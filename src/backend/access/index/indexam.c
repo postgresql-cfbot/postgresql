@@ -33,6 +33,7 @@
  *		index_can_return	- does index support index-only scans?
  *		index_getprocid - get a support procedure OID
  *		index_getprocinfo - get a support procedure's lookup info
+ *		index_batch_add		- add an item (TID, itup) to the batch
  *
  * NOTES
  *		This file contains the index_ routines which used
@@ -54,10 +55,14 @@
 #include "pgstat.h"
 #include "storage/lmgr.h"
 #include "storage/predicate.h"
+#include "utils/memutils.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
+#include "utils/spccache.h"
 #include "utils/syscache.h"
 
+/* enable reading batches / prefetching of TIDs from the index */
+bool		enable_indexscan_batching = false;
 
 /* ----------------------------------------------------------------
  *					macros used in index_ routines
@@ -109,6 +114,15 @@ static IndexScanDesc index_beginscan_internal(Relation indexRelation,
 											  ParallelIndexScanDesc pscan, bool temp_snap);
 static inline void validate_relation_kind(Relation r);
 
+/* index batching */
+static void index_batch_init(IndexScanDesc scan);
+static void index_batch_reset(IndexScanDesc scan);
+static bool index_batch_getnext(IndexScanDesc scan,
+								ScanDirection direction);
+static ItemPointer index_batch_getnext_tid(IndexScanDesc scan,
+										   ScanDirection direction);
+static void index_batch_prefetch(IndexScanDesc scan,
+								 ScanDirection direction);
 
 /* ----------------------------------------------------------------
  *				   index_ interface functions
@@ -256,7 +270,8 @@ IndexScanDesc
 index_beginscan(Relation heapRelation,
 				Relation indexRelation,
 				Snapshot snapshot,
-				int nkeys, int norderbys)
+				int nkeys, int norderbys,
+				bool enable_batching)
 {
 	IndexScanDesc scan;
 
@@ -273,6 +288,24 @@ index_beginscan(Relation heapRelation,
 
 	/* prepare to fetch index matches from table */
 	scan->xs_heapfetch = table_index_fetch_begin(heapRelation);
+
+	/*
+	 * If explicitly requested and supported by both the index AM and the
+	 * plan, initialize batching info.
+	 *
+	 * XXX We do this after ambeginscan(), which means the AM can't init the
+	 * private data in there (it doesn't even know if batching will be used at
+	 * that point).
+	 *
+	 * XXX Maybe we should have a separate "amcanbatch" call, to let the AM
+	 * decide if batching is supported depending on the scan details.
+	 */
+	if ((indexRelation->rd_indam->amgetbatch != NULL) &&
+		enable_batching &&
+		enable_indexscan_batching)
+	{
+		index_batch_init(scan);
+	}
 
 	return scan;
 }
@@ -333,6 +366,12 @@ index_beginscan_internal(Relation indexRelation,
 	scan->parallel_scan = pscan;
 	scan->xs_temp_snap = temp_snap;
 
+	/*
+	 * No batching by default, so set it to NULL. Will be initialized later if
+	 * batching is requested and AM supports it.
+	 */
+	scan->xs_batch = NULL;
+
 	return scan;
 }
 
@@ -368,6 +407,18 @@ index_rescan(IndexScanDesc scan,
 
 	scan->indexRelation->rd_indam->amrescan(scan, keys, nkeys,
 											orderbys, norderbys);
+
+	/*
+	 * Reset the batch, to make it look empty.
+	 *
+	 * Done after the amrescan() call, in case the AM needs some of the batch
+	 * info (e.g. to properly transfer the killed tuples).
+	 *
+	 * XXX This is a bit misleading, because index_batch_reset does not reset
+	 * the killed tuples. So if that's the only justification, we could have
+	 * done it before the call.
+	 */
+	index_batch_reset(scan);
 }
 
 /* ----------------
@@ -444,6 +495,18 @@ index_restrpos(IndexScanDesc scan)
 	scan->xs_heap_continue = false;
 
 	scan->indexRelation->rd_indam->amrestrpos(scan);
+
+	/*
+	 * Reset the batch, to make it look empty.
+	 *
+	 * Done after the amrescan() call, in case the AM needs some of the batch
+	 * info (e.g. to properly transfer the killed tuples).
+	 *
+	 * XXX This is a bit misleading, because index_batch_reset does not reset
+	 * the killed tuples. So if that's the only justification, we could have
+	 * done it before the call.
+	 */
+	index_batch_reset(scan);
 }
 
 /*
@@ -539,7 +602,8 @@ index_parallelrescan(IndexScanDesc scan)
  */
 IndexScanDesc
 index_beginscan_parallel(Relation heaprel, Relation indexrel, int nkeys,
-						 int norderbys, ParallelIndexScanDesc pscan)
+						 int norderbys, ParallelIndexScanDesc pscan,
+						 bool enable_batching)
 {
 	Snapshot	snapshot;
 	IndexScanDesc scan;
@@ -562,6 +626,24 @@ index_beginscan_parallel(Relation heaprel, Relation indexrel, int nkeys,
 	/* prepare to fetch index matches from table */
 	scan->xs_heapfetch = table_index_fetch_begin(heaprel);
 
+	/*
+	 * If explicitly requested and supported by both the index AM and the
+	 * plan, initialize batching info.
+	 *
+	 * XXX We do this after ambeginscan(), which means the AM can't init the
+	 * private data in there (it doesn't even know if batching will be used at
+	 * that point).
+	 *
+	 * XXX Maybe we should have a separate "amcanbatch" call, to let the AM
+	 * decide if batching is supported depending on the scan details.
+	 */
+	if ((indexrel->rd_indam->amgetbatch != NULL) &&
+		enable_batching &&
+		enable_indexscan_batching)
+	{
+		index_batch_init(scan);
+	}
+
 	return scan;
 }
 
@@ -582,6 +664,53 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 
 	/* XXX: we should assert that a snapshot is pushed or registered */
 	Assert(TransactionIdIsValid(RecentXmin));
+
+	/*
+	 * When using batching (which may be disabled for various reasons (e.g.
+	 * through a GUC, the index AM not supporting it) do the old approach.
+	 *
+	 * XXX Maybe we should enable batching based on the plan too, so that we
+	 * don't do batching when it's probably useless (e.g. semijoins or queries
+	 * with LIMIT 1 etc.). But maybe the approach with slow ramp-up (starting
+	 * with small batches) will handle that well enough.
+	 *
+	 * XXX Perhaps it'd be possible to do both in index_getnext_slot(), i.e.
+	 * call either the original code without batching, or the new batching
+	 * code if supported/enabled. It's not great to have duplicated code.
+	 */
+	if (scan->xs_batch != NULL)
+	{
+batch_loaded:
+		/* Try getting a TID from the current batch (if we have one). */
+		while (index_batch_getnext_tid(scan, direction) != NULL)
+		{
+			/*
+			 * We've successfully loaded a TID from the batch, so issue
+			 * prefetches for future TIDs if needed.
+			 */
+			index_batch_prefetch(scan, direction);
+
+			return &scan->xs_heaptid;
+		}
+
+		/*
+		 * We either don't have any batch yet, or we've already processed
+		 * all items from the current batch. Try loading the next one.
+		 *
+		 * If we succeed, issue prefetches (using the current prefetch
+		 * distance without ramp up), and then go back to returning the
+		 * TIDs from the batch.
+		 *
+		 * XXX Maybe do this as a simple while/for loop without the goto.
+		 */
+		if (index_batch_getnext(scan, direction))
+		{
+			index_batch_prefetch(scan, direction);
+			goto batch_loaded;
+		}
+
+		return NULL;
+	}
 
 	/*
 	 * The AM's amgettuple proc finds the next index entry matching the scan
@@ -651,7 +780,19 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 	 * RelationGetIndexScan().
 	 */
 	if (!scan->xactStartedInRecovery)
-		scan->kill_prior_tuple = all_dead;
+	{
+		if (scan->xs_batch == NULL)
+		{
+			scan->kill_prior_tuple = all_dead;
+		}
+		else if (all_dead)
+		{
+			/* batch case - record the killed tuple in the batch */
+			if (scan->xs_batch->nKilledItems < scan->xs_batch->maxSize)
+				scan->xs_batch->killedItems[scan->xs_batch->nKilledItems++]
+					= scan->xs_batch->currIndex;
+		}
+	}
 
 	return found;
 }
@@ -1038,4 +1179,665 @@ index_opclass_options(Relation indrel, AttrNumber attnum, Datum attoptions,
 	(void) FunctionCall1(procinfo, PointerGetDatum(&relopts));
 
 	return build_local_reloptions(&relopts, attoptions, validate);
+}
+
+/*
+ * INDEX BATCHING AND PREFETCHING
+ *
+ * Allows reading chunks of items from an index, instead of reading them
+ * one by one. This reduces the overhead of accessing index pages, and
+ * also allows acting on "future" TIDs - e.g. we can prefetch heap pages
+ * that will be needed, etc.
+ *
+ *
+ * index AM contract
+ * -----------------
+ *
+ * To support batching, the index AM needs to implement an optional callback
+ * amgetbatch() which loads data into the batch (in the scan descriptor).
+ *
+ * The index AM also needs to ensure it can perform all optimizations for
+ * all TIDs in the current batch. A good example of is the kill_prior_tuple
+ * optimization - with batching, the index AM may receive the information
+ * which tuples are to be killed with a delay - when loading the next
+ * batch, when ending/restarting the scan, etc. The AM needs to ensure it
+ * can still process such information, to keep the optimization effective.
+ *
+ * The AM may also need to keep pins required by the whole batch (not just
+ * the last tuple), etc.
+ *
+ * What this means/requires is very dependent on the index AM, of course.
+ * For B-Tree (and most other index AMs), batches spanning multiple leaf
+ * pages would be problematic. Such batches would work for basic index
+ * scans, but the kill_prior_tuple would be an issue - the AMs keep only
+ * a single leaf pinned. We'd either need to keep multiple pins, or allow
+ * reading older leaf pages pages (which might have been modified). Index
+ * only-scans is challenging too - we keep IndexTuple pointers into the
+ * leaf pages, which requires keeping those pins too.
+ *
+ * To solve this, we give the AM some control over batch boundaries. It is
+ * up to the index AM to pick which range of index items to load into the
+ * batch, and how to ensure all the optimizations are possible, keep pins,
+ * and so on. The index AM may use information about the batch (in the
+ * scan descriptor, maintained by indexam.c code), and may also keep some
+ * private information (in the existing "opaque" scan field).
+ *
+ * For most index AMs the easiest way is to not load batches spanning
+ * multiple leaf pages. This may impact the efficiency, especially for
+ * indexes with wide index tuples, as it means batches close to the end
+ * of the leaf page may be smaller.
+ *
+ * Note: There already is a pipeline break for prefetching - as we are
+ * getting closer to the end of a batch, we can't prefetch further than
+ * that, and the effective prefetch distance drops to 0.
+ *
+ * The alternative would be to make the index AMs more complex, to keep
+ * more leaf pages pinned, etc. The current model does not prohibit the
+ * index AMs from implementing that - it's entirely possible to keep the
+ * additional information in the "opaque" structure (say, list of pinned
+ * pages, and other necessary details).
+ *
+ * But that does not seem like a good trade off, as it's subject to
+ * "diminishing returns" - we see significant gains initially (with even
+ * small batches / prefetch distance), and as the batch grows the gains
+ * get smaller and smaller. It does not seem worth the complexity of
+ * pinning more pages etc. at least for the first version.
+ *
+ * To deal with the "prefetch pipeline break", that could be addressed by
+ * allowing multiple in-fligt batches - e.g. with prefetch distance 64
+ * we might have three batches of 32 items each, to prefetch far ahead.
+ * But that's not what this patch does yet.
+ *
+ *
+ * batch = sliding window
+ * ----------------------
+ *
+ * A good way to visualize a batch is a sliding window over the array
+ * of items on a leaf page. In the simplest example (forward scan with no
+ * changes of direction), we slice the array into smaller chunks, and
+ * then process each of those chunks.
+ *
+ * The batch size is adaptive - it starts small (only 8 elements) and
+ * increases as we read more batches (up to 64 elements). We don't want
+ * to regress cases that only need a single item (e.g. LIMIT 1 queries),
+ * and loading/copying a lot of data might cause that. So we start small
+ * and increase the size - that still improves cases reading a lot of
+ * data from the index, without hurting small queries.
+ *
+ * Note: This gradual ramp up is for batch size, independent of what we
+ * do for prefetch. The prefetch distance is gradually increased too, but
+ * it's independent / orthogonal to the batch size. The batch size limits
+ * how far ahead we can prefetch, of course.
+ *
+ * Note: The current limits on batch size (initial 8, maximum 64) are
+ * quite arbitrary, it just seemed those values are sane. We could adjust
+ * the initial size, but I don't think it'd make a fundamental difference.
+ * Growing the batches faster/slower has bigger impact.
+ *
+ * The maximum batch size does not matter much - it's true a btree index can
+ * have up to ~1300 items per 8K leaf page, but in most cases the actual
+ * number is lower, perhaps ~300. That's not that far from 64.
+ *
+ * Each batch has a firstIndex/lastIndex to track which part of the leaf
+ * page it currently represents.
+ *
+ *
+ * kill_prior_tuples
+ * -----------------
+ *
+ * If we decide a tuple can be killed, the batch item is marked accordingly,
+ * and the flag is reset to false (so that the index AM does not do something
+ * silly to a random tuple it thinks is "current").
+ *
+ * Then the next time the AM decides it's time to kill tuples, the AM needs
+ * to look at the batch and consider the tuples marked to be killed. B-Tree
+ * simply adds those TIDs to the regular "killItems" array.
+ *
+ *
+ * mark/restore
+ * ------------
+ *
+ * With batching, the index AM does not know the the "current" position on
+ * the leaf page - we don't propagate this to the index AM while walking
+ * items in the batch. To make ammarkpos() work, the index AM has to check
+ * the current position in the batch, and translate it to the proper page
+ * position, using the private information (about items in the batch).
+ *
+ * XXX This needs more work, I don't quite like how the two layers interact,
+ * it seems quite wrong to look at the batch info directly.
+ */
+
+/*
+ * Comprehensive check of various invariants on the index batch. Makes sure
+ * the indexes are set as expected, the buffer size is within limits, and
+ * so on.
+ */
+static void
+AssertCheckBatchInfo(IndexScanDesc scan)
+{
+#ifdef USE_ASSERT_CHECKING
+	/* all the arrays need to be allocated */
+	Assert((scan->xs_batch->heaptids != NULL) &&
+		   (scan->xs_batch->killedItems != NULL) &&
+		   (scan->xs_batch->privateData != NULL));
+
+	/* if IndexTuples expected, should be allocated too */
+	Assert(!(scan->xs_want_itup && (scan->xs_batch->itups == NULL)));
+
+	/* Various check on batch sizes */
+	Assert((scan->xs_batch->initSize >= 0) &&
+		   (scan->xs_batch->initSize <= scan->xs_batch->currSize) &&
+		   (scan->xs_batch->currSize <= scan->xs_batch->maxSize) &&
+		   (scan->xs_batch->maxSize <= 1024));	/* arbitrary limit */
+
+	/* Is the number of in the batch TIDs in a valid range? */
+	Assert((scan->xs_batch->nheaptids >= 0) &&
+		   (scan->xs_batch->nheaptids <= scan->xs_batch->maxSize));
+
+	/*
+	 * The current item must be between -1 and nheaptids. Those two extreme
+	 * values are starting points for forward/backward scans.
+	 */
+	Assert((scan->xs_batch->currIndex >= -1) &&
+		   (scan->xs_batch->currIndex <= scan->xs_batch->nheaptids));
+
+	/* check prefetch data */
+	Assert((scan->xs_batch->prefetchTarget >= 0) &&
+		   (scan->xs_batch->prefetchTarget <= scan->xs_batch->prefetchMaximum));
+
+	Assert((scan->xs_batch->prefetchIndex >= -1) &&
+		   (scan->xs_batch->prefetchIndex <= scan->xs_batch->nheaptids));
+
+	for (int i = 0; i < scan->xs_batch->nheaptids; i++)
+		Assert(ItemPointerIsValid(&scan->xs_batch->heaptids[i]));
+#endif
+}
+
+/* Is the batch full (TIDs up to capacity)? */
+#define	INDEX_BATCH_IS_FULL(scan)	\
+	((scan)->xs_batch->nheaptids == (scan)->xs_batch->currSize)
+
+/* Is the batch empty (no TIDs)? */
+#define	INDEX_BATCH_IS_EMPTY(scan)	\
+	((scan)->xs_batch->nheaptids == 0)
+
+/*
+ * Did we process all items? For forward scan it means the index points to the
+ * last item, for backward scans it has to point to the first one.
+ *
+ * This does not cover empty batches properly, because of backward scans.
+ */
+#define	INDEX_BATCH_IS_PROCESSED(scan, direction)	\
+	(ScanDirectionIsForward(direction) ? \
+		((scan)->xs_batch->nheaptids == ((scan)->xs_batch->currIndex + 1)) : \
+		((scan)->xs_batch->currIndex == 0))
+
+/* Does the batch items in the requested direction? */
+#define INDEX_BATCH_HAS_ITEMS(scan, direction) \
+	(!INDEX_BATCH_IS_EMPTY(scan) && !INDEX_BATCH_IS_PROCESSED(scan, direction))
+
+
+/* ----------------
+ *		index_batch_getnext - get the next batch of TIDs from a scan
+ *
+ * Returns true if we managed to read at least some TIDs into the batch,
+ * or false if there are no more TIDs in the scan. The xs_heaptids and
+ * xs_nheaptids fields contain the TIDS and the number of elements.
+ *
+ * XXX This only loads the TIDs and resets the various batch fields to
+ * fresh state. It does not set xs_heaptid/xs_itup/xs_hitup, that's the
+ * responsibility of the following index_batch_getnext_tid() calls.
+ * ----------------
+ */
+static bool
+index_batch_getnext(IndexScanDesc scan, ScanDirection direction)
+{
+	bool		found;
+
+	SCAN_CHECKS;
+	CHECK_SCAN_PROCEDURE(amgetbatch);
+
+	/* XXX: we should assert that a snapshot is pushed or registered */
+	Assert(TransactionIdIsValid(RecentXmin));
+
+	/* comprehensive checks of batching info */
+	AssertCheckBatchInfo(scan);
+
+	/*
+	 * We never read a new batch before we run out of items in the current
+	 * one. The current batch has to be either empty or we ran out of items
+	 * (in the given direction).
+	 */
+	Assert(!INDEX_BATCH_HAS_ITEMS(scan, direction));
+
+	/*
+	 * Reset the current/prefetch positions in the batch.
+	 *
+	 * XXX Done before calling amgetbatch(), so that it sees the index as
+	 * invalid, batch as empty, and can add items.
+	 *
+	 * XXX Intentionally does not reset the nheaptids, because the AM does
+	 * rely on that when processing killed tuples. Maybe store the killed
+	 * tuples differently?
+	 */
+	scan->xs_batch->currIndex = -1;
+	scan->xs_batch->prefetchIndex = 0;
+	scan->xs_batch->nheaptids = 0;
+
+	/*
+	 * Reset the memory context with all per-batch data, allocated by the AM.
+	 * This might be tuples, or anything else the AM needs.
+	 *
+	 * XXX Make sure to reset the tuples, because the AM may do something with
+	 * them later (e.g. release them, as getNextNearest in gist), but we may
+	 * release them by the MemoryContextReset() call.
+	 *
+	 * This might break the AM if it relies on them pointing to the last
+	 * tuple, but at least it has the chance to do the right thing by checking
+	 * if the pointer is NULL.
+	 */
+	scan->xs_itup = NULL;
+	scan->xs_hitup = NULL;
+
+	MemoryContextReset(scan->xs_batch->ctx);
+
+	/*
+	 * The AM's amgetbatch proc loads a chunk of TIDs matching the scan keys,
+	 * and puts the TIDs into scan->xs_batch->heaptids.  It should also set
+	 * scan->xs_recheck and possibly
+	 * scan->xs_batch->itups/scan->xs_batch->hitups, though we pay no
+	 * attention to those fields here.
+	 *
+	 * FIXME At the moment this does nothing with hitup. Needs to be fixed?
+	 */
+	found = scan->indexRelation->rd_indam->amgetbatch(scan, direction);
+
+	/* Reset kill flag immediately for safety */
+	scan->kill_prior_tuple = false;
+	scan->xs_heap_continue = false;
+
+	/* If we're out of index entries, we're done */
+	if (!found)
+	{
+		/* release resources (like buffer pins) from table accesses */
+		if (scan->xs_heapfetch)
+			table_index_fetch_reset(scan->xs_heapfetch);
+
+		return false;
+	}
+
+	/* We should have a non-empty batch with items. */
+	Assert(INDEX_BATCH_HAS_ITEMS(scan, direction));
+
+	pgstat_count_index_tuples(scan->indexRelation, scan->xs_batch->nheaptids);
+
+	/*
+	 * Set the prefetch index to the first item in the loaded batch (we expect
+	 * the index AM to set that).
+	 *
+	 * FIXME Maybe set the currIndex here, not in the index AM. It seems much
+	 * more like indexam.c responsibility rather than something every index AM
+	 * should be doing (in _bt_first_batch etc.).
+	 *
+	 * FIXME It's a bit unclear who (indexam.c or the index AM) is responsible
+	 * for setting which fields. This needs clarification.
+	 */
+	scan->xs_batch->prefetchIndex = scan->xs_batch->currIndex;
+
+	/*
+	 * Try to increase the size of the batch. Intentionally done after the AM
+	 * call, so that the new value applies to the next batch. Otherwise we
+	 * would always skip the initial batch size.
+	 */
+	scan->xs_batch->currSize = Min(scan->xs_batch->currSize + 1,
+								   scan->xs_batch->maxSize);
+
+	/* comprehensive checks of batching info */
+	AssertCheckBatchInfo(scan);
+
+	/* Return the batch of TIDs we found. */
+	return true;
+}
+
+/* ----------------
+ *		index_getnext_batch_tid - get the next TID from the current batch
+ *
+ * Same calling convention as index_getnext_tid(), except that NULL means
+ * no more items in the current batch, there may be more batches.
+ *
+ * XXX This only sets xs_heaptid and xs_itup (if requested). Not sure if
+ * we need to do something with xs_hitup.
+ *
+ * FIXME Should this set xs_hitup?
+ * ----------------
+ */
+static ItemPointer
+index_batch_getnext_tid(IndexScanDesc scan, ScanDirection direction)
+{
+	/* comprehensive checks of batching info */
+	AssertCheckBatchInfo(scan);
+
+	/*
+	 * Bail out if he batch does not have more items in the requested directio
+	 * (either empty or everthing processed).
+	 */
+	if (!INDEX_BATCH_HAS_ITEMS(scan, direction))
+		return NULL;
+
+	/*
+	 * Advance to the next batch item - we know it's not empty and there are
+	 * items to process, so this is valid.
+	 */
+	if (ScanDirectionIsForward(direction))
+		scan->xs_batch->currIndex++;
+	else
+		scan->xs_batch->currIndex--;
+
+	/*
+	 * Next TID from the batch, optionally also the IndexTuple/HeapTuple.
+	 *
+	 * XXX Not sure how to decide which of the tuples to set, seems easier to
+	 * just set both, one of them will be NULL.
+	 *
+	 * XXX Do we need to reset the itups/htups array between batches? Doesn't
+	 * seem necessary, but maybe we could get bogus data?
+	 */
+	scan->xs_heaptid = scan->xs_batch->heaptids[scan->xs_batch->currIndex];
+	if (scan->xs_want_itup)
+	{
+		scan->xs_itup = scan->xs_batch->itups[scan->xs_batch->currIndex];
+		scan->xs_hitup = scan->xs_batch->htups[scan->xs_batch->currIndex];
+	}
+
+	scan->xs_recheck = scan->xs_batch->recheck[scan->xs_batch->currIndex];
+
+	/*
+	 * If there are order-by clauses, point to the appropriate chunk in the
+	 * arrays.
+	 */
+	if (scan->numberOfOrderBys > 0)
+	{
+		int			idx = scan->numberOfOrderBys * scan->xs_batch->currIndex;
+
+		scan->xs_orderbyvals = &scan->xs_batch->orderbyvals[idx];
+		scan->xs_orderbynulls = &scan->xs_batch->orderbynulls[idx];
+	}
+
+	/* comprehensive checks of batching info */
+	AssertCheckBatchInfo(scan);
+
+	return &scan->xs_heaptid;
+}
+
+/* ----------------
+ *		index_batch_prefetch - prefetch pages for TIDs in current batch
+ *
+ * The prefetch distance is increased gradually, similar to what we do for
+ * bitmap heap scans. We start from distance 0 (no prefetch), and then in each
+ * iteration increment the distance up to prefetchMaximum.
+ *
+ * The prefetch distance is reset (to 0) only on rescans, not between batches.
+ *
+ * It's possible to provide an index_prefetch_callback callback, to affect
+ * which items need to be prefetched. With prefetch_callback=NULL, all
+ * items are prefetched. With the callback provided, the item is prefetched
+ * iff the callback and returns true.
+ *
+ * The "arg" argument is used to pass a state for the plan node invoking the
+ * function, and is then passed to the callback. This means the callback is
+ * specific to the plan state.
+ *
+ * XXX the prefetchMaximum depends on effective_io_concurrency, and also on
+ * tablespace options.
+ *
+ * XXX For accesses that change scan direction, we may do a lot of unnecessary
+ * prefetching (because we will re-issue prefetches for what we recently read).
+ * I'm not sure if there's a simple way to track what was already prefetched.
+ * Maybe we could count how far we got (in the forward direction), keep that
+ * as a watermark, and never prefetch again below it.
+ *
+ * XXX Maybe wrap this in ifdef USE_PREFETCH?
+ * ----------------
+ */
+static void
+index_batch_prefetch(IndexScanDesc scan, ScanDirection direction)
+{
+	int			prefetchStart,
+				prefetchEnd;
+
+	IndexPrefetchCallback	prefetch_callback = scan->xs_batch->prefetchCallback;
+	void *arg = scan->xs_batch->prefetchArgument;
+
+	if (ScanDirectionIsForward(direction))
+	{
+		/* Where should we start to prefetch? */
+		prefetchStart = Max(scan->xs_batch->currIndex,
+							scan->xs_batch->prefetchIndex);
+
+		/*
+		 * Where should we stop prefetching? this is the first item that we do
+		 * NOT prefetch, i.e. it can be the first item after the batch.
+		 */
+		prefetchEnd = Min((scan->xs_batch->currIndex + 1) + scan->xs_batch->prefetchTarget,
+						  scan->xs_batch->nheaptids);
+
+		/* FIXME should calculate in a way to make this unnecessary */
+		prefetchStart = Max(Min(prefetchStart, scan->xs_batch->nheaptids - 1), 0);
+		prefetchEnd = Max(Min(prefetchEnd, scan->xs_batch->nheaptids - 1), 0);
+
+		/* remember how far we prefetched / where to start the next prefetch */
+		scan->xs_batch->prefetchIndex = prefetchEnd;
+	}
+	else
+	{
+		/* Where should we start to prefetch? */
+		prefetchEnd = Min(scan->xs_batch->currIndex,
+						  scan->xs_batch->prefetchIndex);
+
+		/*
+		 * Where should we stop prefetching? this is the first item that we do
+		 * NOT prefetch, i.e. it can be the first item after the batch.
+		 */
+		prefetchStart = Max((scan->xs_batch->currIndex - 1) - scan->xs_batch->prefetchTarget,
+							-1);
+
+		/* FIXME should calculate in a way to make this unnecessary */
+		prefetchStart = Max(Min(prefetchStart, scan->xs_batch->nheaptids - 1), 0);
+		prefetchEnd = Max(Min(prefetchEnd, scan->xs_batch->nheaptids - 1), 0);
+
+		/* remember how far we prefetched / where to start the next prefetch */
+		scan->xs_batch->prefetchIndex = prefetchStart;
+	}
+
+	/*
+	 * It's possible we get inverted prefetch range after a restrpos() call,
+	 * because we intentionally don't reset the prefetchIndex - we don't want
+	 * to prefetch pages over and over in this case. We'll do nothing in that
+	 * case, except for the AssertCheckBatchInfo().
+	 *
+	 * FIXME I suspect this actually does not work correctly if we change the
+	 * direction, because the prefetchIndex will flip between two extremes
+	 * thanks to the Min/Max.
+	 */
+
+	/*
+	 * Increase the prefetch distance, but not beyond prefetchMaximum. We
+	 * intentionally do this after calculating start/end, so that we start
+	 * actually prefetching only after the first item.
+	 */
+	scan->xs_batch->prefetchTarget = Min(scan->xs_batch->prefetchTarget + 1,
+										 scan->xs_batch->prefetchMaximum);
+
+	/* comprehensive checks of batching info */
+	AssertCheckBatchInfo(scan);
+
+	/* finally, do the actual prefetching */
+	for (int i = prefetchStart; i < prefetchEnd; i++)
+	{
+		/* skip block if the provided callback says so */
+		if (prefetch_callback && !prefetch_callback(scan, arg, i))
+			continue;
+
+		PrefetchBuffer(scan->heapRelation, MAIN_FORKNUM,
+					   ItemPointerGetBlockNumber(&scan->xs_batch->heaptids[i]));
+	}
+}
+
+/*
+ * index_batch_init
+ *		Initialize various fields / arrays needed by batching.
+ *
+ * FIXME This is a bit ad-hoc hodge podge, due to how I was adding more and
+ * more pieces. Some of the fields may be not quite necessary, needs cleanup.
+ */
+static void
+index_batch_init(IndexScanDesc scan)
+{
+	/* init batching info, but only if batch supported */
+	Assert(scan->indexRelation->rd_indam->amgetbatch != NULL);
+
+	scan->xs_batch = palloc0(sizeof(IndexScanBatchData));
+
+	/*
+	 * Set some reasonable batch size defaults.
+	 *
+	 * XXX Maybe should depend on prefetch distance, or something like that?
+	 * The initSize will affect how far ahead we can prefetch.
+	 */
+	scan->xs_batch->maxSize = 64;
+	scan->xs_batch->initSize = 8;
+	scan->xs_batch->currSize = scan->xs_batch->initSize;
+
+	/* initialize prefetching info */
+	scan->xs_batch->prefetchMaximum =
+		get_tablespace_io_concurrency(scan->heapRelation->rd_rel->reltablespace);
+	scan->xs_batch->prefetchTarget = 0;
+	scan->xs_batch->prefetchIndex = 0;
+
+	/* */
+	scan->xs_batch->currIndex = -1;
+
+	/* Preallocate the largest allowed array of TIDs. */
+	scan->xs_batch->nheaptids = 0;
+	scan->xs_batch->heaptids = palloc0(sizeof(ItemPointerData) * scan->xs_batch->maxSize);
+
+	/*
+	 * XXX We can't check scan->xs_want_itup, because that's set only after
+	 * the scan is initialized (and we initialize in beginscan). Maybe we
+	 * could (or should) allocate lazily.
+	 */
+	scan->xs_batch->itups = palloc(sizeof(IndexTuple) * scan->xs_batch->maxSize);
+	scan->xs_batch->htups = palloc(sizeof(HeapTuple) * scan->xs_batch->maxSize);
+
+	scan->xs_batch->recheck = palloc(sizeof(bool) * scan->xs_batch->maxSize);
+
+	/*
+	 * XXX Maybe use a more compact bitmap? We need just one bit per element,
+	 * not a bool. This is easier / more convenient to manipulate, though.
+	 *
+	 * XXX Maybe should allow more items thant the max batch size?
+	 */
+	scan->xs_batch->nKilledItems = 0;
+	scan->xs_batch->killedItems = (int *) palloc0(sizeof(int) * scan->xs_batch->maxSize);
+
+	/*
+	 * XXX Maybe allocate only when actually needed? Also, shouldn't we have a
+	 * memory context for the private data?
+	 */
+	scan->xs_batch->privateData = (Datum *) palloc0(sizeof(Datum) * scan->xs_batch->maxSize);
+
+	if (scan->numberOfOrderBys > 0)
+	{
+		int			cnt = (scan->xs_batch->maxSize * scan->numberOfOrderBys);
+
+		scan->xs_batch->orderbyvals = (Datum *) palloc0(sizeof(Datum) * cnt);
+		scan->xs_batch->orderbynulls = (bool *) palloc0(sizeof(Datum) * cnt);
+	}
+	else
+	{
+		scan->xs_batch->orderbyvals = NULL;
+		scan->xs_batch->orderbynulls = NULL;
+	}
+
+	scan->xs_batch->ctx = AllocSetContextCreate(CurrentMemoryContext,
+												"indexscan batch context",
+												ALLOCSET_DEFAULT_SIZES);
+
+	/* comprehensive checks */
+	AssertCheckBatchInfo(scan);
+}
+
+/*
+ * index_batch_reset
+ *		Reset the batch before reading the next chunk of data.
+ *
+ * FIXME Another bit in need of cleanup. The currIndex default (-1) is not quite
+ * correct, because for backwards scans is wrong.
+ */
+static void
+index_batch_reset(IndexScanDesc scan)
+{
+	/* bail out if batching not enabled */
+	if (!scan->xs_batch)
+		return;
+
+	scan->xs_batch->nheaptids = 0;
+	scan->xs_batch->prefetchIndex = 0;
+	scan->xs_batch->currIndex = -1;
+}
+
+/*
+ * index_batch_add
+ *		Add an item to the batch.
+ *
+ * The item is always a TID, and then also IndexTuple if requested (for IOS).
+ * Items are always added from the beginning (index 0).
+ *
+ * Returns true when adding the item was successful, or false when the batch
+ * is full (and the item should be added to the next batch).
+ */
+bool
+index_batch_add(IndexScanDesc scan, ItemPointerData tid, bool recheck,
+				IndexTuple itup, HeapTuple htup)
+{
+	/* comprehensive checks on the batch info */
+	AssertCheckBatchInfo(scan);
+
+	/* don't add TIDs beyond the current batch size */
+	if (INDEX_BATCH_IS_FULL(scan))
+		return false;
+
+	/*
+	 * There must be space for at least one entry.
+	 *
+	 * XXX Seems redundant with the earlier INDEX_BATCH_IS_FULL check.
+	 */
+	Assert(scan->xs_batch->nheaptids < scan->xs_batch->currSize);
+	Assert(scan->xs_batch->nheaptids >= 0);
+
+	scan->xs_batch->heaptids[scan->xs_batch->nheaptids] = tid;
+	scan->xs_batch->privateData[scan->xs_batch->nheaptids] = (Datum) 0;
+
+	if (scan->xs_want_itup)
+	{
+		scan->xs_batch->itups[scan->xs_batch->nheaptids] = itup;
+		scan->xs_batch->htups[scan->xs_batch->nheaptids] = htup;
+	}
+
+	scan->xs_batch->recheck[scan->xs_batch->nheaptids] = recheck;
+
+	if (scan->numberOfOrderBys > 0)
+	{
+		int			idx = scan->xs_batch->nheaptids * scan->numberOfOrderBys;
+
+		memcpy(&scan->xs_batch->orderbyvals[idx], scan->xs_orderbyvals, sizeof(Datum) * scan->numberOfOrderBys);
+		memcpy(&scan->xs_batch->orderbynulls[idx], scan->xs_orderbynulls, sizeof(bool) * scan->numberOfOrderBys);
+	}
+
+	scan->xs_batch->nheaptids++;
+
+	/* comprehensive checks on the batch info */
+	AssertCheckBatchInfo(scan);
+
+	return true;
 }

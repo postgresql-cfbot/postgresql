@@ -809,7 +809,12 @@ check_exclusion_or_unique_constraint(Relation heap, Relation index,
 retry:
 	conflict = false;
 	found_self = false;
-	index_scan = index_beginscan(heap, index, &DirtySnapshot, indnkeyatts, 0);
+
+	/*
+	 * XXX Does not seem useful to do prefetching for checks of constraints.
+	 * We would probably need just the first item anyway.
+	 */
+	index_scan = index_beginscan(heap, index, &DirtySnapshot, indnkeyatts, 0, false);
 	index_rescan(index_scan, scankeys, indnkeyatts, NULL, 0);
 
 	while (index_getnext_slot(index_scan, ForwardScanDirection, existing_slot))

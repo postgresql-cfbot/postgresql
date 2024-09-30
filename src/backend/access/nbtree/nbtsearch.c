@@ -1540,7 +1540,7 @@ AssertCheckBTBatchInfo(BTScanOpaque so)
  * _bt_copy_batch
  *		Copy a section of the leaf page into the batch.
  */
-static void
+void
 _bt_copy_batch(IndexScanDesc scan, ScanDirection dir, BTScanOpaque so,
 			   int start, int end)
 {

@@ -25,6 +25,10 @@
 #include "utils/memutils.h"
 #include "utils/rel.h"
 
+static void _gist_kill_batch(IndexScanDesc scan);
+static void _gist_copy_batch(IndexScanDesc scan, GISTScanOpaque so,
+							 int start, int end);
+
 /*
  * gistkillitems() -- set LP_DEAD state for items an indexscan caller has
  * told us were killed.
@@ -709,6 +713,14 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 			{
 				GISTSearchItem *item;
 
+				/*
+				 * XXX Probably not needed, we can't mix gettuple and
+				 * getbatch, so we should not get any killed tuples for a
+				 * batch. Maybe replace this with an assert that batch has no
+				 * killed items? Or simply that (xs_batch == NULL)?
+				 */
+				_gist_kill_batch(scan);
+
 				if ((so->curBlkno != InvalidBlockNumber) && (so->numKilled > 0))
 					gistkillitems(scan);
 
@@ -729,6 +741,164 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 				 * return them.
 				 */
 				gistScanPage(scan, item, item->distances, NULL, NULL);
+
+				pfree(item);
+			} while (so->nPageData == 0);
+		}
+	}
+}
+
+/*
+ * gistgetbatch() -- Get the next batch of tuples in the scan
+ */
+bool
+gistgetbatch(IndexScanDesc scan, ScanDirection dir)
+{
+	GISTScanOpaque so = (GISTScanOpaque) scan->opaque;
+
+	if (dir != ForwardScanDirection)
+		elog(ERROR, "GiST only supports forward scan direction");
+
+	if (!so->qual_ok)
+		return false;
+
+	if (so->firstCall)
+	{
+		/* Begin the scan by processing the root page */
+		GISTSearchItem fakeItem;
+
+		pgstat_count_index_scan(scan->indexRelation);
+
+		so->firstCall = false;
+		so->curPageData = so->nPageData = 0;
+		scan->xs_hitup = NULL;
+		if (so->pageDataCxt)
+			MemoryContextReset(so->pageDataCxt);
+
+		fakeItem.blkno = GIST_ROOT_BLKNO;
+		memset(&fakeItem.data.parentlsn, 0, sizeof(GistNSN));
+		gistScanPage(scan, &fakeItem, NULL, NULL, NULL);
+
+		/*
+		 * Mark the batch as empty.
+		 *
+		 * XXX Is this necessary / the right place to do this? Maybe it should
+		 * be done in beginscan/rescan? The one problem with that is we only
+		 * initialize the batch after, so those places don't know if batching
+		 * is to be used.
+		 */
+		so->batch.firstIndex = -1;
+		so->batch.lastIndex = -1;
+	}
+
+	/*
+	 * With order-by clauses, we simply get enough nearest items to fill the
+	 * batch. GIST does not handle killed items in this case for non-batched
+	 * scans, so we don't do that here either. The only issue is that the heap
+	 * tuple returned in xs_hitup is freed on the next getNextNearest() call,
+	 * so we make a copy in the batch memory context.
+	 *
+	 * For scans without order-by clauses, we simply copy a batch of items
+	 * from the next leaf page, and proceed to the next page when needed.
+	 */
+	if (scan->numberOfOrderBys > 0)
+	{
+		int			nitems = 0;
+
+		/* Must fetch tuples in strict distance order */
+		while (nitems < scan->xs_batch->currSize)
+		{
+			HeapTuple	htup;
+			MemoryContext oldctx;
+
+			if (!getNextNearest(scan))
+				break;
+
+			/*
+			 * We need to copy the tuple into the batch context, as it may go
+			 * away on the next getNextNearest call. Free the original tuple,
+			 * otherwise we'd leak the last tuple in a batch.
+			 */
+			oldctx = MemoryContextSwitchTo(scan->xs_batch->ctx);
+			htup = heap_copytuple(scan->xs_hitup);
+
+			pfree(scan->xs_hitup);
+			scan->xs_hitup = NULL;
+
+			MemoryContextSwitchTo(oldctx);
+
+			index_batch_add(scan, scan->xs_heaptid, scan->xs_recheck, NULL, htup);
+
+			nitems++;
+		}
+
+		/* did we find more tuples? */
+		return (scan->xs_batch->nheaptids > 0);
+	}
+	else
+	{
+		/* Fetch the next batch of tuples */
+		for (;;)
+		{
+			int			start,
+						end;
+
+			/* forward directions only, easy to calculate next batch */
+			start = so->batch.lastIndex + 1;
+			end = Min(start + (scan->xs_batch->currSize - 1),
+					  so->nPageData - 1);	/* index of last item */
+			so->curPageData = (end + 1);
+
+			/* if we found more items on the current page, we're done */
+			if (start <= end)
+			{
+				_gist_copy_batch(scan, so, start, end);
+				return true;
+			}
+
+			/* find and process the next index page */
+			do
+			{
+				GISTSearchItem *item;
+
+				_gist_kill_batch(scan);
+
+				if ((so->curBlkno != InvalidBlockNumber) && (so->numKilled > 0))
+					gistkillitems(scan);
+
+				item = getNextGISTSearchItem(so);
+
+				if (!item)
+					return false;
+
+				CHECK_FOR_INTERRUPTS();
+
+				/* save current item BlockNumber for next gistkillitems() call */
+				so->curBlkno = item->blkno;
+
+				/*
+				 * While scanning a leaf page, ItemPointers of matching heap
+				 * tuples are stored in so->pageData.  If there are any on
+				 * this page, we fall out of the inner "do" and loop around to
+				 * return them.
+				 */
+				gistScanPage(scan, item, item->distances, NULL, NULL);
+
+				/*
+				 * If we found any items on the page, copy them into a batch
+				 * and we're done.
+				 */
+
+				/* forward direction only, so get the first chunk of items */
+				start = 0;
+				end = Min(start + (scan->xs_batch->currSize - 1),
+						  so->nPageData - 1);	/* index of last item */
+
+				if (start <= end)
+				{
+					_gist_copy_batch(scan, so, start, end);
+					return true;
+				}
 
 				pfree(item);
 			} while (so->nPageData == 0);
@@ -798,4 +968,129 @@ gistcanreturn(Relation index, int attno)
 		return true;
 	else
 		return false;
+}
+
+static void
+AssertCheckGISTBatchInfo(GISTScanOpaque so)
+{
+#ifdef USE_ASSERT_CHECKING
+	/* should be valid items (with respect to the current leaf page) */
+	Assert(0 <= so->batch.firstIndex);
+	Assert(so->batch.firstIndex <= so->batch.lastIndex);
+	Assert(so->batch.lastIndex <= so->nPageData);
+#endif
+}
+
+/*
+ *	_gist_kill_batch() -- remember the items-to-be-killed from the current batch
+ *
+ * We simply translate the bitmap into the "regular" killedItems array, and let
+ * that to drive which items are killed.
+ */
+static void
+_gist_kill_batch(IndexScanDesc scan)
+{
+	GISTScanOpaque so = (GISTScanOpaque) scan->opaque;
+
+	/* bail out if batching not enabled */
+	if (!scan->xs_batch)
+		return;
+
+	for (int i = 0; i < scan->xs_batch->nKilledItems; i++)
+	{
+		int			index = (so->batch.firstIndex + scan->xs_batch->killedItems[i]);
+
+		/* make sure we have a valid index (in the current leaf page) */
+		Assert((so->batch.firstIndex <= index) &&
+			   (index <= so->batch.lastIndex));
+
+		/*
+		 * Yes, remember it for later. (We'll deal with all such tuples at
+		 * once right before leaving the index page.)  The test for numKilled
+		 * overrun is not just paranoia: if the caller reverses direction in
+		 * the indexscan then the same item might get entered multiple times.
+		 * It's not worth trying to optimize that, so we don't detect it, but
+		 * instead just forget any excess entries.
+		 */
+		if (so->killedItems == NULL)
+		{
+			MemoryContext oldCxt =
+				MemoryContextSwitchTo(so->giststate->scanCxt);
+
+			so->killedItems =
+				(OffsetNumber *) palloc(MaxIndexTuplesPerPage
+										* sizeof(OffsetNumber));
+
+			MemoryContextSwitchTo(oldCxt);
+		}
+		if (so->numKilled < MaxIndexTuplesPerPage)
+			so->killedItems[so->numKilled++] = index;
+	}
+
+	/* now reset the number of killed items */
+	scan->xs_batch->nKilledItems = 0;
+}
+
+/*
+ * FIXME Does this need to worry about recheck/recheckDistances flags in
+ * GISTScanOpaque? Probably yes.
+ *
+ * FIXME Definitely should return recontup for IOS, but that needs changes
+ * to index_batch_add.
+ */
+static void
+_gist_copy_batch(IndexScanDesc scan, GISTScanOpaque so,
+				 int start, int end)
+{
+	/*
+	 * We're reading the first batch, and there should always be at least one
+	 * item (otherwise _bt_first would return false). So we should never get
+	 * into situation with empty start/end range. In the worst case, there is
+	 * just a single item, in which case (start == end).
+	 */
+	Assert(start <= end);
+
+	/* The range of items should fit into the current batch size. */
+	Assert((end - start + 1) <= scan->xs_batch->currSize);
+
+	so->batch.firstIndex = start;
+	so->batch.lastIndex = end;
+
+	AssertCheckGISTBatchInfo(so);
+
+	/*
+	 * Walk through the range of index tuples, copy them into the batch. If
+	 * requested, set the index tuple too.
+	 *
+	 * We don't know if the batch is full already - we just try to add it, and
+	 * bail out if it fails.
+	 *
+	 * FIXME This seems wrong, actually. We use currSize when calculating the
+	 * start/end range, so the add should always succeed.
+	 */
+	while (start <= end)
+	{
+		GISTSearchHeapItem *item = &so->pageData[start];
+
+		HeapTuple	htup = NULL;
+
+		if (scan->xs_want_itup)
+			htup = item->recontup;
+
+		/* try to add it to batch, if there's space */
+		if (!index_batch_add(scan, item->heapPtr, item->recheck, NULL, htup))
+			break;
+
+		start++;
+	}
+
+	/*
+	 * set the starting point
+	 *
+	 * XXX might be better done in indexam.c
+	 */
+	scan->xs_batch->currIndex = -1;
+
+	/* shouldn't be possible to end here with an empty batch */
+	Assert(scan->xs_batch->nheaptids > 0);
 }

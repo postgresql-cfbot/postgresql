@@ -149,6 +149,19 @@ typedef struct GISTSearchItem
 	 sizeof(IndexOrderByDistance) * (n_distances))
 
 /*
+ * Information about the current batch (in batched index scans)
+ *
+ * XXX Probably not needed, as spgist supports just forward scans, so we
+ * could simply the iPtr (no problem after change of scan direction).
+ */
+typedef struct GISTBatchInfo
+{
+	/* Current range of items in a batch (if used). */
+	int			firstIndex;
+	int			lastIndex;
+} GISTBatchInfo;
+
+/*
  * GISTScanOpaqueData: private state for a scan of a GiST index
  */
 typedef struct GISTScanOpaqueData
@@ -176,6 +189,8 @@ typedef struct GISTScanOpaqueData
 	OffsetNumber curPageData;	/* next item to return */
 	MemoryContext pageDataCxt;	/* context holding the fetched tuples, for
 								 * index-only scans */
+
+	GISTBatchInfo batch;		/* batch loaded from the index */
 } GISTScanOpaqueData;
 
 typedef GISTScanOpaqueData *GISTScanOpaque;
@@ -461,6 +476,7 @@ extern XLogRecPtr gistXLogAssignLSN(void);
 
 /* gistget.c */
 extern bool gistgettuple(IndexScanDesc scan, ScanDirection dir);
+extern bool gistgetbatch(IndexScanDesc scan, ScanDirection dir);
 extern int64 gistgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern bool gistcanreturn(Relation index, int attno);
 

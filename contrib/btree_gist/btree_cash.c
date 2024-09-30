@@ -7,6 +7,7 @@
 #include "btree_utils_num.h"
 #include "common/int.h"
 #include "utils/cash.h"
+#include "utils/sortsupport.h"
 
 typedef struct
 {
@@ -25,6 +26,21 @@ PG_FUNCTION_INFO_V1(gbt_cash_consistent);
 PG_FUNCTION_INFO_V1(gbt_cash_distance);
 PG_FUNCTION_INFO_V1(gbt_cash_penalty);
 PG_FUNCTION_INFO_V1(gbt_cash_same);
+PG_FUNCTION_INFO_V1(gbt_cash_sortsupport);
+
+extern Datum cash_cmp(PG_FUNCTION_ARGS);
+
+static int
+gbt_cash_ssup_cmp(Datum x, Datum y, SortSupport ssup)
+{
+	cashKEY	*arg1 = (cashKEY *) DatumGetPointer(x);
+	cashKEY	*arg2 = (cashKEY *) DatumGetPointer(y);
+
+	/* Since lower and upper are always equal, it is enough to compare lower */
+	return DatumGetInt32(DirectFunctionCall2(cash_cmp,
+	                                         CashGetDatum(arg1->lower),
+	                                         CashGetDatum(arg2->lower)));
+}
 
 static bool
 gbt_cashgt(const void *a, const void *b, FmgrInfo *flinfo)
@@ -214,4 +230,15 @@ gbt_cash_same(PG_FUNCTION_ARGS)
 
 	*result = gbt_num_same((void *) b1, (void *) b2, &tinfo, fcinfo->flinfo);
 	PG_RETURN_POINTER(result);
+}
+
+Datum
+gbt_cash_sortsupport(PG_FUNCTION_ARGS)
+{
+	SortSupport ssup = (SortSupport) PG_GETARG_POINTER(0);
+
+	ssup->comparator = gbt_cash_ssup_cmp;
+	ssup->ssup_extra = NULL;
+
+	PG_RETURN_VOID();
 }

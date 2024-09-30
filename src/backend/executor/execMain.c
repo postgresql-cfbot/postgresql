@@ -2292,8 +2292,9 @@ ExecBuildSlotValueDescription(Oid reloid,
 			 */
 			aclresult = pg_attribute_aclcheck(reloid, att->attnum,
 											  GetUserId(), ACL_SELECT);
-			if (bms_is_member(att->attnum - FirstLowInvalidHeapAttributeNumber,
-							  modifiedCols) || aclresult == ACLCHECK_OK)
+			if (aclresult == ACLCHECK_OK ||
+				bms_is_member(att->attnum - FirstLowInvalidHeapAttributeNumber,
+							  modifiedCols))
 			{
 				column_perm = any_perm = true;
 

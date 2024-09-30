@@ -1,0 +1,29 @@
+--
+-- pgp decrypt tests with utf8 encoding
+--
+select getdatabaseencoding() = 'UTF8' AS encoding_test \gset
+\if :encoding_test
+
+select digest(pgp_sym_decrypt(dearmor('
+-----BEGIN PGP MESSAGE-----
+Comment: dat3.aes.sha1.mdc.s2k3.z0
+
+jA0EBwMCxQvxJZ3G/HRg0lgBeYmTa7/uDAjPyFwSX4CYBgpZWVn/JS8JzILrcWF8
+gFnkUKIE0PSaYFp+Yi1VlRfUtRQ/X/LYNGa7tWZS+4VQajz2Xtz4vUeAEiYFYPXk
+73Hb8m1yRhQK
+=ivrD
+-----END PGP MESSAGE-----
+'), '0123456789abcdefghij'), 'sha1');
+
+-- Database encoding protection.  Ciphertext source:
+-- printf '\xe0\xe0\xbff' | gpg --batch --passphrase mykey --textmode --armor --symmetric
+select pgp_sym_decrypt(dearmor('
+-----BEGIN PGP MESSAGE-----
+
+jA0ECQMIk4NUq+Ia+pb+0jkBaKWe8y03NKddkoMTFZt467Qc+JEp4zdlqTdA4d0d
+Pr66ILfi67O8N4AByEjIyeR2ZPvrKN+xdSo=
+=QKy4
+-----END PGP MESSAGE-----
+'), 'mykey', 'debug=1');
+\quit
+\endif

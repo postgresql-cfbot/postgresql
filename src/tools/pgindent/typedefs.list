@@ -2702,6 +2702,7 @@ SortSupportData
 SortTuple
 SortTupleComparator
 SortedPoint
+SpGistBatchInfo
 SpGistBuildState
 SpGistCache
 SpGistDeadTuple

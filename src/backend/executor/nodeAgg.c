@@ -3100,7 +3100,7 @@ hashagg_spill_finish(AggState *aggstate, HashAggSpill *spill, int setno)
 
 	for (i = 0; i < spill->npartitions; i++)
 	{
-		LogicalTape *tape = spill->partitions[i];
+		LogicalTape *tape;
 		HashAggBatch *new_batch;
 		double		cardinality;
 
@@ -3108,6 +3108,7 @@ hashagg_spill_finish(AggState *aggstate, HashAggSpill *spill, int setno)
 		if (spill->ntuples[i] == 0)
 			continue;
 
+		tape = spill->partitions[i];
 		cardinality = estimateHyperLogLog(&spill->hll_card[i]);
 		freeHyperLogLog(&spill->hll_card[i]);
 

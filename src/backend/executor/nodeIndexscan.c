@@ -411,7 +411,7 @@ cmp_orderbyvals(const Datum *adist, const bool *anulls,
 
 	for (i = 0; i < node->iss_NumOrderByKeys; i++)
 	{
-		SortSupport ssup = &node->iss_SortSupport[i];
+		SortSupport ssup;
 
 		/*
 		 * Handle nulls.  We only need to support NULLS LAST ordering, because
@@ -425,6 +425,7 @@ cmp_orderbyvals(const Datum *adist, const bool *anulls,
 		else if (anulls[i] && bnulls[i])
 			return 0;
 
+		ssup = &node->iss_SortSupport[i];
 		result = ssup->comparator(adist[i], bdist[i], ssup);
 		if (result != 0)
 			return result;

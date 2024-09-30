@@ -790,6 +790,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_indexscan_batching", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables the planner's use of index-scan batching."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_indexscan_batching,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_indexonlyscan", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of index-only-scan plans."),
 			NULL,

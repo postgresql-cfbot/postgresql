@@ -184,6 +184,19 @@ typedef struct SpGistSearchItem
 	(offsetof(SpGistSearchItem, distances) + sizeof(double) * (n_distances))
 
 /*
+ * Information about the current batch (in batched index scans)
+ *
+ * XXX Probably not needed, as spgist supports just forward scans, so we
+ * could simply the iPtr (no problem after change of scan direction).
+ */
+typedef struct SpGistBatchInfo
+{
+	/* Current range of items in a batch (if used). */
+	int			firstIndex;
+	int			lastIndex;
+} SpGistBatchInfo;
+
+/*
  * Private state of an index scan
  */
 typedef struct SpGistScanOpaqueData
@@ -234,6 +247,8 @@ typedef struct SpGistScanOpaqueData
 
 	/* distances (for recheck) */
 	IndexOrderByDistance *distances[MaxIndexTuplesPerPage];
+
+	SpGistBatchInfo batch;		/* batch loaded from the index */
 
 	/*
 	 * Note: using MaxIndexTuplesPerPage above is a bit hokey since

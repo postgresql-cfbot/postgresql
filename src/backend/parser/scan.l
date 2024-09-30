@@ -817,8 +817,6 @@ other			.
 					if (yyextra->literallen == 0)
 						yyerror("zero-length delimited identifier");
 					ident = litbufdup(yyscanner);
-					if (yyextra->literallen >= NAMEDATALEN)
-						truncate_identifier(ident, yyextra->literallen, true);
 					yylval->str = ident;
 					return IDENT;
 				}
@@ -845,7 +843,7 @@ other			.
 					/* throw back all but the initial u/U */
 					yyless(1);
 					/* and treat it as {identifier} */
-					ident = downcase_truncate_identifier(yytext, yyleng, true);
+					ident = downcase_identifier(yytext, yyleng);
 					yylval->str = ident;
 					return IDENT;
 				}
@@ -1099,11 +1097,8 @@ other			.
 						return yyextra->keyword_tokens[kwnum];
 					}
 
-					/*
-					 * No.  Convert the identifier to lower case, and truncate
-					 * if necessary.
-					 */
-					ident = downcase_truncate_identifier(yytext, yyleng, true);
+					/* No.  Convert the identifier to lower case. */
+					ident = downcase_identifier(yytext, yyleng);
 					yylval->str = ident;
 					return IDENT;
 				}

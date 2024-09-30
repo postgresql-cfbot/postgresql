@@ -830,10 +830,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 				UnlistenStmt *stmt = (UnlistenStmt *) parsetree;
 
 				CheckRestrictedOperation("UNLISTEN");
-				if (stmt->conditionname)
-					Async_Unlisten(stmt->conditionname);
-				else
-					Async_UnlistenAll();
+				Async_Unlisten(stmt->conditionname);
 			}
 			break;
 

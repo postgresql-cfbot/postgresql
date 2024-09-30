@@ -59,6 +59,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "parser/parser.h"
+#include "parser/scansup.h"
 #include "storage/lmgr.h"
 #include "utils/date.h"
 #include "utils/datetime.h"
@@ -216,6 +217,7 @@ static PartitionStrategy parsePartitionStrategy(char *strategy);
 static void preprocess_pubobj_list(List *pubobjspec_list,
 								   core_yyscan_t yyscanner);
 static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
+static void validate_channel(char *channel);
 
 %}
 
@@ -579,6 +581,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <str>		extract_arg
 %type <boolean> opt_varying opt_timezone opt_no_inherit
 
+%type <str>		Ident
 %type <ival>	Iconst SignedIconst
 %type <str>		Sconst comment_text notify_payload
 %type <str>		RoleId opt_boolean_or_string
@@ -590,6 +593,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	var_value zone_value
 %type <rolespec> auth_ident RoleSpec opt_granted_by
 %type <publicationobjectspec> PublicationObjSpec
+%type <str>		LevelId
 
 %type <keyword> unreserved_keyword type_func_name_keyword
 %type <keyword> col_name_keyword reserved_keyword
@@ -676,6 +680,12 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <boolean>	json_key_uniqueness_constraint_opt
 				json_object_constructor_null_clause_opt
 				json_array_constructor_null_clause_opt
+
+%type <str>		listen_channel
+				listen_channel_inner_levels
+				listen_channel_inner_level
+				listen_channel_outer_level
+%type <str>		notify_channel
 
 
 /*
@@ -1250,7 +1260,7 @@ AlterOptRoleElem:
 				{
 					$$ = makeDefElem("rolemembers", (Node *) $2, @1);
 				}
-			| IDENT
+			| Ident
 				{
 					/*
 					 * We handle identifiers that aren't parser keywords with
@@ -1836,14 +1846,14 @@ opt_boolean_or_string:
  * - an integer or floating point number
  * - a time interval per SQL99
  * ColId gives reduce/reduce errors against ConstInterval and LOCAL,
- * so use IDENT (meaning we reject anything that is a key word).
+ * so use Ident (meaning we reject anything that is a key word).
  */
 zone_value:
 			Sconst
 				{
 					$$ = makeStringConst($1, @1);
 				}
-			| IDENT
+			| Ident
 				{
 					$$ = makeStringConst($1, @1);
 				}
@@ -5865,7 +5875,7 @@ RowSecurityOptionalToRole:
 		;
 
 RowSecurityDefaultPermissive:
-			AS IDENT
+			AS Ident
 				{
 					if (strcmp($2, "permissive") == 0)
 						$$ = true;
@@ -6462,11 +6472,11 @@ old_aggr_list: old_aggr_elem						{ $$ = list_make1($1); }
 		;
 
 /*
- * Must use IDENT here to avoid reduce/reduce conflicts; fortunately none of
+ * Must use Ident here to avoid reduce/reduce conflicts; fortunately none of
  * the item names needed in old aggregate definitions are likely to become
  * SQL keywords.
  */
-old_aggr_elem:  IDENT '=' def_arg
+old_aggr_elem:  Ident '=' def_arg
 				{
 					$$ = makeDefElem($1, (Node *) $3, @1);
 				}
@@ -10944,14 +10954,22 @@ opt_instead:
  *
  *****************************************************************************/
 
-NotifyStmt: NOTIFY ColId notify_payload
+NotifyStmt: NOTIFY notify_channel notify_payload
 				{
 					NotifyStmt *n = makeNode(NotifyStmt);
 
+					validate_channel($2);
 					n->conditionname = $2;
 					n->payload = $3;
 					$$ = (Node *) n;
 				}
+		;
+
+notify_channel:
+			LevelId
+					{ $$ = $1; }
+			| notify_channel '.' LevelId
+					{ $$ = psprintf("%s.%s", $1, $3); }
 		;
 
 notify_payload:
@@ -10959,30 +10977,53 @@ notify_payload:
 			| /*EMPTY*/							{ $$ = NULL; }
 		;
 
-ListenStmt: LISTEN ColId
+ListenStmt: LISTEN listen_channel
 				{
 					ListenStmt *n = makeNode(ListenStmt);
 
+					validate_channel($2);
 					n->conditionname = $2;
 					$$ = (Node *) n;
 				}
 		;
 
 UnlistenStmt:
-			UNLISTEN ColId
+			UNLISTEN listen_channel
 				{
 					UnlistenStmt *n = makeNode(UnlistenStmt);
 
+					validate_channel($2);
 					n->conditionname = $2;
 					$$ = (Node *) n;
 				}
-			| UNLISTEN '*'
-				{
-					UnlistenStmt *n = makeNode(UnlistenStmt);
+		;
 
-					n->conditionname = NULL;
-					$$ = (Node *) n;
-				}
+listen_channel:
+			listen_channel_outer_level
+					{ $$ = $1; }
+			| listen_channel_inner_levels '.' listen_channel_outer_level
+					{ $$ = psprintf("%s.%s", $1, $3); }
+		;
+
+listen_channel_inner_levels:
+			listen_channel_inner_level
+					{ $$ = $1; }
+			| listen_channel_inner_levels '.' listen_channel_inner_level
+					{ $$ = psprintf("%s.%s", $1, $3); }
+		;
+
+listen_channel_inner_level:
+			'%' 								{ $$ = "%"; }
+			| LevelId 							{ $$ = $1; }
+			| LevelId '%' 						{ $$ = psprintf("%s%%", $1); }
+		;
+
+listen_channel_outer_level:
+			'*'									{ $$ = "*"; }
+			| '%'								{ $$ = "%"; }
+			| LevelId							{ $$ = $1; }
+			| LevelId '*'						{ $$ = psprintf("%s*", $1); }
+			| LevelId '%'						{ $$ = psprintf("%s%%", $1); }
 		;
 
 
@@ -11322,7 +11363,7 @@ createdb_opt_item:
 /*
  * Ideally we'd use ColId here, but that causes shift/reduce conflicts against
  * the ALTER DATABASE SET/RESET syntaxes.  Instead call out specific keywords
- * we need, and allow IDENT so that database option names don't have to be
+ * we need, and allow Ident so that database option names don't have to be
  * parser keywords unless they are already keywords for other reasons.
  *
  * XXX this coding technique is fragile since if someone makes a formerly
@@ -11331,7 +11372,7 @@ createdb_opt_item:
  * exercising every such option, at least at the syntax level.
  */
 createdb_opt_name:
-			IDENT							{ $$ = $1; }
+			Ident							{ $$ = $1; }
 			| CONNECTION LIMIT				{ $$ = pstrdup("connection_limit"); }
 			| ENCODING						{ $$ = pstrdup($1); }
 			| LOCATION						{ $$ = pstrdup($1); }
@@ -14100,7 +14141,7 @@ xmltable_column_option_list:
 		;
 
 xmltable_column_option_el:
-			IDENT b_expr
+			Ident b_expr
 				{ $$ = makeDefElem($1, $2, @1); }
 			| DEFAULT b_expr
 				{ $$ = makeDefElem("default", $2, @1); }
@@ -16613,7 +16654,7 @@ extract_list:
  * - thomas 2001-04-12
  */
 extract_arg:
-			IDENT									{ $$ = $1; }
+			Ident									{ $$ = $1; }
 			| YEAR_P								{ $$ = "year"; }
 			| MONTH_P								{ $$ = "month"; }
 			| DAY_P									{ $$ = "day"; }
@@ -17473,23 +17514,27 @@ plassign_equals: COLON_EQUALS
  * is chosen in part to make keywords acceptable as names wherever possible.
  */
 
+Ident: IDENT
+				{ truncate_identifier($1, strlen($1), true); }
+		;
+
 /* Column identifier --- names that can be column, table, etc names.
  */
-ColId:		IDENT									{ $$ = $1; }
+ColId:		Ident									{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| col_name_keyword						{ $$ = pstrdup($1); }
 		;
 
 /* Type/function identifier --- names that can be type or function names.
  */
-type_function_name:	IDENT							{ $$ = $1; }
+type_function_name:	Ident							{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
 		;
 
 /* Any not-fully-reserved word --- these names can be, eg, role names.
  */
-NonReservedWord:	IDENT							{ $$ = $1; }
+NonReservedWord:	Ident							{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| col_name_keyword						{ $$ = pstrdup($1); }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
@@ -17498,7 +17543,7 @@ NonReservedWord:	IDENT							{ $$ = $1; }
 /* Column label --- allowed labels in "AS" clauses.
  * This presently includes *all* Postgres keywords.
  */
-ColLabel:	IDENT									{ $$ = $1; }
+ColLabel:	Ident									{ $$ = $1; }
 			| unreserved_keyword					{ $$ = pstrdup($1); }
 			| col_name_keyword						{ $$ = pstrdup($1); }
 			| type_func_name_keyword				{ $$ = pstrdup($1); }
@@ -17508,10 +17553,17 @@ ColLabel:	IDENT									{ $$ = $1; }
 /* Bare column label --- names that can be column labels without writing "AS".
  * This classification is orthogonal to the other keyword categories.
  */
-BareColLabel:	IDENT								{ $$ = $1; }
+BareColLabel:	Ident								{ $$ = $1; }
 			| bare_label_keyword					{ $$ = pstrdup($1); }
 		;
 
+/* Level identifier --- the same as column identifier but we postpone truncation
+ * until we fully assemble channel name.
+ */
+LevelId:	IDENT									{ $$ = $1; }
+			| unreserved_keyword					{ $$ = pstrdup($1); }
+			| col_name_keyword						{ $$ = pstrdup($1); }
+		;
 
 /*
  * Keyword category lists.  Generally, every keyword present in
@@ -19511,6 +19563,17 @@ makeRecursiveViewSelect(char *relname, List *aliases, Node *query)
 	s->fromClause = list_make1(makeRangeVar(NULL, relname, -1));
 
 	return (Node *) s;
+}
+
+/* Validate channel name in NOTIFY, LISTEN, UNLISTEN statements */
+static void
+validate_channel(char *channel)
+{
+	/* enforce length limits */
+	if (strlen(channel) >= NAMEDATALEN)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("channel name too long")));
 }
 
 /* parser_init()

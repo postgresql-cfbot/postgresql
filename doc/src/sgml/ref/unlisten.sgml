@@ -34,10 +34,12 @@ UNLISTEN { <replaceable class="parameter">channel</replaceable> | * }
    <command>UNLISTEN</command> cancels any existing registration of
    the current <productname>PostgreSQL</productname> session as a
    listener on the notification channel named <replaceable
-   class="parameter">channel</replaceable>.  The special wildcard
-   <literal>*</literal> cancels all listener registrations for the
+   class="parameter">channel</replaceable>. Channel name
+   <replaceable class="parameter">channel</replaceable> can contain
+   wildcards which allows you to simultaneously cancel multiple
+   registrations for the current session. For example,
+   <command>UNLISTEN *</command> cancels all registrations for the
    current session.
-  </para>
 
   <para>
    <xref linkend="sql-notify"/>
@@ -55,17 +57,37 @@ UNLISTEN { <replaceable class="parameter">channel</replaceable> | * }
     <term><replaceable class="parameter">channel</replaceable></term>
     <listitem>
      <para>
-      Name of a notification channel (any identifier).
+      Name of a notification channel. It is a simple string composed of
+      multiple levels in the form <literal>a.b.c</literal> where
+      <literal>a</literal>, <literal>b</literal> and <literal>c</literal> are
+      identifiers which can contain the following wildcards:
      </para>
-    </listitem>
-   </varlistentry>
 
-   <varlistentry>
-    <term><literal>*</literal></term>
-    <listitem>
-     <para>
-      All current listen registrations for this session are cleared.
-     </para>
+     <variablelist>
+      <varlistentry>
+       <term><literal>%</literal></term>
+       <listitem>
+        <para>
+         Matches everything until the end of a level. Can only appear at
+         the end of a level. For example, <command>UNLISTEN a.b%.c</command>
+         cancels registrations on the notification channels named like
+         <literal>a.b.c</literal>, <literal>a.bc.c</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term><literal>*</literal></term>
+       <listitem>
+        <para>
+         Matches everything to the right. Can only appear at the end of
+         the last level. For example, <command>UNLISTEN a.b*</command>
+         cancels registrations on the notification channels named like
+         <literal>a.b</literal>, <literal>a.bc.d</literal>.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
     </listitem>
    </varlistentry>
   </variablelist>

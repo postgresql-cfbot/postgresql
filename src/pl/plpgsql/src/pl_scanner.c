@@ -17,6 +17,7 @@
 
 #include "mb/pg_wchar.h"
 #include "parser/scanner.h"
+#include "parser/scansup.h"
 
 #include "plpgsql.h"
 #include "pl_gram.h"			/* must be after parser/scanner.h */
@@ -358,6 +359,14 @@ internal_yylex(TokenAuxData *auxdata)
 		else if (token == PARAM)
 		{
 			auxdata->lval.str = pstrdup(yytext);
+		}
+
+		else if (token == IDENT)
+		{
+			/* It's an identifier, so truncate as appropriate */
+			truncate_identifier(auxdata->lval.str,
+								strlen(auxdata->lval.str),
+								true);
 		}
 	}
 

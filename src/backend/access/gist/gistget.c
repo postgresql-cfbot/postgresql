@@ -218,13 +218,14 @@ gistindex_keytest(IndexScanDesc scan,
 			 */
 			recheck = true;
 
-			test = FunctionCall5Coll(&key->sk_func,
+			test = FunctionCall6Coll(&key->sk_func,
 									 key->sk_collation,
 									 PointerGetDatum(&de),
 									 key->sk_argument,
 									 Int16GetDatum(key->sk_strategy),
 									 ObjectIdGetDatum(key->sk_subtype),
-									 PointerGetDatum(&recheck));
+									 PointerGetDatum(&recheck),
+									 Int16GetDatum(key->sk_attno));
 
 			if (!DatumGetBool(test))
 				return false;

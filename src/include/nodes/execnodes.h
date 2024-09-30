@@ -730,6 +730,12 @@ typedef struct EState
 	 */
 	List	   *es_insert_pending_result_relations;
 	List	   *es_insert_pending_modifytables;
+
+	int			es_parallelized_nodes;
+	int			es_parallelized_nodes_success;
+	int			es_parallelized_nodes_no_workers;
+	int			es_workers_launched;
+	int			es_workers_planned;
 } EState;
 
 

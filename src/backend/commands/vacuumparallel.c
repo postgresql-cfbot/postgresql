@@ -437,6 +437,14 @@ parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 {
 	Assert(!IsParallelWorker());
 
+	if ((log_parallel_workers == LOG_PARALLEL_WORKERS_ALL &&
+		 pvs->pcxt->nworkers_to_launch > 0) ||
+		(log_parallel_workers == LOG_PARALLEL_WORKERS_FAILURE &&
+		 pvs->pcxt->nworkers_to_launch > pvs->pcxt->nworkers_launched))
+		elog(LOG, "%i workers planned (%i workers launched)",
+			pvs->pcxt->nworkers_to_launch,
+			pvs->pcxt->nworkers_launched);
+
 	/* Copy the updated statistics */
 	for (int i = 0; i < pvs->nindexes; i++)
 	{

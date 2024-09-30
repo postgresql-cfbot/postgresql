@@ -947,18 +947,13 @@ ExecInitIndexScan(IndexScan *node, EState *estate, int eflags)
 		ExecInitExprList(node->indexorderbyorig, (PlanState *) indexstate);
 
 	/*
-	 * Can't do batching (and thus prefetching) when the plan requires mark
-	 * and restore. There's an issue with translating the mark/restore
-	 * positions between the batch in scan descriptor and the original
-	 * position recognized in the index AM.
-	 *
-	 * XXX Hopefully just a temporary limitation?
+	 * All index scans can do batching.
 	 *
 	 * XXX Maybe this should check if the index AM supports batching, or even
 	 * call something like "amcanbatch" (does not exist yet). Or check the
-	 * enable_indexscan_batching GUC? Now we check the GUC in index_beginscan.
+	 * enable_indexscan_batching GUC?
 	 */
-	indexstate->iss_CanBatch = !(eflags & EXEC_FLAG_MARK);
+	indexstate->iss_CanBatch = true;
 
 	/*
 	 * If we are just doing EXPLAIN (ie, aren't going to run the plan), stop

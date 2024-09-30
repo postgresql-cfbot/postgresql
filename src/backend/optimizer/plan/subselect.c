@@ -1275,7 +1275,6 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	 * LATERAL.  (Vars from higher levels don't matter here.)
 	 */
 	sub_ref_outer_relids = pull_varnos_of_level(NULL, (Node *) subselect, 1);
-	use_lateral = !bms_is_empty(sub_ref_outer_relids);
 
 	/*
 	 * Can't convert if the sub-select contains parent-level Vars of relations
@@ -1316,6 +1315,7 @@ convert_ANY_sublink_to_join(PlannerInfo *root, SubLink *sublink,
 	 * below). Therefore this is a lot easier than what pull_up_subqueries has
 	 * to go through.
 	 */
+	use_lateral = !bms_is_empty(sub_ref_outer_relids);
 	nsitem = addRangeTableEntryForSubquery(pstate,
 										   subselect,
 										   makeAlias("ANY_subquery", NIL),

@@ -22,6 +22,7 @@
 #include "catalog/pg_authid.h"
 #include "catalog/pg_foreign_table.h"
 #include "commands/copy.h"
+#include "commands/copyfrom_internal.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
 #include "commands/vacuum.h"
@@ -74,6 +75,8 @@ static const struct FileFdwOption valid_options[] = {
 	{"null", ForeignTableRelationId},
 	{"default", ForeignTableRelationId},
 	{"encoding", ForeignTableRelationId},
+	{"on_error", ForeignTableRelationId},
+	{"log_verbosity", ForeignTableRelationId},
 	{"force_not_null", AttributeRelationId},
 	{"force_null", AttributeRelationId},
 
@@ -725,12 +728,12 @@ fileIterateForeignScan(ForeignScanState *node)
 	ExprContext *econtext;
 	MemoryContext oldcontext;
 	TupleTableSlot *slot = node->ss.ss_ScanTupleSlot;
-	bool		found;
+	CopyFromState cstate = festate->cstate;
 	ErrorContextCallback errcallback;
 
 	/* Set up callback to identify error line number. */
 	errcallback.callback = CopyFromErrorCallback;
-	errcallback.arg = (void *) festate->cstate;
+	errcallback.arg = (void *) cstate;
 	errcallback.previous = error_context_stack;
 	error_context_stack = &errcallback;
 
@@ -751,10 +754,27 @@ fileIterateForeignScan(ForeignScanState *node)
 	 * switch in case we are doing that.
 	 */
 	oldcontext = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-	found = NextCopyFrom(festate->cstate, econtext,
-						 slot->tts_values, slot->tts_isnull);
-	if (found)
+
+retry:
+	if (NextCopyFrom(cstate, econtext, slot->tts_values, slot->tts_isnull))
+	{
+		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
+			cstate->escontext->error_occurred)
+		{
+			/*
+			 * Soft error occurred, skip this tuple and just make
+			 * ErrorSaveContext ready for the next NextCopyFrom. Since we
+			 * don't set details_wanted and error_data is not to be filled,
+			 * just resetting error_occurred is enough.
+			 */
+			cstate->escontext->error_occurred = false;
+
+			/* Repeat NextCopyFrom() until no soft error occurs */
+			goto retry;
+		}
+
 		ExecStoreVirtualTuple(slot);
+	}
 
 	/* Switch back to original memory context */
 	MemoryContextSwitchTo(oldcontext);
@@ -796,8 +816,19 @@ fileEndForeignScan(ForeignScanState *node)
 	FileFdwExecutionState *festate = (FileFdwExecutionState *) node->fdw_state;
 
 	/* if festate is NULL, we are in EXPLAIN; nothing to do */
-	if (festate)
-		EndCopyFrom(festate->cstate);
+	if (!festate)
+		return;
+
+	if (festate->cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
+		festate->cstate->num_errors > 0 &&
+		festate->cstate->opts.log_verbosity >= COPY_LOG_VERBOSITY_DEFAULT)
+		ereport(NOTICE,
+				errmsg_plural("%llu row was skipped due to data type incompatibility",
+							  "%llu rows were skipped due to data type incompatibility",
+							  (unsigned long long) festate->cstate->num_errors,
+							  (unsigned long long) festate->cstate->num_errors));
+
+	EndCopyFrom(festate->cstate);
 }
 
 /*
@@ -1113,7 +1144,8 @@ estimate_costs(PlannerInfo *root, RelOptInfo *baserel,
  * which must have at least targrows entries.
  * The actual number of rows selected is returned as the function result.
  * We also count the total number of rows in the file and return it into
- * *totalrows.  Note that *totaldeadrows is always set to 0.
+ * *totalrows.  Rows skipped due to on_error = 'ignore' are not included
+ * in this count.  Note that *totaldeadrows is always set to 0.
  *
  * Note that the returned list of rows is not always in order by physical
  * position in the file.  Therefore, correlation estimates derived later
@@ -1191,6 +1223,21 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 		if (!found)
 			break;
 
+		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
+			cstate->escontext->error_occurred)
+		{
+			/*
+			 * Soft error occurred, skip this tuple and just make
+			 * ErrorSaveContext ready for the next NextCopyFrom. Since we
+			 * don't set details_wanted and error_data is not to be filled,
+			 * just resetting error_occurred is enough.
+			 */
+			cstate->escontext->error_occurred = false;
+
+			/* Repeat NextCopyFrom() until no soft error occurs */
+			continue;
+		}
+
 		/*
 		 * The first targrows sample rows are simply copied into the
 		 * reservoir.  Then we start replacing tuples in the sample until we
@@ -1235,6 +1282,15 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 
 	/* Clean up. */
 	MemoryContextDelete(tupcontext);
+
+	if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
+		cstate->num_errors > 0 &&
+		cstate->opts.log_verbosity >= COPY_LOG_VERBOSITY_DEFAULT)
+		ereport(NOTICE,
+				errmsg_plural("%llu row was skipped due to data type incompatibility",
+							  "%llu rows were skipped due to data type incompatibility",
+							  (unsigned long long) cstate->num_errors,
+							  (unsigned long long) cstate->num_errors));
 
 	EndCopyFrom(cstate);
 

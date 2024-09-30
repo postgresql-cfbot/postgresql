@@ -1184,7 +1184,9 @@ listDefaultACLs(const char *pattern)
 	printfPQExpBuffer(&buf,
 					  "SELECT pg_catalog.pg_get_userbyid(d.defaclrole) AS \"%s\",\n"
 					  "  n.nspname AS \"%s\",\n"
-					  "  CASE d.defaclobjtype WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' END AS \"%s\",\n"
+					  "  CASE d.defaclobjtype "
+					  "    WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s'"
+					  "    WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' WHEN '%c' THEN '%s' END AS \"%s\",\n"
 					  "  ",
 					  gettext_noop("Owner"),
 					  gettext_noop("Schema"),
@@ -1198,6 +1200,8 @@ listDefaultACLs(const char *pattern)
 					  gettext_noop("type"),
 					  DEFACLOBJ_NAMESPACE,
 					  gettext_noop("schema"),
+					  DEFACLOBJ_LARGEOBJECT,
+					  gettext_noop("large object"),
 					  gettext_noop("Type"));
 
 	printACLColumn(&buf, "d.defaclacl");

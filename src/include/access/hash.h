@@ -152,6 +152,14 @@ typedef struct HashScanPosData
 		(scanpos).itemIndex = 0; \
 	} while (0)
 
+/* Information about the current batch (in batched index scans) */
+typedef struct HashBatchInfo
+{
+	/* Current range of items in a batch (if used). */
+	int			firstIndex;
+	int			lastIndex;
+} HashBatchInfo;
+
 /*
  *	HashScanOpaqueData is private state for a hash index scan.
  */
@@ -181,6 +189,9 @@ typedef struct HashScanOpaqueData
 	/* info about killed items if any (killedItems is NULL if never used) */
 	int		   *killedItems;	/* currPos.items indexes of killed items */
 	int			numKilled;		/* number of currently stored items */
+
+	/* info about current batch */
+	HashBatchInfo batch;
 
 	/*
 	 * Identify all the matching items on a page and save them in
@@ -369,6 +380,7 @@ extern bool hashinsert(Relation rel, Datum *values, bool *isnull,
 					   bool indexUnchanged,
 					   struct IndexInfo *indexInfo);
 extern bool hashgettuple(IndexScanDesc scan, ScanDirection dir);
+extern bool hashgetbatch(IndexScanDesc scan, ScanDirection dir);
 extern int64 hashgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern IndexScanDesc hashbeginscan(Relation rel, int nkeys, int norderbys);
 extern void hashrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
@@ -444,6 +456,11 @@ extern void _hash_finish_split(Relation rel, Buffer metabuf, Buffer obuf,
 /* hashsearch.c */
 extern bool _hash_next(IndexScanDesc scan, ScanDirection dir);
 extern bool _hash_first(IndexScanDesc scan, ScanDirection dir);
+extern bool _hash_next_batch(IndexScanDesc scan, ScanDirection dir);
+extern bool _hash_first_batch(IndexScanDesc scan, ScanDirection dir);
+extern void _hash_copy_batch(IndexScanDesc scan, ScanDirection dir,
+							 HashScanOpaque so, int start, int end);
+extern void _hash_kill_batch(IndexScanDesc scan);
 
 /* hashsort.c */
 typedef struct HSpool HSpool;	/* opaque struct in hashsort.c */

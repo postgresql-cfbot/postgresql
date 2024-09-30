@@ -1118,6 +1118,7 @@ Hash
 HashAggBatch
 HashAggSpill
 HashAllocFunc
+HashBatchInfo
 HashBuildState
 HashCompareFunc
 HashCopyFunc

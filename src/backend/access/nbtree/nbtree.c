@@ -142,6 +142,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->ambeginscan = btbeginscan;
 	amroutine->amrescan = btrescan;
 	amroutine->amgettuple = btgettuple;
+	amroutine->amgetbatch = btgetbatch;
 	amroutine->amgetbitmap = btgetbitmap;
 	amroutine->amendscan = btendscan;
 	amroutine->ammarkpos = btmarkpos;
@@ -261,6 +262,53 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 }
 
 /*
+ *	btgetbatch() -- Get the next batch of tuples in the scan.
+ *
+ * XXX Pretty much like btgettuple(), but for batches of tuples.
+ */
+bool
+btgetbatch(IndexScanDesc scan, ScanDirection dir)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	bool		res;
+
+	/* btree indexes are never lossy */
+	scan->xs_recheck = false;
+
+	/* Each loop iteration performs another primitive index scan */
+	do
+	{
+		/*
+		 * If we've already initialized this scan, we can just advance it in
+		 * the appropriate direction.  If we haven't done so yet, we call
+		 * _bt_first() to get the first item in the scan.
+		 */
+		if (!BTScanPosIsValid(so->currPos))
+			res = _bt_first_batch(scan, dir);
+		else
+		{
+			/*
+			 * Check to see if we should kill tuples from the previous batch.
+			 */
+			_bt_kill_batch(scan);
+
+			/*
+			 * Now continue the scan.
+			 */
+			res = _bt_next_batch(scan, dir);
+		}
+
+		/* If we have a tuple, return it ... */
+		if (res)
+			break;
+
+		/* ... otherwise see if we need another primitive index scan */
+	} while (so->numArrayKeys && _bt_start_prim_scan(scan, dir));
+
+	return res;
+}
+
+/*
  * btgetbitmap() -- gets all matching tuples, and adds them to a bitmap
  */
 int64
@@ -339,6 +387,10 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	so->killedItems = NULL;		/* until needed */
 	so->numKilled = 0;
 
+	/* batch range, initially empty */
+	so->batch.firstIndex = -1;
+	so->batch.lastIndex = -1;
+
 	/*
 	 * We don't know yet whether the scan will be index-only, so we do not
 	 * allocate the tuple workspace arrays until btrescan.  However, we set up
@@ -365,6 +417,9 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	/* we aren't holding any read locks, but gotta drop the pins */
 	if (BTScanPosIsValid(so->currPos))
 	{
+		/* Transfer killed items from the batch to the regular array. */
+		_bt_kill_batch(scan);
+
 		/* Before leaving current page, deal with any killed items */
 		if (so->numKilled > 0)
 			_bt_killitems(scan);
@@ -407,6 +462,10 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 	so->numberOfKeys = 0;		/* until _bt_preprocess_keys sets it */
 	so->numArrayKeys = 0;		/* ditto */
+
+	/* Reset the batch (even if not batched scan) */
+	so->batch.firstIndex = -1;
+	so->batch.lastIndex = -1;
 }
 
 /*
@@ -420,6 +479,9 @@ btendscan(IndexScanDesc scan)
 	/* we aren't holding any read locks, but gotta drop the pins */
 	if (BTScanPosIsValid(so->currPos))
 	{
+		/* Transfer killed items from the batch to the regular array. */
+		_bt_kill_batch(scan);
+
 		/* Before leaving current page, deal with any killed items */
 		if (so->numKilled > 0)
 			_bt_killitems(scan);
@@ -500,6 +562,9 @@ btrestrpos(IndexScanDesc scan)
 		 */
 		if (BTScanPosIsValid(so->currPos))
 		{
+			/* Transfer killed items from the batch to the regular array. */
+			_bt_kill_batch(scan);
+
 			/* Before leaving current page, deal with any killed items */
 			if (so->numKilled > 0)
 				_bt_killitems(scan);

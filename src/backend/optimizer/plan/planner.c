@@ -298,6 +298,10 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	Plan	   *top_plan;
 	ListCell   *lp,
 			   *lr;
+	MemoryContextCounters before_counters,
+				after_counters;
+
+	MemoryContextMemConsumed(CurrentMemoryContext, &before_counters);
 
 	/*
 	 * Set up global state for this planner invocation.  This data is needed
@@ -604,6 +608,13 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 
 	if (glob->partition_directory != NULL)
 		DestroyPartitionDirectory(glob->partition_directory);
+
+	MemoryContextMemConsumed(CurrentMemoryContext, &after_counters);
+	after_counters.freespace -= before_counters.freespace;
+	after_counters.totalspace -= before_counters.totalspace;
+	elog(LOG, "planning memory consumption: used=%lld allocated=%lld",
+		 (long long) (after_counters.totalspace - after_counters.freespace),
+		 (long long) (after_counters.totalspace));
 
 	return result;
 }

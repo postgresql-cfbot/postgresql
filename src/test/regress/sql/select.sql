@@ -262,3 +262,7 @@ create table list_parted_tbl1 partition of list_parted_tbl
   for values in (1) partition by list(b);
 explain (costs off) select * from list_parted_tbl;
 drop table list_parted_tbl;
+
+-- Test hints for underscore swap in attnames without explicitly creating a table.
+select checked_din_5008 from (select false my_col, false checkd_d_500, true din_5008_checked) foo;
+

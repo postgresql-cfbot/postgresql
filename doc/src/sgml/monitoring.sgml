@@ -786,6 +786,28 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>auth_method</structfield> <type>text</type>
+      </para>
+      <para>
+       The authentication method used for authenticating the connection, or
+       NULL for background processes.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>auth_identity</structfield> <type>text</type>
+      </para>
+      <para>
+       The identity (if any) that the user presented during the authentication
+       cycle before they were assigned a database role.  Contains the same
+       value as the identity part in <xref linkend="system-user" />, or NULL
+       for background processes.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>application_name</structfield> <type>text</type>
       </para>
       <para>

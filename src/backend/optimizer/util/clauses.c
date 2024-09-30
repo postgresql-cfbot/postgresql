@@ -5069,7 +5069,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	TupleDesc	rettupdesc;
 	List	   *raw_parsetree_list;
 	List	   *querytree_list;
-	Query	   *querytree;
+	Query	   *querytree = NULL;
 
 	Assert(rte->rtekind == RTE_FUNCTION);
 
@@ -5134,7 +5134,8 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	funcform = (Form_pg_proc) GETSTRUCT(func_tuple);
 
 	/*
-	 * Forget it if the function is not SQL-language or has other showstopper
+	 * Forget it unless the function is SQL-language or provides a support function.
+	 * Also check for other showstopper
 	 * properties.  In particular it mustn't be declared STRICT, since we
 	 * couldn't enforce that.  It also mustn't be VOLATILE, because that is
 	 * supposed to cause it to be executed with its own snapshot, rather than
@@ -5143,7 +5144,7 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 	 * of the function's last SELECT, which should not happen in that case.
 	 * (Rechecking prokind, proretset, and pronargs is just paranoia.)
 	 */
-	if (funcform->prolang != SQLlanguageId ||
+	if ((funcform->prolang != SQLlanguageId && !funcform->prosupport) ||
 		funcform->prokind != PROKIND_FUNCTION ||
 		funcform->proisstrict ||
 		funcform->provolatile == PROVOLATILE_VOLATILE ||
@@ -5166,74 +5167,135 @@ inline_set_returning_function(PlannerInfo *root, RangeTblEntry *rte)
 								  ALLOCSET_DEFAULT_SIZES);
 	oldcxt = MemoryContextSwitchTo(mycxt);
 
-	/* Fetch the function body */
-	tmp = SysCacheGetAttrNotNull(PROCOID, func_tuple, Anum_pg_proc_prosrc);
-	src = TextDatumGetCString(tmp);
-
 	/*
-	 * Setup error traceback support for ereport().  This is so that we can
-	 * finger the function that bad information came from.
+	 * If the function has a SupportRequestInlineSRF support function,
+	 * see if it can produce a Query node we can inline.
+	 * This can be mutually-exclusive with SQL functions.
+	 * Those are inlineable already, so it doesn't make sense to
+	 * attach such a support request to them.
 	 */
-	callback_arg.proname = NameStr(funcform->proname);
-	callback_arg.prosrc = src;
+	if (funcform->prolang != SQLlanguageId && funcform->prosupport) {
+		SupportRequestInlineSRF req;
+		FuncExpr	dummy_fexpr;
+		Node	   *newnode;
 
-	sqlerrcontext.callback = sql_inline_error_callback;
-	sqlerrcontext.arg = (void *) &callback_arg;
-	sqlerrcontext.previous = error_context_stack;
-	error_context_stack = &sqlerrcontext;
+		/*
+		 * We don't need the whole sqlerrcontext,
+		 * but make sure we restore it correctly
+		 * if we goto fail.
+		 */
+		sqlerrcontext.previous = error_context_stack;
 
-	/* If we have prosqlbody, pay attention to that not prosrc */
-	tmp = SysCacheGetAttr(PROCOID,
-						  func_tuple,
-						  Anum_pg_proc_prosqlbody,
-						  &isNull);
-	if (!isNull)
-	{
-		Node	   *n;
+		/*
+		 * Build a SupportRequestInlineSRF node to pass to the support
+		 * function, pointing to a dummy FuncExpr node containing the
+		 * simplified arg list.  We use this approach to present a uniform
+		 * interface to the support function regardless of how the target
+		 * function is actually being invoked.
+		 */
 
-		n = stringToNode(TextDatumGetCString(tmp));
-		if (IsA(n, List))
-			querytree_list = linitial_node(List, castNode(List, n));
-		else
-			querytree_list = list_make1(n);
-		if (list_length(querytree_list) != 1)
+		dummy_fexpr.xpr.type = T_FuncExpr;
+		dummy_fexpr.funcid = func_oid;
+		dummy_fexpr.funcresulttype = funcform->prorettype;
+		dummy_fexpr.funcretset = funcform->proretset;
+		dummy_fexpr.funcvariadic = OidIsValid(funcform->provariadic);
+		dummy_fexpr.funcformat = COERCE_EXPLICIT_CALL;
+		dummy_fexpr.funccollid = InvalidOid;
+		dummy_fexpr.inputcollid = InvalidOid;
+		dummy_fexpr.args = fexpr->args;
+		dummy_fexpr.location = -1;
+
+		req.type = T_SupportRequestInlineSRF;
+		req.fcall = &dummy_fexpr;
+
+		newnode = (Node *)
+			DatumGetPointer(OidFunctionCall1(funcform->prosupport,
+											 PointerGetDatum(&req)));
+
+		if (!newnode)
 			goto fail;
-		querytree = linitial(querytree_list);
 
-		/* Acquire necessary locks, then apply rewriter. */
-		AcquireRewriteLocks(querytree, true, false);
-		querytree_list = pg_rewrite_query(querytree);
-		if (list_length(querytree_list) != 1)
-			goto fail;
-		querytree = linitial(querytree_list);
+		if (!IsA(newnode, Query))
+			elog(ERROR,
+				 "Got unexpected node type %d from SupportRequestInlineSRF for function %s",
+				 newnode->type, NameStr(funcform->proname));
+
+		querytree = (Query *) newnode;
+		querytree_list = list_make1(querytree);
 	}
-	else
+
+
+	if (!querytree)
 	{
-		/*
-		 * Set up to handle parameters while parsing the function body.  We
-		 * can use the FuncExpr just created as the input for
-		 * prepare_sql_fn_parse_info.
-		 */
-		pinfo = prepare_sql_fn_parse_info(func_tuple,
-										  (Node *) fexpr,
-										  fexpr->inputcollid);
+		/* Fetch the function body */
+		tmp = SysCacheGetAttrNotNull(PROCOID, func_tuple, Anum_pg_proc_prosrc);
+		src = TextDatumGetCString(tmp);
 
 		/*
-		 * Parse, analyze, and rewrite (unlike inline_function(), we can't
-		 * skip rewriting here).  We can fail as soon as we find more than one
-		 * query, though.
+		 * Setup error traceback support for ereport().  This is so that we can
+		 * finger the function that bad information came from.
 		 */
-		raw_parsetree_list = pg_parse_query(src);
-		if (list_length(raw_parsetree_list) != 1)
-			goto fail;
+		callback_arg.proname = NameStr(funcform->proname);
+		callback_arg.prosrc = src;
 
-		querytree_list = pg_analyze_and_rewrite_withcb(linitial(raw_parsetree_list),
-													   src,
-													   (ParserSetupHook) sql_fn_parser_setup,
-													   pinfo, NULL);
-		if (list_length(querytree_list) != 1)
-			goto fail;
-		querytree = linitial(querytree_list);
+		sqlerrcontext.callback = sql_inline_error_callback;
+		sqlerrcontext.arg = (void *) &callback_arg;
+		sqlerrcontext.previous = error_context_stack;
+		error_context_stack = &sqlerrcontext;
+
+		/* If we have prosqlbody, pay attention to that not prosrc */
+		tmp = SysCacheGetAttr(PROCOID,
+							  func_tuple,
+							  Anum_pg_proc_prosqlbody,
+							  &isNull);
+		if (!isNull)
+		{
+			Node	   *n;
+
+			n = stringToNode(TextDatumGetCString(tmp));
+			if (IsA(n, List))
+				querytree_list = linitial_node(List, castNode(List, n));
+			else
+				querytree_list = list_make1(n);
+			if (list_length(querytree_list) != 1)
+				goto fail;
+			querytree = linitial(querytree_list);
+
+			/* Acquire necessary locks, then apply rewriter. */
+			AcquireRewriteLocks(querytree, true, false);
+			querytree_list = pg_rewrite_query(querytree);
+			if (list_length(querytree_list) != 1)
+				goto fail;
+			querytree = linitial(querytree_list);
+		}
+		else
+		{
+			/*
+			 * Set up to handle parameters while parsing the function body.  We
+			 * can use the FuncExpr just created as the input for
+			 * prepare_sql_fn_parse_info.
+			 */
+			pinfo = prepare_sql_fn_parse_info(func_tuple,
+											  (Node *) fexpr,
+											  fexpr->inputcollid);
+
+			/*
+			 * Parse, analyze, and rewrite (unlike inline_function(), we can't
+			 * skip rewriting here).  We can fail as soon as we find more than one
+			 * query, though.
+			 */
+			raw_parsetree_list = pg_parse_query(src);
+			if (list_length(raw_parsetree_list) != 1)
+				goto fail;
+
+			querytree_list = pg_analyze_and_rewrite_withcb(linitial(raw_parsetree_list),
+														   src,
+														   (ParserSetupHook) sql_fn_parser_setup,
+														   pinfo, NULL);
+			if (list_length(querytree_list) != 1)
+				goto fail;
+			querytree = linitial(querytree_list);
+		}
 	}
 
 	/*

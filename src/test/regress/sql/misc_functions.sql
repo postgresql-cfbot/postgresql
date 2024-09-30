@@ -247,6 +247,12 @@ CREATE FUNCTION test_support_func(internal)
     AS :'regresslib', 'test_support_func'
     LANGUAGE C STRICT;
 
+-- With a support function that inlines SRFs
+CREATE FUNCTION test_inline_srf_support_func(internal)
+    RETURNS internal
+    AS :'regresslib', 'test_inline_srf_support_func'
+    LANGUAGE C STRICT;
+
 ALTER FUNCTION my_int_eq(int, int) SUPPORT test_support_func;
 
 EXPLAIN (COSTS OFF)
@@ -264,6 +270,8 @@ SELECT * FROM tenk1 a JOIN my_gen_series(1,1000) g ON a.unique1 = g;
 
 EXPLAIN (COSTS OFF)
 SELECT * FROM tenk1 a JOIN my_gen_series(1,10) g ON a.unique1 = g;
+
+
 
 --
 -- Test the SupportRequestRows support function for generate_series_timestamp()
@@ -309,6 +317,85 @@ false, true, false, true);
 -- We expect generate_series_timestamp() to throw the error rather than in
 -- the support function.
 SELECT * FROM generate_series(TIMESTAMPTZ '2024-02-01', TIMESTAMPTZ '2024-03-01', INTERVAL '0 day') g(s);
+
+--
+-- Test inlining PL/pgSQL functions
+--
+-- RETURNS SETOF TEXT:
+CREATE OR REPLACE FUNCTION foo_from_bar(colname TEXT, tablename TEXT, filter TEXT)
+RETURNS SETOF TEXT
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format('SELECT %I::text FROM %I', colname, tablename);
+  IF filter IS NOT NULL THEN
+    sql := CONCAT(sql, format(' WHERE %I::text = $1', colname));
+  END IF;
+  RETURN QUERY EXECUTE sql USING filter;
+END;
+$function$ STABLE LEAKPROOF;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+ALTER FUNCTION foo_from_bar(TEXT, TEXT, TEXT) SUPPORT test_inline_srf_support_func;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+DROP FUNCTION foo_from_bar;
+-- RETURNS SETOF RECORD:
+CREATE OR REPLACE FUNCTION foo_from_bar(colname TEXT, tablename TEXT, filter TEXT)
+RETURNS SETOF RECORD
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format('SELECT %I::text FROM %I', colname, tablename);
+  IF filter IS NOT NULL THEN
+    sql := CONCAT(sql, format(' WHERE %I::text = $1', colname));
+  END IF;
+  RETURN QUERY EXECUTE sql USING filter;
+END;
+$function$ STABLE LEAKPROOF;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+ALTER FUNCTION foo_from_bar(TEXT, TEXT, TEXT) SUPPORT test_inline_srf_support_func;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL) AS bar(foo TEXT);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!') AS bar(foo TEXT);
+DROP FUNCTION foo_from_bar;
+-- RETURNS TABLE:
+CREATE OR REPLACE FUNCTION foo_from_bar(colname TEXT, tablename TEXT, filter TEXT)
+RETURNS TABLE(foo TEXT)
+LANGUAGE plpgsql
+AS $function$
+DECLARE
+  sql TEXT;
+BEGIN
+  sql := format('SELECT %I::text FROM %I', colname, tablename);
+  IF filter IS NOT NULL THEN
+    sql := CONCAT(sql, format(' WHERE %I::text = $1', colname));
+  END IF;
+  RETURN QUERY EXECUTE sql USING filter;
+END;
+$function$ STABLE LEAKPROOF;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+ALTER FUNCTION foo_from_bar(TEXT, TEXT, TEXT) SUPPORT test_inline_srf_support_func;
+SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', NULL);
+EXPLAIN SELECT * FROM foo_from_bar('f1', 'text_tbl', 'doh!');
+DROP FUNCTION foo_from_bar;
 
 -- Test functions for control data
 SELECT count(*) > 0 AS ok FROM pg_control_checkpoint();

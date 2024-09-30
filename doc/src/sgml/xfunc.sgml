@@ -4077,6 +4077,20 @@ supportfn(internal) returns internal
    </para>
 
    <para>
+    Similarly, a <link linkend="queries-tablefunction">set-returning function</link>
+    can implement <literal>SupportRequestInlineSRF</literal> to return a
+    <literal>Query</literal> node, which the planner will try to inline into
+    the outer query, just as <productname>PostgreSQL</productname> inlines
+    SQL functions.  Normallly only SQL functions can be inlined, but this support
+    request allows a function in <link linkend="plpgsql">PL/pgSQL</link>
+    or another language to build a dynamic SQL query and have it inlined too.
+    It is the responsibility of the support function to return
+    a node that matches the parent function's implementation. One way to do this is
+    to build a SQL string then parse it with <literal>pg_parse_query</literal>.
+    See <literal>regress.c</literal> for an example.
+   </para>
+
+   <para>
     For target functions that return <type>boolean</type>, it is often useful to estimate
     the fraction of rows that will be selected by a <literal>WHERE</literal> clause using that
     function.  This can be done by a support function that implements

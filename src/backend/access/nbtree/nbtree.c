@@ -519,6 +519,25 @@ btmarkpos(IndexScanDesc scan)
 	BTScanPosUnpinIfPinned(so->markPos);
 
 	/*
+	 * With batched scans, we don't maintain the itemIndex when processing the
+	 * batch, so we need to calculate the current value.
+	 *
+	 * FIXME I don't like that this requires knowledge of batching details,
+	 * I'd very much prefer those to remain isolated in indexam.c. The best
+	 * idea I have is a function that returns the batch index, something like
+	 * index_batch_get_index(). That's close to how other places in AMs talk
+	 * to indexam.c (e.g. when setting distances / orderby in spgist).
+	 */
+	if (scan->xs_batch)
+	{
+		/* the index should be valid in the batch */
+		Assert(scan->xs_batch->currIndex >= 0);
+		Assert(scan->xs_batch->currIndex < scan->xs_batch->nheaptids);
+
+		so->currPos.itemIndex = so->batch.firstIndex + scan->xs_batch->currIndex;
+	}
+
+	/*
 	 * Just record the current itemIndex.  If we later step to next page
 	 * before releasing the marked position, _bt_steppage makes a full copy of
 	 * the currPos struct in markPos.  If (as often happens) the mark is moved
@@ -551,6 +570,59 @@ btrestrpos(IndexScanDesc scan)
 		 * accurate.
 		 */
 		so->currPos.itemIndex = so->markItemIndex;
+
+		/*
+		 * We're restoring to a different position on the same page, but the
+		 * wrong batch may be loaded. Check if the current batch includes
+		 * itemIndex, and load the correct batch if not. We don't know in
+		 * which direction the scan will move, so we try to put the current
+		 * index in the middle of a batch. For indexes close to the end of the
+		 * page we may load fewer items, but that seems acceptable.
+		 *
+		 * Then update the index of the current item, even if we already have
+		 * the correct batch loaded.
+		 *
+		 * FIXME Similar to btmarkpos() - I don't like how this leaks details
+		 * that should be specific to indexam.c. The "restored" flag is weird
+		 * too - but even if we need it, we could set it in indexam.c, right?
+		 */
+		if (scan->xs_batch != NULL)
+		{
+			if ((so->currPos.itemIndex < so->batch.firstIndex) ||
+				(so->currPos.itemIndex > so->batch.lastIndex))
+			{
+				int			start = Max(so->currPos.firstItem,
+										so->currPos.itemIndex - (scan->xs_batch->currSize / 2));
+				int			end = Min(so->currPos.lastItem,
+									  start + (scan->xs_batch->currSize - 1));
+
+				Assert(start <= end);
+				Assert((end - start + 1) <= scan->xs_batch->currSize);
+
+				/* make it look empty */
+				scan->xs_batch->nheaptids = 0;
+				scan->xs_batch->prefetchIndex = -1;
+
+				/*
+				 * XXX the scan direction is bogus / not important. It affects
+				 * only how we advance the currIndex, but we'll override that
+				 * anyway to point at the "correct" entry.
+				 */
+				_bt_copy_batch(scan, ForwardScanDirection, so, start, end);
+			}
+
+			/*
+			 * Set the batch index to the "correct" position in the batch,
+			 * even if we haven't re-loaded it from the page. Also remember we
+			 * just did this, so that the next call to
+			 * index_batch_getnext_tid() does not advance it again.
+			 *
+			 * XXX This is a bit weird. There should be a way to not need the
+			 * "restored" flag I think.
+			 */
+			scan->xs_batch->currIndex = (so->currPos.itemIndex - so->batch.firstIndex);
+			scan->xs_batch->restored = true;
+		}
 	}
 	else
 	{
@@ -587,6 +659,45 @@ btrestrpos(IndexScanDesc scan)
 			{
 				_bt_start_array_keys(scan, so->currPos.dir);
 				so->needPrimScan = false;
+			}
+
+			/*
+			 * With batched scans, we know the current batch is definitely
+			 * wrong (we've moved to a different leaf page). So empty the
+			 * batch, and load the right part of the page.
+			 *
+			 * Similarly to the block above, we place the current index in the
+			 * middle of the batch (if possible). And then we update the index
+			 * to point at the correct batch item.
+			 */
+			if (scan->xs_batch != NULL)
+			{
+				int			start = Max(so->currPos.firstItem,
+										so->currPos.itemIndex - (scan->xs_batch->currSize / 2));
+				int			end = Min(so->currPos.lastItem,
+									  start + (scan->xs_batch->currSize - 1));
+
+				Assert(start <= end);
+				Assert((end - start + 1) <= scan->xs_batch->currSize);
+
+				/* make it look empty */
+				scan->xs_batch->nheaptids = 0;
+				scan->xs_batch->prefetchIndex = -1;
+
+				/* XXX the scan direction is bogus */
+				_bt_copy_batch(scan, ForwardScanDirection, so, start, end);
+
+				/*
+				 * Set the batch index to the "correct" position in the batch,
+				 * even if we haven't re-loaded it from the page. Also
+				 * remember we just did this, so that the next call to
+				 * index_batch_getnext_tid() does not advance it again.
+				 *
+				 * XXX This is a bit weird. There should be a way to not need
+				 * the "restored" flag I think.
+				 */
+				scan->xs_batch->currIndex = (so->currPos.itemIndex - so->batch.firstIndex);
+				scan->xs_batch->restored = true;
 			}
 		}
 		else

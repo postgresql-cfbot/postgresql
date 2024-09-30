@@ -361,7 +361,6 @@ INSERT INTO people (id, name, address) VALUE (<emphasis>DEFAULT</emphasis>, 'C',
    storage and is computed when it is read.  Thus, a virtual generated column
    is similar to a view and a stored generated column is similar to a
    materialized view (except that it is always updated automatically).
-   <productname>PostgreSQL</productname> currently implements only stored generated columns.
   </para>
 
   <para>
@@ -371,12 +370,12 @@ INSERT INTO people (id, name, address) VALUE (<emphasis>DEFAULT</emphasis>, 'C',
 CREATE TABLE people (
     ...,
     height_cm numeric,
-    height_in numeric <emphasis>GENERATED ALWAYS AS (height_cm / 2.54) STORED</emphasis>
+    height_in numeric <emphasis>GENERATED ALWAYS AS (height_cm / 2.54)</emphasis>
 );
 </programlisting>
-   The keyword <literal>STORED</literal> must be specified to choose the
-   stored kind of generated column.  See <xref linkend="sql-createtable"/> for
-   more details.
+   A generated column is by default of the virtual kind.  Use the keywords
+   <literal>VIRTUAL</literal> or <literal>STORED</literal> to make the choice
+   explicit.  See <xref linkend="sql-createtable"/> for more details.
   </para>
 
   <para>
@@ -442,12 +441,18 @@ CREATE TABLE people (
       <listitem>
        <para>
         If a parent column is a generated column, its child column must also
-        be a generated column; however, the child column can have a
-        different generation expression.  The generation expression that is
+        be a generated column of the same kind (stored or virtual); however,
+        the child column can have a different generation expression.
+       </para>
+
+       <para>
+        For stored generated columns, the generation expression that is
         actually applied during insert or update of a row is the one
-        associated with the table that the row is physically in.
-        (This is unlike the behavior for column defaults: for those, the
-        default value associated with the table named in the query applies.)
+        associated with the table that the row is physically in.  (This is
+        unlike the behavior for column defaults: for those, the default value
+        associated with the table named in the query applies.)  For virtual
+        generated columns, the generation expression of the table named in the
+        query applies when a table is read.
        </para>
       </listitem>
       <listitem>

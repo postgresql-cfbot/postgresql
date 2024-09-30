@@ -26,6 +26,7 @@
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "partitioning/partbounds.h"
+#include "rewrite/rewriteHandler.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -157,6 +158,7 @@ RelationBuildPartitionKey(Relation relation)
 		 * in canonical form already (ie, no need for OR-merging or constant
 		 * elimination).
 		 */
+		expr = expand_generated_columns_in_expr(expr, relation, 1);
 		expr = eval_const_expressions(NULL, expr);
 		fix_opfuncids(expr);
 

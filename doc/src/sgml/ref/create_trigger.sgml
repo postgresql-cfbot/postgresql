@@ -279,7 +279,7 @@ UPDATE OF <replaceable>column_name1</replaceable> [, <replaceable>column_name2</
      <para>
       <literal>INSTEAD OF UPDATE</literal> events do not allow a list of columns.
       A column list cannot be specified when requesting transition relations,
-      either.
+      either.  Virtual generated columns are not supported in the column list.
      </para>
     </listitem>
    </varlistentry>

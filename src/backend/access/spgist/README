@@ -160,7 +160,7 @@ the following notation, where tuple's id is just for discussion (no such id
 is actually stored):
 
 inner tuple: {tuple id}(prefix string)[ comma separated list of node labels ]
-leaf tuple: {tuple id}< value >
+leaf tuple: {tuple id}(value)
 
 Suppose we need to insert string 'www.gogo.com' into inner tuple
 

@@ -111,81 +111,77 @@ by building a "normal" index tuple and then modifying it.)  The points to
 know are:
 
 * In a single-column index, a key tuple just contains the key datum, but
-  in a multi-column index, a key tuple contains the pair (column number,
-  key datum) where the column number is stored as an int2.  This is needed
-  to support different key data types in different columns.  This much of
-  the tuple is built by index_form_tuple according to the usual rules.
-  The column number (if present) can never be null, but the key datum can
-  be, in which case a null bitmap is present as usual.  (As usual for index
-  tuples, the size of the null bitmap is fixed at INDEX_MAX_KEYS.)
+in a multi-column index, a key tuple contains the pair (column number,
+key datum) where the column number is stored as an int2.  This is needed
+to support different key data types in different columns.  This much of
+the tuple is built by index_form_tuple according to the usual rules.
+The column number (if present) can never be null, but the key datum can
+be, in which case a null bitmap is present as usual.  (As usual for index
+tuples, the size of the null bitmap is fixed at INDEX_MAX_KEYS.)
 
 * If the key datum is null (ie, IndexTupleHasNulls() is true), then
-  just after the nominal index data (ie, at offset IndexInfoFindDataOffset
-  or IndexInfoFindDataOffset + sizeof(int2)) there is a byte indicating
-  the "category" of the null entry.  These are the possible categories:
-
-        1 = ordinary null key value extracted from an indexable item
-        2 = placeholder for zero-key indexable item
-        3 = placeholder for null indexable item
-
-  Placeholder null entries are inserted into the index because otherwise
-  there would be no index entry at all for an empty or null indexable item,
-  which would mean that full index scans couldn't be done and various corner
-  cases would give wrong answers.  The different categories of null entries
-  are treated as distinct keys by the btree, but heap itempointers for the
-  same category of null entry are merged into one index entry just as happens
-  with ordinary key entries.
+just after the nominal index data (ie, at offset IndexInfoFindDataOffset
+or IndexInfoFindDataOffset + sizeof(int2)) there is a byte indicating
+the "category" of the null entry.  These are the possible categories:
+  1) ordinary null key value extracted from an indexable item
+  2) placeholder for zero-key indexable item
+  3) placeholder for null indexable item
+Placeholder null entries are inserted into the index because otherwise
+there would be no index entry at all for an empty or null indexable item,
+which would mean that full index scans couldn't be done and various corner
+cases would give wrong answers.  The different categories of null entries
+are treated as distinct keys by the btree, but heap itempointers for the
+same category of null entry are merged into one index entry just as happens
+with ordinary key entries.
 
 * In a key entry at the btree leaf level, at the next SHORTALIGN boundary,
-  there is a list of item pointers, in compressed format (see Posting List
-  Compression section), pointing to the heap tuples for which the indexable
-  items contain this key. This is called the "posting list".
-
-  If the list would be too big for the index tuple to fit on an index page, the
-  ItemPointers are pushed out to a separate posting page or pages, and none
-  appear in the key entry itself.  The separate pages are called a "posting
-  tree" (see below); Note that in either case, the ItemPointers associated with
-  a key can easily be read out in sorted order; this is relied on by the scan
-  algorithms.
+there is a list of item pointers, in compressed format (see Posting List
+Compression section), pointing to the heap tuples for which the indexable
+items contain this key. This is called the "posting list".  
+If the list would be too big for the index tuple to fit on an index page, the
+ItemPointers are pushed out to a separate posting page or pages, and none
+appear in the key entry itself.  The separate pages are called a "posting
+tree" (see below); Note that in either case, the ItemPointers associated with
+a key can easily be read out in sorted order; this is relied on by the scan
+algorithms.
 
 * The index tuple header fields of a leaf key entry are abused as follows:
+  1) Posting list case:
 
-1) Posting list case:
-
-* ItemPointerGetBlockNumber(&itup->t_tid) contains the offset from index
+  - ItemPointerGetBlockNumber(&itup->t_tid) contains the offset from index
   tuple start to the posting list.
   Access macros: GinGetPostingOffset(itup) / GinSetPostingOffset(itup,n)
 
-* ItemPointerGetOffsetNumber(&itup->t_tid) contains the number of elements
+  - ItemPointerGetOffsetNumber(&itup->t_tid) contains the number of elements
   in the posting list (number of heap itempointers).
   Access macros: GinGetNPosting(itup) / GinSetNPosting(itup,n)
 
-* If IndexTupleHasNulls(itup) is true, the null category byte can be
+  - If IndexTupleHasNulls(itup) is true, the null category byte can be
   accessed/set with GinGetNullCategory(itup,gs) / GinSetNullCategory(itup,gs,c)
 
-* The posting list can be accessed with GinGetPosting(itup)
+  - The posting list can be accessed with GinGetPosting(itup)
 
-* If GinItupIsCompressed(itup), the posting list is stored in compressed
+  - If GinItupIsCompressed(itup), the posting list is stored in compressed
   format. Otherwise it is just an array of ItemPointers. New tuples are always
   stored in compressed format, uncompressed items can be present if the
   database was migrated from 9.3 or earlier version.
 
-2) Posting tree case:
+  2) Posting tree case:
 
-* ItemPointerGetBlockNumber(&itup->t_tid) contains the index block number
+  -  ItemPointerGetBlockNumber(&itup->t_tid) contains the index block number
   of the root of the posting tree.
   Access macros: GinGetPostingTree(itup) / GinSetPostingTree(itup, blkno)
 
-* ItemPointerGetOffsetNumber(&itup->t_tid) contains the magic number
+  - ItemPointerGetOffsetNumber(&itup->t_tid) contains the magic number
   GIN_TREE_POSTING, which distinguishes this from the posting-list case
   (it's large enough that that many heap itempointers couldn't possibly
   fit on an index page).  This value is inserted automatically by the
   GinSetPostingTree macro.
 
-* If IndexTupleHasNulls(itup) is true, the null category byte can be
+  - If IndexTupleHasNulls(itup) is true, the null category byte can be
   accessed/set with GinGetNullCategory(itup,gs) / GinSetNullCategory(itup,gs,c)
 
-* The posting list is not present and must not be accessed.
+  - The posting list is not present and must not be accessed.
 
 Use the macro GinIsPostingTree(itup) to determine which case applies.
 
@@ -518,44 +514,44 @@ For compatibility, old uncompressed format is also supported. Following
 rules are used to handle it:
 
 * GIN_ITUP_COMPRESSED flag marks index tuples that contain a posting list.
-  This flag is stored in high bit of ItemPointerGetBlockNumber(&itup->t_tid).
-  Use GinItupIsCompressed(itup) to check the flag.
+This flag is stored in high bit of ItemPointerGetBlockNumber(&itup->t_tid).
+Use GinItupIsCompressed(itup) to check the flag.
 
 * Posting tree pages in the new format are marked with the GIN_COMPRESSED flag.
   Macros GinPageIsCompressed(page) and GinPageSetCompressed(page) are used to
   check and set this flag.
 
 * All scan operations check format of posting list add use corresponding code
-  to read its content.
+to read its content.
 
 * When updating an index tuple containing an uncompressed posting list, it
-  will be replaced with new index tuple containing a compressed list.
+will be replaced with new index tuple containing a compressed list.
 
 * When updating an uncompressed posting tree leaf page, it's compressed.
 
 * If vacuum finds some dead TIDs in uncompressed posting lists, they are
-  converted into compressed posting lists. This assumes that the compressed
-  posting list fits in the space occupied by the uncompressed list. IOW, we
-  assume that the compressed version of the page, with the dead items removed,
-  takes less space than the old uncompressed version.
+converted into compressed posting lists. This assumes that the compressed
+posting list fits in the space occupied by the uncompressed list. IOW, we
+assume that the compressed version of the page, with the dead items removed,
+takes less space than the old uncompressed version.
 
 Limitations
 -----------
 
-* Gin doesn't use scan->kill_prior_tuple & scan->ignore_killed_tuples
-* Gin searches entries only by equality matching, or simple range
-  matching using the "partial match" feature.
+  * Gin doesn't use scan->kill_prior_tuple & scan->ignore_killed_tuples
+  * Gin searches entries only by equality matching, or simple range
+    matching using the "partial match" feature.
 
 TODO
 ----
 
 Nearest future:
 
-* Opclasses for more types (no programming, just many catalog changes)
+  * Opclasses for more types (no programming, just many catalog changes)
 
 Distant future:
 
-* Replace B-tree of entries to something like GiST
+  * Replace B-tree of entries to something like GiST
 
 Authors
 -------

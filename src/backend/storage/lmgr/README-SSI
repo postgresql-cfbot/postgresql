@@ -200,54 +200,54 @@ PostgreSQL Implementation
 -------------------------
 
 * Since this technique is based on Snapshot Isolation (SI), those
-  areas in PostgreSQL which don't use SI can't be brought under SSI.
-  This includes system tables, temporary tables, sequences, hint bit
-  rewrites, etc.  SSI can not eliminate existing anomalies in these
-  areas.
+areas in PostgreSQL which don't use SI can't be brought under SSI.
+This includes system tables, temporary tables, sequences, hint bit
+rewrites, etc.  SSI can not eliminate existing anomalies in these
+areas.
 
 * Any transaction which is run at a transaction isolation level
-  other than SERIALIZABLE will not be affected by SSI.  If you want to
-  enforce business rules through SSI, all transactions should be run at
-  the SERIALIZABLE transaction isolation level, and that should
-  probably be set as the default.
+other than SERIALIZABLE will not be affected by SSI.  If you want to
+enforce business rules through SSI, all transactions should be run at
+the SERIALIZABLE transaction isolation level, and that should
+probably be set as the default.
 
 * If all transactions are run at the SERIALIZABLE transaction
-  isolation level, business rules can be enforced in triggers or
-  application code without ever having a need to acquire an explicit
-  lock or to use SELECT FOR SHARE or SELECT FOR UPDATE.
+isolation level, business rules can be enforced in triggers or
+application code without ever having a need to acquire an explicit
+lock or to use SELECT FOR SHARE or SELECT FOR UPDATE.
 
 * Those who want to continue to use snapshot isolation without
-  the additional protections of SSI (and the associated costs of
-  enforcing those protections), can use the REPEATABLE READ transaction
-  isolation level.  This level retains its legacy behavior, which
-  is identical to the old SERIALIZABLE implementation and fully
-  consistent with the standard's requirements for the REPEATABLE READ
-  transaction isolation level.
+the additional protections of SSI (and the associated costs of
+enforcing those protections), can use the REPEATABLE READ transaction
+isolation level.  This level retains its legacy behavior, which
+is identical to the old SERIALIZABLE implementation and fully
+consistent with the standard's requirements for the REPEATABLE READ
+transaction isolation level.
 
 * Performance under this SSI implementation will be significantly
-  improved if transactions which don't modify permanent tables are
-  declared to be READ ONLY before they begin reading data.
+improved if transactions which don't modify permanent tables are
+declared to be READ ONLY before they begin reading data.
 
 * Performance under SSI will tend to degrade more rapidly with a
-  large number of active database transactions than under less strict
-  isolation levels.  Limiting the number of active transactions through
-  use of a connection pool or similar techniques may be necessary to
-  maintain good performance.
+large number of active database transactions than under less strict
+isolation levels.  Limiting the number of active transactions through
+use of a connection pool or similar techniques may be necessary to
+maintain good performance.
 
 * Any transaction which must be rolled back to prevent
-  serialization anomalies will fail with SQLSTATE 40001, which has a
-  standard meaning of "serialization failure".
+serialization anomalies will fail with SQLSTATE 40001, which has a
+standard meaning of "serialization failure".
 
 * This SSI implementation makes an effort to choose the
-  transaction to be canceled such that an immediate retry of the
-  transaction will not fail due to conflicts with exactly the same
-  transactions.  Pursuant to this goal, no transaction is canceled
-  until one of the other transactions in the set of conflicts which
-  could generate an anomaly has successfully committed.  This is
-  conceptually similar to how write conflicts are handled.  To fully
-  implement this guarantee there needs to be a way to roll back the
-  active transaction for another process with a serialization failure
-  SQLSTATE, even if it is "idle in transaction".
+transaction to be canceled such that an immediate retry of the
+transaction will not fail due to conflicts with exactly the same
+transactions.  Pursuant to this goal, no transaction is canceled
+until one of the other transactions in the set of conflicts which
+could generate an anomaly has successfully committed.  This is
+conceptually similar to how write conflicts are handled.  To fully
+implement this guarantee there needs to be a way to roll back the
+active transaction for another process with a serialization failure
+SQLSTATE, even if it is "idle in transaction".
 
 
 Predicate Locking
@@ -306,20 +306,20 @@ Predicate locks will be acquired for the heap based on the following:
 * For a table scan, the entire relation will be locked.
 
 * Each tuple read which is visible to the reading transaction
-  will be locked, whether or not it meets selection criteria; except
-  that there is no need to acquire an SIREAD lock on a tuple when the
-  transaction already holds a write lock on any tuple representing the
-  row, since a rw-conflict would also create a ww-dependency which
-  has more aggressive enforcement and thus will prevent any anomaly.
+will be locked, whether or not it meets selection criteria; except
+that there is no need to acquire an SIREAD lock on a tuple when the
+transaction already holds a write lock on any tuple representing the
+row, since a rw-conflict would also create a ww-dependency which
+has more aggressive enforcement and thus will prevent any anomaly.
 
 * Modifying a heap tuple creates a rw-conflict with any transaction
-  that holds a SIREAD lock on that tuple, or on the page or relation
-  that contains it.
+that holds a SIREAD lock on that tuple, or on the page or relation
+that contains it.
 
 * Inserting a new tuple creates a rw-conflict with any transaction
-  holding a SIREAD lock on the entire relation. It doesn't conflict with
-  page-level locks, because page-level locks are only used to aggregate
-  tuple locks. Unlike index page locks, they don't lock "gaps" on the page.
+holding a SIREAD lock on the entire relation. It doesn't conflict with
+page-level locks, because page-level locks are only used to aggregate
+tuple locks. Unlike index page locks, they don't lock "gaps" on the page.
 
 
 Index AM implementations
@@ -347,59 +347,59 @@ false positives, they should be minimized for performance reasons.
 Several optimizations are possible, though not all are implemented yet:
 
 * An index scan which is just finding the right position for an
-  index insertion or deletion need not acquire a predicate lock.
+index insertion or deletion need not acquire a predicate lock.
 
 * An index scan which is comparing for equality on the entire key
-  for a unique index need not acquire a predicate lock as long as a key
-  is found corresponding to a visible tuple which has not been modified
-  by another transaction -- there are no "between or around" gaps to
-  cover.
+for a unique index need not acquire a predicate lock as long as a key
+is found corresponding to a visible tuple which has not been modified
+by another transaction -- there are no "between or around" gaps to
+cover.
 
 * As long as built-in foreign key enforcement continues to use
-  its current "special tricks" to deal with MVCC issues, predicate
-  locks should not be needed for scans done by enforcement code.
+its current "special tricks" to deal with MVCC issues, predicate
+locks should not be needed for scans done by enforcement code.
 
 * If a search determines that no rows can be found regardless of
-  index contents because the search conditions are contradictory (e.g.,
-  x = 1 AND x = 2), then no predicate lock is needed.
+index contents because the search conditions are contradictory (e.g.,
+x = 1 AND x = 2), then no predicate lock is needed.
 
 Other index AM implementation considerations:
 
 * For an index AM that doesn't have support for predicate locking,
-  we just acquire a predicate lock on the whole index for any search.
+we just acquire a predicate lock on the whole index for any search.
 
 * B-tree index searches acquire predicate locks only on the
-  index *leaf* pages needed to lock the appropriate index range. If,
-  however, a search discovers that no root page has yet been created, a
-  predicate lock on the index relation is required.
+index *leaf* pages needed to lock the appropriate index range. If,
+however, a search discovers that no root page has yet been created, a
+predicate lock on the index relation is required.
 
 * Like a B-tree, GIN searches acquire predicate locks only on the
-  leaf pages of entry tree. When performing an equality scan, and an
-  entry has a posting tree, the posting tree root is locked instead, to
-  lock only that key value. However, fastupdate=on postpones the
-  insertion of tuples into index structure by temporarily storing them
-  into pending list. That makes us unable to detect r-w conflicts using
-  page-level locks. To cope with that, insertions to the pending list
-  conflict with all scans.
+leaf pages of entry tree. When performing an equality scan, and an
+entry has a posting tree, the posting tree root is locked instead, to
+lock only that key value. However, fastupdate=on postpones the
+insertion of tuples into index structure by temporarily storing them
+into pending list. That makes us unable to detect r-w conflicts using
+page-level locks. To cope with that, insertions to the pending list
+conflict with all scans.
 
 * GiST searches can determine that there are no matches at any
-  level of the index, so we acquire predicate lock at each index
-  level during a GiST search. An index insert at the leaf level can
-  then be trusted to ripple up to all levels and locations where
-  conflicting predicate locks may exist. In case there is a page split,
-  we need to copy predicate lock from the original page to all the new
-  pages.
+level of the index, so we acquire predicate lock at each index
+level during a GiST search. An index insert at the leaf level can
+then be trusted to ripple up to all levels and locations where
+conflicting predicate locks may exist. In case there is a page split,
+we need to copy predicate lock from the original page to all the new
+pages.
 
 * Hash index searches acquire predicate locks on the primary
-  page of a bucket. It acquires a lock on both the old and new buckets
-  for scans that happen concurrently with page splits. During a bucket
-  split, a predicate lock is copied from the primary page of an old
-  bucket to the primary page of a new bucket.
+page of a bucket. It acquires a lock on both the old and new buckets
+for scans that happen concurrently with page splits. During a bucket
+split, a predicate lock is copied from the primary page of an old
+bucket to the primary page of a new bucket.
 
 * The effects of page splits, overflows, consolidations, and
-  removals must be carefully reviewed to ensure that predicate locks
-  aren't "lost" during those operations, or kept with pages which could
-  get re-used for different parts of the index.
+removals must be carefully reviewed to ensure that predicate locks
+aren't "lost" during those operations, or kept with pages which could
+get re-used for different parts of the index.
 
 
 Innovations
@@ -448,34 +448,34 @@ Differences from the implementation described in the papers are
 listed below.
 
 * New structures needed to be created in shared memory to track
-  the proper information for serializable transactions and their SIREAD
-  locks.
+the proper information for serializable transactions and their SIREAD
+locks.
 
 * Because PostgreSQL does not have the same concept of an "oldest
-  transaction ID" for all serializable transactions as assumed in the
-  Cahill thesis, we track the oldest snapshot xmin among serializable
-  transactions, and a count of how many active transactions use that
-  xmin. When the count hits zero we find the new oldest xmin and run a
-  clean-up based on that.
+transaction ID" for all serializable transactions as assumed in the
+Cahill thesis, we track the oldest snapshot xmin among serializable
+transactions, and a count of how many active transactions use that
+xmin. When the count hits zero we find the new oldest xmin and run a
+clean-up based on that.
 
 * Because reads in a subtransaction may cause that subtransaction
-  to roll back, thereby affecting what is written by the top level
-  transaction, predicate locks must survive a subtransaction rollback.
-  As a consequence, all xid usage in SSI, including predicate locking,
-  is based on the top level xid.  When looking at an xid that comes
-  from a tuple's xmin or xmax, for example, we always call
-  SubTransGetTopmostTransaction() before doing much else with it.
+to roll back, thereby affecting what is written by the top level
+transaction, predicate locks must survive a subtransaction rollback.
+As a consequence, all xid usage in SSI, including predicate locking,
+is based on the top level xid.  When looking at an xid that comes
+from a tuple's xmin or xmax, for example, we always call
+SubTransGetTopmostTransaction() before doing much else with it.
 
 * PostgreSQL does not use "update in place" with a rollback log
-  for its MVCC implementation.  Where possible it uses "HOT" updates on
-  the same page (if there is room and no indexed value is changed).
-  For non-HOT updates the old tuple is expired in place and a new tuple
-  is inserted at a new location.  Because of this difference, a tuple
-  lock in PostgreSQL doesn't automatically lock any other versions of a
-  row.  We don't try to copy or expand a tuple lock to any other
-  versions of the row, based on the following proof that any additional
-  serialization failures we would get from that would be false
-  positives:
+for its MVCC implementation.  Where possible it uses "HOT" updates on
+the same page (if there is room and no indexed value is changed).
+For non-HOT updates the old tuple is expired in place and a new tuple
+is inserted at a new location.  Because of this difference, a tuple
+lock in PostgreSQL doesn't automatically lock any other versions of a
+row.  We don't try to copy or expand a tuple lock to any other
+versions of the row, based on the following proof that any additional
+serialization failures we would get from that would be false
+positives:
 
   - If transaction T1 reads a row version (thus acquiring a
     predicate lock on it) and a second transaction T2 updates that row
@@ -595,33 +595,33 @@ This is intended to be the place to record specific issues which need
 more detailed review or analysis.
 
 * WAL file replay. While serializable implementations using S2PL
-  can guarantee that the write-ahead log contains commits in a sequence
-  consistent with some serial execution of serializable transactions,
-  SSI cannot make that guarantee. While the WAL replay is no less
-  consistent than under snapshot isolation, it is possible that under
-  PITR recovery or hot standby a database could reach a readable state
-  where some transactions appear before other transactions which would
-  have had to precede them to maintain serializable consistency. In
-  essence, if we do nothing, WAL replay will be at snapshot isolation
-  even for serializable transactions. Is this OK? If not, how do we
-  address it?
+can guarantee that the write-ahead log contains commits in a sequence
+consistent with some serial execution of serializable transactions,
+SSI cannot make that guarantee. While the WAL replay is no less
+consistent than under snapshot isolation, it is possible that under
+PITR recovery or hot standby a database could reach a readable state
+where some transactions appear before other transactions which would
+have had to precede them to maintain serializable consistency. In
+essence, if we do nothing, WAL replay will be at snapshot isolation
+even for serializable transactions. Is this OK? If not, how do we
+address it?
 
 * External replication. Look at how this impacts external
-  replication solutions, like Postgres-R, Slony, pgpool, HS/SR, etc.
-  This is related to the "WAL file replay" issue.
+replication solutions, like Postgres-R, Slony, pgpool, HS/SR, etc.
+This is related to the "WAL file replay" issue.
 
 * UNIQUE btree search for equality on all columns. Since a search
-  of a UNIQUE index using equality tests on all columns will lock the
-  heap tuple if an entry is found, it appears that there is no need to
-  get a predicate lock on the index in that case. A predicate lock is
-  still needed for such a search if a matching index entry which points
-  to a visible tuple is not found.
+of a UNIQUE index using equality tests on all columns will lock the
+heap tuple if an entry is found, it appears that there is no need to
+get a predicate lock on the index in that case. A predicate lock is
+still needed for such a search if a matching index entry which points
+to a visible tuple is not found.
 
 * Minimize touching of shared memory. Should lists in shared
-  memory push entries which have just been returned to the front of the
-  available list, so they will be popped back off soon and some memory
-  might never be touched, or should we keep adding returned items to
-  the end of the available list?
+memory push entries which have just been returned to the front of the
+available list, so they will be popped back off soon and some memory
+might never be touched, or should we keep adding returned items to
+the end of the available list?
 
 
 References

@@ -10,11 +10,11 @@ General source-file layout
 There are six separately-compilable source files, five of which expose
 exactly one exported function apiece:
 
-	regcomp.c	pg_regcomp
-	regexec.c	pg_regexec
-	regerror.c	pg_regerror
-	regfree.c	pg_regfree
-	regprefix.c	pg_regprefix
+* regcomp.c	pg_regcomp
+* regexec.c	pg_regexec
+* regerror.c	pg_regerror
+* regfree.c	pg_regfree
+* regprefix.c	pg_regprefix
 
 (The pg_ prefixes were added by the Postgres project to distinguish this
 library version from any similar one that might be present on a particular
@@ -40,19 +40,19 @@ structs.)
 
 What's where in src/backend/regex/:
 
-	regcomp.c		Top-level regex compilation code
-	regc_color.c		Color map management
-	regc_cvec.c		Character vector (cvec) management
-	regc_lex.c		Lexer
-	regc_nfa.c		NFA handling
-	regc_locale.c		Application-specific locale code from Tcl project
-	regc_pg_locale.c	Postgres-added application-specific locale code
-	regexec.c		Top-level regex execution code
-	rege_dfa.c		DFA creation and execution
-	regerror.c		pg_regerror: generate text for a regex error code
-	regfree.c		pg_regfree: API to free a no-longer-needed regex_t
-	regexport.c		Functions for extracting info from a regex_t
-	regprefix.c		Code for extracting a common prefix from a regex_t
+* regcomp.c		Top-level regex compilation code
+* regc_color.c		Color map management
+* regc_cvec.c		Character vector (cvec) management
+* regc_lex.c		Lexer
+* regc_nfa.c		NFA handling
+* regc_locale.c		Application-specific locale code from Tcl project
+* regc_pg_locale.c	Postgres-added application-specific locale code
+* regexec.c		Top-level regex execution code
+* rege_dfa.c		DFA creation and execution
+* regerror.c		pg_regerror: generate text for a regex error code
+* regfree.c		pg_regfree: API to free a no-longer-needed regex_t
+* regexport.c		Functions for extracting info from a regex_t
+* regprefix.c		Code for extracting a common prefix from a regex_t
 
 The locale-specific code is concerned primarily with case-folding and with
 expanding locale-specific character classes, such as [[:alnum:]].  It
@@ -60,11 +60,11 @@ really needs refactoring if this is ever to become a standalone library.
 
 The header files for the library are in src/include/regex/:
 
-	regcustom.h		Customizes library for particular application
-	regerrs.h		Error message list
-	regex.h			Exported API
-	regexport.h		Exported API for regexport.c
-	regguts.h		Internals declarations
+* regcustom.h		Customizes library for particular application
+* regerrs.h		Error message list
+* regex.h			Exported API
+* regexport.h		Exported API for regexport.c
+* regguts.h		Internals declarations
 
 
 DFAs, NFAs, and all that

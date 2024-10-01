@@ -131,6 +131,15 @@ static relopt_bool boolRelOpts[] =
 	},
 	{
 		{
+			"force_generic",
+			"estimate the selectivity like generic plan",
+			RELOPT_KIND_ATTRIBUTE,
+			ShareUpdateExclusiveLock
+		},
+		false
+	},
+	{
+		{
 			"security_barrier",
 			"View acts as a row security barrier",
 			RELOPT_KIND_VIEW,
@@ -2070,7 +2079,8 @@ attribute_reloptions(Datum reloptions, bool validate)
 {
 	static const relopt_parse_elt tab[] = {
 		{"n_distinct", RELOPT_TYPE_REAL, offsetof(AttributeOpts, n_distinct)},
-		{"n_distinct_inherited", RELOPT_TYPE_REAL, offsetof(AttributeOpts, n_distinct_inherited)}
+		{"n_distinct_inherited", RELOPT_TYPE_REAL, offsetof(AttributeOpts, n_distinct_inherited)},
+		{"force_generic", RELOPT_TYPE_BOOL, offsetof(AttributeOpts, force_generic)}
 	};
 
 	return (bytea *) build_reloptions(reloptions, validate,

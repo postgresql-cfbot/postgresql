@@ -38,6 +38,7 @@ typedef enum CopyOnErrorChoice
 {
 	COPY_ON_ERROR_STOP = 0,		/* immediately throw errors, default */
 	COPY_ON_ERROR_IGNORE,		/* ignore errors */
+	COPY_ON_ERROR_TABLE,		/* saving errors info to table */
 } CopyOnErrorChoice;
 
 /*
@@ -83,6 +84,7 @@ typedef struct CopyFormatOptions
 	bool		convert_selectively;	/* do selective binary conversion? */
 	CopyOnErrorChoice on_error; /* what to do when error happened */
 	CopyLogVerbosityChoice log_verbosity;	/* verbosity of logged messages */
+	char		*on_error_tbl; /* on error, save error info to table */
 	List	   *convert_select; /* list of column names (can be NIL) */
 } CopyFormatOptions;
 

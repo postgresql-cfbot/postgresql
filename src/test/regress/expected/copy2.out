@@ -789,6 +789,99 @@ CONTEXT:  COPY check_ign_err, line 1: "1	{1}"
 COPY check_ign_err FROM STDIN WITH (on_error ignore);
 ERROR:  extra data after last expected column
 CONTEXT:  COPY check_ign_err, line 1: "1	{1}	3	abc"
+create table err_tbl(
+  userid oid, -- the user oid while copy generated this entry
+  copy_tbl oid, --copy table
+  filename text,
+  lineno  bigint,
+  line    text,
+  colname text,
+  raw_field_value text,
+  err_message text,
+  err_detail text,
+  errorcode text
+);
+create table err_tbl_1(
+  userid oid, -- the user oid while copy generated this entry
+  copy_tbl oid, --copy table
+  filename text,
+  lineno  bigint,
+  line    text,
+  colname text,
+  raw_field_value text,
+  err_message text,
+  err_detail text
+);
+create table t_copy_tbl(a int, b int, c int);
+--the folowing should all fails
+COPY t_copy_tbl FROM STDIN WITH (on_error 'table');
+ERROR:  COPY ON_ERROR "table" requires a custom specified error saving table
+COPY t_copy_tbl TO STDIN WITH (on_error 'table');
+ERROR:  COPY ON_ERROR cannot be used with COPY TO
+LINE 1: COPY t_copy_tbl TO STDIN WITH (on_error 'table');
+                                       ^
+COPY t_copy_tbl FROM STDIN WITH (table err_tbl);
+ERROR:  COPY "table" option can only be used when ON_ERROR option is specified as "table"
+COPY t_copy_tbl TO STDIN WITH (table err_tbl);
+ERROR:  COPY "table" option can only be used when ON_ERROR option is specified as "table"
+COPY t_copy_tbl(a,b) FROM STDIN WITH (on_error 'table', table not_exists);
+ERROR:  error saving table "public"."not_exists" does not exist
+create view s1 as select 1 as a;
+COPY t_copy_tbl(a) FROM STDIN WITH (on_error 'table', table s1);
+ERROR:  COPY ON_ERROR cannot use relation "s1" for error saving
+DETAIL:  This operation is not supported for views.
+drop view s1;
+--should fail. err_tbl_1 does not meet criteria
+COPY t_copy_tbl(a,b) FROM STDIN WITH (on_error 'table', table err_tbl_1);
+ERROR:  table "public"."err_tbl_1" cannot be used for COPY FROM error saving
+DETAIL:  Table "public"."err_tbl_1" data definition cannot be used for error saving
+--should fail, extra columns
+COPY t_copy_tbl(a,b) FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+ERROR:  extra data after last expected column
+CONTEXT:  COPY t_copy_tbl, line 1: "1,2,3,4"
+--should fail, less columns
+COPY t_copy_tbl(a,b) FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+ERROR:  extra data after last expected column
+CONTEXT:  COPY t_copy_tbl, line 1: "1,2,"
+--ok cases.
+COPY t_copy_tbl FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+NOTICE:  4 rows were skipped due to data type incompatibility
+--should fail. lack priviledge
+begin;
+create user regress_user20;
+grant insert(userid,copy_tbl,filename,lineno,line) on table err_tbl to regress_user20;
+grant insert on table t_copy_tbl to regress_user20;
+set role regress_user20;
+COPY t_copy_tbl FROM STDIN WITH (delimiter ',', on_error 'table', table err_tbl);
+ERROR:  permission denied to set table "public"."err_tbl" for COPY FROM error saving
+HINT:  Ensure current user have enough priviledge on "public"."err_tbl" for COPY FROM error saving
+ROLLBACK;
+select	pg_class.relname as copy_destination
+        ,filename
+        ,lineno
+        ,line
+        ,colname
+        ,raw_field_value
+        ,err_message
+        ,err_detail
+        ,errorcode
+from err_tbl join pg_class on copy_tbl = pg_class.oid;
+ copy_destination | filename | lineno |           line           | colname |   raw_field_value   |                         err_message                          | err_detail | errorcode 
+------------------+----------+--------+--------------------------+---------+---------------------+--------------------------------------------------------------+------------+-----------
+ t_copy_tbl       | STDIN    |      1 | 1,2,a                    | c       | a                   | invalid input syntax for type integer: "a"                   |            | 22P02
+ t_copy_tbl       | STDIN    |      3 | 1,_junk,test             | b       | _junk               | invalid input syntax for type integer: "_junk"               |            | 22P02
+ t_copy_tbl       | STDIN    |      4 | cola,colb,colc           | a       | cola                | invalid input syntax for type integer: "cola"                |            | 22P02
+ t_copy_tbl       | STDIN    |      7 | 1,11,4238679732489879879 | c       | 4238679732489879879 | value "4238679732489879879" is out of range for type integer |            | 22003
+(4 rows)
+
+select * from t_copy_tbl;
+ a | b | c  
+---+---+----
+ 1 | 2 |  3
+ 4 | 5 |  6
+ 8 | 9 | 10
+(3 rows)
+
 -- clean up
 DROP TABLE forcetest;
 DROP TABLE vistest;
@@ -807,6 +900,9 @@ DROP TABLE check_ign_err;
 DROP TABLE check_ign_err2;
 DROP DOMAIN dcheck_ign_err2;
 DROP TABLE hard_err;
+DROP TABLE err_tbl;
+DROP TABLE err_tbl_1;
+DROP TABLE t_copy_tbl;
 --
 -- COPY FROM ... DEFAULT
 --

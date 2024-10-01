@@ -3469,6 +3469,10 @@ copy_opt_item:
 				{
 					$$ = makeDefElem("null", (Node *) makeString($3), @1);
 				}
+			| TABLE opt_as Sconst
+				{
+					$$ = makeDefElem("table", (Node *) makeString($3), @1);
+				}
 			| CSV
 				{
 					$$ = makeDefElem("format", (Node *) makeString("csv"), @1);

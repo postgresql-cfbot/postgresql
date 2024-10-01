@@ -35,12 +35,14 @@
 #include "executor/execPartition.h"
 #include "executor/executor.h"
 #include "executor/nodeModifyTable.h"
+#include "executor/spi.h"
 #include "executor/tuptable.h"
 #include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/miscnodes.h"
 #include "optimizer/optimizer.h"
+#include "parser/parse_relation.h"
 #include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/fd.h"
@@ -1024,6 +1026,12 @@ CopyFrom(CopyFromState cstate)
 			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
 										 ++skipped);
 
+			if (cstate->opts.on_error == COPY_ON_ERROR_TABLE)
+			{
+				cstate->escontext->error_occurred = false;
+				cstate->escontext->details_wanted = true;
+				memset(cstate->escontext->error_data,0, sizeof(ErrorData));
+			}
 			continue;
 		}
 
@@ -1326,6 +1334,13 @@ CopyFrom(CopyFromState cstate)
 							  "%llu rows were skipped due to data type incompatibility",
 							  (unsigned long long) cstate->num_errors,
 							  (unsigned long long) cstate->num_errors));
+	/*
+	 * similar to commit a9cf48a
+	 * (https://postgr.es/m/7bcfc39d4176faf85ab317d0c26786953646a411.camel@cybertec.at)
+	 * in COPY FROM keep error saving table locks until the transaction end.
+	*/
+	if (cstate->error_saving_rel != NULL)
+		table_close(cstate->error_saving_rel, NoLock);
 
 	if (bistate != NULL)
 		FreeBulkInsertState(bistate);
@@ -1479,6 +1494,130 @@ BeginCopyFrom(ParseState *pstate,
 	}
 	else
 		cstate->escontext = NULL;
+
+	if (cstate->opts.on_error == COPY_ON_ERROR_TABLE)
+	{
+		StringInfoData 	querybuf;
+		const char *copy_nspname;
+		Oid			err_tbl_oid;
+		Oid			copy_nspoid;
+		bool		on_error_tbl_ok;
+		bool		allow_insert_error_tbl;
+		bool		isnull;
+
+		Assert(cstate->escontext != NULL);
+		Assert(cstate->opts.on_error_tbl != NULL);
+
+		/* get copy error saving table reloid */
+		copy_nspname = get_namespace_name(RelationGetNamespace(cstate->rel));
+		copy_nspoid = get_namespace_oid(copy_nspname, false);
+		err_tbl_oid = get_relname_relid(cstate->opts.on_error_tbl, copy_nspoid);
+
+		if (!OidIsValid(err_tbl_oid))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("error saving table \"%s\".\"%s\" does not exist",
+							copy_nspname, cstate->opts.on_error_tbl)));
+
+		/* error saving table must be a normal realtion kind */
+		if (get_rel_relkind(err_tbl_oid) != RELKIND_RELATION)
+			ereport(ERROR,
+					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
+					errmsg("COPY %s cannot use relation \"%s\" for error saving",
+							"ON_ERROR", cstate->opts.on_error_tbl),
+					errdetail_relkind_not_supported(get_rel_relkind(err_tbl_oid))));
+
+		/*
+		 * we may insert tuples to error-saving table, to do that we need first
+		 * check the table lock situation. If it is already under heavy lock,
+		 * then our COPY operation would be stuck. instead of let COPY stuck,
+		 * just error report that the table is in heavy lock.
+		*/
+		initStringInfo(&querybuf);
+		appendStringInfo(&querybuf,
+			"select 1 as exists from ( "
+			"select	1 "
+			"from 	pg_class, pg_locks "
+			"where	pg_class.oid = pg_locks.relation "
+			"and 	pg_class.relnamespace = %d "
+			"and 	pg_class.oid = %d "
+			"and 	mode not in ('AccessShareLock', 'RowShareLock', 'RowExclusiveLock')); "
+			,copy_nspoid, err_tbl_oid);
+
+		if (SPI_connect() != SPI_OK_CONNECT)
+			elog(ERROR, "SPI_connect failed");
+
+		if (SPI_execute(querybuf.data, false, 0) != SPI_OK_SELECT)
+			elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+		if (SPI_processed != 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("table \"%s\".\"%s\" was locked, cannot be used for error saving",
+							 copy_nspname, cstate->opts.on_error_tbl)));
+
+		/* current user should have INSERT priviledge on error_saving table */
+		resetStringInfo(&querybuf);
+		appendStringInfo(&querybuf,
+						"SELECT has_table_privilege (CURRENT_USER, %d, 'INSERT')",
+						err_tbl_oid);
+		if (SPI_execute(querybuf.data, false, 0) != SPI_OK_SELECT)
+			elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+		allow_insert_error_tbl = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[0],
+											 SPI_tuptable->tupdesc,
+											 1, &isnull));
+		if (!allow_insert_error_tbl)
+			ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied to set table \"%s\".\"%s\" for COPY FROM error saving",
+								copy_nspname, cstate->opts.on_error_tbl),
+						 errhint("Ensure current user have enough priviledge on \"%s\".\"%s\" for COPY FROM error saving",
+								copy_nspname, cstate->opts.on_error_tbl)));
+
+		resetStringInfo(&querybuf);
+		/*
+		 * Check the error saving table's data definition (column name,
+		 * data types) can be used for error saving or not.
+		 *
+		*/
+		appendStringInfo(&querybuf,
+						"SELECT (array_agg(pa.attname ORDER BY pa.attnum) "
+							"= '{ctid,userid,copy_tbl,filename,lineno, "
+							"line,colname,raw_field_value,err_message,err_detail,errorcode}') "
+							"AND (ARRAY_AGG(pt.typname ORDER BY pa.attnum) "
+							"= '{tid,oid,oid,text,int8,text,text,text,text,text,text}') "
+							"FROM pg_catalog.pg_attribute pa "
+							"JOIN pg_catalog.pg_class pc ON pc.oid = pa.attrelid "
+							"JOIN pg_catalog.pg_type pt ON pt.oid = pa.atttypid "
+							"JOIN pg_catalog.pg_namespace pn "
+							"ON pn.oid = pc.relnamespace WHERE ");
+		appendStringInfo(&querybuf,
+							"pn.nspname = $$%s$$ AND relname = $$%s$$ "
+							"AND pa.attnum >= -1 AND NOT attisdropped ",
+							copy_nspname, cstate->opts.on_error_tbl);
+
+		if (SPI_execute(querybuf.data, false, 0) != SPI_OK_SELECT)
+			elog(ERROR, "SPI_exec failed: %s", querybuf.data);
+
+		on_error_tbl_ok = DatumGetBool(SPI_getbinval(SPI_tuptable->vals[0],
+									   SPI_tuptable->tupdesc,
+									   1, &isnull));
+		if(!on_error_tbl_ok)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("table \"%s\".\"%s\" cannot be used for COPY FROM error saving",
+							copy_nspname, cstate->opts.on_error_tbl),
+					 errdetail("Table \"%s\".\"%s\" data definition cannot be used for error saving",
+							   copy_nspname, cstate->opts.on_error_tbl)));
+
+		if (SPI_finish() != SPI_OK_FINISH)
+			elog(ERROR, "SPI_finish failed");
+
+		/* now error-saving table is ok for error saving, take a lock for insert*/
+		cstate->error_saving_rel = table_open(err_tbl_oid, RowExclusiveLock);
+		cstate->escontext->details_wanted = true;
+	}
 
 	/* Convert FORCE_NULL name list to per-column flags, check validity */
 	cstate->opts.force_null_flags = (bool *) palloc0(num_phys_attrs * sizeof(bool));

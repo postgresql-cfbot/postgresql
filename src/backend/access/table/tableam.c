@@ -187,6 +187,34 @@ table_beginscan_parallel(Relation relation, ParallelTableScanDesc pscan)
 											pscan, flags);
 }
 
+TableScanDesc
+table_beginscan_parallel_tidrange(Relation relation, ParallelTableScanDesc pscan)
+{
+	Snapshot	snapshot;
+	uint32		flags = SO_TYPE_TIDRANGESCAN | SO_ALLOW_PAGEMODE;
+	TableScanDesc sscan;
+
+	Assert(RelationGetRelid(relation) == pscan->phs_relid);
+
+	if (!pscan->phs_snapshot_any)
+	{
+		/* Snapshot was serialized -- restore it */
+		snapshot = RestoreSnapshot((char *) pscan + pscan->phs_snapshot_off);
+		RegisterSnapshot(snapshot);
+		flags |= SO_TEMP_SNAPSHOT;
+	}
+	else
+	{
+		/* SnapshotAny passed by caller (not serialized) */
+		snapshot = SnapshotAny;
+	}
+
+	sscan = relation->rd_tableam->scan_begin(relation, snapshot, 0, NULL,
+											 pscan, flags);
+
+	return sscan;
+}
+
 
 /* ----------------------------------------------------------------------------
  * Index scan related functions.
@@ -576,7 +604,8 @@ table_block_parallelscan_nextpage(Relation rel,
 		pbscanwork->phsw_chunk_remaining = pbscanwork->phsw_chunk_size - 1;
 	}
 
-	if (nallocated >= pbscan->phs_nblocks)
+	if (nallocated >= pbscan->phs_nblocks || (pbscan->phs_numblock != 0 &&
+		nallocated >= pbscan->phs_numblock))
 		page = InvalidBlockNumber;	/* all blocks have been allocated */
 	else
 		page = (nallocated + pbscan->phs_startblock) % pbscan->phs_nblocks;

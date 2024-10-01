@@ -98,4 +98,49 @@ COMMIT;
 
 DROP TABLE tidrangescan;
 
+-- tests for parallel tidrangescans
+SET parallel_setup_cost=0;
+SET parallel_tuple_cost=0;
+SET min_parallel_table_scan_size=0;
+SET max_parallel_workers_per_gather=4;
+
+CREATE TABLE parallel_tidrangescan(id integer, data text) with (fillfactor=10);
+
+-- insert enough tuples such that each page gets 5 tuples with fillfactor = 10
+INSERT INTO parallel_tidrangescan SELECT i,repeat('x', 100) FROM generate_series(1,200) AS s(i);
+
+-- ensure there are 40 pages for parallel test
+select min(ctid), max(ctid) from parallel_tidrangescan;
+
+-- parallel range scans with upper bound
+explain (costs off)
+select count(*) from parallel_tidrangescan where ctid<'(30,1)';
+select count(*) from parallel_tidrangescan where ctid<'(30,1)';
+
+-- parallel range scans with lower bound
+explain (costs off)
+select count(*) from parallel_tidrangescan where ctid>'(10,0)';
+select count(*) from parallel_tidrangescan where ctid>'(10,0)';
+
+-- parallel range scans with both bounds
+explain (costs off)
+select count(*) from parallel_tidrangescan where ctid>'(10,0)' and ctid<'(30,1)';
+select count(*) from parallel_tidrangescan where ctid>'(10,0)' and ctid<'(30,1)';
+
+-- parallel rescans
+EXPLAIN (COSTS OFF)
+SELECT t.ctid,t2.c FROM parallel_tidrangescan t,
+LATERAL (SELECT count(*) c FROM parallel_tidrangescan t2 WHERE t2.ctid <= t.ctid) t2
+WHERE t.ctid < '(1,0)';
+
+SELECT t.ctid,t2.c FROM parallel_tidrangescan t,
+LATERAL (SELECT count(*) c FROM parallel_tidrangescan t2 WHERE t2.ctid <= t.ctid) t2
+WHERE t.ctid < '(1,0)';
+
+DROP TABLE parallel_tidrangescan;
+
+RESET parallel_setup_cost;
+RESET parallel_tuple_cost;
+RESET min_parallel_table_scan_size;
+RESET max_parallel_workers_per_gather;
 RESET enable_seqscan;

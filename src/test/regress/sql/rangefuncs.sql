@@ -648,6 +648,48 @@ select * from sin(3) as t(f1 int8,f2 int8);  -- fail, scalar result type
 drop type rngfunc_type cascade;
 
 --
+-- test use of PL/pgSQL functions returning setof record
+--
+
+create or replace function array_to_set2(anyarray) returns setof record as $$
+  begin
+  return query execute 'select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i'
+    using $1;
+  end;
+$$ language plpgsql immutable;
+
+-- materialize mode requires a result TupleDesc:
+select array_to_set2(array['one', 'two']); -- fail
+select * from array_to_set2(array['one', 'two']) as t(f1 int,f2 text);
+select * from array_to_set2(array['one', 'two']); -- fail
+select * from array_to_set2(array['one', 'two']) as t(f1 numeric(4,2),f2 text); -- fail
+select * from array_to_set2(array['one', 'two']) as t(f1 point,f2 text); -- fail
+explain (verbose, costs off)
+  select * from array_to_set2(array['one', 'two']) as t(f1 int, f2 text);
+drop function array_to_set2;
+
+--
+-- test use of PL/pgSQL functions returning table
+--
+
+create or replace function array_to_set2(anyarray) returns table(index int, value anyelement) as $$
+  begin
+  return query execute 'select i AS "index", $1[i] AS "value" from generate_subscripts($1, 1) i'
+    using $1;
+  end;
+$$ language plpgsql immutable;
+
+-- materialize mode requires a result TupleDesc:
+select array_to_set2(array['one', 'two']);
+select * from array_to_set2(array['one', 'two']) as t(f1 int,f2 text); -- fail
+select * from array_to_set2(array['one', 'two']);
+select * from array_to_set2(array['one', 'two']) as t(f1 numeric(4,2),f2 text); -- fail
+select * from array_to_set2(array['one', 'two']) as t(f1 point,f2 text); -- fail
+explain (verbose, costs off)
+  select * from array_to_set2(array['one', 'two']);
+drop function array_to_set2;
+
+--
 -- Check some cases involving added/dropped columns in a rowtype result
 --
 

@@ -69,6 +69,7 @@ log_destination = 'stderr, csvlog, jsonlog'
 # these ensure stability of test results:
 log_rotation_age = 0
 lc_messages = 'C'
+max_log_size = 32
 ));
 
 $node->start();
@@ -134,6 +135,20 @@ $node->psql('postgres', 'fee fi fo fum');
 check_log_pattern('stderr', $new_current_logfiles, 'syntax error', $node);
 check_log_pattern('csvlog', $new_current_logfiles, 'syntax error', $node);
 check_log_pattern('jsonlog', $new_current_logfiles, 'syntax error', $node);
+
+$node->psql('postgres', 'INSERT INTO SOME_NON_EXISTANT_TABLE VALUES (TEST)');
+for (my $attempts = 0; $attempts < $max_attempts; $attempts++)
+{
+	eval {
+		$current_logfiles = slurp_file($node->data_dir . '/current_logfiles');
+	};
+	last unless $@;
+	usleep(100_000);
+}
+die $@ if $@;
+check_log_pattern('stderr',  $current_logfiles, 'INSERT INTO SOME_NON_EXISTANT_TA(?!(BLE VALUES \(TEST\)))', $node);
+check_log_pattern('csvlog',  $current_logfiles, 'INSERT INTO SOME_NON_EXISTANT_TA(?!(BLE VALUES \(TEST\)))', $node);
+check_log_pattern('jsonlog', $current_logfiles, 'INSERT INTO SOME_NON_EXISTANT_TA(?!(BLE VALUES \(TEST\)))', $node);
 
 $node->stop();
 

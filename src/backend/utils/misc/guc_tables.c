@@ -3714,6 +3714,17 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 
+	{
+		{"max_log_size", PGC_SIGHUP, LOGGING_WHAT,
+			gettext_noop("Sets max size of logged statement."),
+			NULL
+		},
+		&max_log_size,
+		5 * (1024 * 1024),
+		0, INT_MAX,
+		NULL, NULL, NULL
+	},
+
 	/* End-of-list marker */
 	{
 		{NULL, 0, 0, NULL, NULL}, NULL, 0, 0, 0, NULL, NULL, NULL

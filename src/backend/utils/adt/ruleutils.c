@@ -777,6 +777,19 @@ pg_get_viewdef_name_ext(PG_FUNCTION_ARGS)
 }
 
 /*
+ * Internal version of pg_get_viewdef
+ */
+char *
+pg_get_viewdef_string(Oid viewoid, bool pretty)
+{
+	int			prettyFlags;
+
+	prettyFlags = GET_PRETTY_FLAGS(pretty);
+
+	return pg_get_viewdef_worker(viewoid, prettyFlags, WRAP_COLUMN_DEFAULT);
+}
+
+/*
  * Common code for by-OID and by-name variants of pg_get_viewdef
  */
 static char *

@@ -39,6 +39,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
@@ -61,8 +62,7 @@ static bool transientrel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void transientrel_shutdown(DestReceiver *self);
 static void transientrel_destroy(DestReceiver *self);
 static uint64 refresh_matview_datafill(DestReceiver *dest, Query *query,
-									   ParseState *pstate, const char *queryString,
-									   bool is_create);
+									   ParseState *pstate, bool is_create);
 static char *make_temptable_name_n(char *tempname, int n);
 static void refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 								   int save_sec_context);
@@ -327,11 +327,21 @@ RefreshMatViewByOid(Oid matviewOid, bool is_create, bool skipData,
 	if (!skipData)
 	{
 		DestReceiver *dest;
-		const char *queryString = pstate->p_sourcetext;
+		ParseState *refresh_pstate = pstate;
+
+		/*
+		 * On refresh, the pstate's source text will be the refresh utility
+		 * statement. We need to fetch the the view definition to get the
+		 * query executed by the refresh.
+		 */
+		if (!is_create)
+		{
+			refresh_pstate = make_parsestate(NULL);
+			refresh_pstate->p_sourcetext = pg_get_viewdef_string(matviewOid, false);
+		}
 
 		dest = CreateTransientRelDestReceiver(OIDNewHeap);
-		processed = refresh_matview_datafill(dest, dataQuery, pstate,
-											 queryString, is_create);
+		processed = refresh_matview_datafill(dest, dataQuery, refresh_pstate, is_create);
 	}
 
 	/* Make the matview match the newly generated data. */
@@ -406,8 +416,7 @@ RefreshMatViewByOid(Oid matviewOid, bool is_create, bool skipData,
  */
 static uint64
 refresh_matview_datafill(DestReceiver *dest, Query *query,
-						 ParseState *pstate, const char *queryString,
-						 bool is_create)
+						 ParseState *pstate, bool is_create)
 {
 	List	   *rewritten;
 	PlannedStmt *plan;
@@ -415,6 +424,7 @@ refresh_matview_datafill(DestReceiver *dest, Query *query,
 	Query	   *copied_query;
 	uint64		processed;
 	JumbleState *jstate = NULL;
+	const char *queryString = pstate->p_sourcetext;
 
 	/* Lock and rewrite, using a copy to preserve the original query. */
 	copied_query = copyObject(query);

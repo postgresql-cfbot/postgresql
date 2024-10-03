@@ -273,6 +273,8 @@ PostgreSQL documentation
         <link linkend="monitoring-pg-stat-database-view">
         <structname>pg_stat_database</structname></link> view.
         See <xref linkend="checksums" /> for details.
+        Data checksums are enabled by default. They can be
+        disabled by use of <option>--no-data-checksums</option>.
        </para>
       </listitem>
      </varlistentry>

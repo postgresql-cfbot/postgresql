@@ -58,7 +58,6 @@
 /* Hook for plugins to get control at end of parse analysis */
 post_parse_analyze_hook_type post_parse_analyze_hook = NULL;
 
-static Query *transformOptionalSelectInto(ParseState *pstate, Node *parseTree);
 static Query *transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt);
 static Query *transformInsertStmt(ParseState *pstate, InsertStmt *stmt);
 static OnConflictExpr *transformOnConflictClause(ParseState *pstate,
@@ -113,13 +112,15 @@ parse_analyze_fixedparams(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_stmt_len = parseTree->stmt_len;
+	pstate->p_stmt_location = parseTree->stmt_location;
 
 	if (numParams > 0)
 		setup_parse_fixed_parameters(pstate, paramTypes, numParams);
 
 	pstate->p_queryEnv = queryEnv;
 
-	query = transformTopLevelStmt(pstate, parseTree);
+	query = transformOptionalSelectInto(pstate, parseTree->stmt);
 
 	if (IsQueryIdEnabled())
 		jstate = JumbleQuery(query);
@@ -153,12 +154,14 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_stmt_len = parseTree->stmt_len;
+	pstate->p_stmt_location = parseTree->stmt_location;
 
 	setup_parse_variable_parameters(pstate, paramTypes, numParams);
 
 	pstate->p_queryEnv = queryEnv;
 
-	query = transformTopLevelStmt(pstate, parseTree);
+	query = transformOptionalSelectInto(pstate, parseTree->stmt);
 
 	/* make sure all is well with parameter types */
 	check_variable_parameters(pstate, query);
@@ -195,10 +198,12 @@ parse_analyze_withcb(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_stmt_len = parseTree->stmt_len;
+	pstate->p_stmt_location = parseTree->stmt_location;
 	pstate->p_queryEnv = queryEnv;
 	(*parserSetup) (pstate, parserSetupArg);
 
-	query = transformTopLevelStmt(pstate, parseTree);
+	query = transformOptionalSelectInto(pstate, parseTree->stmt);
 
 	if (IsQueryIdEnabled())
 		jstate = JumbleQuery(query);
@@ -239,27 +244,6 @@ parse_sub_analyze(Node *parseTree, ParseState *parentParseState,
 }
 
 /*
- * transformTopLevelStmt -
- *	  transform a Parse tree into a Query tree.
- *
- * This function is just responsible for transferring statement location data
- * from the RawStmt into the finished Query.
- */
-Query *
-transformTopLevelStmt(ParseState *pstate, RawStmt *parseTree)
-{
-	Query	   *result;
-
-	/* We're at top level, so allow SELECT INTO */
-	result = transformOptionalSelectInto(pstate, parseTree->stmt);
-
-	result->stmt_location = parseTree->stmt_location;
-	result->stmt_len = parseTree->stmt_len;
-
-	return result;
-}
-
-/*
  * transformOptionalSelectInto -
  *	  If SELECT has INTO, convert it to CREATE TABLE AS.
  *
@@ -269,7 +253,7 @@ transformTopLevelStmt(ParseState *pstate, RawStmt *parseTree)
  * of the parse tree, and so we only try it before entering the recursive
  * transformStmt() processing.
  */
-static Query *
+Query *
 transformOptionalSelectInto(ParseState *pstate, Node *parseTree)
 {
 	if (IsA(parseTree, SelectStmt))
@@ -417,7 +401,9 @@ transformStmt(ParseState *pstate, Node *parseTree)
 			 */
 			result = makeNode(Query);
 			result->commandType = CMD_UTILITY;
-			result->utilityStmt = (Node *) parseTree;
+			result->utilityStmt = parseTree;
+			result->stmt_location = pstate->p_stmt_location;
+			result->stmt_len = pstate->p_stmt_len;
 			break;
 	}
 
@@ -507,6 +493,37 @@ analyze_requires_snapshot(RawStmt *parseTree)
 }
 
 /*
+ * setQueryStmtLen
+ *		Set stmt_len in Query.
+ *
+ * Some statements, like PreparableStmt, can be located within parentheses.
+ * For example "(SELECT 1)" or "COPY (UPDATE ...) to x;". For those, we can't
+ * use the whole string from the statement's location or the SQL string will
+ * yield "SELECT 1)". The parser will set stmt_len, reflecting the size of the
+ * statement within the parentheses. Thus, when stmt_len is available, we use it
+ * for the Query's stmt_len.
+ *
+ * For other cases, the parser can't provide the length of individual statements.
+ * However, we have the statement's location plus the length (p_stmt_len) and
+ * location (p_stmt_location) of the top level RawStmt, stored in pstate. Thus,
+ * the statement's length is the RawStmt's length minus how much we've advanced
+ * in the RawStmt's string.
+ */
+void
+setQueryStmtLen(ParseState *pstate, Query *qry, int stmt_len)
+{
+	if (stmt_len > 0)
+		/* Statement's length is known, use it */
+		qry->stmt_len = stmt_len;
+	else
+		/*
+		 * Compute the statement's length from statement's location and RawStmt's
+		 * length and location
+		 */
+		qry->stmt_len = pstate->p_stmt_len - (qry->stmt_location - pstate->p_stmt_location);
+}
+
+/*
  * transformDeleteStmt -
  *	  transforms a Delete Statement
  */
@@ -518,6 +535,8 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	Node	   *qual;
 
 	qry->commandType = CMD_DELETE;
+	qry->stmt_location = stmt->stmt_location;
+	setQueryStmtLen(pstate, qry, stmt->stmt_len);
 
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
@@ -606,6 +625,8 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 	Assert(pstate->p_ctenamespace == NIL);
 
 	qry->commandType = CMD_INSERT;
+	qry->stmt_location = stmt->stmt_location;
+	setQueryStmtLen(pstate, qry, stmt->stmt_len);
 	pstate->p_is_insert = true;
 
 	/* process the WITH clause independently of all else */
@@ -1331,7 +1352,6 @@ count_rowexpr_columns(ParseState *pstate, Node *expr)
 	return -1;
 }
 
-
 /*
  * transformSelectStmt -
  *	  transforms a Select Statement
@@ -1347,6 +1367,8 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt)
 	ListCell   *l;
 
 	qry->commandType = CMD_SELECT;
+	qry->stmt_location = stmt->stmt_location;
+	setQueryStmtLen(pstate, qry, stmt->stmt_len);
 
 	/* process the WITH clause independently of all else */
 	if (stmt->withClause)
@@ -1499,6 +1521,8 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	int			i;
 
 	qry->commandType = CMD_SELECT;
+	qry->stmt_location = stmt->stmt_location;
+	setQueryStmtLen(pstate, qry, stmt->stmt_len);
 
 	/* Most SELECT stuff doesn't apply in a VALUES clause */
 	Assert(stmt->distinctClause == NIL);
@@ -1730,6 +1754,8 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	int			tllen;
 
 	qry->commandType = CMD_SELECT;
+	qry->stmt_location = stmt->stmt_location;
+	setQueryStmtLen(pstate, qry, stmt->stmt_len);
 
 	/*
 	 * Find leftmost leaf SelectStmt.  We currently only need to do this in
@@ -2397,6 +2423,8 @@ transformReturnStmt(ParseState *pstate, ReturnStmt *stmt)
 	Query	   *qry = makeNode(Query);
 
 	qry->commandType = CMD_SELECT;
+	qry->stmt_location = pstate->p_stmt_location;
+	qry->stmt_len = pstate->p_stmt_len;
 	qry->isReturn = true;
 
 	qry->targetList = list_make1(makeTargetEntry((Expr *) transformExpr(pstate, stmt->returnval, EXPR_KIND_SELECT_TARGET),
@@ -2430,6 +2458,8 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 	Node	   *qual;
 
 	qry->commandType = CMD_UPDATE;
+	qry->stmt_location = stmt->stmt_location;
+	setQueryStmtLen(pstate, qry, stmt->stmt_len);
 	pstate->p_is_insert = false;
 
 	/* process the WITH clause independently of all else */
@@ -2677,6 +2707,8 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 	 * consider WITH or INTO, and we build a targetlist our own way.
 	 */
 	qry->commandType = CMD_SELECT;
+	qry->stmt_location = pstate->p_stmt_location;
+	qry->stmt_len = pstate->p_stmt_len;
 	pstate->p_is_insert = false;
 
 	/* make FOR UPDATE/FOR SHARE info available to addRangeTableEntry */
@@ -2948,6 +2980,8 @@ transformDeclareCursorStmt(ParseState *pstate, DeclareCursorStmt *stmt)
 	/* represent the command as a utility Query */
 	result = makeNode(Query);
 	result->commandType = CMD_UTILITY;
+	result->stmt_location = pstate->p_stmt_location;
+	result->stmt_len = pstate->p_stmt_len;
 	result->utilityStmt = (Node *) stmt;
 
 	return result;
@@ -3003,6 +3037,8 @@ transformExplainStmt(ParseState *pstate, ExplainStmt *stmt)
 	/* represent the command as a utility Query */
 	result = makeNode(Query);
 	result->commandType = CMD_UTILITY;
+	result->stmt_location = pstate->p_stmt_location;
+	result->stmt_len = pstate->p_stmt_len;
 	result->utilityStmt = (Node *) stmt;
 
 	return result;
@@ -3083,6 +3119,8 @@ transformCreateTableAsStmt(ParseState *pstate, CreateTableAsStmt *stmt)
 	/* represent the command as a utility Query */
 	result = makeNode(Query);
 	result->commandType = CMD_UTILITY;
+	result->stmt_location = pstate->p_stmt_location;
+	result->stmt_len = pstate->p_stmt_len;
 	result->utilityStmt = (Node *) stmt;
 
 	return result;
@@ -3207,6 +3245,8 @@ transformCallStmt(ParseState *pstate, CallStmt *stmt)
 	/* represent the command as a utility Query */
 	result = makeNode(Query);
 	result->commandType = CMD_UTILITY;
+	result->stmt_location = pstate->p_stmt_location;
+	result->stmt_len = pstate->p_stmt_len;
 	result->utilityStmt = (Node *) stmt;
 
 	return result;

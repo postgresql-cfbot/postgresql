@@ -207,33 +207,33 @@ SELECT toplevel, calls, query FROM pg_stat_statements
   ORDER BY query COLLATE "C";
  toplevel | calls |                                                   query                                                    
 ----------+-------+------------------------------------------------------------------------------------------------------------
+ f        |     1 | DELETE FROM stats_track_tab
+ f        |     1 | INSERT INTO stats_track_tab VALUES (($1))
+ f        |     1 | MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($1, $2) id) ON x = id                    +
+          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                   +
+          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id)
+ f        |     1 | SELECT $1
+ f        |     1 | SELECT $1 UNION SELECT $2
+ f        |     1 | SELECT $1, $2
  t        |     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
+ f        |     1 | TABLE stats_track_tab
+ f        |     1 | TABLE test_table
+ f        |     1 | UPDATE stats_track_tab SET x=$1 WHERE x=$2
+ f        |     1 | VALUES($1)
+ f        |     1 | VALUES($1, $2)
  t        |     1 | explain (costs off) (SELECT $1, $2)
- f        |     1 | explain (costs off) (SELECT $1, $2);
  t        |     1 | explain (costs off) (TABLE test_table)
- f        |     1 | explain (costs off) (TABLE test_table);
  t        |     1 | explain (costs off) (VALUES($1, $2))
- f        |     1 | explain (costs off) (VALUES($1, $2));
  t        |     1 | explain (costs off) DELETE FROM stats_track_tab
- f        |     1 | explain (costs off) DELETE FROM stats_track_tab;
  t        |     1 | explain (costs off) INSERT INTO stats_track_tab VALUES (($1))
- f        |     1 | explain (costs off) INSERT INTO stats_track_tab VALUES (($1));
  t        |     1 | explain (costs off) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($1, $2) id) ON x = id+
           |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                   +
           |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id)
- f        |     1 | explain (costs off) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($1, $2) id) ON x = id+
-          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                   +
-          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id);
  t        |     1 | explain (costs off) SELECT $1
  t        |     1 | explain (costs off) SELECT $1 UNION SELECT $2
- f        |     1 | explain (costs off) SELECT $1 UNION SELECT $2;
- f        |     1 | explain (costs off) SELECT $1;
  t        |     1 | explain (costs off) TABLE stats_track_tab
- f        |     1 | explain (costs off) TABLE stats_track_tab;
  t        |     1 | explain (costs off) UPDATE stats_track_tab SET x=$1 WHERE x=$2
- f        |     1 | explain (costs off) UPDATE stats_track_tab SET x=$1 WHERE x=$2;
  t        |     1 | explain (costs off) VALUES($1)
- f        |     1 | explain (costs off) VALUES($1);
 (23 rows)
 
 -- Explain - top-level tracking.
@@ -480,51 +480,49 @@ explain (costs off) SELECT 1, 2 UNION SELECT 3, 4\; explain (costs off) (SELECT 
 
 SELECT toplevel, calls, query FROM pg_stat_statements
   ORDER BY query COLLATE "C";
- toplevel | calls |                                                              query                                                               
-----------+-------+----------------------------------------------------------------------------------------------------------------------------------
+ toplevel | calls |                                                   query                                                    
+----------+-------+------------------------------------------------------------------------------------------------------------
+ f        |     1 | (SELECT $1, $2, $3) UNION SELECT $4, $5, $6
+ f        |     1 | DELETE FROM stats_track_tab
+ f        |     1 | DELETE FROM stats_track_tab WHERE x=$1
+ f        |     1 | INSERT INTO stats_track_tab VALUES ($1), ($2)
+ f        |     1 | INSERT INTO stats_track_tab VALUES (($1))
+ f        |     1 | MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($1, $2) id) ON x = id                    +
+          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                   +
+          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id)
+ f        |     1 | SELECT $1
+ f        |     1 | SELECT $1, $2
+ f        |     1 | SELECT $1, $2 UNION SELECT $3, $4
+ f        |     1 | SELECT $1, $2, $3
+ f        |     1 | SELECT $1, $2, $3, $4
+ f        |     1 | SELECT $1, $2, $3, $4, $5
  t        |     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
+ f        |     1 | TABLE stats_track_tab
+ f        |     1 | TABLE test_table
+ f        |     1 | UPDATE stats_track_tab SET x=$1
+ f        |     1 | UPDATE stats_track_tab SET x=$1 WHERE x=$2
+ f        |     1 | VALUES($1)
+ f        |     1 | VALUES($1, $2)
  t        |     1 | explain (costs off) (SELECT $1, $2, $3)
  t        |     1 | explain (costs off) (SELECT $1, $2, $3) UNION SELECT $4, $5, $6
- f        |     1 | explain (costs off) (SELECT $1, $2, $3); explain (costs off) (SELECT 1, 2, 3, 4);
  t        |     1 | explain (costs off) (SELECT $1, $2, $3, $4)
- f        |     1 | explain (costs off) (SELECT 1, 2, 3); explain (costs off) (SELECT $1, $2, $3, $4);
  t        |     1 | explain (costs off) (TABLE test_table)
  t        |     1 | explain (costs off) (VALUES($1, $2))
  t        |     1 | explain (costs off) DELETE FROM stats_track_tab
  t        |     1 | explain (costs off) DELETE FROM stats_track_tab WHERE x=$1
- f        |     1 | explain (costs off) DELETE FROM stats_track_tab; explain (costs off) DELETE FROM stats_track_tab WHERE x=$1;
- f        |     1 | explain (costs off) DELETE FROM stats_track_tab; explain (costs off) DELETE FROM stats_track_tab WHERE x=1;
  t        |     1 | explain (costs off) INSERT INTO stats_track_tab VALUES ($1), ($2)
  t        |     1 | explain (costs off) INSERT INTO stats_track_tab VALUES (($1))
- f        |     1 | explain (costs off) INSERT INTO stats_track_tab VALUES (($1)); explain (costs off) INSERT INTO stats_track_tab VALUES (1), (2);
- f        |     1 | explain (costs off) INSERT INTO stats_track_tab VALUES ((1)); explain (costs off) INSERT INTO stats_track_tab VALUES ($1), ($2);
- t        |     1 | explain (costs off) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($1, $2) id) ON x = id                      +
-          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                                         +
+ t        |     1 | explain (costs off) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($1, $2) id) ON x = id+
+          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                   +
           |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id)
- f        |     1 | explain (costs off) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($1, $2) id) ON x = id                      +
-          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                                         +
-          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id); explain (costs off) SELECT 1, 2, 3, 4, 5;
- f        |     1 | explain (costs off) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series(1, 10) id) ON x = id                       +
-          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                                         +
-          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id); explain (costs off) SELECT $1, $2, $3, $4, $5;
  t        |     1 | explain (costs off) SELECT $1
  t        |     1 | explain (costs off) SELECT $1, $2
  t        |     1 | explain (costs off) SELECT $1, $2 UNION SELECT $3, $4
- f        |     1 | explain (costs off) SELECT $1, $2 UNION SELECT $3, $4; explain (costs off) (SELECT 1, 2, 3) UNION SELECT 3, 4, 5;
  t        |     1 | explain (costs off) SELECT $1, $2, $3, $4, $5
- f        |     1 | explain (costs off) SELECT $1; explain (costs off) SELECT 1, 2;
- f        |     1 | explain (costs off) SELECT 1, 2 UNION SELECT 3, 4; explain (costs off) (SELECT $1, $2, $3) UNION SELECT $4, $5, $6;
- f        |     1 | explain (costs off) SELECT 1; explain (costs off) SELECT $1, $2;
  t        |     1 | explain (costs off) TABLE stats_track_tab
- f        |     1 | explain (costs off) TABLE stats_track_tab; explain (costs off) (TABLE test_table);
- f        |     1 | explain (costs off) TABLE stats_track_tab; explain (costs off) (TABLE test_table);
  t        |     1 | explain (costs off) UPDATE stats_track_tab SET x=$1
  t        |     1 | explain (costs off) UPDATE stats_track_tab SET x=$1 WHERE x=$2
- f        |     1 | explain (costs off) UPDATE stats_track_tab SET x=$1 WHERE x=$2; explain (costs off) UPDATE stats_track_tab SET x=1;
- f        |     1 | explain (costs off) UPDATE stats_track_tab SET x=1 WHERE x=1; explain (costs off) UPDATE stats_track_tab SET x=$1;
  t        |     1 | explain (costs off) VALUES($1)
- f        |     1 | explain (costs off) VALUES($1); explain (costs off) (VALUES(1, 2));
- f        |     1 | explain (costs off) VALUES(1); explain (costs off) (VALUES($1, $2));
 (37 rows)
 
 -- Explain - top-level tracking with multi statement.
@@ -753,24 +751,24 @@ SELECT toplevel, calls, query FROM pg_stat_statements
  toplevel | calls |                                                              query                                                               
 ----------+-------+----------------------------------------------------------------------------------------------------------------------------------
  t        |     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
+ f        |     1 | WITH a AS (select $1) (SELECT $2, $3)
+ f        |     1 | WITH a AS (select $1) DELETE FROM stats_track_tab
+ f        |     1 | WITH a AS (select $1) INSERT INTO stats_track_tab VALUES (($2))
+ f        |     1 | WITH a AS (select $1) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($2, $3) id) ON x = id                    +
+          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                                         +
+          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id)
+ f        |     1 | WITH a AS (select $1) SELECT $2
+ f        |     1 | WITH a AS (select $1) SELECT $2 UNION SELECT $3
+ f        |     1 | WITH a AS (select $1) UPDATE stats_track_tab SET x=$2 WHERE x=$3
  t        |     1 | explain (costs off) (WITH a AS (select $1) (SELECT $2, $3))
- f        |     1 | explain (costs off) (WITH a AS (select $1) (SELECT $2, $3));
  t        |     1 | explain (costs off) WITH a AS (select $1) DELETE FROM stats_track_tab
- f        |     1 | explain (costs off) WITH a AS (select $1) DELETE FROM stats_track_tab;
  t        |     1 | explain (costs off) WITH a AS (select $1) INSERT INTO stats_track_tab VALUES (($2))
- f        |     1 | explain (costs off) WITH a AS (select $1) INSERT INTO stats_track_tab VALUES (($2));
  t        |     1 | explain (costs off) WITH a AS (select $1) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($2, $3) id) ON x = id+
           |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                                         +
           |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id)
- f        |     1 | explain (costs off) WITH a AS (select $1) MERGE INTO stats_track_tab USING (SELECT id FROM generate_series($2, $3) id) ON x = id+
-          |       |     WHEN MATCHED THEN UPDATE SET x = id                                                                                         +
-          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id);
  t        |     1 | explain (costs off) WITH a AS (select $1) SELECT $2
  t        |     1 | explain (costs off) WITH a AS (select $1) SELECT $2 UNION SELECT $3
- f        |     1 | explain (costs off) WITH a AS (select $1) SELECT $2 UNION SELECT $3;
- f        |     1 | explain (costs off) WITH a AS (select $1) SELECT $2;
  t        |     1 | explain (costs off) WITH a AS (select $1) UPDATE stats_track_tab SET x=$2 WHERE x=$3
- f        |     1 | explain (costs off) WITH a AS (select $1) UPDATE stats_track_tab SET x=$2 WHERE x=$3;
 (15 rows)
 
 -- Explain with CTE - top-level tracking
@@ -881,7 +879,7 @@ SELECT toplevel, calls, query FROM pg_stat_statements
 ----------+-------+---------------------------------------------------------------------------------------------------------------
  t        |     1 | EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) DECLARE foocur CURSOR FOR SELECT * FROM stats_track_tab
  t        |     1 | EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) SELECT $1
- f        |     1 | EXPLAIN (ANALYZE, COSTS OFF, SUMMARY OFF, TIMING OFF) SELECT $1;
+ f        |     1 | SELECT $1
  t        |     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
 (4 rows)
 
@@ -999,8 +997,8 @@ SELECT toplevel, calls, query FROM pg_stat_statements
 ----------+-------+-----------------------------------------------------------------
  t        |     1 | CREATE TEMPORARY TABLE pgss_ctas_1 AS SELECT $1
  t        |     1 | CREATE TEMPORARY TABLE pgss_ctas_2 AS EXECUTE test_prepare_pgss
- f        |     1 | PREPARE test_prepare_pgss AS select generate_series($1, $2)
  t        |     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
+ f        |     1 | select generate_series($1, $2)
 (4 rows)
 
 -- Create Table As, top-level tracking.
@@ -1151,25 +1149,25 @@ COPY (DELETE FROM stats_track_tab WHERE x=2 RETURNING x) to stdout;
 2
 SELECT toplevel, calls, query FROM pg_stat_statements
   ORDER BY query COLLATE "C";
- toplevel | calls |                                  query                                   
-----------+-------+--------------------------------------------------------------------------
- f        |     1 | COPY (DELETE FROM stats_track_tab WHERE x=$1 RETURNING x) to stdout
+ toplevel | calls |                                  query                                  
+----------+-------+-------------------------------------------------------------------------
  t        |     1 | COPY (DELETE FROM stats_track_tab WHERE x=2 RETURNING x) to stdout
- f        |     1 | COPY (INSERT INTO stats_track_tab (x) VALUES ($1) RETURNING x) to stdout
  t        |     1 | COPY (INSERT INTO stats_track_tab (x) VALUES (1) RETURNING x) to stdout
- f        |     1 | COPY (MERGE INTO stats_track_tab USING (SELECT $1 id) ON x = id         +
-          |       |     WHEN MATCHED THEN UPDATE SET x = id                                 +
+ t        |     1 | COPY (MERGE INTO stats_track_tab USING (SELECT 1 id) ON x = id         +
+          |       |     WHEN MATCHED THEN UPDATE SET x = id                                +
           |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id) RETURNING x) to stdout
- t        |     1 | COPY (MERGE INTO stats_track_tab USING (SELECT 1 id) ON x = id          +
-          |       |     WHEN MATCHED THEN UPDATE SET x = id                                 +
-          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id) RETURNING x) to stdout
- f        |     1 | COPY (SELECT $1 UNION SELECT $2) to stdout
- f        |     1 | COPY (SELECT $1) to stdout
  t        |     1 | COPY (SELECT 1 UNION SELECT 2) to stdout
  t        |     1 | COPY (SELECT 1) to stdout
- f        |     1 | COPY (UPDATE stats_track_tab SET x=$1 WHERE x=$2 RETURNING x) to stdout
  t        |     1 | COPY (UPDATE stats_track_tab SET x=2 WHERE x=1 RETURNING x) to stdout
+ f        |     1 | DELETE FROM stats_track_tab WHERE x=$1 RETURNING x
+ f        |     1 | INSERT INTO stats_track_tab (x) VALUES ($1) RETURNING x
+ f        |     1 | MERGE INTO stats_track_tab USING (SELECT $1 id) ON x = id              +
+          |       |     WHEN MATCHED THEN UPDATE SET x = id                                +
+          |       |     WHEN NOT MATCHED THEN INSERT (x) VALUES (id) RETURNING x
+ f        |     1 | SELECT $1
+ f        |     1 | SELECT $1 UNION SELECT $2
  t        |     1 | SELECT pg_stat_statements_reset() IS NOT NULL AS t
+ f        |     1 | UPDATE stats_track_tab SET x=$1 WHERE x=$2 RETURNING x
 (13 rows)
 
 -- COPY - top-level tracking.

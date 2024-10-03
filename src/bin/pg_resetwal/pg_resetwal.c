@@ -875,6 +875,7 @@ RewriteControlFile(void)
 	ControlFile.backupStartPoint = 0;
 	ControlFile.backupEndPoint = 0;
 	ControlFile.backupEndRequired = false;
+	ControlFile.backupLabelRequired = false;
 
 	/*
 	 * Force the defaults for max_* settings. The values don't really matter

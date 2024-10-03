@@ -704,7 +704,14 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 	}
 	else
 	{
-		/* No backup_label file has been found if we are here. */
+		/*
+		 * No backup_label file has been found if we are here. Error if the
+		 * control file requires backup_label.
+		 */
+		if (ControlFile->backupLabelRequired)
+			ereport(FATAL,
+					(errmsg("could not find backup_label required for recovery"),
+					 errhint("backup_label must be present for recovery to succeed")));
 
 		/*
 		 * If tablespace_map file is present without backup_label file, there
@@ -977,6 +984,7 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 		{
 			ControlFile->backupStartPoint = checkPoint.redo;
 			ControlFile->backupEndRequired = backupEndRequired;
+			ControlFile->backupLabelRequired = false;
 
 			if (backupFromStandby)
 			{

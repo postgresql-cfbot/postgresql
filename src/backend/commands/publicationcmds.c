@@ -433,6 +433,87 @@ pub_collist_contains_invalid_column(Oid pubid, Relation relation, List *ancestor
 	return result;
 }
 
+/*
+ * Execute ALTER PUBLICATION RENAME
+ */
+ObjectAddress
+RenamePublication(const char *oldname, const char *newname)
+{
+	Relation			rel;
+	HeapTuple			tup;
+	ObjectAddress		address;
+	Form_pg_publication	pubform;
+	bool				replaces[Natts_pg_publication];
+	bool				nulls[Natts_pg_publication];
+	Datum				values[Natts_pg_publication];
+
+	rel = table_open(PublicationRelationId, RowExclusiveLock);
+
+	tup = SearchSysCacheCopy1(PUBLICATIONNAME,
+							  CStringGetDatum(oldname));
+
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("publication \"%s\" does not exist",
+						oldname)));
+
+	pubform = (Form_pg_publication) GETSTRUCT(tup);
+
+	/* must be owner */
+	if (!object_ownercheck(PublicationRelationId, pubform->oid, GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_PUBLICATION,
+					   NameStr(pubform->pubname));
+
+	/* Everything ok, form a new tuple. */
+	memset(values, 0, sizeof(values));
+	memset(nulls, false, sizeof(nulls));
+	memset(replaces, false, sizeof(replaces));
+
+	/* Only update the pubname */
+	values[Anum_pg_publication_pubname - 1] =
+		DirectFunctionCall1(namein, CStringGetDatum(newname));
+	replaces[Anum_pg_publication_pubname - 1] = true;
+
+	tup = heap_modify_tuple(tup, RelationGetDescr(rel), values, nulls,
+							replaces);
+
+	/* Invalidate the relcache. */
+	if (pubform->puballtables)
+	{
+		CacheInvalidateRelcacheAll();
+	}
+	else
+	{
+		List	   *relids = NIL;
+		List	   *schemarelids = NIL;
+
+		/*
+		 * For partition table, when we insert data, get_rel_sync_entry is
+		 * called and a hash entry is created for the corresponding leaf table.
+		 * So invalidating the leaf nodes would be sufficient here.
+		 */
+		relids = GetPublicationRelations(pubform->oid,
+										 PUBLICATION_PART_LEAF);
+		schemarelids = GetAllSchemaPublicationRelations(pubform->oid,
+														PUBLICATION_PART_LEAF);
+
+		relids = list_concat_unique_oid(relids, schemarelids);
+
+		InvalidatePublicationRels(relids);
+	}
+
+	CatalogTupleUpdate(rel, &tup->t_self, tup);
+
+	ObjectAddressSet(address, PublicationRelationId, pubform->oid);
+
+	heap_freetuple(tup);
+
+	table_close(rel, RowExclusiveLock);
+
+	return address;
+}
+
 /* check_functions_in_node callback */
 static bool
 contain_mutable_or_user_functions_checker(Oid func_id, void *context)
@@ -1920,6 +2001,32 @@ AlterPublicationOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 	}
 
 	form->pubowner = newOwnerId;
+
+	/* Invalidate the relcache. */
+	if (form->puballtables)
+	{
+		CacheInvalidateRelcacheAll();
+	}
+	else
+	{
+		List	   *relids = NIL;
+		List	   *schemarelids = NIL;
+
+		/*
+		 * For partition table, when we insert data, get_rel_sync_entry is
+		 * called and a hash entry is created for the corresponding leaf table.
+		 * So invalidating the leaf nodes would be sufficient here.
+		 */
+		relids = GetPublicationRelations(form->oid,
+										 PUBLICATION_PART_LEAF);
+		schemarelids = GetAllSchemaPublicationRelations(form->oid,
+														PUBLICATION_PART_LEAF);
+
+		relids = list_concat_unique_oid(relids, schemarelids);
+
+		InvalidatePublicationRels(relids);
+	}
+
 	CatalogTupleUpdate(rel, &tup->t_self, tup);
 
 	/* Update owner dependency reference */

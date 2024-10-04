@@ -52,6 +52,7 @@ CATALOG(pg_constraint,2606,ConstraintRelationId)
 	bool		condeferrable;	/* deferrable constraint? */
 	bool		condeferred;	/* deferred by default? */
 	bool		convalidated;	/* constraint has been validated? */
+	bool		conenforced;	/* enforced constraint? */
 
 	/*
 	 * conrelid and conkey are only meaningful if the constraint applies to a
@@ -223,6 +224,7 @@ extern Oid	CreateConstraintEntry(const char *constraintName,
 								  bool isDeferrable,
 								  bool isDeferred,
 								  bool isValidated,
+								  bool isEnforced,
 								  Oid parentConstrId,
 								  Oid relId,
 								  const int16 *constraintKey,

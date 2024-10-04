@@ -40,6 +40,7 @@ typedef struct CookedConstraint
 	AttrNumber	attnum;			/* which attr (only for DEFAULT) */
 	Node	   *expr;			/* transformed default or check expr */
 	bool		skip_validation;	/* skip validation? (only for CHECK) */
+	bool		is_enforced;	/* is enforced? (only for CHECK) */
 	bool		is_local;		/* constraint has local (non-inherited) def */
 	int			inhcount;		/* number of times constraint is inherited */
 	bool		is_no_inherit;	/* constraint has local def and cannot be

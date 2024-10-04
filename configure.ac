@@ -1722,6 +1722,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	getifaddrs
 	getpeerucred
 	inet_pton
+	localeconv_l
 	kqueue
 	mbstowcs_l
 	memset_s

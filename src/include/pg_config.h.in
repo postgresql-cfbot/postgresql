@@ -265,6 +265,9 @@
 /* Define to 1 if you have the `zstd' library (-lzstd). */
 #undef HAVE_LIBZSTD
 
+/* Define to 1 if you have the `localeconv_l' function. */
+#undef HAVE_LOCALECONV_L
+
 /* Define to 1 if `long int' works and is 64 bits. */
 #undef HAVE_LONG_INT_64
 

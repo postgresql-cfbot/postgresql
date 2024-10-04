@@ -729,7 +729,6 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 	const char *dblocale = NULL;
 	char	   *dbicurules = NULL;
 	char		dblocprovider = '\0';
-	char	   *canonname;
 	int			encoding = -1;
 	bool		dbistemplate = false;
 	bool		dballowconnections = true;
@@ -1063,18 +1062,16 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 				 errmsg("invalid server encoding %d", encoding)));
 
 	/* Check that the chosen locales are valid, and get canonical spellings */
-	if (!check_locale(LC_COLLATE, dbcollate, &canonname))
+	if (!check_locale(LC_COLLATE, dbcollate))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("invalid LC_COLLATE locale name: \"%s\"", dbcollate),
 				 errhint("If the locale name is specific to ICU, use ICU_LOCALE.")));
-	dbcollate = canonname;
-	if (!check_locale(LC_CTYPE, dbctype, &canonname))
+	if (!check_locale(LC_CTYPE, dbctype))
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 				 errmsg("invalid LC_CTYPE locale name: \"%s\"", dbctype),
 				 errhint("If the locale name is specific to ICU, use ICU_LOCALE.")));
-	dbctype = canonname;
 
 	check_encoding_locale_matches(encoding, dbcollate, dbctype);
 

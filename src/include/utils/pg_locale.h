@@ -48,7 +48,7 @@ extern PGDLLIMPORT char *localized_full_months[];
 /* is the databases's LC_CTYPE the C locale? */
 extern PGDLLIMPORT bool database_ctype_is_c;
 
-extern bool check_locale(int category, const char *locale, char **canonname);
+extern bool check_locale(int category, const char *locale);
 extern char *pg_perm_setlocale(int category, const char *locale);
 
 /*

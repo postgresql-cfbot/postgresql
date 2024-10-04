@@ -2126,8 +2126,6 @@ locale_date_order(const char *locale)
  * it seems that on most implementations that's the only thing it's good for;
  * we could wish that setlocale gave back a canonically spelled version of
  * the locale name, but typically it doesn't.)
- *
- * this should match the backend's check_locale() function
  */
 static void
 check_locale_name(int category, const char *locale, char **canonname)

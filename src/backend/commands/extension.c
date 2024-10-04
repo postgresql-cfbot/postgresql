@@ -85,6 +85,8 @@ typedef struct ExtensionControlFile
 									 * MODULE_PATHNAME */
 	char	   *comment;		/* comment, if any */
 	char	   *schema;			/* target schema (allowed if !relocatable) */
+	bool		owned_schema;	/* if the schema should be owned by the
+								 * extension */
 	bool		relocatable;	/* is ALTER EXTENSION SET SCHEMA supported? */
 	bool		superuser;		/* must be superuser to install? */
 	bool		trusted;		/* allow becoming superuser on the fly? */
@@ -516,6 +518,14 @@ parse_extension_control_file(ExtensionControlFile *control,
 		else if (strcmp(item->name, "schema") == 0)
 		{
 			control->schema = pstrdup(item->value);
+		}
+		else if (strcmp(item->name, "owned_schema") == 0)
+		{
+			if (!parse_bool(item->value, &control->owned_schema))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("parameter \"%s\" requires a Boolean value",
+								item->name)));
 		}
 		else if (strcmp(item->name, "relocatable") == 0)
 		{
@@ -1654,8 +1664,11 @@ CreateExtensionInternal(char *extensionName,
 	 */
 	if (schemaName)
 	{
-		/* If the user is giving us the schema name, it must exist already. */
-		schemaOid = get_namespace_oid(schemaName, false);
+		/*
+		 * If the user is giving us the schema name, it must exist already if
+		 * the extension does not want to own the schema
+		 */
+		schemaOid = get_namespace_oid(schemaName, control->owned_schema);
 	}
 
 	if (control->schema != NULL)
@@ -1677,7 +1690,10 @@ CreateExtensionInternal(char *extensionName,
 
 		/* Always use the schema from control file for current extension. */
 		schemaName = control->schema;
+	}
 
+	if (schemaName)
+	{
 		/* Find or create the schema in case it does not exist. */
 		schemaOid = get_namespace_oid(schemaName, true);
 
@@ -1698,8 +1714,22 @@ CreateExtensionInternal(char *extensionName,
 			 */
 			schemaOid = get_namespace_oid(schemaName, false);
 		}
+		else if (control->owned_schema)
+		{
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_SCHEMA),
+					 errmsg("schema \"%s\" already exists",
+							schemaName)));
+		}
+
 	}
-	else if (!OidIsValid(schemaOid))
+	else if (control->owned_schema)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_SCHEMA),
+				 errmsg("no schema has been selected to create in")));
+	}
+	else
 	{
 		/*
 		 * Neither user nor author of the extension specified schema; use the
@@ -1766,6 +1796,7 @@ CreateExtensionInternal(char *extensionName,
 	 */
 	address = InsertExtensionTuple(control->name, extowner,
 								   schemaOid, control->relocatable,
+								   control->owned_schema,
 								   versionName,
 								   PointerGetDatum(NULL),
 								   PointerGetDatum(NULL),
@@ -1971,7 +2002,8 @@ CreateExtension(ParseState *pstate, CreateExtensionStmt *stmt)
  */
 ObjectAddress
 InsertExtensionTuple(const char *extName, Oid extOwner,
-					 Oid schemaOid, bool relocatable, const char *extVersion,
+					 Oid schemaOid, bool relocatable, bool ownedSchema,
+					 const char *extVersion,
 					 Datum extConfig, Datum extCondition,
 					 List *requiredExtensions)
 {
@@ -2001,6 +2033,7 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 	values[Anum_pg_extension_extowner - 1] = ObjectIdGetDatum(extOwner);
 	values[Anum_pg_extension_extnamespace - 1] = ObjectIdGetDatum(schemaOid);
 	values[Anum_pg_extension_extrelocatable - 1] = BoolGetDatum(relocatable);
+	values[Anum_pg_extension_extownedschema - 1] = BoolGetDatum(ownedSchema);
 	values[Anum_pg_extension_extversion - 1] = CStringGetTextDatum(extVersion);
 
 	if (extConfig == PointerGetDatum(NULL))
@@ -2044,6 +2077,17 @@ InsertExtensionTuple(const char *extName, Oid extOwner,
 	/* Record all of them (this includes duplicate elimination) */
 	record_object_address_dependencies(&myself, refobjs, DEPENDENCY_NORMAL);
 	free_object_addresses(refobjs);
+
+	if (ownedSchema)
+	{
+		ObjectAddress schemaAddress = {
+			.classId = NamespaceRelationId,
+			.objectId = schemaOid,
+		};
+
+		recordDependencyOn(&schemaAddress, &myself, DEPENDENCY_EXTENSION);
+	}
+
 
 	/* Post creation hook for new extension */
 	InvokeObjectPostCreateHook(ExtensionRelationId, extensionOid, 0);
@@ -2892,10 +2936,9 @@ AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *o
 	HeapTuple	depTup;
 	ObjectAddresses *objsMoved;
 	ObjectAddress extAddr;
+	bool		ownedSchema;
 
 	extensionOid = get_extension_oid(extensionName, false);
-
-	nspOid = LookupCreationNamespace(newschema);
 
 	/*
 	 * Permission check: must own extension.  Note that we don't bother to
@@ -2904,22 +2947,6 @@ AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *o
 	if (!object_ownercheck(ExtensionRelationId, extensionOid, GetUserId()))
 		aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_EXTENSION,
 					   extensionName);
-
-	/* Permission check: must have creation rights in target namespace */
-	aclresult = object_aclcheck(NamespaceRelationId, nspOid, GetUserId(), ACL_CREATE);
-	if (aclresult != ACLCHECK_OK)
-		aclcheck_error(aclresult, OBJECT_SCHEMA, newschema);
-
-	/*
-	 * If the schema is currently a member of the extension, disallow moving
-	 * the extension into the schema.  That would create a dependency loop.
-	 */
-	if (getExtensionOfObject(NamespaceRelationId, nspOid) == extensionOid)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("cannot move extension \"%s\" into schema \"%s\" "
-						"because the extension contains the schema",
-						extensionName, newschema)));
 
 	/* Locate the pg_extension tuple */
 	extRel = table_open(ExtensionRelationId, RowExclusiveLock);
@@ -2944,14 +2971,38 @@ AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *o
 
 	systable_endscan(extScan);
 
-	/*
-	 * If the extension is already in the target schema, just silently do
-	 * nothing.
-	 */
-	if (extForm->extnamespace == nspOid)
+	ownedSchema = extForm->extownedschema;
+
+	if (!ownedSchema)
 	{
-		table_close(extRel, RowExclusiveLock);
-		return InvalidObjectAddress;
+		nspOid = LookupCreationNamespace(newschema);
+
+		/* Permission check: must have creation rights in target namespace */
+		aclresult = object_aclcheck(NamespaceRelationId, nspOid, GetUserId(), ACL_CREATE);
+		if (aclresult != ACLCHECK_OK)
+			aclcheck_error(aclresult, OBJECT_SCHEMA, newschema);
+
+		/*
+		 * If the schema is currently a member of the extension, disallow
+		 * moving the extension into the schema.  That would create a
+		 * dependency loop.
+		 */
+		if (getExtensionOfObject(NamespaceRelationId, nspOid) == extensionOid)
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("cannot move extension \"%s\" into schema \"%s\" "
+							"because the extension contains the schema",
+							extensionName, newschema)));
+
+		/*
+		 * If the extension is already in the target schema, just silently do
+		 * nothing.
+		 */
+		if (extForm->extnamespace == nspOid)
+		{
+			table_close(extRel, RowExclusiveLock);
+			return InvalidObjectAddress;
+		}
 	}
 
 	/* Check extension is supposed to be relocatable */
@@ -3025,6 +3076,13 @@ AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *o
 		}
 
 		/*
+		 * We don't actually have to move any objects anything for owned
+		 * schemas, because we simply rename the schema.
+		 */
+		if (ownedSchema)
+			continue;
+
+		/*
 		 * Otherwise, ignore non-membership dependencies.  (Currently, the
 		 * only other case we could see here is a normal dependency from
 		 * another extension.)
@@ -3067,18 +3125,26 @@ AlterExtensionNamespace(const char *extensionName, const char *newschema, Oid *o
 
 	relation_close(depRel, AccessShareLock);
 
-	/* Now adjust pg_extension.extnamespace */
-	extForm->extnamespace = nspOid;
+	if (ownedSchema)
+	{
+		RenameSchema(get_namespace_name(oldNspOid), newschema);
+		table_close(extRel, RowExclusiveLock);
+	}
+	else
+	{
+		/* Now adjust pg_extension.extnamespace */
+		extForm->extnamespace = nspOid;
 
-	CatalogTupleUpdate(extRel, &extTup->t_self, extTup);
+		CatalogTupleUpdate(extRel, &extTup->t_self, extTup);
 
-	table_close(extRel, RowExclusiveLock);
+		table_close(extRel, RowExclusiveLock);
 
-	/* update dependency to point to the new schema */
-	if (changeDependencyFor(ExtensionRelationId, extensionOid,
-							NamespaceRelationId, oldNspOid, nspOid) != 1)
-		elog(ERROR, "could not change schema dependency for extension %s",
-			 NameStr(extForm->extname));
+		/* update dependency to point to the new schema */
+		if (changeDependencyFor(ExtensionRelationId, extensionOid,
+								NamespaceRelationId, oldNspOid, nspOid) != 1)
+			elog(ERROR, "could not change schema dependency for extension %s",
+				 NameStr(extForm->extname));
+	}
 
 	InvokeObjectPostAlterHook(ExtensionRelationId, extensionOid, 0);
 

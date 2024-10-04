@@ -9446,7 +9446,7 @@ RenameStmt: ALTER AGGREGATE aggregate_with_argtypes RENAME TO name
 					RenameStmt *n = makeNode(RenameStmt);
 
 					n->renameType = OBJECT_PUBLICATION;
-					n->object = (Node *) makeString($3);
+					n->subname = $3;
 					n->newname = $6;
 					n->missing_ok = false;
 					$$ = (Node *) n;

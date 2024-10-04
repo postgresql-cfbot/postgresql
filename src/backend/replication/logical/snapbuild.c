@@ -728,13 +728,15 @@ SnapBuildProcessNewCid(SnapBuild *builder, TransactionId xid,
  * catalog contents).
  */
 static void
-SnapBuildDistributeSnapshotAndInval(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid)
+SnapBuildDistributeSnapshotAndInval(SnapBuild *builder, XLogRecPtr lsn,
+									TransactionId xid)
 {
 	dlist_iter	txn_i;
 	ReorderBufferTXN *txn;
 	ReorderBufferTXN *curr_txn;
 
-	curr_txn = ReorderBufferTXNByXid(builder->reorder, xid, false, NULL, InvalidXLogRecPtr, false);
+	curr_txn = ReorderBufferTXNByXid(builder->reorder, xid, false, NULL,
+									 InvalidXLogRecPtr, false);
 
 	/*
 	 * Iterate through all toplevel transactions. This can include
@@ -784,7 +786,8 @@ SnapBuildDistributeSnapshotAndInval(SnapBuild *builder, XLogRecPtr lsn, Transact
 		 */
 		if (txn->xid != xid && curr_txn->ninvalidations > 0)
 			ReorderBufferAddInvalidations(builder->reorder, txn->xid, lsn,
-										  curr_txn->ninvalidations, curr_txn->invalidations);
+										  curr_txn->ninvalidations,
+										  curr_txn->invalidations);
 	}
 }
 

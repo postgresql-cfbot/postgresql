@@ -34,6 +34,7 @@
 #include "optimizer/subselect.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -1215,6 +1216,189 @@ inline_cte_walker(Node *node, inline_cte_walker_context *context)
 	return expression_tree_walker(node, inline_cte_walker, context);
 }
 
+
+/*
+ * The function traverses the tree looking for elements of type var.
+ * If it finds it, it returns true.
+ */
+static bool
+values_simplicity_check_walker(Node *node, void *ctx)
+{
+	if (node == NULL)
+	{
+		return false;
+	}
+	else if(IsA(node, Var))
+		return true;
+	else if(IsA(node, Query))
+		return query_tree_walker((Query *) node,
+								 values_simplicity_check_walker,
+								 (void*) ctx,
+								 QTW_EXAMINE_RTES_BEFORE);
+
+	return expression_tree_walker(node, values_simplicity_check_walker,
+								  (void *) ctx);
+}
+
+/*
+ * Designed in analogy with is_simple_values
+ */
+static bool
+is_simple_values_sequence(Query *query)
+{
+	RangeTblEntry *rte;
+
+	/* In theory removing (altering) part of restrictions */
+	if (list_length(query->targetList) > 1 ||
+		query->limitCount != NULL || query->limitOffset != NULL ||
+		query->sortClause != NIL ||
+		list_length(query->rtable) != 1)
+		return false;
+
+	rte = linitial_node(RangeTblEntry,query->rtable);
+
+	/* Permanent restrictions */
+	if (rte->rtekind != RTE_VALUES ||
+		list_length(rte->values_lists) <= 1 ||
+		contain_volatile_functions((Node *) query))
+		return false;
+
+	/*
+	 * Go to the query tree to be sure that expression doesn't
+	 * have any Var type elements.
+	 */
+	return !expression_tree_walker((Node *) (rte->values_lists),
+								   values_simplicity_check_walker,
+								   NULL);
+}
+
+/*
+ * Transform appropriate testexpr and const VALUES expression to SaOpExpr.
+ *
+ * Return NULL, if transformation isn't allowed.
+ */
+ScalarArrayOpExpr *
+convert_VALUES_to_ANY(Query *query, Node *testexpr)
+{
+	RangeTblEntry	   *rte;
+	Node			   *leftop;
+	Oid					consttype;
+	int16				typlen;
+	bool				typbyval;
+	char				typalign;
+	ArrayType		   *arrayConst;
+	Oid					arraytype;
+	Node			   *arrayNode;
+	Oid					matchOpno;
+	Form_pg_operator	operform;
+	ScalarArrayOpExpr  *saopexpr;
+	ListCell		   *lc;
+	Oid					inputcollid;
+	HeapTuple			opertup;
+	bool				have_param = false;
+	List			   *consts = NIL;
+
+	/* Extract left side of SAOP from test epression */
+
+	if (!IsA(testexpr, OpExpr) ||
+		list_length(((OpExpr *) testexpr)->args) != 2 ||
+		!is_simple_values_sequence(query))
+		return NULL;
+
+	rte = linitial_node(RangeTblEntry,query->rtable);
+	leftop = linitial(((OpExpr *) testexpr)->args);
+	matchOpno = ((OpExpr *) testexpr)->opno;
+	inputcollid = linitial_oid(rte->colcollations);
+
+	foreach (lc, rte->values_lists)
+	{
+		List *elem = lfirst(lc);
+		Node *value = linitial(elem);
+
+		value = eval_const_expressions(NULL, value);
+
+		if (!IsA(value, Const))
+			have_param = true;
+		else if (((Const *) value)->constisnull)
+			/*
+			 * Constant expression isn't converted because it is a NULL.
+			 * NULLS just not supported by the construct_array routine.
+			 */
+			return NULL;
+
+		consts = lappend(consts, value);
+
+	}
+	Assert(list_length(consts) == list_length(rte->values_lists));
+
+	consttype = linitial_oid(rte->coltypes);
+	Assert(list_length(rte->coltypes) == 1 && OidIsValid(consttype));
+	arraytype = get_array_type(linitial_oid(rte->coltypes));
+	if (!OidIsValid(arraytype))
+		return NULL;
+
+	/* TODO: remember parameters */
+	if (have_param)
+	{
+		/*
+		 * We need to construct an ArrayExpr given we have Param's not just
+		 * Const's.
+		 */
+		ArrayExpr  *arrayExpr = makeNode(ArrayExpr);
+
+		/* array_collid will be set by parse_collate.c */
+		arrayExpr->element_typeid = consttype;
+		arrayExpr->array_typeid = arraytype;
+		arrayExpr->multidims = false;
+		arrayExpr->elements = consts;
+		arrayExpr->location = -1;
+
+		arrayNode = (Node *) arrayExpr;
+	}
+	else
+	{
+		int			i = 0;
+		ListCell   *lc1;
+		Datum	   *elems;
+
+		/* Direct creation of Const array */
+
+		elems = (Datum *) palloc(sizeof(Datum) * list_length(consts));
+		foreach (lc1, consts)
+			elems[i++] = lfirst_node(Const, lc1)->constvalue;
+
+		get_typlenbyvalalign(consttype, &typlen, &typbyval, &typalign);
+
+		arrayConst = construct_array(elems, i, consttype,
+									 typlen, typbyval, typalign);
+		arrayNode = (Node *) makeConst(arraytype, -1, inputcollid,
+									   -1, PointerGetDatum(arrayConst),
+									   false, false);
+		pfree(elems);
+	}
+
+	/* Lookup for operator to fetch necessary information for the SAOP node */
+	opertup = SearchSysCache1(OPEROID, ObjectIdGetDatum(matchOpno));
+	if (!HeapTupleIsValid(opertup))
+		elog(ERROR, "cache lookup failed for operator %u", matchOpno);
+
+	operform = (Form_pg_operator) GETSTRUCT(opertup);
+
+	/* Build the SAOP expression node */
+	saopexpr = makeNode(ScalarArrayOpExpr);
+	saopexpr->opno = matchOpno;
+	saopexpr->opfuncid = operform->oprcode;
+	saopexpr->hashfuncid = InvalidOid;
+	saopexpr->negfuncid = InvalidOid;
+	saopexpr->useOr = true;
+	saopexpr->inputcollid = inputcollid;
+	saopexpr->args = list_make2(leftop, arrayNode);
+	saopexpr->location = -1;
+
+	ReleaseSysCache(opertup);
+
+	return saopexpr;
+}
 
 /*
  * convert_ANY_sublink_to_join: try to convert an ANY SubLink to a join

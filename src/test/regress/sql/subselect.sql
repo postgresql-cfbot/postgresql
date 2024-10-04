@@ -1038,3 +1038,141 @@ WHERE a.thousand < 750;
 explain (costs off)
 SELECT * FROM tenk1 A LEFT JOIN tenk2 B
 ON B.hundred in (SELECT min(c.hundred) FROM tenk2 C WHERE c.odd = b.odd);
+
+--
+-- Test VALUES to ARRAY (VtA) transformation
+--
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM onek, (VALUES(147, 'RFAAAA'), (931, 'VJAAAA')) AS v (i, j)
+  WHERE onek.unique1 = v.i AND onek.stringu1 = v.j;
+
+SELECT * FROM onek,
+  (VALUES ((SELECT i FROM
+    (VALUES(10000), (2), (389), (1000), (2000), ((SELECT 10029))) AS foo(i)
+    ORDER BY i ASC LIMIT 1))) bar (i)
+  WHERE onek.unique1 = bar.i;
+
+-- Forbid VTA transformation for a composite argument
+EXPLAIN (COSTS OFF)
+SELECT * FROM onek
+  WHERE (unique1,ten) IN (VALUES (1,1), (20,0), (99,9), (17,99))
+  ORDER BY unique1;
+
+-- Values to Array transformation
+EXPLAIN (COSTS OFF)
+SELECT * FROM onek
+    WHERE unique1 IN (VALUES(10000), (2), (389), (1000), (2000), (10029))
+    ORDER BY unique1;
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM onek
+    WHERE unique1 IN (VALUES(1200), (1));
+
+-- TODO: Recursively evaluate constant queries.
+EXPLAIN (COSTS OFF)
+SELECT * FROM onek
+  WHERE unique1 IN (SELECT x*x FROM (VALUES(1200), (1)) AS x(x));
+
+-- transformation doesn't apply because values RTE exists in subquery
+EXPLAIN (COSTS OFF)
+select * FROM onek,
+  (VALUES ((select i FROM
+    (VALUES(10000), (2), (389), (1000), (2000), (10029)) as foo(i)
+    ORDER BY i ASC LIMIT 1))) bar (i)
+  WHERE onek.unique1 = bar.i;
+
+EXPLAIN (COSTS OFF)
+SELECT unique1, stringu1 FROM onek WHERE stringu1::name IN (VALUES('RFAAAA'), ('VJAAAA'));
+
+-- transformation doesn't apply because of type differences
+EXPLAIN (COSTS OFF)
+SELECT unique1, stringu1 FROM onek WHERE stringu1::text IN (VALUES('RFAAAA'), ('VJAAAA'));
+
+EXPLAIN (COSTS OFF)
+SELECT * from onek WHERE unique1 in (VALUES(1200::bigint), (1));
+
+-- Recursive VTA transformation
+EXPLAIN (COSTS OFF)
+SELECT * FROM (
+  SELECT ten FROM onek
+  WHERE unique1 IN (VALUES(10000), (2), (389), (1000), (2000), (10029))
+  OFFSET 0
+);
+
+EXPLAIN (COSTS OFF)
+SELECT (SELECT avg(ten::integer) FROM onek
+WHERE unique1 IN (VALUES(10000), (2), (389), (1000), (2000), (10029)));
+
+-- VTA shouldn't depend on the side of the join probing with the VALUES expression.
+EXPLAIN (COSTS OFF)
+SELECT c.oid,c.relname FROM pg_class c JOIN pg_am a USING (oid)
+WHERE a.oid IN (VALUES (1), (2));
+EXPLAIN (COSTS OFF)
+SELECT c.oid,c.relname FROM pg_class c JOIN pg_am a USING (oid)
+WHERE c.oid IN (VALUES (1), (2));
+
+-- Complexity of test expression doesn't matter
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek WHERE sin(two)+four IN (VALUES (sin(0.5)), (2));
+EXPLAIN (COSTS OFF)
+
+-- VTA Doesn't allow NULLs in the list - may be until a better solution.
+SELECT ten FROM onek WHERE sin(two)+four IN (VALUES (sin(0.5)), (NULL), (2));
+
+-- TODO No.2
+PREPARE test (int,numeric, text) AS
+  SELECT ten FROM onek WHERE sin(two)*four/($3::real) IN (VALUES (sin($2)), (2), ($1));
+EXPLAIN (COSTS OFF) EXECUTE test(42, 3.14, '-1.5');
+EXPLAIN (COSTS OFF) EXECUTE test(NULL, 3.14, NULL);
+EXPLAIN (COSTS OFF) EXECUTE test(NULL, 3.14, '-1.5');
+PREPARE test1 (int,numeric, text) AS
+  SELECT ten FROM onek
+  WHERE sin(two)*four/($3::real) IN (VALUES (sin($2)), (2), ($2), ($2), ($1));
+-- VTA forbidden because sin($1) can't be evaluated to Const.
+EXPLAIN (COSTS OFF) EXECUTE test1(NULL, 2, '2');
+
+PREPARE test2 (int,numeric, text) AS
+  SELECT ten FROM onek
+  WHERE sin(two)*four/($3::real) IN (VALUES (2), ($2), ($2), ($1));
+-- VTA forbidden because of unresolved casting of numeric parameter to common type
+EXPLAIN (COSTS OFF) EXECUTE test2(2, 2, '2');
+PREPARE test3 (int,int, text) AS
+  SELECT ten FROM onek
+  WHERE sin(two)*four/($3::real) IN (VALUES (2), ($2), ($2), ($1));
+-- Legal VTA transformation
+EXPLAIN (COSTS OFF) EXECUTE test3(2, 2, '2');
+
+-- Be careful in case of sort_specification clauses like LIMIT, OFFSET etc.
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek WHERE unique1 IN (VALUES (1), (2) OFFSET 1);
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek WHERE unique1 IN (VALUES (1), (2) ORDER BY 1);
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek WHERE unique1 IN (VALUES (1), (2) LIMIT 1);
+
+SELECT oid,relname FROM pg_class WHERE oid IN (VALUES (sin(0.5)), (2)); -- ERROR
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek WHERE unique1 IN (VALUES (sin(0.5)), (2));
+
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek t
+WHERE unique1 IN (VALUES (0), ((2 IN (SELECT unique2 FROM onek c
+  WHERE c.unique2 = t.unique1))::integer));
+
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek t
+WHERE unique1 IN (VALUES (0), ((2 IN (SELECT unique2 FROM onek c
+  WHERE c.unique2 IN (VALUES (sin(0.5)), (2))))::integer));
+
+-- Doesn't allow the VtA dispite of possibility. XXX: should we improve it later?
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek t WHERE unique1 IN (VALUES (0), ((2 IN (
+  (VALUES (1), (3))))::integer)
+);
+
+-- The VtA works. Do we need to constify the 'SELECT 3' subquery?
+EXPLAIN (COSTS OFF)
+SELECT ten FROM onek t WHERE unique1 IN (VALUES (0), ((2 IN
+  (SELECT (3)))::integer)
+);

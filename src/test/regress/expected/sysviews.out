@@ -230,3 +230,10 @@ select count(*) >= 4 as ok FROM pg_system_versions;
  t
 (1 row)
 
+-- There is always some number of shared objects
+select count(*) > 0 as ok FROM pg_system_libraries;
+ ok 
+----
+ t
+(1 row)
+

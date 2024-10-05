@@ -14,6 +14,10 @@
  * a version string directly allows for more flexibility about how and when the
  * information could be reported.
  *
+ * Libraries reporting is implemented similarly via a hash table containing
+ * only the library file path. This information is populated directly during
+ * the initialization.
+ *
  * Portions Copyright (c) 1996-2024, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
  *
@@ -32,6 +36,7 @@
 #include "utils/system_version.h"
 
 static HTAB	   *versions = NULL;
+static HTAB	   *libraries = NULL;
 
 void
 add_system_version(const char* name, SystemVersionCB cb, VersionType type)
@@ -159,6 +164,82 @@ pg_get_system_versions(PG_FUNCTION_ARGS)
 		values[0] = CStringGetTextDatum(hentry->name);
 		values[1] = CStringGetTextDatum(version);
 		values[2] = hentry->type;
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+	}
+
+	return (Datum) 0;
+}
+
+/*
+ * Walk through list of shared objects and populate the libraries hash table.
+ */
+void
+register_libraries()
+{
+	HASHCTL		ctl;
+
+	ctl.keysize = NAMEDATALEN;
+	ctl.entrysize = sizeof(SystemLibrary);
+	ctl.hcxt = CurrentMemoryContext;
+
+	libraries = hash_create("Libraries table",
+								   MAX_SYSTEM_LIBRARIES,
+								   &ctl,
+								   HASH_ELEM | HASH_STRINGS);
+
+	dl_iterate_phdr(add_library, NULL);
+}
+
+int add_library(struct dl_phdr_info *info, size_t size, void *data)
+{
+	const char 		*key;
+	bool 			found;
+
+	if (strcmp(info->dlpi_name, "") == 0)
+	{
+		/* The first visited object is the main program with the empty name,
+		 * which is not so interesting. */
+		return 0;
+	}
+
+	key = pstrdup(info->dlpi_name);
+	hash_search(libraries, key, HASH_ENTER, &found);
+
+	if (found)
+		ereport(ERROR,
+				(errcode(ERRCODE_DUPLICATE_OBJECT),
+				 errmsg("duplicated library")));
+
+	return 0;
+}
+
+/*
+ * pg_get_libraries
+ *
+ * List information about shared objects.
+ */
+Datum
+pg_get_system_libraries(PG_FUNCTION_ARGS)
+{
+#define PG_GET_SYS_LIBRARIES_COLS 1
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	HASH_SEQ_STATUS status;
+	SystemLibrary *hentry;
+
+	/* Build tuplestore to hold the result rows */
+	InitMaterializedSRF(fcinfo, 0);
+
+	if (!versions)
+		return (Datum) 0;
+
+	hash_seq_init(&status, libraries);
+	while ((hentry = (SystemLibrary *) hash_seq_search(&status)) != NULL)
+	{
+		Datum		values[PG_GET_SYS_LIBRARIES_COLS] = {0};
+		bool		nulls[PG_GET_SYS_LIBRARIES_COLS] = {0};
+
+		values[0] = CStringGetTextDatum(hentry->filepath);
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}

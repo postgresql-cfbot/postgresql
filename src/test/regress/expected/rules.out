@@ -2613,6 +2613,8 @@ pg_stats_ext_exprs| SELECT cn.nspname AS schemaname,
      JOIN LATERAL ( SELECT unnest(pg_get_statisticsobjdef_expressions(s.oid)) AS expr,
             unnest(sd.stxdexpr) AS a) stat ON ((stat.expr IS NOT NULL)))
   WHERE (pg_has_role(c.relowner, 'USAGE'::text) AND ((c.relrowsecurity = false) OR (NOT row_security_active(c.oid))));
+pg_system_libraries| SELECT name
+   FROM pg_get_system_libraries() f(name text);
 pg_system_versions| SELECT name,
     version,
         CASE type

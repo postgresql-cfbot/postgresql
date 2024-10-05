@@ -15,6 +15,7 @@
 #include <link.h>
 
 #define MAX_SYSTEM_VERSIONS 100
+#define MAX_SYSTEM_LIBRARIES 100
 
 typedef enum VersionType
 {
@@ -36,8 +37,14 @@ typedef struct SystemVersion
 	SystemVersionCB	callback; 			/* Callback to fetch the version string */
 } SystemVersion;
 
+typedef struct SystemLibrary
+{
+	char			filepath[NAMEDATALEN];
+} SystemLibrary;
+
 void add_system_version(const char* name, SystemVersionCB cb, VersionType type);
 extern void register_core_versions(void);
+extern void register_libraries(void);
 
 const char* core_get_version(bool *available);
 const char* core_get_arch(bool *available);
@@ -45,5 +52,7 @@ const char* core_get_compiler(bool *available);
 
 const char* icu_get_version(bool *available);
 const char* glibc_get_version(bool *available);
+
+int add_library(struct dl_phdr_info *info, size_t size, void *data);
 
 #endif							/* SYSTEM_VERSION_H */

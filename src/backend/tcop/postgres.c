@@ -4373,6 +4373,7 @@ PostgresMain(const char *dbname, const char *username)
 
 	/* Prepare information for reporting versions and libraries. */
 	register_system_versions();
+	register_libraries();
 
 	/*
 	 * Also set up handler to log session end; we have to wait till now to be

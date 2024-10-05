@@ -1387,3 +1387,6 @@ CREATE VIEW pg_system_versions AS
                   WHEN 1 THEN 'Run Time'
                   END AS "type"
     FROM pg_get_system_versions();
+
+CREATE VIEW pg_system_libraries AS
+    SELECT * FROM pg_get_system_libraries() as f(name text);

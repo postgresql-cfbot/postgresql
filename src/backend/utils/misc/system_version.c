@@ -68,6 +68,65 @@ add_system_version(const char* name, SystemVersionCB cb, VersionType type)
 }
 
 /*
+ * Register versions that describe core components and do not correspond to any
+ * individual component.
+ */
+void
+register_core_versions()
+{
+	add_system_version("Core", core_get_version, CompileTime);
+	add_system_version("Arch", core_get_arch, CompileTime);
+	add_system_version("Compiler", core_get_compiler, CompileTime);
+	add_system_version("ICU", icu_get_version, RunTime);
+	add_system_version("Glibc", glibc_get_version, RunTime);
+}
+
+const char*
+core_get_version(bool *available)
+{
+	*available = true;
+	return (const char*) psprintf("%s", PG_VERSION);
+}
+
+const char*
+core_get_arch(bool *available)
+{
+	*available = true;
+	return (const char*) psprintf("%s", PG_ARCH_STR);
+}
+
+const char*
+core_get_compiler(bool *available)
+{
+	*available = true;
+	return (const char*) psprintf("%s", PG_CC_STR);
+}
+
+const char*
+icu_get_version(bool *available)
+{
+#ifdef USE_ICU
+	UVersionInfo UCDVersion;
+	char* version = palloc0(U_MAX_VERSION_STRING_LENGTH);
+
+	*available = true;
+	u_getUnicodeVersion(UCDVersion);
+	u_versionToString(UCDVersion, version);
+	return (const char*) version;
+#else
+	*available = false;
+	return (const char*) "";
+#endif
+}
+
+const char*
+glibc_get_version(bool *available)
+{
+	*available = true;
+	return (const char*) gnu_get_libc_version();
+}
+
+/*
  * pg_get_system_versions
  *
  * List information about system versions.

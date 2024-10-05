@@ -11,6 +11,7 @@
 #ifndef SYSTEM_VERSION_H
 #define SYSTEM_VERSION_H
 
+#include <gnu/libc-version.h>
 #include <link.h>
 
 #define MAX_SYSTEM_VERSIONS 100
@@ -36,5 +37,13 @@ typedef struct SystemVersion
 } SystemVersion;
 
 void add_system_version(const char* name, SystemVersionCB cb, VersionType type);
+extern void register_core_versions(void);
+
+const char* core_get_version(bool *available);
+const char* core_get_arch(bool *available);
+const char* core_get_compiler(bool *available);
+
+const char* icu_get_version(bool *available);
+const char* glibc_get_version(bool *available);
 
 #endif							/* SYSTEM_VERSION_H */

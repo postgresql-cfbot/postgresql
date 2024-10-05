@@ -188,3 +188,22 @@ InstrJitAgg(JitInstrumentation *dst, JitInstrumentation *add)
 	INSTR_TIME_ADD(dst->optimization_counter, add->optimization_counter);
 	INSTR_TIME_ADD(dst->emission_counter, add->emission_counter);
 }
+
+/*
+ * Return JIT provider's version string for troubleshooting purposes.
+ */
+const char *
+jit_get_version(bool *available)
+{
+	if (provider_init())
+		return provider.get_version(available);
+
+	*available = false;
+	return "";
+}
+
+void
+jit_register_version(void)
+{
+	add_system_version("LLVM", jit_get_version, RunTime);
+}

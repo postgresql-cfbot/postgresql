@@ -1379,3 +1379,11 @@ CREATE VIEW pg_stat_subscription_stats AS
 
 CREATE VIEW pg_wait_events AS
     SELECT * FROM pg_get_wait_events();
+
+CREATE VIEW pg_system_versions AS
+    SELECT
+        name, version,
+        CASE type WHEN 0 THEN 'Compile Time'
+                  WHEN 1 THEN 'Run Time'
+                  END AS "type"
+    FROM pg_get_system_versions();

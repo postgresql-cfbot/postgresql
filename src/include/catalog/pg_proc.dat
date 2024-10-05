@@ -12377,4 +12377,10 @@
   proargtypes => 'int2',
   prosrc => 'gist_stratnum_identity' },
 
+{ oid => '9432', descr => 'describe system verions',
+  proname => 'pg_get_system_versions', procost => '10', prorows => '10',
+  proretset => 't', provolatile => 'v', prorettype => 'record',
+  proargtypes => '', proallargtypes => '{text,text,int8}',
+  proargmodes => '{o,o,o}', proargnames => '{name,version,type}',
+  prosrc => 'pg_get_system_versions' },
 ]

@@ -297,7 +297,7 @@ _hash_first(IndexScanDesc scan, ScanDirection dir)
 	HashPageOpaque opaque;
 	HashScanPosItem *currItem;
 
-	pgstat_count_index_scan(rel);
+	pgstat_count_index_scan(rel, false);
 
 	/*
 	 * We do not support hash scans with no index qualification, because we

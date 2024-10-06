@@ -624,7 +624,7 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 		/* Begin the scan by processing the root page */
 		GISTSearchItem fakeItem;
 
-		pgstat_count_index_scan(scan->indexRelation);
+		pgstat_count_index_scan(scan->indexRelation, false);
 
 		so->firstCall = false;
 		so->curPageData = so->nPageData = 0;
@@ -749,7 +749,7 @@ gistgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	if (!so->qual_ok)
 		return 0;
 
-	pgstat_count_index_scan(scan->indexRelation);
+	pgstat_count_index_scan(scan->indexRelation, false);
 
 	/* Begin the scan by processing the root page */
 	so->curPageData = so->nPageData = 0;

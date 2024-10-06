@@ -911,6 +911,12 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 	}
 
 	/*
+	 * Count an indexscan for stats, now that we know that we'll call
+	 * _bt_search/_bt_endpoint below
+	 */
+	pgstat_count_index_scan(rel, (scan->parallel_scan != NULL));
+
+	/*
 	 * For parallel scans, get the starting page from shared state. If the
 	 * scan has not started, proceed to find out first leaf page in the usual
 	 * way while keeping other participating processes waiting.  If the scan
@@ -965,12 +971,6 @@ _bt_first(IndexScanDesc scan, ScanDirection dir)
 		 */
 		_bt_start_array_keys(scan, dir);
 	}
-
-	/*
-	 * Count an indexscan for stats, now that we know that we'll call
-	 * _bt_search/_bt_endpoint below
-	 */
-	pgstat_count_index_scan(rel);
 
 	/*----------
 	 * Examine the scan keys to discover where we need to start the scan.

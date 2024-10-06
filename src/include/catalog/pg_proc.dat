@@ -913,6 +913,12 @@
   prorettype => 'table_am_handler', proargtypes => 'internal',
   prosrc => 'heap_tableam_handler' },
 
+# Sequence access method handlers
+{ oid => '8209', descr => 'local sequence access method handler',
+  proname => 'seq_local_sequenceam_handler', provolatile => 'v',
+  prorettype => 'sequence_am_handler', proargtypes => 'internal',
+  prosrc => 'seq_local_sequenceam_handler' },
+
 # Index access method handlers
 { oid => '330', descr => 'btree index access method handler',
   proname => 'bthandler', provolatile => 'v', prorettype => 'index_am_handler',
@@ -7745,6 +7751,13 @@
 { oid => '327', descr => 'I/O',
   proname => 'index_am_handler_out', prorettype => 'cstring',
   proargtypes => 'index_am_handler', prosrc => 'index_am_handler_out' },
+{ oid => '8207', descr => 'I/O',
+  proname => 'sequence_am_handler_in', proisstrict => 'f',
+  prorettype => 'sequence_am_handler', proargtypes => 'cstring',
+  prosrc => 'sequence_am_handler_in' },
+{ oid => '8208', descr => 'I/O',
+  proname => 'sequence_am_handler_out', prorettype => 'cstring',
+  proargtypes => 'sequence_am_handler', prosrc => 'sequence_am_handler_out' },
 { oid => '3311', descr => 'I/O',
   proname => 'tsm_handler_in', proisstrict => 'f', prorettype => 'tsm_handler',
   proargtypes => 'cstring', prosrc => 'tsm_handler_in' },

@@ -59,6 +59,7 @@ MAKE_SYSCACHE(AMOID, pg_am_oid_index, 4);
  * Allowed values for amtype
  */
 #define AMTYPE_INDEX					'i' /* index access method */
+#define AMTYPE_SEQUENCE					's' /* sequence access method */
 #define AMTYPE_TABLE					't' /* table access method */
 
 #endif							/* EXPOSE_TO_CLIENT_CODE */

@@ -9,6 +9,7 @@ node_support_input_i = [
   'nodes/execnodes.h',
   'access/amapi.h',
   'access/sdir.h',
+  'access/sequenceam.h',
   'access/tableam.h',
   'access/tsmapi.h',
   'commands/event_trigger.h',

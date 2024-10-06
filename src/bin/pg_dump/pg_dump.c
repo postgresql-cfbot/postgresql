@@ -134,6 +134,7 @@ typedef struct
 	int64		cache;			/* cache size */
 	int64		last_value;		/* last value of sequence */
 	bool		is_called;		/* whether nextval advances before returning */
+	char	   *seqam;			/* access method of sequence */
 } SequenceItem;
 
 typedef enum OidOptions
@@ -477,6 +478,7 @@ main(int argc, char **argv)
 		{"if-exists", no_argument, &dopt.if_exists, 1},
 		{"inserts", no_argument, NULL, 9},
 		{"lock-wait-timeout", required_argument, NULL, 2},
+		{"no-sequence-access-method", no_argument, &dopt.outputNoSequenceAm, 1},
 		{"no-table-access-method", no_argument, &dopt.outputNoTableAm, 1},
 		{"no-tablespaces", no_argument, &dopt.outputNoTablespaces, 1},
 		{"quote-all-identifiers", no_argument, &quote_all_identifiers, 1},
@@ -1098,6 +1100,7 @@ main(int argc, char **argv)
 	ropt->superuser = dopt.outputSuperuser;
 	ropt->createDB = dopt.outputCreateDB;
 	ropt->noOwner = dopt.outputNoOwner;
+	ropt->noSequenceAm = dopt.outputNoSequenceAm;
 	ropt->noTableAm = dopt.outputNoTableAm;
 	ropt->noTablespace = dopt.outputNoTablespaces;
 	ropt->disable_triggers = dopt.disable_triggers;
@@ -1214,6 +1217,7 @@ help(const char *progname)
 	printf(_("  --no-publications            do not dump publications\n"));
 	printf(_("  --no-security-labels         do not dump security label assignments\n"));
 	printf(_("  --no-subscriptions           do not dump subscriptions\n"));
+	printf(_("  --no-sequence-access-method  do not sequence table access methods\n"));
 	printf(_("  --no-table-access-method     do not dump table access methods\n"));
 	printf(_("  --no-tablespaces             do not dump tablespace assignments\n"));
 	printf(_("  --no-toast-compression       do not dump TOAST compression methods\n"));
@@ -13118,6 +13122,9 @@ dumpAccessMethod(Archive *fout, const AccessMethodInfo *aminfo)
 		case AMTYPE_INDEX:
 			appendPQExpBufferStr(q, "TYPE INDEX ");
 			break;
+		case AMTYPE_SEQUENCE:
+			appendPQExpBufferStr(q, "TYPE SEQUENCE ");
+			break;
 		case AMTYPE_TABLE:
 			appendPQExpBufferStr(q, "TYPE TABLE ");
 			break;
@@ -17404,26 +17411,40 @@ collectSequences(Archive *fout)
 	 *
 	 * Since version 18, we can gather the sequence data in this query with
 	 * pg_get_sequence_data(), but we only do so for non-schema-only dumps.
+	 *
+	 * Access methods for sequences are supported since version 18.
 	 */
 	if (fout->remoteVersion < 100000)
 		return;
-	else if (fout->remoteVersion < 180000 ||
-			 (fout->dopt->schemaOnly && !fout->dopt->sequence_data))
+	else if (fout->remoteVersion < 180000)
 		query = "SELECT seqrelid, format_type(seqtypid, NULL), "
 			"seqstart, seqincrement, "
 			"seqmax, seqmin, "
 			"seqcache, seqcycle, "
-			"NULL, 'f' "
+			"NULL, 'f', NULL "
 			"FROM pg_catalog.pg_sequence "
 			"ORDER BY seqrelid";
+	else if	(fout->dopt->schemaOnly && !fout->dopt->sequence_data)
+		query = "SELECT s.seqrelid, format_type(s.seqtypid, NULL), "
+			"s.seqstart, s.seqincrement, "
+			"s.seqmax, s.seqmin, "
+			"s.seqcache, s.seqcycle, "
+			"NULL, 'f', a.amname AS seqam "
+			"FROM pg_catalog.pg_sequence s "
+			"JOIN pg_class c ON (c.oid = s.seqrelid) "
+			"JOIN pg_am a ON (a.oid = c.relam) "
+			"ORDER BY seqrelid";
 	else
-		query = "SELECT seqrelid, format_type(seqtypid, NULL), "
-			"seqstart, seqincrement, "
-			"seqmax, seqmin, "
-			"seqcache, seqcycle, "
-			"last_value, is_called "
-			"FROM pg_catalog.pg_sequence, "
-			"pg_get_sequence_data(seqrelid) "
+		query = "SELECT s.seqrelid, format_type(s.seqtypid, NULL), "
+			"s.seqstart, s.seqincrement, "
+			"s.seqmax, s.seqmin, "
+			"s.seqcache, s.seqcycle, "
+			"r.last_value, r.is_called, "
+			"a.amname AS seqam "
+			"FROM pg_catalog.pg_sequence s "
+			"JOIN pg_class c ON (c.oid = s.seqrelid) "
+			"JOIN pg_am a ON (a.oid = c.relam), "
+			"pg_get_sequence_data(s.seqrelid) r "
 			"ORDER BY seqrelid;";
 
 	res = ExecuteSqlQuery(fout, query, PGRES_TUPLES_OK);
@@ -17443,6 +17464,10 @@ collectSequences(Archive *fout)
 		sequences[i].cycled = (strcmp(PQgetvalue(res, i, 7), "t") == 0);
 		sequences[i].last_value = strtoi64(PQgetvalue(res, i, 8), NULL, 10);
 		sequences[i].is_called = (strcmp(PQgetvalue(res, i, 9), "t") == 0);
+		if (!PQgetisnull(res, i, 10))
+			sequences[i].seqam = pg_strdup(PQgetvalue(res, i, 10));
+		else
+			sequences[i].seqam = NULL;
 	}
 
 	PQclear(res);
@@ -17514,6 +17539,7 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 		seq->minv = strtoi64(PQgetvalue(res, 0, 4), NULL, 10);
 		seq->cache = strtoi64(PQgetvalue(res, 0, 5), NULL, 10);
 		seq->cycled = (strcmp(PQgetvalue(res, 0, 6), "t") == 0);
+		seq->seqam = NULL;
 
 		PQclear(res);
 	}
@@ -17636,6 +17662,7 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 					 ARCHIVE_OPTS(.tag = tbinfo->dobj.name,
 								  .namespace = tbinfo->dobj.namespace->dobj.name,
 								  .owner = tbinfo->rolname,
+								  .sequenceam = seq->seqam,
 								  .description = "SEQUENCE",
 								  .section = SECTION_PRE_DATA,
 								  .createStmt = query->data,

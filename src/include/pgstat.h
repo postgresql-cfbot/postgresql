@@ -192,6 +192,7 @@ typedef struct PgStat_BackendSubEntry
 typedef struct PgStat_TableCounts
 {
 	PgStat_Counter numscans;
+	PgStat_Counter parallelnumscans;
 
 	PgStat_Counter tuples_returned;
 	PgStat_Counter tuples_fetched;
@@ -435,6 +436,8 @@ typedef struct PgStat_StatTabEntry
 {
 	PgStat_Counter numscans;
 	TimestampTz lastscan;
+	PgStat_Counter parallelnumscans;
+	TimestampTz parallellastscan;
 
 	PgStat_Counter tuples_returned;
 	PgStat_Counter tuples_fetched;
@@ -642,10 +645,13 @@ extern void pgstat_report_analyze(Relation rel,
 
 /* nontransactional event counts are simple enough to inline */
 
-#define pgstat_count_heap_scan(rel)									\
+#define pgstat_count_heap_scan(rel, parallel)						\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
+		if (pgstat_should_count_relation(rel)) {					\
 			(rel)->pgstat_info->counts.numscans++;					\
+			if (parallel)											\
+				(rel)->pgstat_info->counts.parallelnumscans++;		\
+		}															\
 	} while (0)
 #define pgstat_count_heap_getnext(rel)								\
 	do {															\
@@ -657,10 +663,13 @@ extern void pgstat_report_analyze(Relation rel,
 		if (pgstat_should_count_relation(rel))						\
 			(rel)->pgstat_info->counts.tuples_fetched++;			\
 	} while (0)
-#define pgstat_count_index_scan(rel)								\
+#define pgstat_count_index_scan(rel, parallel)						\
 	do {															\
-		if (pgstat_should_count_relation(rel))						\
+		if (pgstat_should_count_relation(rel)) {					\
 			(rel)->pgstat_info->counts.numscans++;					\
+			if (parallel)											\
+				(rel)->pgstat_info->counts.parallelnumscans++;		\
+		}															\
 	} while (0)
 #define pgstat_count_index_tuples(rel, n)							\
 	do {															\

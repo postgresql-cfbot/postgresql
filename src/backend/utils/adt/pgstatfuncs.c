@@ -82,6 +82,9 @@ PG_STAT_GET_RELENTRY_INT64(mod_since_analyze)
 /* pg_stat_get_numscans */
 PG_STAT_GET_RELENTRY_INT64(numscans)
 
+/* pg_stat_get_parallelnumscans */
+PG_STAT_GET_RELENTRY_INT64(parallelnumscans)
+
 /* pg_stat_get_tuples_deleted */
 PG_STAT_GET_RELENTRY_INT64(tuples_deleted)
 
@@ -139,6 +142,9 @@ PG_STAT_GET_RELENTRY_TIMESTAMPTZ(last_vacuum_time)
 
 /* pg_stat_get_lastscan */
 PG_STAT_GET_RELENTRY_TIMESTAMPTZ(lastscan)
+
+/* pg_stat_get_parallellastscan */
+PG_STAT_GET_RELENTRY_TIMESTAMPTZ(parallellastscan)
 
 Datum
 pg_stat_get_function_calls(PG_FUNCTION_ARGS)

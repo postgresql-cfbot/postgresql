@@ -435,7 +435,7 @@ ginNewScanKey(IndexScanDesc scan)
 
 	MemoryContextSwitchTo(oldCtx);
 
-	pgstat_count_index_scan(scan->indexRelation);
+	pgstat_count_index_scan(scan->indexRelation, false);
 }
 
 void

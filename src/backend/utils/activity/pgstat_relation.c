@@ -829,12 +829,20 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	tabentry = &shtabstats->stats;
 
 	tabentry->numscans += lstats->counts.numscans;
+	tabentry->parallelnumscans += lstats->counts.parallelnumscans;
+
+	/*
+	 * Don't check counts.parallelnumscans because counts.numscans includes
+	 * counts.parallelnumscans.
+	 */
 	if (lstats->counts.numscans)
 	{
 		TimestampTz t = GetCurrentTransactionStopTimestamp();
 
 		if (t > tabentry->lastscan)
 			tabentry->lastscan = t;
+		if (t > tabentry->parallellastscan && lstats->counts.parallelnumscans)
+			tabentry->parallellastscan = t;
 	}
 	tabentry->tuples_returned += lstats->counts.tuples_returned;
 	tabentry->tuples_fetched += lstats->counts.tuples_fetched;

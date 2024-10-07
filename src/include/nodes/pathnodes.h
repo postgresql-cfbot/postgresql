@@ -316,6 +316,12 @@ struct PlannerInfo
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
 
+	/* counter for assigning RestrictInfo serial numbers */
+	int			last_rinfo_serial;
+
+	/* Hash table to store and retrieve child RestrictInfos. */
+	struct HTAB *child_rinfo_hash pg_node_attr(read_write_ignore);
+
 	/* list of "canonical" PathKeys */
 	List	   *canon_pathkeys;
 
@@ -338,12 +344,6 @@ struct PlannerInfo
 
 	/* list of SpecialJoinInfos */
 	List	   *join_info_list;
-
-	/* counter for assigning RestrictInfo serial numbers */
-	int			last_rinfo_serial;
-
-	/* Hash table to store and retrieve child RestrictInfos. */
-	struct HTAB *child_rinfo_hash pg_node_attr(read_write_ignore);
 
 	/*
 	 * all_result_relids is empty for SELECT, otherwise it contains at least

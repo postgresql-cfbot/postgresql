@@ -245,7 +245,6 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
 	result->info.icu.locale = MemoryContextStrdup(context, iculocstr);
 	result->info.icu.ucol = collator;
-	result->provider = COLLPROVIDER_ICU;
 	result->deterministic = deterministic;
 	result->collate_is_c = false;
 	result->ctype_is_c = false;
@@ -503,8 +502,6 @@ strncoll_icu_utf8(const char *arg1, ssize_t len1, const char *arg2, ssize_t len2
 	int			result;
 	UErrorCode	status;
 
-	Assert(locale->provider == COLLPROVIDER_ICU);
-
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 
 	status = U_ZERO_ERROR;
@@ -531,8 +528,6 @@ strnxfrm_icu(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	int32_t		ulen;
 	size_t		uchar_bsize;
 	Size		result_bsize;
-
-	Assert(locale->provider == COLLPROVIDER_ICU);
 
 	init_icu_converter();
 
@@ -577,8 +572,6 @@ strnxfrm_prefix_icu_utf8(char *dest, size_t destsize,
 	UCharIterator iter;
 	uint32_t	state[2];
 	UErrorCode	status;
-
-	Assert(locale->provider == COLLPROVIDER_ICU);
 
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 
@@ -730,8 +723,6 @@ strncoll_icu(const char *arg1, ssize_t len1,
 			   *uchar2;
 	int			result;
 
-	Assert(locale->provider == COLLPROVIDER_ICU);
-
 	/* if encoding is UTF8, use more efficient strncoll_icu_utf8 */
 #ifdef HAVE_UCOL_STRCOLLUTF8
 	Assert(GetDatabaseEncoding() != PG_UTF8);
@@ -779,8 +770,6 @@ strnxfrm_prefix_icu(char *dest, size_t destsize,
 	UChar	   *uchar = NULL;
 	size_t		uchar_bsize;
 	Size		result_bsize;
-
-	Assert(locale->provider == COLLPROVIDER_ICU);
 
 	/* if encoding is UTF8, use more efficient strnxfrm_prefix_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);

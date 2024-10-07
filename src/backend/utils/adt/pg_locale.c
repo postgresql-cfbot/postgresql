@@ -1364,7 +1364,6 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
 
 	result->info.builtin.locale = MemoryContextStrdup(context, locstr);
-	result->provider = COLLPROVIDER_BUILTIN;
 	result->deterministic = true;
 	result->collate_is_c = true;
 	result->ctype_is_c = (strcmp(locstr, "C") == 0);

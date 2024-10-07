@@ -2347,7 +2347,7 @@ typedef struct AlterTableStmt
 typedef enum AlterTableType
 {
 	AT_AddColumn,				/* add column */
-	AT_AddColumnToView,			/* implicitly via CREATE OR REPLACE VIEW */
+	AT_AddColumnToView,			/* implicitly via CREATE OR REPLACE [MATERIALIZED] VIEW */
 	AT_ColumnDefault,			/* alter column default */
 	AT_CookedColumnDefault,		/* add a pre-cooked column default */
 	AT_DropNotNull,				/* alter column drop not null */

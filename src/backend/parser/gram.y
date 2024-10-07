@@ -4830,6 +4830,51 @@ CreateMatViewStmt:
 					$8->rel->relpersistence = $2;
 					$8->skipData = !($11);
 					$$ = (Node *) ctas;
+
+					if (ctas->into->rel->schemaname)
+							ereport(WARNING,
+									errmsg("IF NOT EXISTS is deprecated in materialized view creation"),
+									errhint("Use CREATE OR REPLACE MATERIALIZED VIEW %s.%s.",
+											ctas->into->rel->schemaname,
+											ctas->into->rel->relname),
+									parser_errposition(@1));
+					else
+							ereport(WARNING,
+									errmsg("IF NOT EXISTS is deprecated in materialized view creation"),
+									errhint("Use CREATE OR REPLACE MATERIALIZED VIEW %s.",
+											ctas->into->rel->relname),
+									parser_errposition(@1));
+				}
+		| CREATE OR REPLACE OptNoLog MATERIALIZED VIEW create_mv_target AS SelectStmt opt_with_data
+				{
+					CreateTableAsStmt *ctas = makeNode(CreateTableAsStmt);
+
+					ctas->query = $9;
+					ctas->into = $7;
+					ctas->objtype = OBJECT_MATVIEW;
+					ctas->is_select_into = false;
+					ctas->if_not_exists = false;
+					/* cram additional flags into the IntoClause */
+					$7->rel->relpersistence = $4;
+					$7->skipData = !($10);
+					$7->replace = true;
+					$$ = (Node *) ctas;
+				}
+		| CREATE OR REPLACE OptNoLog MATERIALIZED VIEW create_mv_target AS SelectStmt WITH OLD DATA_P
+				{
+					CreateTableAsStmt *ctas = makeNode(CreateTableAsStmt);
+
+					ctas->query = $9;
+					ctas->into = $7;
+					ctas->objtype = OBJECT_MATVIEW;
+					ctas->is_select_into = false;
+					ctas->if_not_exists = false;
+					/* cram additional flags into the IntoClause */
+					$7->rel->relpersistence = $4;
+					$7->skipData = false;
+					$7->keepData = true;
+					$7->replace = true;
+					$$ = (Node *) ctas;
 				}
 		;
 

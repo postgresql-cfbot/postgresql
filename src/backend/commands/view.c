@@ -30,8 +30,6 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 
-static void checkViewColumns(TupleDesc newdesc, TupleDesc olddesc);
-
 /*---------------------------------------------------------------------
  * DefineVirtualRelation
  *
@@ -130,7 +128,7 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 		 * column list.
 		 */
 		descriptor = BuildDescForRelation(attrList);
-		checkViewColumns(descriptor, rel->rd_att);
+		checkViewColumns(descriptor, rel->rd_att, false);
 
 		/*
 		 * If new attributes have been added, we must add pg_attribute entries
@@ -263,15 +261,22 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
  * added to generate specific complaints.  Also, we allow the new view to have
  * more columns than the old.
  */
-static void
-checkViewColumns(TupleDesc newdesc, TupleDesc olddesc)
+void
+checkViewColumns(TupleDesc newdesc, TupleDesc olddesc, bool is_matview)
 {
 	int			i;
 
 	if (newdesc->natts < olddesc->natts)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-				 errmsg("cannot drop columns from view")));
+	{
+		if (is_matview)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					errmsg("cannot drop columns from materialized view"));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+					 errmsg("cannot drop columns from view")));
+	}
 
 	for (i = 0; i < olddesc->natts; i++)
 	{
@@ -280,17 +285,34 @@ checkViewColumns(TupleDesc newdesc, TupleDesc olddesc)
 
 		/* XXX msg not right, but we don't support DROP COL on view anyway */
 		if (newattr->attisdropped != oldattr->attisdropped)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-					 errmsg("cannot drop columns from view")));
+		{
+			if (is_matview)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						errmsg("cannot drop columns from materialized view"));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("cannot drop columns from view")));
+		}
 
 		if (strcmp(NameStr(newattr->attname), NameStr(oldattr->attname)) != 0)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-					 errmsg("cannot change name of view column \"%s\" to \"%s\"",
-							NameStr(oldattr->attname),
-							NameStr(newattr->attname)),
-					 errhint("Use ALTER VIEW ... RENAME COLUMN ... to change name of view column instead.")));
+		{
+			if (is_matview)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						errmsg("cannot change name of materialized view column \"%s\" to \"%s\"",
+							   NameStr(oldattr->attname),
+							   NameStr(newattr->attname)),
+						errhint("Use ALTER MATERIALIZED VIEW ... RENAME COLUMN ... to change name of materialized view column instead."));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("cannot change name of view column \"%s\" to \"%s\"",
+								NameStr(oldattr->attname),
+								NameStr(newattr->attname)),
+						 errhint("Use ALTER VIEW ... RENAME COLUMN ... to change name of view column instead.")));
+		}
 
 		/*
 		 * We cannot allow type, typmod, or collation to change, since these
@@ -299,26 +321,48 @@ checkViewColumns(TupleDesc newdesc, TupleDesc olddesc)
 		 */
 		if (newattr->atttypid != oldattr->atttypid ||
 			newattr->atttypmod != oldattr->atttypmod)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-					 errmsg("cannot change data type of view column \"%s\" from %s to %s",
-							NameStr(oldattr->attname),
-							format_type_with_typemod(oldattr->atttypid,
-													 oldattr->atttypmod),
-							format_type_with_typemod(newattr->atttypid,
-													 newattr->atttypmod))));
+		{
+			if (is_matview)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						errmsg("cannot change data type of materialized view column \"%s\" from %s to %s",
+							   NameStr(oldattr->attname),
+							   format_type_with_typemod(oldattr->atttypid,
+														oldattr->atttypmod),
+							   format_type_with_typemod(newattr->atttypid,
+														newattr->atttypmod)));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("cannot change data type of view column \"%s\" from %s to %s",
+								NameStr(oldattr->attname),
+								format_type_with_typemod(oldattr->atttypid,
+														 oldattr->atttypmod),
+								format_type_with_typemod(newattr->atttypid,
+														 newattr->atttypmod))));
+		}
 
 		/*
 		 * At this point, attcollations should be both valid or both invalid,
 		 * so applying get_collation_name unconditionally should be fine.
 		 */
 		if (newattr->attcollation != oldattr->attcollation)
-			ereport(ERROR,
-					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-					 errmsg("cannot change collation of view column \"%s\" from \"%s\" to \"%s\"",
-							NameStr(oldattr->attname),
-							get_collation_name(oldattr->attcollation),
-							get_collation_name(newattr->attcollation))));
+		{
+			if (is_matview)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						errmsg("cannot change collation of materialized view column \"%s\" from \"%s\" to \"%s\"",
+							   NameStr(oldattr->attname),
+							   get_collation_name(oldattr->attcollation),
+							   get_collation_name(newattr->attcollation)));
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("cannot change collation of view column \"%s\" from \"%s\" to \"%s\"",
+								NameStr(oldattr->attname),
+								get_collation_name(oldattr->attcollation),
+								get_collation_name(newattr->attcollation))));
+		}
 	}
 
 	/*

@@ -377,41 +377,57 @@ Objects in extension "test_ext_cor"
 CREATE COLLATION ext_cine_coll
   ( LC_COLLATE = "C", LC_CTYPE = "C" );
 CREATE EXTENSION test_ext_cine;  -- fail
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 ERROR:  collation ext_cine_coll is not a member of extension "test_ext_cine"
 DETAIL:  An extension may only use CREATE ... IF NOT EXISTS to skip object creation if the conflicting object is one that it already owns.
 DROP COLLATION ext_cine_coll;
 CREATE MATERIALIZED VIEW ext_cine_mv AS SELECT 11 AS f1;
 CREATE EXTENSION test_ext_cine;  -- fail
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 ERROR:  materialized view ext_cine_mv is not a member of extension "test_ext_cine"
 DETAIL:  An extension may only use CREATE ... IF NOT EXISTS to skip object creation if the conflicting object is one that it already owns.
 DROP MATERIALIZED VIEW ext_cine_mv;
 CREATE FOREIGN DATA WRAPPER dummy;
 CREATE SERVER ext_cine_srv FOREIGN DATA WRAPPER dummy;
 CREATE EXTENSION test_ext_cine;  -- fail
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 ERROR:  server ext_cine_srv is not a member of extension "test_ext_cine"
 DETAIL:  An extension may only use CREATE ... IF NOT EXISTS to skip object creation if the conflicting object is one that it already owns.
 DROP SERVER ext_cine_srv;
 CREATE SCHEMA ext_cine_schema;
 CREATE EXTENSION test_ext_cine;  -- fail
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 ERROR:  schema ext_cine_schema is not a member of extension "test_ext_cine"
 DETAIL:  An extension may only use CREATE ... IF NOT EXISTS to skip object creation if the conflicting object is one that it already owns.
 DROP SCHEMA ext_cine_schema;
 CREATE SEQUENCE ext_cine_seq;
 CREATE EXTENSION test_ext_cine;  -- fail
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 ERROR:  sequence ext_cine_seq is not a member of extension "test_ext_cine"
 DETAIL:  An extension may only use CREATE ... IF NOT EXISTS to skip object creation if the conflicting object is one that it already owns.
 DROP SEQUENCE ext_cine_seq;
 CREATE TABLE ext_cine_tab1 (x int);
 CREATE EXTENSION test_ext_cine;  -- fail
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 ERROR:  table ext_cine_tab1 is not a member of extension "test_ext_cine"
 DETAIL:  An extension may only use CREATE ... IF NOT EXISTS to skip object creation if the conflicting object is one that it already owns.
 DROP TABLE ext_cine_tab1;
 CREATE TABLE ext_cine_tab2 AS SELECT 42 AS y;
 CREATE EXTENSION test_ext_cine;  -- fail
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 ERROR:  table ext_cine_tab2 is not a member of extension "test_ext_cine"
 DETAIL:  An extension may only use CREATE ... IF NOT EXISTS to skip object creation if the conflicting object is one that it already owns.
 DROP TABLE ext_cine_tab2;
 CREATE EXTENSION test_ext_cine;
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 \dx+ test_ext_cine
 Objects in extension "test_ext_cine"
         Object description         
@@ -433,6 +449,8 @@ Objects in extension "test_ext_cine"
 (14 rows)
 
 ALTER EXTENSION test_ext_cine UPDATE TO '1.1';
+WARNING:  IF NOT EXISTS is deprecated in materialized view creation
+HINT:  Use CREATE OR REPLACE MATERIALIZED VIEW ext_cine_mv.
 \dx+ test_ext_cine
 Objects in extension "test_ext_cine"
         Object description         

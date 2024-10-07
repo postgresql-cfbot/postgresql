@@ -128,6 +128,11 @@ static pg_locale_t default_locale = NULL;
 static bool CurrentLocaleConvValid = false;
 static bool CurrentLCTimeValid = false;
 
+struct builtin_provider
+{
+	const char *locale;
+};
+
 /* Cache for collation-related knowledge */
 
 typedef struct
@@ -1331,6 +1336,7 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 {
 	const char *locstr;
 	pg_locale_t result;
+	struct builtin_provider *builtin;
 
 	if (collid == DEFAULT_COLLATION_OID)
 	{
@@ -1362,8 +1368,10 @@ create_pg_locale_builtin(Oid collid, MemoryContext context)
 	builtin_validate_locale(GetDatabaseEncoding(), locstr);
 
 	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
+	builtin = MemoryContextAlloc(context, sizeof(struct builtin_provider));
+	builtin->locale = MemoryContextStrdup(context, locstr);
+	result->provider_data = (void *) builtin;
 
-	result->info.builtin.locale = MemoryContextStrdup(context, locstr);
 	result->deterministic = true;
 	result->collate_is_c = true;
 	result->ctype_is_c = (strcmp(locstr, "C") == 0);

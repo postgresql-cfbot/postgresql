@@ -171,21 +171,7 @@ struct pg_locale_struct
 	const struct casemap_methods *casemap;	/* NULL if ctype_is_c */
 	const struct ctype_methods *ctype;	/* NULL if ctype_is_c */
 
-	union
-	{
-		struct
-		{
-			const char *locale;
-		}			builtin;
-		locale_t	lt;
-#ifdef USE_ICU
-		struct
-		{
-			const char *locale;
-			UCollator  *ucol;
-		}			icu;
-#endif
-	}			info;
+	void	   *provider_data;
 };
 
 typedef struct pg_locale_struct *pg_locale_t;

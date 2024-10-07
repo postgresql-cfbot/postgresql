@@ -39,6 +39,12 @@ extern pg_locale_t create_pg_locale_icu(Oid collid, MemoryContext context);
 
 #ifdef USE_ICU
 
+struct icu_provider
+{
+	const char *locale;
+	UCollator  *ucol;
+};
+
 extern UCollator *pg_ucol_open(const char *loc_str);
 
 static int	strncoll_icu(const char *arg1, ssize_t len1,
@@ -192,6 +198,7 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	bool		deterministic;
 	const char *iculocstr;
 	const char *icurules = NULL;
+	struct icu_provider *icu;
 	UCollator  *collator;
 	pg_locale_t result;
 
@@ -243,8 +250,12 @@ create_pg_locale_icu(Oid collid, MemoryContext context)
 	collator = make_icu_collator(iculocstr, icurules);
 
 	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
-	result->info.icu.locale = MemoryContextStrdup(context, iculocstr);
-	result->info.icu.ucol = collator;
+
+	icu = MemoryContextAllocZero(context, sizeof(struct icu_provider));
+	icu->locale = MemoryContextStrdup(context, iculocstr);
+	icu->ucol = collator;
+	result->provider_data = (void *) icu;
+
 	result->deterministic = deterministic;
 	result->collate_is_c = false;
 	result->ctype_is_c = false;
@@ -501,11 +512,12 @@ strncoll_icu_utf8(const char *arg1, ssize_t len1, const char *arg2, ssize_t len2
 {
 	int			result;
 	UErrorCode	status;
+	struct icu_provider *icu = (struct icu_provider *) locale->provider_data;
 
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 
 	status = U_ZERO_ERROR;
-	result = ucol_strcollUTF8(locale->info.icu.ucol,
+	result = ucol_strcollUTF8(icu->ucol,
 							  arg1, len1,
 							  arg2, len2,
 							  &status);
@@ -529,6 +541,8 @@ strnxfrm_icu(char *dest, size_t destsize, const char *src, ssize_t srclen,
 	size_t		uchar_bsize;
 	Size		result_bsize;
 
+	struct icu_provider *icu = (struct icu_provider *) locale->provider_data;
+
 	init_icu_converter();
 
 	ulen = uchar_length(icu_converter, src, srclen);
@@ -542,7 +556,7 @@ strnxfrm_icu(char *dest, size_t destsize, const char *src, ssize_t srclen,
 
 	ulen = uchar_convert(icu_converter, uchar, ulen + 1, src, srclen);
 
-	result_bsize = ucol_getSortKey(locale->info.icu.ucol,
+	result_bsize = ucol_getSortKey(icu->ucol,
 								   uchar, ulen,
 								   (uint8_t *) dest, destsize);
 
@@ -573,12 +587,14 @@ strnxfrm_prefix_icu_utf8(char *dest, size_t destsize,
 	uint32_t	state[2];
 	UErrorCode	status;
 
+	struct icu_provider *icu = (struct icu_provider *) locale->provider_data;
+
 	Assert(GetDatabaseEncoding() == PG_UTF8);
 
 	uiter_setUTF8(&iter, src, srclen);
 	state[0] = state[1] = 0;	/* won't need that again */
 	status = U_ZERO_ERROR;
-	result = ucol_nextSortKeyPart(locale->info.icu.ucol,
+	result = ucol_nextSortKeyPart(icu->ucol,
 								  &iter,
 								  state,
 								  (uint8_t *) dest,
@@ -669,11 +685,13 @@ icu_convert_case(ICU_Convert_Func func, pg_locale_t mylocale,
 	UErrorCode	status;
 	int32_t		len_dest;
 
+	struct icu_provider *icu = (struct icu_provider *) mylocale->provider_data;
+
 	len_dest = len_source;		/* try first with same length */
 	*buff_dest = palloc(len_dest * sizeof(**buff_dest));
 	status = U_ZERO_ERROR;
 	len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-					mylocale->info.icu.locale, &status);
+					icu->locale, &status);
 	if (status == U_BUFFER_OVERFLOW_ERROR)
 	{
 		/* try again with adjusted length */
@@ -681,7 +699,7 @@ icu_convert_case(ICU_Convert_Func func, pg_locale_t mylocale,
 		*buff_dest = palloc(len_dest * sizeof(**buff_dest));
 		status = U_ZERO_ERROR;
 		len_dest = func(*buff_dest, len_dest, buff_source, len_source,
-						mylocale->info.icu.locale, &status);
+						icu->locale, &status);
 	}
 	if (U_FAILURE(status))
 		ereport(ERROR,
@@ -723,6 +741,8 @@ strncoll_icu(const char *arg1, ssize_t len1,
 			   *uchar2;
 	int			result;
 
+	struct icu_provider *icu = (struct icu_provider *) locale->provider_data;
+
 	/* if encoding is UTF8, use more efficient strncoll_icu_utf8 */
 #ifdef HAVE_UCOL_STRCOLLUTF8
 	Assert(GetDatabaseEncoding() != PG_UTF8);
@@ -745,7 +765,7 @@ strncoll_icu(const char *arg1, ssize_t len1,
 	ulen1 = uchar_convert(icu_converter, uchar1, ulen1 + 1, arg1, len1);
 	ulen2 = uchar_convert(icu_converter, uchar2, ulen2 + 1, arg2, len2);
 
-	result = ucol_strcoll(locale->info.icu.ucol,
+	result = ucol_strcoll(icu->ucol,
 						  uchar1, ulen1,
 						  uchar2, ulen2);
 
@@ -771,6 +791,8 @@ strnxfrm_prefix_icu(char *dest, size_t destsize,
 	size_t		uchar_bsize;
 	Size		result_bsize;
 
+	struct icu_provider *icu = (struct icu_provider *) locale->provider_data;
+
 	/* if encoding is UTF8, use more efficient strnxfrm_prefix_icu_utf8 */
 	Assert(GetDatabaseEncoding() != PG_UTF8);
 
@@ -790,7 +812,7 @@ strnxfrm_prefix_icu(char *dest, size_t destsize,
 	uiter_setString(&iter, uchar, ulen);
 	state[0] = state[1] = 0;	/* won't need that again */
 	status = U_ZERO_ERROR;
-	result_bsize = ucol_nextSortKeyPart(locale->info.icu.ucol,
+	result_bsize = ucol_nextSortKeyPart(icu->ucol,
 										&iter,
 										state,
 										(uint8_t *) dest,

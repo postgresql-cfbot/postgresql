@@ -3407,6 +3407,15 @@ struct config_int ConfigureNamesInt[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"autovacuum_max_threshold", PGC_SIGHUP, AUTOVACUUM,
+			gettext_noop("Maximum number of tuple updates or deletes prior to vacuum."),
+			NULL
+		},
+		&autovacuum_max_thresh,
+		100000000, -1, INT_MAX,
+		NULL, NULL, NULL
+	},
+	{
 		{"autovacuum_vacuum_insert_threshold", PGC_SIGHUP, AUTOVACUUM,
 			gettext_noop("Minimum number of tuple inserts prior to vacuum, or -1 to disable insert vacuums."),
 			NULL

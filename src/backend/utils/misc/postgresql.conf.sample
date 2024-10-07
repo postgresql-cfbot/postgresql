@@ -663,6 +663,8 @@
 #autovacuum_naptime = 1min		# time between autovacuum runs
 #autovacuum_vacuum_threshold = 50	# min number of row updates before
 					# vacuum
+#autovacuum_max_threshold = 100000000	# max number of row updates before
+					# vacuum
 #autovacuum_vacuum_insert_threshold = 1000	# min number of row inserts
 						# before vacuum; -1 disables insert
 						# vacuums

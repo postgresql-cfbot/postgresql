@@ -119,6 +119,7 @@ int			autovacuum_max_workers;
 int			autovacuum_work_mem = -1;
 int			autovacuum_naptime;
 int			autovacuum_vac_thresh;
+int			autovacuum_max_thresh;
 double		autovacuum_vac_scale;
 int			autovacuum_vac_ins_thresh;
 double		autovacuum_vac_ins_scale;
@@ -2888,6 +2889,8 @@ recheck_relation_needs_vacanalyze(Oid relid,
  * threshold.  This threshold is calculated as
  *
  * threshold = vac_base_thresh + vac_scale_factor * reltuples
+ * if (threshold > vac_max_thresh)
+ *     threshold = vac_max_thres;
  *
  * For analyze, the analysis done is that the number of tuples inserted,
  * deleted and updated since the last analyze exceeds a threshold calculated
@@ -2926,6 +2929,7 @@ relation_needs_vacanalyze(Oid relid,
 
 	/* constants from reloptions or GUC variables */
 	int			vac_base_thresh,
+				vac_max_thresh,
 				vac_ins_base_thresh,
 				anl_base_thresh;
 	float4		vac_scale_factor,
@@ -2966,6 +2970,10 @@ relation_needs_vacanalyze(Oid relid,
 	vac_base_thresh = (relopts && relopts->vacuum_threshold >= 0)
 		? relopts->vacuum_threshold
 		: autovacuum_vac_thresh;
+
+	vac_max_thresh = (relopts && relopts->vacuum_max_threshold >= 0)
+		? relopts->vacuum_max_threshold
+		: autovacuum_max_thresh;
 
 	vac_ins_scale_factor = (relopts && relopts->vacuum_ins_scale_factor >= 0)
 		? relopts->vacuum_ins_scale_factor
@@ -3040,6 +3048,9 @@ relation_needs_vacanalyze(Oid relid,
 			reltuples = 0;
 
 		vacthresh = (float4) vac_base_thresh + vac_scale_factor * reltuples;
+		if (vac_max_thresh >= 0 && vacthresh > (float4) vac_max_thresh)
+			vacthresh = (float4) vac_max_thresh;
+
 		vacinsthresh = (float4) vac_ins_base_thresh + vac_ins_scale_factor * reltuples;
 		anlthresh = (float4) anl_base_thresh + anl_scale_factor * reltuples;
 

@@ -573,7 +573,7 @@ extern PgStat_EntryRef *pgstat_fetch_pending_entry(PgStat_Kind kind,
 extern void *pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, uint64 objid);
 extern void pgstat_snapshot_fixed(PgStat_Kind kind);
 
-
+extern void pgstat_update_snapshot(PgStat_Kind kind);
 /*
  * Functions in pgstat_archiver.c
  */

@@ -1048,6 +1048,7 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	/* Set cost-based vacuum delay */
 	VacuumUpdateCosts();
 	VacuumCostBalance = 0;
+	VacuumDelayTime = 0;
 	VacuumCostBalanceLocal = 0;
 	VacuumSharedCostBalance = &(shared->cost_balance);
 	VacuumActiveNWorkers = &(shared->active_nworkers);

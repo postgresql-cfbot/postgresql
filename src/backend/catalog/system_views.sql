@@ -1379,3 +1379,53 @@ CREATE VIEW pg_stat_subscription_stats AS
 
 CREATE VIEW pg_wait_events AS
     SELECT * FROM pg_get_wait_events();
+--
+-- Show extended cumulative statistics on a vacuum operation over all tables and
+-- databases of the instance.
+-- Use Invalid Oid "0" as an input relation id to get stat on each table in a
+-- database.
+--
+
+CREATE VIEW pg_stat_vacuum_tables AS
+SELECT
+  rel.oid as relid,
+  ns.nspname AS "schema",
+  rel.relname AS relname,
+
+  COALESCE(stats.total_blks_read, 0) AS total_blks_read,
+  COALESCE(stats.total_blks_hit, 0) AS total_blks_hit,
+  COALESCE(stats.total_blks_dirtied, 0) AS total_blks_dirtied,
+  COALESCE(stats.total_blks_written, 0) AS total_blks_written,
+
+  COALESCE(stats.rel_blks_read, 0) AS rel_blks_read,
+  COALESCE(stats.rel_blks_hit, 0) AS rel_blks_hit,
+
+  COALESCE(stats.pages_scanned, 0) AS pages_scanned,
+  COALESCE(stats.pages_removed, 0) AS pages_removed,
+  COALESCE(stats.pages_frozen, 0) AS pages_frozen,
+  COALESCE(stats.pages_all_visible, 0) AS pages_all_visible,
+  COALESCE(stats.tuples_deleted, 0) AS tuples_deleted,
+  COALESCE(stats.tuples_frozen, 0) AS tuples_frozen,
+  COALESCE(stats.dead_tuples, 0) AS dead_tuples,
+
+  COALESCE(stats.index_vacuum_count, 0) AS index_vacuum_count,
+  COALESCE(stats.rev_all_frozen_pages, 0) AS rev_all_frozen_pages,
+  COALESCE(stats.rev_all_visible_pages, 0) AS rev_all_visible_pages,
+
+  COALESCE(stats.wal_records, 0) AS wal_records,
+  COALESCE(stats.wal_fpi, 0) AS wal_fpi,
+  COALESCE(stats.wal_bytes, 0) AS wal_bytes,
+
+  COALESCE(stats.blk_read_time, 0) AS blk_read_time,
+  COALESCE(stats.blk_write_time, 0) AS blk_write_time,
+
+  COALESCE(stats.delay_time, 0) AS delay_time,
+  COALESCE(stats.system_time, 0) AS system_time,
+  COALESCE(stats.user_time, 0) AS user_time,
+  COALESCE(stats.total_time, 0) AS total_time,
+  COALESCE(stats.interrupts, 0) AS interrupts
+
+FROM pg_class rel
+  JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+  LEFT JOIN pg_stat_vacuum_tables(rel.oid) stats ON true
+WHERE rel.relkind = 'r';

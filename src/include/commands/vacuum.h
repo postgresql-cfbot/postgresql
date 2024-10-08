@@ -308,6 +308,7 @@ extern PGDLLIMPORT int vacuum_multixact_failsafe_age;
 extern PGDLLIMPORT pg_atomic_uint32 *VacuumSharedCostBalance;
 extern PGDLLIMPORT pg_atomic_uint32 *VacuumActiveNWorkers;
 extern PGDLLIMPORT int VacuumCostBalanceLocal;
+extern PGDLLIMPORT double VacuumDelayTime;
 
 extern PGDLLIMPORT bool VacuumFailsafeActive;
 extern PGDLLIMPORT double vacuum_cost_delay;

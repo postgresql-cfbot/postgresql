@@ -230,6 +230,7 @@ extern int	geterrlevel(void);
 extern int	geterrposition(void);
 extern int	getinternalerrposition(void);
 
+extern int	geterrelevel(void);
 
 /*----------
  * Old-style error reporting API: to be used in this way:

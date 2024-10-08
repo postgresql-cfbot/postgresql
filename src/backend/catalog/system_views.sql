@@ -1474,3 +1474,31 @@ WHERE
   rel.oid = stats.relid AND
   ns.oid = rel.relnamespace AND
   rel.relkind = 'i';
+
+CREATE VIEW pg_stat_vacuum_database AS
+SELECT
+  db.oid as dboid,
+  db.datname AS dbname,
+
+  stats.db_blks_read,
+  stats.db_blks_hit,
+  stats.total_blks_dirtied,
+  stats.total_blks_written,
+
+  stats.wal_records,
+  stats.wal_fpi,
+  stats.wal_bytes,
+
+  stats.blk_read_time,
+  stats.blk_write_time,
+
+  stats.delay_time,
+  stats.system_time,
+  stats.user_time,
+  stats.total_time,
+
+  stats.interrupts
+FROM
+  pg_database db LEFT JOIN pg_stat_vacuum_database(db.oid) stats
+ON
+  db.oid = stats.dboid;

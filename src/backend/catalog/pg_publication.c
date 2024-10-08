@@ -134,7 +134,8 @@ static bool
 is_publishable_class(Oid relid, Form_pg_class reltuple)
 {
 	return (reltuple->relkind == RELKIND_RELATION ||
-			reltuple->relkind == RELKIND_PARTITIONED_TABLE) &&
+			reltuple->relkind == RELKIND_PARTITIONED_TABLE ||
+			reltuple->relkind == RELKIND_SEQUENCE) &&
 		!IsCatalogRelationOid(relid) &&
 		reltuple->relpersistence == RELPERSISTENCE_PERMANENT &&
 		relid >= FirstNormalObjectId;
@@ -980,6 +981,42 @@ GetAllSchemaPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
 }
 
 /*
+ * Gets list of all relations published by FOR ALL SEQUENCES publication(s).
+ */
+List *
+GetAllSequencesPublicationRelations(void)
+{
+	Relation	classRel;
+	ScanKeyData key[1];
+	TableScanDesc scan;
+	HeapTuple	tuple;
+	List	   *result = NIL;
+
+	classRel = table_open(RelationRelationId, AccessShareLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_class_relkind,
+				BTEqualStrategyNumber, F_CHAREQ,
+				CharGetDatum(RELKIND_SEQUENCE));
+
+	scan = table_beginscan_catalog(classRel, 1, key);
+
+	while ((tuple = heap_getnext(scan, ForwardScanDirection)) != NULL)
+	{
+		Form_pg_class relForm = (Form_pg_class) GETSTRUCT(tuple);
+		Oid			relid = relForm->oid;
+
+		if (is_publishable_class(relid, relForm))
+			result = lappend_oid(result, relid);
+	}
+
+	table_endscan(scan);
+
+	table_close(classRel, AccessShareLock);
+	return result;
+}
+
+/*
  * Get publication using oid
  *
  * The Publication struct and its data are palloc'ed here.
@@ -1001,6 +1038,7 @@ GetPublication(Oid pubid)
 	pub->oid = pubid;
 	pub->name = pstrdup(NameStr(pubform->pubname));
 	pub->alltables = pubform->puballtables;
+	pub->allsequences = pubform->puballsequences;
 	pub->pubactions.pubinsert = pubform->pubinsert;
 	pub->pubactions.pubupdate = pubform->pubupdate;
 	pub->pubactions.pubdelete = pubform->pubdelete;

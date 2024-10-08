@@ -4277,6 +4277,7 @@ getPublications(Archive *fout)
 	int			i_pubname;
 	int			i_pubowner;
 	int			i_puballtables;
+	int			i_puballsequences;
 	int			i_pubinsert;
 	int			i_pubupdate;
 	int			i_pubdelete;
@@ -4291,23 +4292,29 @@ getPublications(Archive *fout)
 	query = createPQExpBuffer();
 
 	/* Get the publications. */
-	if (fout->remoteVersion >= 130000)
+	if (fout->remoteVersion >= 180000)
 		appendPQExpBufferStr(query,
 							 "SELECT p.tableoid, p.oid, p.pubname, "
 							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot "
+							 "p.puballtables, p.puballsequences, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot "
+							 "FROM pg_publication p");
+	else if (fout->remoteVersion >= 130000)
+		appendPQExpBufferStr(query,
+							 "SELECT p.tableoid, p.oid, p.pubname, "
+							 "p.pubowner, "
+							 "p.puballtables, false as p.puballsequences, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, p.pubviaroot "
 							 "FROM pg_publication p");
 	else if (fout->remoteVersion >= 110000)
 		appendPQExpBufferStr(query,
 							 "SELECT p.tableoid, p.oid, p.pubname, "
 							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false AS pubviaroot "
+							 "p.puballtables, false as p.puballsequences, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate, false AS pubviaroot "
 							 "FROM pg_publication p");
 	else
 		appendPQExpBufferStr(query,
 							 "SELECT p.tableoid, p.oid, p.pubname, "
 							 "p.pubowner, "
-							 "p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, false AS pubtruncate, false AS pubviaroot "
+							 "p.puballtables, false as p.puballsequences, p.pubinsert, p.pubupdate, p.pubdelete, false AS pubtruncate, false AS pubviaroot "
 							 "FROM pg_publication p");
 
 	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
@@ -4322,6 +4329,7 @@ getPublications(Archive *fout)
 	i_pubname = PQfnumber(res, "pubname");
 	i_pubowner = PQfnumber(res, "pubowner");
 	i_puballtables = PQfnumber(res, "puballtables");
+	i_puballsequences = PQfnumber(res, "puballsequences");
 	i_pubinsert = PQfnumber(res, "pubinsert");
 	i_pubupdate = PQfnumber(res, "pubupdate");
 	i_pubdelete = PQfnumber(res, "pubdelete");
@@ -4341,6 +4349,8 @@ getPublications(Archive *fout)
 		pubinfo[i].rolname = getRoleName(PQgetvalue(res, i, i_pubowner));
 		pubinfo[i].puballtables =
 			(strcmp(PQgetvalue(res, i, i_puballtables), "t") == 0);
+		pubinfo[i].puballsequences =
+			(strcmp(PQgetvalue(res, i, i_puballsequences), "t") == 0);
 		pubinfo[i].pubinsert =
 			(strcmp(PQgetvalue(res, i, i_pubinsert), "t") == 0);
 		pubinfo[i].pubupdate =
@@ -4390,8 +4400,12 @@ dumpPublication(Archive *fout, const PublicationInfo *pubinfo)
 	appendPQExpBuffer(query, "CREATE PUBLICATION %s",
 					  qpubname);
 
-	if (pubinfo->puballtables)
+	if (pubinfo->puballtables && pubinfo->puballsequences)
+		appendPQExpBufferStr(query, " FOR ALL TABLES, SEQUENCES");
+	else if (pubinfo->puballtables)
 		appendPQExpBufferStr(query, " FOR ALL TABLES");
+	else if (pubinfo->puballsequences)
+		appendPQExpBufferStr(query, " FOR ALL SEQUENCES");
 
 	appendPQExpBufferStr(query, " WITH (publish = '");
 	if (pubinfo->pubinsert)

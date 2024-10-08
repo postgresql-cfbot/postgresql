@@ -111,7 +111,6 @@ static void init_params(ParseState *pstate, List *options, bool for_identity,
 						Form_pg_sequence_data seqdataform,
 						bool *need_seq_rewrite,
 						List **owned_by);
-static void do_setval(Oid relid, int64 next, bool iscalled);
 static void process_owned_by(Relation seqrel, List *owned_by, bool for_identity);
 
 
@@ -942,9 +941,12 @@ lastval(PG_FUNCTION_ARGS)
  * restore the state of a sequence exactly during data-only restores -
  * it is the only way to clear the is_called flag in an existing
  * sequence.
+ *
+ * log_cnt is currently used only by the sequence syncworker to set the
+ * log_cnt for sequences while synchronizing values from the publisher.
  */
-static void
-do_setval(Oid relid, int64 next, bool iscalled)
+void
+SetSequence(Oid relid, int64 next, bool is_called, int64 log_cnt)
 {
 	SeqTable	elm;
 	Relation	seqrel;
@@ -995,7 +997,7 @@ do_setval(Oid relid, int64 next, bool iscalled)
 						(long long) minv, (long long) maxv)));
 
 	/* Set the currval() state only if iscalled = true */
-	if (iscalled)
+	if (is_called)
 	{
 		elm->last = next;		/* last returned number */
 		elm->last_valid = true;
@@ -1012,8 +1014,8 @@ do_setval(Oid relid, int64 next, bool iscalled)
 	START_CRIT_SECTION();
 
 	seq->last_value = next;		/* last fetched number */
-	seq->is_called = iscalled;
-	seq->log_cnt = 0;
+	seq->is_called = is_called;
+	seq->log_cnt = log_cnt;
 
 	MarkBufferDirty(buf);
 
@@ -1044,8 +1046,8 @@ do_setval(Oid relid, int64 next, bool iscalled)
 }
 
 /*
- * Implement the 2 arg setval procedure.
- * See do_setval for discussion.
+ * Implement the 2 arg set sequence procedure.
+ * See SetSequence for discussion.
  */
 Datum
 setval_oid(PG_FUNCTION_ARGS)
@@ -1053,14 +1055,14 @@ setval_oid(PG_FUNCTION_ARGS)
 	Oid			relid = PG_GETARG_OID(0);
 	int64		next = PG_GETARG_INT64(1);
 
-	do_setval(relid, next, true);
+	SetSequence(relid, next, true, SEQ_LOG_CNT_INVALID);
 
 	PG_RETURN_INT64(next);
 }
 
 /*
- * Implement the 3 arg setval procedure.
- * See do_setval for discussion.
+ * Implement the 3 arg set sequence procedure.
+ * See SetSequence for discussion.
  */
 Datum
 setval3_oid(PG_FUNCTION_ARGS)
@@ -1069,7 +1071,7 @@ setval3_oid(PG_FUNCTION_ARGS)
 	int64		next = PG_GETARG_INT64(1);
 	bool		iscalled = PG_GETARG_BOOL(2);
 
-	do_setval(relid, next, iscalled);
+	SetSequence(relid, next, iscalled, SEQ_LOG_CNT_INVALID);
 
 	PG_RETURN_INT64(next);
 }
@@ -1897,6 +1899,11 @@ pg_sequence_last_value(PG_FUNCTION_ARGS)
 
 /*
  * Return the current on-disk state of the sequence.
+ *
+ * The page_lsn will be utilized in logical replication sequence
+ * synchronization to record the page_lsn of sequence in the pg_subscription_rel
+ * system catalog. It will reflect the page_lsn of the remote sequence at the
+ * moment it was synchronized.
  *
  * Note: This is roughly equivalent to selecting the data from the sequence,
  * except that it also returns the page LSN.

@@ -2544,6 +2544,10 @@ _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state)
 	/* Shutdown worker processes */
 	WaitForParallelWorkersToFinish(brinleader->pcxt);
 
+	pgstat_update_parallel_maint_workers_stats(
+		(PgStat_Counter) brinleader->pcxt->nworkers_to_launch,
+		(PgStat_Counter) brinleader->pcxt->nworkers_launched);
+
 	/*
 	 * Next, accumulate WAL usage.  (This must wait for the workers to finish,
 	 * or we might get incomplete data.)

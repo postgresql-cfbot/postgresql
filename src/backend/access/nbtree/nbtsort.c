@@ -1615,6 +1615,10 @@ _bt_end_parallel(BTLeader *btleader)
 	/* Shutdown worker processes */
 	WaitForParallelWorkersToFinish(btleader->pcxt);
 
+	pgstat_update_parallel_maint_workers_stats(
+		(PgStat_Counter) btleader->pcxt->nworkers_to_launch,
+		(PgStat_Counter) btleader->pcxt->nworkers_launched);
+
 	/*
 	 * Next, accumulate WAL usage.  (This must wait for the workers to finish,
 	 * or we might get incomplete data.)

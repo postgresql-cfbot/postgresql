@@ -1075,6 +1075,8 @@ CREATE VIEW pg_stat_database AS
             pg_stat_get_db_sessions_killed(D.oid) AS sessions_killed,
             pg_stat_get_db_parallel_workers_to_launch(D.oid) as parallel_workers_to_launch,
             pg_stat_get_db_parallel_workers_launched(D.oid) as parallel_workers_launched,
+            pg_stat_get_db_parallel_maint_workers_to_launch(D.oid) as parallel_maint_workers_to_launch,
+            pg_stat_get_db_parallel_maint_workers_launched(D.oid) as parallel_maint_workers_launched,
             pg_stat_get_db_stat_reset_time(D.oid) AS stats_reset
     FROM (
         SELECT 0 AS oid, NULL::name AS datname

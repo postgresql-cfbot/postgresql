@@ -90,6 +90,7 @@ static List *matchLocks(CmdType event, Relation relation,
 						int varno, Query *parsetree, bool *hasUpdate);
 static Query *fireRIRrules(Query *parsetree, List *activeRIRs);
 static Bitmapset *adjust_view_column_set(Bitmapset *cols, List *targetlist);
+static Node *expand_generated_columns_internal(Node *node, Relation rel, int rt_index, RangeTblEntry *rte);
 
 
 /*
@@ -974,7 +975,8 @@ rewriteTargetListIU(List *targetList,
 		if (att_tup->attgenerated)
 		{
 			/*
-			 * stored generated column will be fixed in executor
+			 * virtual generated column stores a null value; stored generated
+			 * column will be fixed in executor
 			 */
 			new_tle = NULL;
 		}
@@ -2253,6 +2255,30 @@ fireRIRrules(Query *parsetree, List *activeRIRs)
 			parsetree->hasRowSecurity = true;
 		if (hasSubLinks)
 			parsetree->hasSubLinks = true;
+
+		table_close(rel, NoLock);
+	}
+
+	/*
+	 * Expand virtual generated columns of this table
+	 *
+	 * This must be last, since whatever else gets inserted into the query
+	 * above could contain a generated column.
+	 */
+	rt_index = 0;
+	foreach(lc, parsetree->rtable)
+	{
+		RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+		Relation	rel;
+
+		++rt_index;
+
+		if (rte->rtekind != RTE_RELATION)
+			continue;
+
+		rel = table_open(rte->relid, NoLock);
+
+		parsetree = (Query *) expand_generated_columns_internal((Node *) parsetree, rel, rt_index, rte);
 
 		table_close(rel, NoLock);
 	}
@@ -4362,6 +4388,89 @@ RewriteQuery(Query *parsetree, List *rewrite_events, int orig_rt_length)
 	}
 
 	return rewritten;
+}
+
+
+/*
+ * Expand virtual generated columns
+ *
+ * If the table contains virtual generated columns, build a target list
+ * containing the expanded expressions and use ReplaceVarsFromTargetList() to
+ * do the replacements.
+ */
+static Node *
+expand_generated_columns_internal(Node *node, Relation rel, int rt_index, RangeTblEntry *rte)
+{
+	TupleDesc	tupdesc;
+
+	tupdesc = RelationGetDescr(rel);
+	if (tupdesc->constr && tupdesc->constr->has_generated_virtual)
+	{
+		List	   *tlist = NIL;
+
+		for (int i = 0; i < tupdesc->natts; i++)
+		{
+			Form_pg_attribute attr = TupleDescAttr(tupdesc, i);
+
+			if (attr->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+			{
+				Node	   *defexpr;
+				int			attnum = i + 1;
+				Oid			attcollid;
+				TargetEntry *te;
+
+				defexpr = build_column_default(rel, attnum);
+				if (defexpr == NULL)
+					elog(ERROR, "no generation expression found for column number %d of table \"%s\"",
+						 attnum, RelationGetRelationName(rel));
+
+				/*
+				 * If the column definition has a collation and it is
+				 * different from the collation of the generation expression,
+				 * put a COLLATE clause around the expression.
+				 */
+				attcollid = attr->attcollation;
+				if (attcollid && attcollid != exprCollation(defexpr))
+				{
+					CollateExpr *ce = makeNode(CollateExpr);
+
+					ce->arg = (Expr *) defexpr;
+					ce->collOid = attcollid;
+					ce->location = -1;
+
+					defexpr = (Node *) ce;
+				}
+
+				ChangeVarNodes(defexpr, 1, rt_index, 0);
+
+				te = makeTargetEntry((Expr *) defexpr, attnum, 0, false);
+				tlist = lappend(tlist, te);
+			}
+		}
+
+		Assert(list_length(tlist) > 0);
+
+		node = ReplaceVarsFromTargetList(node, rt_index, 0, rte, tlist, REPLACEVARS_CHANGE_VARNO, rt_index, NULL);
+	}
+
+	return node;
+}
+
+Node *
+expand_generated_columns_in_expr(Node *node, Relation rel, int rt_index)
+{
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+
+	if (tupdesc->constr && tupdesc->constr->has_generated_virtual)
+	{
+		RangeTblEntry *rte;
+
+		rte = makeNode(RangeTblEntry);
+		rte->relid = RelationGetRelid(rel);
+		node = expand_generated_columns_internal(node, rel, rt_index, rte);
+	}
+
+	return node;
 }
 
 

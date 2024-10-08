@@ -2754,6 +2754,7 @@ typedef struct Constraint
 	char	   *cooked_expr;	/* CHECK or DEFAULT expression, as
 								 * nodeToString representation */
 	char		generated_when; /* ALWAYS or BY DEFAULT */
+	char		generated_kind; /* STORED or VIRTUAL */
 	int			inhcount;		/* initial inheritance count to apply, for
 								 * "raw" NOT NULL constraints */
 	bool		nulls_not_distinct; /* null treatment for UNIQUE constraints */

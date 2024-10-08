@@ -2948,6 +2948,15 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 									 errhint("A child table column cannot be generated unless its parent column is.")));
 					}
 
+					if (coldef->generated && restdef->generated && coldef->generated != restdef->generated)
+						ereport(ERROR,
+								(errcode(ERRCODE_INVALID_COLUMN_DEFINITION),
+								 errmsg("column \"%s\" inherits from generated column of different kind",
+										restdef->colname),
+								 errdetail("Parent column is %s, child column is %s.",
+										   coldef->generated == ATTRIBUTE_GENERATED_STORED ? "STORED" : "VIRTUAL",
+										   restdef->generated == ATTRIBUTE_GENERATED_STORED ? "STORED" : "VIRTUAL")));
+
 					/*
 					 * Override the parent's default value for this column
 					 * (coldef->cooked_default) with the partition's local
@@ -3218,6 +3227,15 @@ MergeChildAttribute(List *inh_columns, int exist_attno, int newcol_attno, const 
 							inhdef->colname),
 					 errhint("A child table column cannot be generated unless its parent column is.")));
 	}
+
+	if (inhdef->generated && newdef->generated && newdef->generated != inhdef->generated)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_COLUMN_DEFINITION),
+				 errmsg("column \"%s\" inherits from generated column of different kind",
+						inhdef->colname),
+				 errdetail("Parent column is %s, child column is %s.",
+						   inhdef->generated == ATTRIBUTE_GENERATED_STORED ? "STORED" : "VIRTUAL",
+						   newdef->generated == ATTRIBUTE_GENERATED_STORED ? "STORED" : "VIRTUAL")));
 
 	/*
 	 * If new def has a default, override previous default
@@ -6043,7 +6061,7 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap, LOCKMODE lockmode)
 		{
 			case CONSTR_CHECK:
 				needscan = true;
-				con->qualstate = ExecPrepareExpr((Expr *) con->qual, estate);
+				con->qualstate = ExecPrepareExpr((Expr *) expand_generated_columns_in_expr(con->qual, newrel ? newrel : oldrel, 1), estate);
 				break;
 			case CONSTR_FOREIGN:
 				/* Nothing to do here */
@@ -7742,6 +7760,14 @@ ATExecSetNotNull(AlteredTableInfo *tab, Relation rel,
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
+	/* TODO: see transformColumnDefinition() */
+	if (attTup->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("not-null constraints are not supported on virtual generated columns"),
+				 errdetail("Column \"%s\" of relation \"%s\" is a virtual generated column.",
+						   colName, RelationGetRelationName(rel))));
+
 	/*
 	 * Okay, actually perform the catalog change ... if needed
 	 */
@@ -8339,7 +8365,18 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
-	if (attTup->attgenerated != ATTRIBUTE_GENERATED_STORED)
+	/*
+	 * TODO: This could be done, but it would need a different implementation:
+	 * no rewriting, but still need to recheck any constraints.
+	 */
+	if (attTup->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("ALTER TABLE / SET EXPRESSION is not supported for virtual generated columns"),
+				 errdetail("Column \"%s\" of relation \"%s\" is a virtual generated column.",
+						   colName, RelationGetRelationName(rel))));
+
+	if (!attTup->attgenerated)
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("column \"%s\" of relation \"%s\" is not a generated column",
@@ -8496,17 +8533,30 @@ ATExecDropExpression(Relation rel, const char *colName, bool missing_ok, LOCKMOD
 				 errmsg("cannot alter system column \"%s\"",
 						colName)));
 
-	if (attTup->attgenerated != ATTRIBUTE_GENERATED_STORED)
+	/*
+	 * TODO: This could be done, but it would need a table rewrite to
+	 * materialize the generated values.  Note that for the time being, we
+	 * still error with missing_ok, so that we don't silently leave the column
+	 * as generated.
+	 */
+	if (attTup->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("ALTER TABLE / DROP EXPRESSION is not supported for virtual generated columns"),
+				 errdetail("Column \"%s\" of relation \"%s\" is a virtual generated column.",
+						   colName, RelationGetRelationName(rel))));
+
+	if (!attTup->attgenerated)
 	{
 		if (!missing_ok)
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-					 errmsg("column \"%s\" of relation \"%s\" is not a stored generated column",
+					 errmsg("column \"%s\" of relation \"%s\" is not a generated column",
 							colName, RelationGetRelationName(rel))));
 		else
 		{
 			ereport(NOTICE,
-					(errmsg("column \"%s\" of relation \"%s\" is not a stored generated column, skipping",
+					(errmsg("column \"%s\" of relation \"%s\" is not a generated column, skipping",
 							colName, RelationGetRelationName(rel))));
 			heap_freetuple(tuple);
 			table_close(attrelation, RowExclusiveLock);
@@ -8647,6 +8697,16 @@ ATExecSetStatistics(Relation rel, const char *colName, int16 colNum, Node *newVa
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				 errmsg("cannot alter system column \"%s\"",
+						colName)));
+
+	/*
+	 * Prevent this as long as the ANALYZE code skips virtual generated
+	 * columns.
+	 */
+	if (attrtuple->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("cannot alter statistics on virtual generated column \"%s\"",
 						colName)));
 
 	if (rel->rd_rel->relkind == RELKIND_INDEX ||
@@ -9759,6 +9819,19 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 						 errmsg("invalid %s action for foreign key constraint containing generated column",
 								"ON DELETE")));
 		}
+
+		/*
+		 * FKs on virtual columns are not supported.  This would require
+		 * various additional support in ri_triggers.c, including special
+		 * handling in ri_NullCheck(), ri_KeysEqual(),
+		 * RI_FKey_fk_upd_check_required() (since all virtual columns appear
+		 * as NULL there).  Also not really practical as long as you can't
+		 * index virtual columns.
+		 */
+		if (attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("foreign key constraints on virtual generated columns are not supported")));
 	}
 
 	/*
@@ -12893,8 +12966,12 @@ ATPrepAlterColumnType(List **wqueue,
 					   list_make1_oid(rel->rd_rel->reltype),
 					   0);
 
-	if (tab->relkind == RELKIND_RELATION ||
-		tab->relkind == RELKIND_PARTITIONED_TABLE)
+	if (attTup->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+	{
+		/* do nothing */
+	}
+	else if (tab->relkind == RELKIND_RELATION ||
+			 tab->relkind == RELKIND_PARTITIONED_TABLE)
 	{
 		/*
 		 * Set up an expression to transform the old data value to the new
@@ -12967,11 +13044,12 @@ ATPrepAlterColumnType(List **wqueue,
 				 errmsg("\"%s\" is not a table",
 						RelationGetRelationName(rel))));
 
-	if (!RELKIND_HAS_STORAGE(tab->relkind))
+	if (!RELKIND_HAS_STORAGE(tab->relkind) || attTup->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
 	{
 		/*
-		 * For relations without storage, do this check now.  Regular tables
-		 * will check it later when the table is being rewritten.
+		 * For relations or columns without storage, do this check now.
+		 * Regular tables will check it later when the table is being
+		 * rewritten.
 		 */
 		find_composite_type_dependencies(rel->rd_rel->reltype, rel, NULL);
 	}
@@ -15932,6 +16010,14 @@ MergeAttributesIntoExisting(Relation child_rel, Relation parent_rel, bool ispart
 						(errcode(ERRCODE_DATATYPE_MISMATCH),
 						 errmsg("column \"%s\" in child table must not be a generated column", parent_attname)));
 
+			if (parent_att->attgenerated && child_att->attgenerated && child_att->attgenerated != parent_att->attgenerated)
+				ereport(ERROR,
+						(errcode(ERRCODE_DATATYPE_MISMATCH),
+						 errmsg("column \"%s\" inherits from generated column of different kind", parent_attname),
+						 errdetail("Parent column is %s, child column is %s.",
+								   parent_att->attgenerated == ATTRIBUTE_GENERATED_STORED ? "STORED" : "VIRTUAL",
+								   child_att->attgenerated == ATTRIBUTE_GENERATED_STORED ? "STORED" : "VIRTUAL")));
+
 			/*
 			 * Regular inheritance children are independent enough not to
 			 * inherit identity columns.  But partitions are integral part of
@@ -18065,8 +18151,11 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 						 parser_errposition(pstate, pelem->location)));
 
 			/*
-			 * Generated columns cannot work: They are computed after BEFORE
-			 * triggers, but partition routing is done before all triggers.
+			 * Stored generated columns cannot work: They are computed after
+			 * BEFORE triggers, but partition routing is done before all
+			 * triggers.  Maybe virtual generated columns could be made to
+			 * work, but then they would need to be handled as an expression
+			 * below.
 			 */
 			if (attform->attgenerated)
 				ereport(ERROR,
@@ -18148,9 +18237,12 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 				}
 
 				/*
-				 * Generated columns cannot work: They are computed after
-				 * BEFORE triggers, but partition routing is done before all
-				 * triggers.
+				 * Stored generated columns cannot work: They are computed
+				 * after BEFORE triggers, but partition routing is done before
+				 * all triggers.  Virtual generated columns could probably
+				 * work, but it would require more work elsewhere (for example
+				 * SET EXPRESSION would need to check whether the column is
+				 * used in partition keys).  Seems safer to prohibit for now.
 				 */
 				i = -1;
 				while ((i = bms_next_member(expr_attrs, i)) >= 0)

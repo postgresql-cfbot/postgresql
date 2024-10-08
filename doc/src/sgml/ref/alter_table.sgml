@@ -554,6 +554,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       This form alters the attributes of a constraint that was previously
       created. Currently only foreign key constraints may be altered.
      </para>
+     <para>
+      Note that changing constraints to <literal>ENFORCED</literal>, which were
+      previously marked as valid and <literal>NOT ENFORCED</literal>, will
+      trigger validation, similar to <literal>VALIDATE CONSTRAINT</literal>.
+     </para>
     </listitem>
    </varlistentry>
 

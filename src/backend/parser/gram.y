@@ -4040,6 +4040,7 @@ ColConstraintElem:
 					n->fk_del_set_cols = ($5)->deleteAction->cols;
 					n->skip_validation = false;
 					n->initially_valid = true;
+					n->is_enforced = true;
 					$$ = (Node *) n;
 				}
 		;
@@ -4301,7 +4302,7 @@ ConstraintElem:
 					processCASbits($12, @12, "FOREIGN KEY",
 								   &n->deferrable, &n->initdeferred,
 								   &n->skip_validation, NULL,
-								   NULL,
+								   &n->is_enforced,
 								   yyscanner);
 					n->initially_valid = !n->skip_validation;
 					$$ = (Node *) n;

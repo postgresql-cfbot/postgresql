@@ -1030,11 +1030,13 @@ CREATE TABLE example (
    </indexterm>
 
    <para>
-    A foreign key constraint specifies that the values in a column (or
-    a group of columns) must match the values appearing in some row
-    of another table.
-    We say this maintains the <firstterm>referential
-    integrity</firstterm> between two related tables.
+    A foreign key constraint with <literal>ENFORCED</literal>, the default
+    setting, specifies that the values in a column (or a group of columns)
+    must match the values appearing in some row of another table.  We say this
+    maintains the <firstterm>referential integrity</firstterm> between two
+    related tables.  If a foreign key constraint is created with <literal>NOT ENFORCED</literal>,
+    the check for aforementioned <firstterm>referential integrity</firstterm>
+    will not be performed.
    </para>
 
    <para>

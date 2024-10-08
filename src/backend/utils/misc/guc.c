@@ -249,7 +249,7 @@ static void reapply_stacked_values(struct config_generic *variable,
 								   GucContext curscontext, GucSource cursource,
 								   Oid cursrole);
 static bool validate_option_array_item(const char *name, const char *value,
-									   bool skipIfNoPermissions);
+									   bool skipIfNoPermissions, int source);
 static void write_auto_conf_file(int fd, const char *filename, ConfigVariable *head);
 static void replace_auto_config_value(ConfigVariable **head_p, ConfigVariable **tail_p,
 									  const char *name, const char *value);
@@ -4660,6 +4660,12 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 				union config_var_val newval;
 				void	   *newextra = NULL;
 
+				/*
+				 * PGC_S_FILE is used even though we should use PGC_S_TEST,
+				 * since various GUC validation functions use TEST to give a
+				 * NOTICE rather than an ERROR, and we don't want to allow
+				 * setting values that would always return an error later.
+				 */
 				if (!parse_and_validate_value(record, name, value,
 											  PGC_S_FILE, ERROR,
 											  &newval, &newextra))
@@ -6450,7 +6456,7 @@ ProcessGUCArray(ArrayType *array,
  * to indicate the current table entry is NULL.
  */
 ArrayType *
-GUCArrayAdd(ArrayType *array, const char *name, const char *value)
+GUCArrayAdd(ArrayType *array, const char *name, const char *value, int source)
 {
 	struct config_generic *record;
 	Datum		datum;
@@ -6461,7 +6467,7 @@ GUCArrayAdd(ArrayType *array, const char *name, const char *value)
 	Assert(value);
 
 	/* test if the option is valid and we're allowed to set it */
-	(void) validate_option_array_item(name, value, false);
+	(void) validate_option_array_item(name, value, false, source);
 
 	/* normalize name (converts obsolete GUC names to modern spellings) */
 	record = find_option(name, false, true, WARNING);
@@ -6528,7 +6534,7 @@ GUCArrayAdd(ArrayType *array, const char *name, const char *value)
  * is NULL then a null should be stored.
  */
 ArrayType *
-GUCArrayDelete(ArrayType *array, const char *name)
+GUCArrayDelete(ArrayType *array, const char *name, int source)
 {
 	struct config_generic *record;
 	ArrayType  *newarray;
@@ -6538,7 +6544,7 @@ GUCArrayDelete(ArrayType *array, const char *name)
 	Assert(name);
 
 	/* test if the option is valid and we're allowed to set it */
-	(void) validate_option_array_item(name, NULL, false);
+	(void) validate_option_array_item(name, NULL, false, source);
 
 	/* normalize name (converts obsolete GUC names to modern spellings) */
 	record = find_option(name, false, true, WARNING);
@@ -6598,7 +6604,7 @@ GUCArrayDelete(ArrayType *array, const char *name)
  * those that are PGC_USERSET or we have permission to set
  */
 ArrayType *
-GUCArrayReset(ArrayType *array)
+GUCArrayReset(ArrayType *array, int source)
 {
 	ArrayType  *newarray;
 	int			i;
@@ -6636,7 +6642,7 @@ GUCArrayReset(ArrayType *array)
 		*eqsgn = '\0';
 
 		/* skip if we have permission to delete it */
-		if (validate_option_array_item(val, NULL, true))
+		if (validate_option_array_item(val, NULL, true, source))
 			continue;
 
 		/* else add it to the output array */
@@ -6671,7 +6677,7 @@ GUCArrayReset(ArrayType *array)
  */
 static bool
 validate_option_array_item(const char *name, const char *value,
-						   bool skipIfNoPermissions)
+						   bool skipIfNoPermissions, int source)
 
 {
 	struct config_generic *gconf;
@@ -6732,7 +6738,7 @@ validate_option_array_item(const char *name, const char *value,
 	/* test for permissions and valid option value */
 	(void) set_config_option(name, value,
 							 superuser() ? PGC_SUSET : PGC_USERSET,
-							 PGC_S_TEST, GUC_ACTION_SET, false, 0, false);
+							 source, GUC_ACTION_SET, false, 0, false);
 
 	return true;
 }

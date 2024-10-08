@@ -70,7 +70,7 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 								 RelationGetDescr(rel), &isnull);
 
 			if (!isnull)
-				new = GUCArrayReset(DatumGetArrayTypeP(datum));
+				new = GUCArrayReset(DatumGetArrayTypeP(datum), PGC_S_TEST);
 
 			if (new)
 			{
@@ -115,9 +115,9 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 
 		/* Update (valuestr is NULL in RESET cases) */
 		if (valuestr)
-			a = GUCArrayAdd(a, setstmt->name, valuestr);
+			a = GUCArrayAdd(a, setstmt->name, valuestr, PGC_S_TEST);
 		else
-			a = GUCArrayDelete(a, setstmt->name);
+			a = GUCArrayDelete(a, setstmt->name, PGC_S_TEST);
 
 		if (a)
 		{
@@ -141,7 +141,7 @@ AlterSetting(Oid databaseid, Oid roleid, VariableSetStmt *setstmt)
 
 		memset(nulls, false, sizeof(nulls));
 
-		a = GUCArrayAdd(NULL, setstmt->name, valuestr);
+		a = GUCArrayAdd(NULL, setstmt->name, valuestr, PGC_S_TEST);
 
 		values[Anum_pg_db_role_setting_setdatabase - 1] =
 			ObjectIdGetDatum(databaseid);

@@ -4302,7 +4302,7 @@ struct config_string ConfigureNamesString[] =
 		},
 		&session_preload_libraries_string,
 		"",
-		NULL, NULL, NULL
+		check_session_preload_libraries, NULL, NULL
 	},
 
 	{
@@ -4313,7 +4313,7 @@ struct config_string ConfigureNamesString[] =
 		},
 		&shared_preload_libraries_string,
 		"",
-		NULL, NULL, NULL
+		check_shared_preload_libraries, NULL, NULL
 	},
 
 	{
@@ -4324,7 +4324,7 @@ struct config_string ConfigureNamesString[] =
 		},
 		&local_preload_libraries_string,
 		"",
-		NULL, NULL, NULL
+		check_local_preload_libraries, NULL, NULL
 	},
 
 	{

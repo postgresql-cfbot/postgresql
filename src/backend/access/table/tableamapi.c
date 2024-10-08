@@ -132,7 +132,7 @@ check_default_table_access_method(char **newval, void **extra, GucSource source)
 			 * nonexistent table access method, only a NOTICE. See comments in
 			 * guc.h.
 			 */
-			if (source == PGC_S_TEST)
+			if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 			{
 				ereport(NOTICE,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),

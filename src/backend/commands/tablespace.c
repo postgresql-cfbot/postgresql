@@ -1104,7 +1104,7 @@ check_default_tablespace(char **newval, void **extra, GucSource source)
 			 * When source == PGC_S_TEST, don't throw a hard error for a
 			 * nonexistent tablespace, only a NOTICE.  See comments in guc.h.
 			 */
-			if (source == PGC_S_TEST)
+			if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 			{
 				ereport(NOTICE,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),
@@ -1251,7 +1251,7 @@ check_temp_tablespaces(char **newval, void **extra, GucSource source)
 			curoid = get_tablespace_oid(curname, source <= PGC_S_TEST);
 			if (curoid == InvalidOid)
 			{
-				if (source == PGC_S_TEST)
+				if (source == PGC_S_TEST || source == PGC_S_TEST_FUNCTION)
 					ereport(NOTICE,
 							(errcode(ERRCODE_UNDEFINED_OBJECT),
 							 errmsg("tablespace \"%s\" does not exist",

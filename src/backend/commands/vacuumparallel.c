@@ -443,6 +443,12 @@ parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 {
 	Assert(!IsParallelWorker());
 
+	if (pvs->nworkers_to_launch > 0)
+		pgstat_update_parallel_maint_workers_stats(
+			(PgStat_Counter) pvs->pcxt->nworkers_to_launch,
+			(PgStat_Counter) pvs->pcxt->nworkers_launched
+		);
+
 	/* Copy the updated statistics */
 	for (int i = 0; i < pvs->nindexes; i++)
 	{

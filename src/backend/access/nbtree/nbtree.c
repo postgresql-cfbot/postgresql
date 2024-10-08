@@ -66,7 +66,9 @@ typedef enum
  */
 typedef struct BTParallelScanDescData
 {
-	BlockNumber btps_scanPage;	/* latest or next page to be scanned */
+	BlockNumber btps_nextScanPage;	/* next page to be scanned */
+	BlockNumber btps_lastCurrPage;	/* page whose sibling link was copied into
+									 * btps_scanPage */
 	BTPS_State	btps_pageStatus;	/* indicates whether next page is
 									 * available for scan. see above for
 									 * possible states of parallel scan. */
@@ -522,7 +524,7 @@ btrestrpos(IndexScanDesc scan)
 			/* Reset the scan's array keys (see _bt_steppage for why) */
 			if (so->numArrayKeys)
 			{
-				_bt_start_array_keys(scan, so->currPos.dir);
+				_bt_start_array_keys(scan, so->markDir);
 				so->needPrimScan = false;
 			}
 		}
@@ -550,7 +552,8 @@ btinitparallelscan(void *target)
 	BTParallelScanDesc bt_target = (BTParallelScanDesc) target;
 
 	SpinLockInit(&bt_target->btps_mutex);
-	bt_target->btps_scanPage = InvalidBlockNumber;
+	bt_target->btps_nextScanPage = InvalidBlockNumber;
+	bt_target->btps_lastCurrPage = InvalidBlockNumber;
 	bt_target->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
 	ConditionVariableInit(&bt_target->btps_cv);
 }
@@ -575,7 +578,8 @@ btparallelrescan(IndexScanDesc scan)
 	 * consistency.
 	 */
 	SpinLockAcquire(&btscan->btps_mutex);
-	btscan->btps_scanPage = InvalidBlockNumber;
+	btscan->btps_nextScanPage = InvalidBlockNumber;
+	btscan->btps_lastCurrPage = InvalidBlockNumber;
 	btscan->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
 	SpinLockRelease(&btscan->btps_mutex);
 }
@@ -591,18 +595,21 @@ btparallelrescan(IndexScanDesc scan)
  * start just yet (only backends that call from _bt_first are capable of
  * starting primitive index scans, which they indicate by passing first=true).
  *
- * If the return value is true, *pageno returns the next or current page
- * of the scan (depending on the scan direction).  An invalid block number
- * means the scan hasn't yet started, or that caller needs to start the next
- * primitive index scan (if it's the latter case we'll set so.needPrimScan).
- * The first time a participating process reaches the last page, it will return
- * true and set *pageno to P_NONE; after that, further attempts to seize the
- * scan will return false.
+ * If the return value is true, *next_scan_page returns the next page of the
+ * scan, and *curr_page returns the page whose sibling link *next_scan_page
+ * came from.  An invalid *next_scan_page means the scan hasn't yet started,
+ * or that caller needs to start the next primitive index scan (if it's the
+ * latter case we'll set so.needPrimScan).  The first time a participating
+ * process reaches the last page, it will return true and set *next_scan_page
+ * to P_NONE; after that, further attempts to seize the scan will return
+ * false.
  *
- * Callers should ignore the value of pageno if the return value is false.
+ * Callers should ignore the value of next_scan_page and curr_page if the
+ * return value is false.
  */
 bool
-_bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
+_bt_parallel_seize(IndexScanDesc scan, BlockNumber *next_scan_page,
+				   BlockNumber *curr_page, bool first)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	bool		exit_loop = false;
@@ -610,7 +617,17 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
 
-	*pageno = P_NONE;
+	*next_scan_page = P_NONE;
+	*curr_page = InvalidBlockNumber;
+
+	/*
+	 * Reset so->currPos, and initialize moreLeft/moreRight such that the next
+	 * call to _bt_readnextpage treats this backend similarly to a serial
+	 * backend that steps from *curr_page to *next_scan_page (unless this
+	 * backend's so->currPos is initialized by _bt_readfirstpage before then).
+	 */
+	BTScanPosInvalidate(so->currPos);
+	so->currPos.moreLeft = so->currPos.moreRight = true;
 
 	if (first)
 	{
@@ -660,7 +677,7 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 					array->cur_elem = btscan->btps_arrElems[i];
 					skey->sk_argument = array->elem_values[array->cur_elem];
 				}
-				*pageno = InvalidBlockNumber;
+				*next_scan_page = InvalidBlockNumber;
 				exit_loop = true;
 			}
 			else
@@ -688,7 +705,8 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 			 * of advancing it to a new page!
 			 */
 			btscan->btps_pageStatus = BTPARALLEL_ADVANCING;
-			*pageno = btscan->btps_scanPage;
+			*next_scan_page = btscan->btps_nextScanPage;
+			*curr_page = btscan->btps_lastCurrPage;
 			exit_loop = true;
 		}
 		SpinLockRelease(&btscan->btps_mutex);
@@ -703,17 +721,20 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 
 /*
  * _bt_parallel_release() -- Complete the process of advancing the scan to a
- *		new page.  We now have the new value btps_scanPage; some other backend
+ *		new page.  We now have the new value btps_nextScanPage; another backend
  *		can now begin advancing the scan.
  *
- * Callers whose scan uses array keys must save their scan_page argument so
+ * Callers whose scan uses array keys must save their curr_page argument so
  * that it can be passed to _bt_parallel_primscan_schedule, should caller
- * determine that another primitive index scan is required.  If that happens,
- * scan_page won't be scanned by any backend (unless the next primitive index
- * scan lands on scan_page).
+ * determine that another primitive index scan is required.
+ *
+ * Note: unlike the serial case, parallel scans don't need to remember both
+ * sibling links.  next_scan_page is whichever link is next given the scan's
+ * direction, since its direction cannot change when parallelism is in use.
  */
 void
-_bt_parallel_release(IndexScanDesc scan, BlockNumber scan_page)
+_bt_parallel_release(IndexScanDesc scan, BlockNumber next_scan_page,
+					 BlockNumber curr_page)
 {
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
@@ -722,7 +743,8 @@ _bt_parallel_release(IndexScanDesc scan, BlockNumber scan_page)
 												  parallel_scan->ps_offset);
 
 	SpinLockAcquire(&btscan->btps_mutex);
-	btscan->btps_scanPage = scan_page;
+	btscan->btps_nextScanPage = next_scan_page;
+	btscan->btps_lastCurrPage = curr_page;
 	btscan->btps_pageStatus = BTPARALLEL_IDLE;
 	SpinLockRelease(&btscan->btps_mutex);
 	ConditionVariableSignal(&btscan->btps_cv);
@@ -778,13 +800,13 @@ _bt_parallel_done(IndexScanDesc scan)
 /*
  * _bt_parallel_primscan_schedule() -- Schedule another primitive index scan.
  *
- * Caller passes the block number most recently passed to _bt_parallel_release
+ * Caller passes the curr_page most recently passed to _bt_parallel_release
  * by its backend.  Caller successfully schedules the next primitive index scan
  * if the shared parallel state hasn't been seized since caller's backend last
  * advanced the scan.
  */
 void
-_bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber prev_scan_page)
+_bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber curr_page)
 {
 	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
@@ -796,10 +818,11 @@ _bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber prev_scan_page)
 												  parallel_scan->ps_offset);
 
 	SpinLockAcquire(&btscan->btps_mutex);
-	if (btscan->btps_scanPage == prev_scan_page &&
+	if (btscan->btps_lastCurrPage == curr_page &&
 		btscan->btps_pageStatus == BTPARALLEL_IDLE)
 	{
-		btscan->btps_scanPage = InvalidBlockNumber;
+		btscan->btps_nextScanPage = InvalidBlockNumber;
+		btscan->btps_lastCurrPage = InvalidBlockNumber;
 		btscan->btps_pageStatus = BTPARALLEL_NEED_PRIMSCAN;
 
 		/* Serialize scan's current array keys */

@@ -2269,7 +2269,7 @@ match_previous_words(int pattern_id,
 					  "ADD PUBLICATION", "DROP PUBLICATION");
 	/* ALTER SUBSCRIPTION <name> REFRESH PUBLICATION */
 	else if (Matches("ALTER", "SUBSCRIPTION", MatchAny, MatchAnyN, "REFRESH", "PUBLICATION"))
-		COMPLETE_WITH("WITH (");
+		COMPLETE_WITH("SEQUENCES", "WITH (");
 	/* ALTER SUBSCRIPTION <name> REFRESH PUBLICATION WITH ( */
 	else if (Matches("ALTER", "SUBSCRIPTION", MatchAny, MatchAnyN, "REFRESH", "PUBLICATION", "WITH", "("))
 		COMPLETE_WITH("copy_data");

@@ -472,6 +472,7 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		header_specified = false;
 	bool		on_error_specified = false;
 	bool		log_verbosity_specified = false;
+	bool		force_array_specified = false;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -496,6 +497,8 @@ ProcessCopyOptions(ParseState *pstate,
 				 /* default format */ ;
 			else if (strcmp(fmt, "csv") == 0)
 				opts_out->csv_mode = true;
+			else if (strcmp(fmt, "json") == 0)
+				opts_out->json_mode = true;
 			else if (strcmp(fmt, "binary") == 0)
 				opts_out->binary = true;
 			else
@@ -624,6 +627,13 @@ ProcessCopyOptions(ParseState *pstate,
 								defel->defname),
 						 parser_errposition(pstate, defel->location)));
 		}
+		else if (strcmp(defel->defname, "force_array") == 0)
+		{
+			if (force_array_specified)
+				errorConflictingDefElem(defel, pstate);
+			force_array_specified = true;
+			opts_out->force_array = defGetBoolean(defel);
+		}
 		else if (strcmp(defel->defname, "on_error") == 0)
 		{
 			if (on_error_specified)
@@ -741,6 +751,11 @@ ProcessCopyOptions(ParseState *pstate,
 		/*- translator: %s is the name of a COPY option, e.g. ON_ERROR */
 				 errmsg("cannot specify %s in BINARY mode", "HEADER")));
 
+	if (opts_out->json_mode && opts_out->header_line)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot specify %s in JSON mode", "HEADER")));
+
 	/* Check quote */
 	if (!opts_out->csv_mode && opts_out->quote != NULL)
 		ereport(ERROR,
@@ -838,6 +853,17 @@ ProcessCopyOptions(ParseState *pstate,
 		 second %s is a COPY with direction, e.g. COPY TO */
 				 errmsg("COPY %s cannot be used with %s", "FREEZE",
 						"COPY TO")));
+
+	/* Check json format  */
+	if (opts_out->json_mode && is_from)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("COPY json mode cannot be used with %s", "COPY FROM")));
+
+	if (!opts_out->json_mode && opts_out->force_array)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("COPY %s can only used with JSON mode", "FORCE_ARRAY")));
 
 	if (opts_out->default_print)
 	{

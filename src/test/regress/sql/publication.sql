@@ -117,6 +117,43 @@ RESET client_min_messages;
 DROP TABLE testpub_tbl3, testpub_tbl3a;
 DROP PUBLICATION testpub3, testpub4;
 
+--- Tests for publications with SEQUENCES
+CREATE SEQUENCE regress_pub_seq0;
+CREATE SEQUENCE pub_test.regress_pub_seq1;
+
+-- FOR ALL SEQUENCES
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION regress_pub_forallsequences1 FOR ALL SEQUENCES;
+RESET client_min_messages;
+
+SELECT pubname, puballtables, puballsequences FROM pg_publication WHERE pubname = 'regress_pub_forallsequences1';
+\d+ regress_pub_seq0
+\dRp+ regress_pub_forallsequences1
+
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION regress_pub_forallsequences2 FOR ALL SEQUENCES;
+RESET client_min_messages;
+
+-- check that describe sequence lists all publications the sequence belongs to
+\d+ pub_test.regress_pub_seq1
+
+--- FOR ALL specifying both TABLES and SEQUENCES
+SET client_min_messages = 'ERROR';
+CREATE PUBLICATION regress_pub_for_allsequences_alltables FOR ALL SEQUENCES, TABLES;
+RESET client_min_messages;
+
+SELECT pubname, puballtables, puballsequences FROM pg_publication WHERE pubname = 'regress_pub_for_allsequences_alltables';
+\dRp+ regress_pub_for_allsequences_alltables
+
+DROP SEQUENCE regress_pub_seq0, pub_test.regress_pub_seq1;
+DROP PUBLICATION regress_pub_forallsequences1, regress_pub_forallsequences2, regress_pub_for_allsequences_alltables;
+
+-- fail - FOR ALL specifying TABLES more than once
+CREATE PUBLICATION regress_pub_for_allsequences_alltables FOR ALL SEQUENCES, TABLES, TABLES;
+
+-- fail - FOR ALL specifying SEQUENCES more than once
+CREATE PUBLICATION regress_pub_for_allsequences_alltables FOR ALL SEQUENCES, TABLES, SEQUENCES;
+
 -- Tests for partitioned tables
 SET client_min_messages = 'ERROR';
 CREATE PUBLICATION testpub_forparted;

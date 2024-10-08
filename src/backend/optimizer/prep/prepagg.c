@@ -39,6 +39,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/pathnodes.h"
+#include "nodes/supportnodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/plancat.h"
@@ -63,6 +64,25 @@ static int	find_compatible_trans(PlannerInfo *root, Aggref *newagg,
 								  Datum initValue, bool initValueIsNull,
 								  List *transnos);
 static Datum GetAggInitVal(Datum textInitVal, Oid transtype);
+
+static void
+optimize_aggregates(Aggref *aggref)
+{
+	SupportRequestMinMax	req;
+	Oid						prosupport;
+
+	prosupport = get_func_support(aggref->aggfnoid);
+
+	/* Check if there's a support function for the aggregate */
+	if (!OidIsValid(prosupport))
+		return;
+
+
+	req.type = T_SupportRequestMinMax;
+	req.aggref = aggref;
+	/* call the support function */
+	(void) OidFunctionCall1(prosupport, PointerGetDatum(&req));
+}
 
 /* -----------------
  * Resolve the transition type of all Aggrefs, and determine which Aggrefs
@@ -214,6 +234,12 @@ preprocess_aggref(Aggref *aggref, PlannerInfo *root)
 		initValue = GetAggInitVal(textInitVal, aggtranstype);
 
 	ReleaseSysCache(aggTuple);
+
+	/*
+	 * See if any modifications can be made to each aggregate to allow
+	 * planner to process it in more effective way.
+	 */
+	optimize_aggregates(aggref);
 
 	/*
 	 * 1. See if this is identical to another aggregate function call that

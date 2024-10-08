@@ -343,4 +343,11 @@ typedef struct SupportRequestOptimizeWindowClause
 								 * optimizations are possible. */
 } SupportRequestOptimizeWindowClause;
 
+typedef struct SupportRequestMinMax
+{
+	NodeTag		type;
+
+	Aggref	   *aggref;
+} SupportRequestMinMax;
+
 #endif							/* SUPPORTNODES_H */

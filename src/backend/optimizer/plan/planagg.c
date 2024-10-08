@@ -33,6 +33,7 @@
 #include "catalog/pg_type.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/supportnodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
@@ -43,6 +44,7 @@
 #include "parser/parse_clause.h"
 #include "parser/parsetree.h"
 #include "rewrite/rewriteManip.h"
+#include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -509,4 +511,78 @@ fetch_agg_sort_op(Oid aggfnoid)
 	ReleaseSysCache(aggTuple);
 
 	return aggsortop;
+}
+
+Datum
+minmax_support(PG_FUNCTION_ARGS)
+{
+	Node   *rawreq = (Node *) PG_GETARG_POINTER(0);
+	Oid		aggsortop;
+
+	if (IsA(rawreq, SupportRequestMinMax))
+	{
+		SupportRequestMinMax   *req = (SupportRequestMinMax *) rawreq;
+		Aggref				   *aggref = req->aggref;
+
+		if (list_length(aggref->args) != 1 || aggref->aggfilter != NULL)
+			PG_RETURN_POINTER(NULL);
+
+		aggsortop = fetch_agg_sort_op(aggref->aggfnoid);
+		if (!OidIsValid(aggsortop))
+			PG_RETURN_POINTER(NULL);		/* not a MIN/MAX aggregate */
+
+		if (aggref->aggorder != NIL)
+		{
+			SortGroupClause	   *orderClause;
+			TargetEntry		   *curTarget;
+
+			curTarget = (TargetEntry *) linitial(aggref->args);
+
+			/*
+			 * If the order clause is the same column as the one we're
+			 * aggregating, we can still use the index: It is undefined which
+			 * value is MIN() or MAX(), as well as which value is first or
+			 * last when sorted. So, we can still use the index IFF the
+			 * aggregated expression equals the expression used in the
+			 * ordering operation.
+			 */
+
+			/*
+			 * We only accept a single argument to min/max aggregates,
+			 * orderings that have more clauses won't provide correct results.
+			 */
+			Assert(list_length(aggref->aggorder) == 1);
+
+			orderClause = castNode(SortGroupClause, linitial(aggref->aggorder));
+
+			if (orderClause->tleSortGroupRef != curTarget->ressortgroupref)
+				elog(ERROR, "Aggregate order clause isn't found in target list");
+
+			if (orderClause->sortop != aggsortop)
+			{
+				List	   *btclasses;
+				ListCell   *lc;
+
+				btclasses = get_op_btree_interpretation(orderClause->sortop);
+
+				foreach(lc, btclasses)
+				{
+					OpBtreeInterpretation *interpretation;
+
+					interpretation = (OpBtreeInterpretation *) lfirst(lc);
+					if (op_in_opfamily(aggsortop, interpretation->opfamily_id))
+					{
+						aggref->aggorder = NIL;
+						break;
+					}
+				}
+
+				list_free_deep(btclasses);
+			}
+			else
+				aggref->aggorder = NIL;
+		}
+	}
+
+	PG_RETURN_POINTER(NULL);
 }

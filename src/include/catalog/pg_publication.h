@@ -54,6 +54,9 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 
 	/* true if partition changes are published using root schema */
 	bool		pubviaroot;
+
+	/* true if generated columns data should be published */
+	bool		pubgencols;
 } FormData_pg_publication;
 
 /* ----------------
@@ -103,6 +106,7 @@ typedef struct Publication
 	char	   *name;
 	bool		alltables;
 	bool		pubviaroot;
+	bool		pubgencols;
 	PublicationActions pubactions;
 } Publication;
 

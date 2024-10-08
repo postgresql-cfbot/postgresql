@@ -41,7 +41,8 @@ typedef struct LogicalRepRelMapEntry
 
 extern void logicalrep_relmap_update(LogicalRepRelation *remoterel);
 extern void logicalrep_partmap_reset_relmap(LogicalRepRelation *remoterel);
-
+extern int	logicalrep_rel_att_by_name(LogicalRepRelation *remoterel,
+									   const char *attname);
 extern LogicalRepRelMapEntry *logicalrep_rel_open(LogicalRepRelId remoteid,
 												  LOCKMODE lockmode);
 extern LogicalRepRelMapEntry *logicalrep_partition_open(LogicalRepRelMapEntry *root,

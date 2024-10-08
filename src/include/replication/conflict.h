@@ -11,6 +11,7 @@
 
 #include "nodes/execnodes.h"
 #include "parser/parse_node.h"
+#include "replication/logicalrelation.h"
 #include "utils/timestamp.h"
 
 /*
@@ -91,12 +92,14 @@ extern bool GetTupleTransactionInfo(TupleTableSlot *localslot,
 									RepOriginId *localorigin,
 									TimestampTz *localts);
 extern void ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
-								int elevel, ConflictType type,
+								ConflictType type,
+								ConflictResolver resolver,
 								TupleTableSlot *searchslot,
 								TupleTableSlot *localslot,
 								TupleTableSlot *remoteslot,
 								Oid indexoid, TransactionId localxmin,
-								RepOriginId localorigin, TimestampTz localts);
+								RepOriginId localorigin, TimestampTz localts,
+								bool apply_remote);
 extern void InitConflictIndexes(ResultRelInfo *relInfo);
 extern void SetSubConflictResolvers(Oid subId, List *resolvers);
 extern void RemoveSubConflictResolvers(Oid confid);
@@ -109,5 +112,8 @@ extern ConflictType ValidateConflictTypeAndResolver(const char *conflict_type,
 													const char *conflict_resolver);
 extern List *GetDefaultConflictResolvers(void);
 extern void ResetSubConflictResolver(Oid subid, char *conflict_type);
-
+extern ConflictResolver GetConflictResolver(Oid subid, ConflictType type,
+											Relation localrel,
+											LogicalRepTupleData *newtup,
+											bool *apply_remote);
 #endif

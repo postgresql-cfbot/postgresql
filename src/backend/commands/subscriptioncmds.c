@@ -26,6 +26,7 @@
 #include "catalog/objectaddress.h"
 #include "catalog/pg_authid_d.h"
 #include "catalog/pg_database_d.h"
+#include "catalog/pg_sequence.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_type.h"
@@ -103,6 +104,7 @@ typedef struct SubOpts
 } SubOpts;
 
 static List *fetch_table_list(WalReceiverConn *wrconn, List *publications);
+static List *fetch_sequence_list(WalReceiverConn *wrconn, List *publications);
 static void check_publications_origin(WalReceiverConn *wrconn,
 									  List *publications, bool copydata,
 									  char *origin, Oid *subrel_local_oids,
@@ -723,6 +725,12 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 	recordDependencyOnOwner(SubscriptionRelationId, subid, owner);
 
+	/*
+	 * XXX: If the subscription is for a sequence-only publication, creating
+	 * this origin is unnecessary. It can be created later during the ALTER
+	 * SUBSCRIPTION ... REFRESH command, if the publication is updated to
+	 * include tables or tables in schemas.
+	 */
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
 	replorigin_create(originname);
 
@@ -734,9 +742,6 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	{
 		char	   *err;
 		WalReceiverConn *wrconn;
-		List	   *tables;
-		ListCell   *lc;
-		char		table_state;
 		bool		must_use_password;
 
 		/* Try to connect to the publisher. */
@@ -751,6 +756,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 
 		PG_TRY();
 		{
+			bool		has_tables;
+			List	   *relations;
+			char		table_state;
+
 			check_publications(wrconn, publications);
 			check_publications_origin(wrconn, publications, opts.copy_data,
 									  opts.origin, NULL, 0, stmt->subname);
@@ -762,13 +771,16 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 			table_state = opts.copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY;
 
 			/*
-			 * Get the table list from publisher and build local table status
-			 * info.
+			 * Build local relation status info. Relations are for both tables
+			 * and sequences from the publisher.
 			 */
-			tables = fetch_table_list(wrconn, publications);
-			foreach(lc, tables)
+			relations = fetch_table_list(wrconn, publications);
+			has_tables = relations != NIL;
+			relations = list_concat(relations,
+									fetch_sequence_list(wrconn, publications));
+
+			foreach_ptr(RangeVar, rv, relations)
 			{
-				RangeVar   *rv = (RangeVar *) lfirst(lc);
 				Oid			relid;
 
 				relid = RangeVarGetRelid(rv, AccessShareLock, false);
@@ -785,6 +797,11 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 			 * If requested, create permanent slot for the subscription. We
 			 * won't use the initial snapshot for anything, so no need to
 			 * export it.
+			 *
+			 * XXX: If the subscription is for a sequence-only publication,
+			 * creating this slot is unnecessary. It can be created later
+			 * during the ALTER SUBSCRIPTION ... REFRESH command, if the
+			 * publication is updated to include tables or tables in schema.
 			 */
 			if (opts.create_slot)
 			{
@@ -808,7 +825,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 				 * PENDING, to allow ALTER SUBSCRIPTION ... REFRESH
 				 * PUBLICATION to work.
 				 */
-				if (opts.twophase && !opts.copy_data && tables != NIL)
+				if (opts.twophase && !opts.copy_data && has_tables)
 					twophase_enabled = true;
 
 				walrcv_create_slot(wrconn, opts.slot_name, false, twophase_enabled,
@@ -847,12 +864,50 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	return myself;
 }
 
+/*
+ * Update the subscription to refresh both the publication and the publication
+ * objects associated with the subscription.
+ *
+ * Parameters:
+ *
+ * If 'copy_data' is true, the function will set the state to INIT; otherwise,
+ * it will set the state to READY.
+ *
+ * If 'validate_publications' is provided with a publication list, the
+ * function checks that the specified publications exist on the publisher.
+ *
+ * If 'refresh_tables' is true, update the subscription by adding or removing
+ * tables that have been added or removed since the last subscription creation
+ * or refresh publication.
+ *
+ * If 'refresh_sequences' is true, update the subscription by adding or removing
+ * sequences that have been added or removed since the last subscription
+ * creation or publication refresh.
+ *
+ * Note, this is a common function for handling different REFRESH commands
+ * according to the parameter 'resync_all_sequences'
+ *
+ * 1. ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES
+ *    (when parameter resync_all_sequences is true)
+ *
+ *    The function will mark all sequences with INIT state.
+ *    Assert copy_data is true.
+ *    Assert refresh_tables is false.
+ *    Assert refresh_sequences is true.
+ *
+ * 2. ALTER SUBSCRIPTION ... REFRESH PUBLICATION [WITH (copy_data=true|false)]
+ *    (when parameter resync_all_sequences is false)
+ *
+ *    The function will update only the newly added tables and/or sequences
+ *    based on the copy_data parameter.
+ */
 static void
 AlterSubscription_refresh(Subscription *sub, bool copy_data,
-						  List *validate_publications)
+						  List *validate_publications, bool refresh_tables,
+						  bool refresh_sequences, bool resync_all_sequences)
 {
 	char	   *err;
-	List	   *pubrel_names;
+	List	   *pubrel_names = NIL;
 	List	   *subrel_states;
 	Oid		   *subrel_local_oids;
 	Oid		   *pubrel_local_oids;
@@ -869,6 +924,11 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 	SubRemoveRels *sub_remove_rels;
 	WalReceiverConn *wrconn;
 	bool		must_use_password;
+
+#ifdef USE_ASSERT_CHECKING
+	if (resync_all_sequences)
+		Assert(copy_data && !refresh_tables && refresh_sequences);
+#endif
 
 	/* Load the library providing us libpq calls. */
 	load_file("libpqwalreceiver", false);
@@ -889,10 +949,17 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 			check_publications(wrconn, validate_publications);
 
 		/* Get the table list from publisher. */
-		pubrel_names = fetch_table_list(wrconn, sub->publications);
+		if (refresh_tables)
+			pubrel_names = fetch_table_list(wrconn, sub->publications);
+
+		/* Get the sequence list from publisher. */
+		if (refresh_sequences)
+			pubrel_names = list_concat(pubrel_names,
+									   fetch_sequence_list(wrconn,
+														   sub->publications));
 
 		/* Get local table list. */
-		subrel_states = GetSubscriptionRelations(sub->oid, false);
+		subrel_states = GetSubscriptionRelations(sub->oid, refresh_tables, refresh_sequences, true);
 		subrel_count = list_length(subrel_states);
 
 		/*
@@ -911,9 +978,10 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		qsort(subrel_local_oids, subrel_count,
 			  sizeof(Oid), oid_cmp);
 
-		check_publications_origin(wrconn, sub->publications, copy_data,
-								  sub->origin, subrel_local_oids,
-								  subrel_count, sub->name);
+		if (refresh_tables)
+			check_publications_origin(wrconn, sub->publications, copy_data,
+									  sub->origin, subrel_local_oids,
+									  subrel_count, sub->name);
 
 		/*
 		 * Rels that we want to remove from subscription and drop any slots
@@ -935,12 +1003,13 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		{
 			RangeVar   *rv = (RangeVar *) lfirst(lc);
 			Oid			relid;
+			char		relkind;
 
 			relid = RangeVarGetRelid(rv, AccessShareLock, false);
 
 			/* Check for supported relkind. */
-			CheckSubscriptionRelkind(get_rel_relkind(relid),
-									 rv->schemaname, rv->relname);
+			relkind = get_rel_relkind(relid);
+			CheckSubscriptionRelkind(relkind, rv->schemaname, rv->relname);
 
 			pubrel_local_oids[off++] = relid;
 
@@ -951,8 +1020,9 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 										copy_data ? SUBREL_STATE_INIT : SUBREL_STATE_READY,
 										InvalidXLogRecPtr, true);
 				ereport(DEBUG1,
-						(errmsg_internal("table \"%s.%s\" added to subscription \"%s\"",
-										 rv->schemaname, rv->relname, sub->name)));
+						errmsg_internal("%s \"%s.%s\" added to subscription \"%s\"",
+										relkind == RELKIND_SEQUENCE ? "sequence" : "table",
+										rv->schemaname, rv->relname, sub->name));
 			}
 		}
 
@@ -968,11 +1038,32 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		{
 			Oid			relid = subrel_local_oids[off];
 
-			if (!bsearch(&relid, pubrel_local_oids,
-						 list_length(pubrel_names), sizeof(Oid), oid_cmp))
+			if (bsearch(&relid, pubrel_local_oids,
+						list_length(pubrel_names), sizeof(Oid), oid_cmp))
+			{
+				/*
+				 * The resync_all_sequences flag will only be set to true for
+				 * the REFRESH PUBLICATION SEQUENCES command, indicating that
+				 * the existing sequences need to be re-synchronized by
+				 * resetting the relation to its initial state.
+				 */
+				if (resync_all_sequences)
+				{
+
+					UpdateSubscriptionRelState(sub->oid, relid, SUBREL_STATE_INIT,
+											   InvalidXLogRecPtr);
+					ereport(DEBUG1,
+							errmsg_internal("sequence \"%s.%s\" of subscription \"%s\" set to INIT state",
+											get_namespace_name(get_rel_namespace(relid)),
+											get_rel_name(relid),
+											sub->name));
+				}
+			}
+			else
 			{
 				char		state;
 				XLogRecPtr	statelsn;
+				char		relkind = get_rel_relkind(relid);
 
 				/*
 				 * Lock pg_subscription_rel with AccessExclusiveLock to
@@ -994,41 +1085,51 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 				/* Last known rel state. */
 				state = GetSubscriptionRelState(sub->oid, relid, &statelsn);
 
+				RemoveSubscriptionRel(sub->oid, relid);
+
 				sub_remove_rels[remove_rel_len].relid = relid;
 				sub_remove_rels[remove_rel_len++].state = state;
 
-				RemoveSubscriptionRel(sub->oid, relid);
-
-				logicalrep_worker_stop(sub->oid, relid);
-
 				/*
-				 * For READY state, we would have already dropped the
-				 * tablesync origin.
+				 * A single sequencesync worker synchronizes all sequences, so
+				 * only stop workers when relation kind is not sequence.
 				 */
-				if (state != SUBREL_STATE_READY)
+				if (relkind != RELKIND_SEQUENCE)
 				{
-					char		originname[NAMEDATALEN];
+					logicalrep_worker_stop(sub->oid, relid, WORKERTYPE_TABLESYNC);
 
 					/*
-					 * Drop the tablesync's origin tracking if exists.
-					 *
-					 * It is possible that the origin is not yet created for
-					 * tablesync worker, this can happen for the states before
-					 * SUBREL_STATE_FINISHEDCOPY. The tablesync worker or
-					 * apply worker can also concurrently try to drop the
-					 * origin and by this time the origin might be already
-					 * removed. For these reasons, passing missing_ok = true.
+					 * For READY state, we would have already dropped the
+					 * tablesync origin.
 					 */
-					ReplicationOriginNameForLogicalRep(sub->oid, relid, originname,
-													   sizeof(originname));
-					replorigin_drop_by_name(originname, true, false);
+					if (state != SUBREL_STATE_READY)
+					{
+						char		originname[NAMEDATALEN];
+
+						/*
+						 * Drop the tablesync's origin tracking if exists.
+						 *
+						 * It is possible that the origin is not yet created
+						 * for tablesync worker, this can happen for the
+						 * states before SUBREL_STATE_FINISHEDCOPY. The
+						 * tablesync worker or apply worker can also
+						 * concurrently try to drop the origin and by this
+						 * time the origin might be already removed. For these
+						 * reasons, passing missing_ok = true.
+						 */
+						ReplicationOriginNameForLogicalRep(sub->oid, relid,
+														   originname,
+														   sizeof(originname));
+						replorigin_drop_by_name(originname, true, false);
+					}
 				}
 
 				ereport(DEBUG1,
-						(errmsg_internal("table \"%s.%s\" removed from subscription \"%s\"",
-										 get_namespace_name(get_rel_namespace(relid)),
-										 get_rel_name(relid),
-										 sub->name)));
+						errmsg_internal("%s \"%s.%s\" removed from subscription \"%s\"",
+										relkind == RELKIND_SEQUENCE ? "sequence" : "table",
+										get_namespace_name(get_rel_namespace(relid)),
+										get_rel_name(relid),
+										sub->name));
 			}
 		}
 
@@ -1039,6 +1140,10 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		 */
 		for (off = 0; off < remove_rel_len; off++)
 		{
+			/* Skip relations belonging to sequences. */
+			if (get_rel_relkind(sub_remove_rels[off].relid) == RELKIND_SEQUENCE)
+				continue;
+
 			if (sub_remove_rels[off].state != SUBREL_STATE_READY &&
 				sub_remove_rels[off].state != SUBREL_STATE_SYNCDONE)
 			{
@@ -1424,8 +1529,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								 errhint("Use ALTER SUBSCRIPTION ... SET PUBLICATION ... WITH (refresh = false).")));
 
 					/*
-					 * See ALTER_SUBSCRIPTION_REFRESH for details why this is
-					 * not allowed.
+					 * See ALTER_SUBSCRIPTION_REFRESH_PUBLICATION for details
+					 * why this is not allowed.
 					 */
 					if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED && opts.copy_data)
 						ereport(ERROR,
@@ -1439,7 +1544,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					sub->publications = stmt->publication;
 
 					AlterSubscription_refresh(sub, opts.copy_data,
-											  stmt->publication);
+											  stmt->publication, true, true,
+											  false);
 				}
 
 				break;
@@ -1479,8 +1585,8 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 										 "ALTER SUBSCRIPTION ... DROP PUBLICATION ... WITH (refresh = false)")));
 
 					/*
-					 * See ALTER_SUBSCRIPTION_REFRESH for details why this is
-					 * not allowed.
+					 * See ALTER_SUBSCRIPTION_REFRESH_PUBLICATION for details
+					 * why this is not allowed.
 					 */
 					if (sub->twophasestate == LOGICALREP_TWOPHASE_STATE_ENABLED && opts.copy_data)
 						ereport(ERROR,
@@ -1498,13 +1604,28 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 					sub->publications = publist;
 
 					AlterSubscription_refresh(sub, opts.copy_data,
-											  validate_publications);
+											  validate_publications, true, true,
+											  false);
 				}
 
 				break;
 			}
 
-		case ALTER_SUBSCRIPTION_REFRESH:
+		case ALTER_SUBSCRIPTION_REFRESH_PUBLICATION_SEQUENCES:
+			{
+				if (!sub->enabled)
+					ereport(ERROR,
+							errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							errmsg("ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES is not allowed for disabled subscriptions"));
+
+				PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION ... REFRESH PUBLICATION SEQUENCES");
+
+				AlterSubscription_refresh(sub, true, NULL, false, true, true);
+
+				break;
+			}
+
+		case ALTER_SUBSCRIPTION_REFRESH_PUBLICATION:
 			{
 				if (!sub->enabled)
 					ereport(ERROR,
@@ -1539,7 +1660,7 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 				PreventInTransactionBlock(isTopLevel, "ALTER SUBSCRIPTION ... REFRESH");
 
-				AlterSubscription_refresh(sub, opts.copy_data, NULL);
+				AlterSubscription_refresh(sub, opts.copy_data, NULL, true, true, false);
 
 				break;
 			}
@@ -1781,7 +1902,11 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	{
 		LogicalRepWorker *w = (LogicalRepWorker *) lfirst(lc);
 
-		logicalrep_worker_stop(w->subid, w->relid);
+		/* Worker might have exited because of an error */
+		if (w->type == WORKERTYPE_UNKNOWN)
+			continue;
+
+		logicalrep_worker_stop(w->subid, w->relid, w->type);
 	}
 	list_free(subworkers);
 
@@ -1804,7 +1929,7 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 	 * the apply and tablesync workers and they can't restart because of
 	 * exclusive lock on the subscription.
 	 */
-	rstates = GetSubscriptionRelations(subid, true);
+	rstates = GetSubscriptionRelations(subid, true, false, false);
 	foreach(lc, rstates)
 	{
 		SubscriptionRelState *rstate = (SubscriptionRelState *) lfirst(lc);
@@ -2162,11 +2287,15 @@ check_publications_origin(WalReceiverConn *wrconn, List *publications,
 	for (i = 0; i < subrel_count; i++)
 	{
 		Oid			relid = subrel_local_oids[i];
-		char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
-		char	   *tablename = get_rel_name(relid);
 
-		appendStringInfo(&cmd, "AND NOT (N.nspname = '%s' AND C.relname = '%s')\n",
-						 schemaname, tablename);
+		if (get_rel_relkind(relid) != RELKIND_SEQUENCE)
+		{
+			char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
+			char	   *tablename = get_rel_name(relid);
+
+			appendStringInfo(&cmd, "AND NOT (N.nspname = '%s' AND C.relname = '%s')\n",
+							 schemaname, tablename);
+		}
 	}
 
 	res = walrcv_exec(wrconn, cmd.data, 1, tableRow);
@@ -2334,6 +2463,63 @@ fetch_table_list(WalReceiverConn *wrconn, List *publications)
 	walrcv_clear_result(res);
 
 	return tablelist;
+}
+
+/*
+ * Get the list of sequences which belong to specified publications on the
+ * publisher connection.
+ */
+static List *
+fetch_sequence_list(WalReceiverConn *wrconn, List *publications)
+{
+	WalRcvExecResult *res;
+	StringInfoData cmd;
+	TupleTableSlot *slot;
+	Oid			tableRow[2] = {TEXTOID, TEXTOID};
+	List	   *seqlist = NIL;
+
+	Assert(list_length(publications) > 0);
+
+	initStringInfo(&cmd);
+
+	appendStringInfoString(&cmd,
+						   "SELECT DISTINCT s.schemaname, s.sequencename\n"
+						   "FROM pg_catalog.pg_publication_sequences s\n"
+						   "WHERE s.pubname IN (");
+	get_publications_str(publications, &cmd, true);
+	appendStringInfoChar(&cmd, ')');
+
+	res = walrcv_exec(wrconn, cmd.data, 2, tableRow);
+	pfree(cmd.data);
+
+	if (res->status != WALRCV_OK_TUPLES)
+		ereport(ERROR,
+				errmsg("could not receive list of sequences from the publisher: %s",
+					   res->err));
+
+	/* Process sequences. */
+	slot = MakeSingleTupleTableSlot(res->tupledesc, &TTSOpsMinimalTuple);
+	while (tuplestore_gettupleslot(res->tuplestore, true, false, slot))
+	{
+		char	   *nspname;
+		char	   *relname;
+		bool		isnull;
+		RangeVar   *rv;
+
+		nspname = TextDatumGetCString(slot_getattr(slot, 1, &isnull));
+		Assert(!isnull);
+		relname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
+		Assert(!isnull);
+
+		rv = makeRangeVar(nspname, relname, -1);
+		seqlist = lappend(seqlist, rv);
+		ExecClearTuple(slot);
+	}
+
+	ExecDropSingleTupleTableSlot(slot);
+	walrcv_clear_result(res);
+
+	return seqlist;
 }
 
 /*

@@ -27,6 +27,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/memutils.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_lsn.h"
 #include "utils/rel.h"
@@ -431,7 +432,9 @@ RemoveSubscriptionRel(Oid subid, Oid relid)
 		 * leave tablesync slots or origins in the system when the
 		 * corresponding table is dropped.
 		 */
-		if (!OidIsValid(subid) && subrel->srsubstate != SUBREL_STATE_READY)
+		if (!OidIsValid(subid) &&
+			get_rel_relkind(subrel->srrelid) != RELKIND_SEQUENCE &&
+			subrel->srsubstate != SUBREL_STATE_READY)
 		{
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
@@ -468,7 +471,8 @@ HasSubscriptionTables(Oid subid)
 	Relation	rel;
 	ScanKeyData skey[1];
 	SysScanDesc scan;
-	bool		has_subrels;
+	HeapTuple	tup;
+	bool		has_subrels = false;
 
 	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
 
@@ -480,8 +484,22 @@ HasSubscriptionTables(Oid subid)
 	scan = systable_beginscan(rel, InvalidOid, false,
 							  NULL, 1, skey);
 
-	/* If even a single tuple exists then the subscription has tables. */
-	has_subrels = HeapTupleIsValid(systable_getnext(scan));
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_subscription_rel subrel;
+
+		subrel = (Form_pg_subscription_rel) GETSTRUCT(tup);
+
+		/*
+		 * Skip sequence tuples. If even a single table tuple exists then the
+		 * subscription has tables.
+		 */
+		if (get_rel_relkind(subrel->srrelid) != RELKIND_SEQUENCE)
+		{
+			has_subrels = true;
+			break;
+		}
+	}
 
 	/* Cleanup */
 	systable_endscan(scan);
@@ -493,12 +511,21 @@ HasSubscriptionTables(Oid subid)
 /*
  * Get the relations for the subscription.
  *
- * If not_ready is true, return only the relations that are not in a ready
- * state, otherwise return all the relations of the subscription.  The
- * returned list is palloc'ed in the current memory context.
+ * get_tables: get relations for tables of the subscription.
+ *
+ * get_sequences: get relations for sequences of the subscription.
+ *
+ * all_states:
+ * If getting tables, if all_states is true get all tables, otherwise
+ * only get tables that have not reached READY state.
+ * If getting sequences, if all_states is true get all sequences,
+ * otherwise only get sequences that are in INIT state.
+ *
+ * The returned list is palloc'ed in the current memory context.
  */
 List *
-GetSubscriptionRelations(Oid subid, bool not_ready)
+GetSubscriptionRelations(Oid subid, bool get_tables, bool get_sequences,
+						 bool all_states)
 {
 	List	   *res = NIL;
 	Relation	rel;
@@ -507,6 +534,9 @@ GetSubscriptionRelations(Oid subid, bool not_ready)
 	ScanKeyData skey[2];
 	SysScanDesc scan;
 
+	/* One or both of 'get_tables' and 'get_sequences' must be true. */
+	Assert(get_tables || get_sequences);
+
 	rel = table_open(SubscriptionRelRelationId, AccessShareLock);
 
 	ScanKeyInit(&skey[nkeys++],
@@ -514,7 +544,7 @@ GetSubscriptionRelations(Oid subid, bool not_ready)
 				BTEqualStrategyNumber, F_OIDEQ,
 				ObjectIdGetDatum(subid));
 
-	if (not_ready)
+	if (!all_states)
 		ScanKeyInit(&skey[nkeys++],
 					Anum_pg_subscription_rel_srsubstate,
 					BTEqualStrategyNumber, F_CHARNE,
@@ -529,8 +559,18 @@ GetSubscriptionRelations(Oid subid, bool not_ready)
 		SubscriptionRelState *relstate;
 		Datum		d;
 		bool		isnull;
+		char		relkind;
 
 		subrel = (Form_pg_subscription_rel) GETSTRUCT(tup);
+		relkind = get_rel_relkind(subrel->srrelid);
+
+		/* Skip sequences if they were not requested */
+		if (relkind == RELKIND_SEQUENCE && !get_sequences)
+			continue;
+
+		/* Skip tables if they were not requested */
+		if (relkind != RELKIND_SEQUENCE && !get_tables)
+			continue;
 
 		relstate = (SubscriptionRelState *) palloc(sizeof(SubscriptionRelState));
 		relstate->relid = subrel->srrelid;

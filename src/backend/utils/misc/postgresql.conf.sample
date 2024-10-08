@@ -620,6 +620,7 @@
 #log_temp_files = -1			# log temporary files equal or larger
 					# than the specified size in kilobytes;
 					# -1 disables, 0 logs all temp files
+#log_parallel_workers = none            # none, all, failure
 #log_timezone = 'GMT'
 
 # - Process Title -

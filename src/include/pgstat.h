@@ -169,11 +169,19 @@ typedef struct PgStat_BackendSubEntry
 	PgStat_Counter conflict_count[CONFLICT_NUM_TYPES];
 } PgStat_BackendSubEntry;
 
+/* Type of ExtVacReport */
+typedef enum ExtVacReportType
+{
+	PGSTAT_EXTVAC_INVALID = 0,
+	PGSTAT_EXTVAC_HEAP = 1,
+	PGSTAT_EXTVAC_INDEX = 2
+} ExtVacReportType;
+
 /* ----------
  *
  * ExtVacReport
  *
- * Additional statistics of vacuum processing over a heap relation.
+ * Additional statistics of vacuum processing over a relation.
  * pages_removed is the amount by which the physically shrank,
  * if any (ie the change in its total size on disk)
  * pages_deleted refer to free space within the index file
@@ -205,14 +213,38 @@ typedef struct ExtVacReport
 	/* Interruptions on any errors. */
 	int32		interrupts;
 
-	int64		pages_scanned;		/* number of pages we examined */
-	int64		pages_removed;		/* number of pages removed by vacuum */
-	int64		pages_frozen;		/* number of pages marked in VM as frozen */
-	int64		pages_all_visible;	/* number of pages marked in VM as all-visible */
-	int64		tuples_deleted;		/* tuples deleted by vacuum */
-	int64		tuples_frozen;		/* tuples frozen up by vacuum */
-	int64		dead_tuples;		/* number of deleted tuples which vacuum cannot clean up by vacuum operation */
-	int64		index_vacuum_count;	/* number of index vacuumings */
+	ExtVacReportType type;		/* heap, index, etc. */
+
+	/* ----------
+	 *
+	 * There are separate metrics of statistic for tables and indexes,
+	 * which collect during vacuum.
+	 * The union operator allows to combine these statistics
+	 * so that each metric is assigned to a specific class of collected statistics.
+	 * Such a combined structure was called per_type_stats.
+	 * The name of the structure itself is not used anywhere,
+	 * it exists only for understanding the code.
+	 * ----------
+	*/
+	union
+	{
+		struct
+		{
+			int64		pages_scanned;		/* number of pages we examined */
+			int64		pages_removed;		/* number of pages removed by vacuum */
+			int64		pages_frozen;		/* number of pages marked in VM as frozen */
+			int64		pages_all_visible;	/* number of pages marked in VM as all-visible */
+			int64		tuples_deleted;		/* tuples deleted by vacuum */
+			int64		tuples_frozen;		/* tuples frozen up by vacuum */
+			int64		dead_tuples;		/* number of deleted tuples which vacuum cannot clean up by vacuum operation */
+			int64		index_vacuum_count;	/* number of index vacuumings */
+		}			heap;
+		struct
+		{
+			int64		pages_deleted;		/* number of pages deleted by vacuum */
+			int64		tuples_deleted;		/* tuples deleted by vacuum */
+		}			index;
+	} /* per_type_stats */;
 } ExtVacReport;
 
 /* ----------
@@ -694,7 +726,7 @@ extern void pgstat_report_vacuum(Oid tableoid, bool shared,
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
-extern void pgstat_report_vacuum_error(Oid tableoid);
+extern void pgstat_report_vacuum_error(Oid tableoid, ExtVacReportType m_type);
 
 /*
  * If stats are enabled, but pending data hasn't been prepared yet, call

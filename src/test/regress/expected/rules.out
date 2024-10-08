@@ -2237,6 +2237,32 @@ pg_stat_user_tables| SELECT relid,
     autoanalyze_count
    FROM pg_stat_all_tables
   WHERE ((schemaname <> ALL (ARRAY['pg_catalog'::name, 'information_schema'::name])) AND (schemaname !~ '^pg_toast'::text));
+pg_stat_vacuum_indexes| SELECT rel.oid AS relid,
+    ns.nspname AS schema,
+    rel.relname,
+    stats.total_blks_read,
+    stats.total_blks_hit,
+    stats.total_blks_dirtied,
+    stats.total_blks_written,
+    stats.rel_blks_read,
+    stats.rel_blks_hit,
+    stats.pages_deleted,
+    stats.tuples_deleted,
+    stats.wal_records,
+    stats.wal_fpi,
+    stats.wal_bytes,
+    stats.blk_read_time,
+    stats.blk_write_time,
+    stats.delay_time,
+    stats.system_time,
+    stats.user_time,
+    stats.total_time,
+    stats.interrupts
+   FROM pg_database db,
+    pg_class rel,
+    pg_namespace ns,
+    LATERAL pg_stat_vacuum_indexes(rel.oid) stats(relid, total_blks_read, total_blks_hit, total_blks_dirtied, total_blks_written, rel_blks_read, rel_blks_hit, pages_deleted, tuples_deleted, wal_records, wal_fpi, wal_bytes, blk_read_time, blk_write_time, delay_time, system_time, user_time, total_time, interrupts)
+  WHERE ((db.datname = current_database()) AND (rel.oid = stats.relid) AND (ns.oid = rel.relnamespace) AND (rel.relkind = 'i'::"char"));
 pg_stat_vacuum_tables| SELECT rel.oid AS relid,
     ns.nspname AS schema,
     rel.relname,

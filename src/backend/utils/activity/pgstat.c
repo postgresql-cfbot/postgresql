@@ -1122,7 +1122,8 @@ pgstat_update_snapshot(PgStat_Kind kind)
 	PG_TRY();
 	{
 		pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_SNAPSHOT;
-		pgstat_build_snapshot(PGSTAT_KIND_RELATION);
+		if (kind == PGSTAT_KIND_RELATION)
+			pgstat_build_snapshot(PGSTAT_KIND_RELATION);
 	}
 	PG_FINALLY();
 	{
@@ -1175,6 +1176,10 @@ pgstat_build_snapshot(PgStat_Kind statKind)
 			continue;
 
 		if (p->dropped)
+			continue;
+
+		if (statKind != PGSTAT_KIND_INVALID && statKind != p->key.kind)
+			/* Load stat of specific type, if defined */
 			continue;
 
 		Assert(pg_atomic_read_u32(&p->refcount) > 0);

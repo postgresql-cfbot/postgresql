@@ -9,10 +9,9 @@ step s2_print_vacuum_stats_table:
     FROM pg_stat_vacuum_tables vt, pg_class c
     WHERE vt.relname = 'test_vacuum_stat_isolation' AND vt.relid = c.oid;
 
-relname                   |tuples_deleted|dead_tuples|tuples_frozen
---------------------------+--------------+-----------+-------------
-test_vacuum_stat_isolation|             0|          0|            0
-(1 row)
+relname|tuples_deleted|dead_tuples|tuples_frozen
+-------+--------------+-----------+-------------
+(0 rows)
 
 step s1_begin_repeatable_read: 
   BEGIN transaction ISOLATION LEVEL REPEATABLE READ;

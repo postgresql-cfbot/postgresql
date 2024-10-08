@@ -17,8 +17,7 @@ SET track_functions TO 'all';
 SELECT pg_stat_force_next_flush();
 
 \set sample_size 10000
-SET vacuum_freeze_min_age = 0;
-SET vacuum_freeze_table_age = 0;
+
 --SET stats_fetch_consistency = snapshot;
 CREATE TABLE vestat (x int) WITH (autovacuum_enabled = off, fillfactor = 10);
 INSERT INTO vestat SELECT x FROM generate_series(1,:sample_size) as x;

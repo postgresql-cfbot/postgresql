@@ -12391,4 +12391,13 @@
   proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o}',
   proargnames => '{reloid,relid,total_blks_read,total_blks_hit,total_blks_dirtied,total_blks_written,rel_blks_read,rel_blks_hit,pages_scanned,pages_removed,pages_frozen,pages_all_visible,tuples_deleted,tuples_frozen,dead_tuples,index_vacuum_count,rev_all_frozen_pages,rev_all_visible_pages,wal_records,wal_fpi,wal_bytes,blk_read_time,blk_write_time,delay_time,system_time,user_time,total_time,interrupts}',
   prosrc => 'pg_stat_vacuum_tables' },
+{ oid => '8002',
+  descr => 'pg_stat_vacuum_indexes return stats values',
+  proname => 'pg_stat_vacuum_indexes', prorows => 1000, provolatile => 's', prorettype => 'record',proisstrict => 'f',
+  proretset => 't',
+  proargtypes => 'oid',
+  proallargtypes => '{oid,oid,int8,int8,int8,int8,int8,int8,int8,int8,int8,int8,numeric,float8,float8,float8,float8,float8,float8,int4}',
+  proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o}',
+  proargnames => '{reloid,relid,total_blks_read,total_blks_hit,total_blks_dirtied,total_blks_written,rel_blks_read,rel_blks_hit,pages_deleted,tuples_deleted,wal_records,wal_fpi,wal_bytes,blk_read_time,blk_write_time,delay_time,system_time,user_time,total_time,interrupts}',
+  prosrc => 'pg_stat_vacuum_indexes' }
 ]

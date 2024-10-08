@@ -2101,17 +2101,19 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 }
 
 #define EXTVACHEAPSTAT_COLUMNS	27
+#define EXTVACIDXSTAT_COLUMNS	19
+#define EXTVACSTAT_COLUMNS Max(EXTVACHEAPSTAT_COLUMNS, EXTVACIDXSTAT_COLUMNS)
 
 static void
 tuplestore_put_for_relation(Oid relid, ReturnSetInfo *rsinfo,
 							PgStat_StatTabEntry *tabentry)
 {
-	Datum		values[EXTVACHEAPSTAT_COLUMNS];
-	bool		nulls[EXTVACHEAPSTAT_COLUMNS];
+	Datum		values[EXTVACSTAT_COLUMNS];
+	bool		nulls[EXTVACSTAT_COLUMNS];
 	char		buf[256];
 	int			i = 0;
 
-	memset(nulls, 0, EXTVACHEAPSTAT_COLUMNS * sizeof(bool));
+	memset(nulls, 0, EXTVACSTAT_COLUMNS * sizeof(bool));
 
 	values[i++] = ObjectIdGetDatum(relid);
 
@@ -2124,16 +2126,25 @@ tuplestore_put_for_relation(Oid relid, ReturnSetInfo *rsinfo,
 									tabentry->vacuum_ext.blks_hit);
 	values[i++] = Int64GetDatum(tabentry->vacuum_ext.blks_hit);
 
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.pages_scanned);
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.pages_removed);
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.pages_frozen);
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.pages_all_visible);
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.tuples_deleted);
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.tuples_frozen);
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.dead_tuples);
-	values[i++] = Int64GetDatum(tabentry->vacuum_ext.index_vacuum_count);
-	values[i++] = Int64GetDatum(tabentry->rev_all_frozen_pages);
-	values[i++] = Int64GetDatum(tabentry->rev_all_visible_pages);
+	if (tabentry->vacuum_ext.type == PGSTAT_EXTVAC_HEAP)
+	{
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.pages_scanned);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.pages_removed);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.pages_frozen);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.pages_all_visible);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.tuples_deleted);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.tuples_frozen);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.dead_tuples);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.heap.index_vacuum_count);
+		values[i++] = Int64GetDatum(tabentry->rev_all_frozen_pages);
+		values[i++] = Int64GetDatum(tabentry->rev_all_visible_pages);
+
+	}
+	else if (tabentry->vacuum_ext.type == PGSTAT_EXTVAC_INDEX)
+	{
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.index.pages_deleted);
+		values[i++] = Int64GetDatum(tabentry->vacuum_ext.index.tuples_deleted);
+	}
 
 	values[i++] = Int64GetDatum(tabentry->vacuum_ext.wal_records);
 	values[i++] = Int64GetDatum(tabentry->vacuum_ext.wal_fpi);
@@ -2161,10 +2172,9 @@ tuplestore_put_for_relation(Oid relid, ReturnSetInfo *rsinfo,
  * Get the vacuum statistics for the heap tables or indexes.
  */
 static void
-pg_stats_vacuum(FunctionCallInfo fcinfo, int ncolumns)
+pg_stats_vacuum(FunctionCallInfo fcinfo, ExtVacReportType type, int ncolumns)
 {
 	ReturnSetInfo		   *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
-	Oid						relid = PG_GETARG_OID(0);
 	PgStat_StatTabEntry    *tabentry;
 
 	InitMaterializedSRF(fcinfo, 0);
@@ -2177,34 +2187,39 @@ pg_stats_vacuum(FunctionCallInfo fcinfo, int ncolumns)
 	Assert(rsinfo->setDesc->natts == ncolumns);
 	Assert(rsinfo->setResult != NULL);
 
-	/* Load table statistics for specified database. */
-	if (OidIsValid(relid))
+	if (type == PGSTAT_EXTVAC_INDEX || type == PGSTAT_EXTVAC_HEAP)
 	{
-		tabentry = pgstat_fetch_stat_tabentry(relid);
-		if (tabentry == NULL)
-			/* Table don't exists or isn't an heap relation. */
-			return;
+		Oid					relid = PG_GETARG_OID(0);
 
-		tuplestore_put_for_relation(relid, rsinfo, tabentry);
-	}
-	else
-	{
-		SnapshotIterator		hashiter;
-		PgStat_SnapshotEntry   *entry;
-
-		pgstat_update_snapshot(PGSTAT_KIND_RELATION);
-
-		/* Iterate the snapshot */
-		InitSnapshotIterator(pgStatLocal.snapshot.stats, &hashiter);
-
-		while ((entry = ScanStatSnapshot(pgStatLocal.snapshot.stats, &hashiter)) != NULL)
+		/* Load table statistics for specified relation. */
+		if (OidIsValid(relid))
 		{
-			CHECK_FOR_INTERRUPTS();
+			tabentry = pgstat_fetch_stat_tabentry(relid);
+			if (tabentry == NULL || tabentry->vacuum_ext.type != type)
+				/* Table don't exists or isn't an heap relation. */
+				return;
 
-			tabentry = (PgStat_StatTabEntry *) entry->data;
+			tuplestore_put_for_relation(relid, rsinfo, tabentry);
+		}
+		else
+		{
+			SnapshotIterator		hashiter;
+			PgStat_SnapshotEntry   *entry;
 
-			if (tabentry != NULL)
-				tuplestore_put_for_relation(entry->key.objid, rsinfo, tabentry);
+			pgstat_update_snapshot(PGSTAT_KIND_RELATION);
+
+			/* Iterate the snapshot */
+			InitSnapshotIterator(pgStatLocal.snapshot.stats, &hashiter);
+
+			while ((entry = ScanStatSnapshot(pgStatLocal.snapshot.stats, &hashiter)) != NULL)
+			{
+				CHECK_FOR_INTERRUPTS();
+
+				tabentry = (PgStat_StatTabEntry *) entry->data;
+
+				if (tabentry != NULL && tabentry->vacuum_ext.type == type)
+					tuplestore_put_for_relation(entry->key.objid, rsinfo, tabentry);
+			}
 		}
 	}
 }
@@ -2215,7 +2230,18 @@ pg_stats_vacuum(FunctionCallInfo fcinfo, int ncolumns)
 Datum
 pg_stat_vacuum_tables(PG_FUNCTION_ARGS)
 {
-	pg_stats_vacuum(fcinfo, EXTVACHEAPSTAT_COLUMNS);
+	pg_stats_vacuum(fcinfo, PGSTAT_EXTVAC_HEAP, EXTVACHEAPSTAT_COLUMNS);
+
+	PG_RETURN_VOID();
+}
+
+/*
+ * Get the vacuum statistics for the indexes.
+ */
+Datum
+pg_stat_vacuum_indexes(PG_FUNCTION_ARGS)
+{
+	pg_stats_vacuum(fcinfo, PGSTAT_EXTVAC_INDEX, EXTVACIDXSTAT_COLUMNS);
 
 	PG_RETURN_VOID();
 }

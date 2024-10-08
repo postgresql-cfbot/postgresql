@@ -1429,3 +1429,38 @@ FROM pg_class rel
   JOIN pg_namespace ns ON ns.oid = rel.relnamespace
   LEFT JOIN pg_stat_vacuum_tables(rel.oid) stats ON true
 WHERE rel.relkind = 'r';
+
+CREATE VIEW pg_stat_vacuum_indexes AS
+SELECT
+  rel.oid as relid,
+  ns.nspname AS "schema",
+  rel.relname AS relname,
+
+  COALESCE(total_blks_read, 0) AS total_blks_read,
+  COALESCE(total_blks_hit, 0) AS total_blks_hit,
+  COALESCE(total_blks_dirtied, 0) AS total_blks_dirtied,
+  COALESCE(total_blks_written, 0) AS total_blks_written,
+
+  COALESCE(rel_blks_read, 0) AS rel_blks_read,
+  COALESCE(rel_blks_hit, 0) AS rel_blks_hit,
+
+  COALESCE(pages_deleted, 0) AS pages_deleted,
+  COALESCE(tuples_deleted, 0) AS tuples_deleted,
+
+  COALESCE(wal_records, 0) AS wal_records,
+  COALESCE(wal_fpi, 0) AS wal_fpi,
+  COALESCE(wal_bytes, 0) AS wal_bytes,
+
+  COALESCE(blk_read_time, 0) AS blk_read_time,
+  COALESCE(blk_write_time, 0) AS blk_write_time,
+
+  COALESCE(delay_time, 0) AS delay_time,
+  COALESCE(system_time, 0) AS system_time,
+  COALESCE(user_time, 0) AS user_time,
+  COALESCE(total_time, 0) AS total_time,
+  COALESCE(interrupts, 0) AS interrupts
+FROM
+  pg_class rel
+  JOIN pg_namespace ns ON ns.oid = rel.relnamespace
+  LEFT JOIN pg_stat_vacuum_indexes(rel.oid) stats ON true
+WHERE rel.relkind = 'i';

@@ -213,7 +213,7 @@ pgstat_drop_relation(Relation rel)
  * ---------
  */
 void
-pgstat_report_vacuum_error(Oid tableoid)
+pgstat_report_vacuum_error(Oid tableoid, ExtVacReportType m_type)
 {
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_Relation *shtabentry;
@@ -230,6 +230,7 @@ pgstat_report_vacuum_error(Oid tableoid)
 	tabentry = &shtabentry->stats;
 
 	tabentry->vacuum_ext.interrupts++;
+	tabentry->vacuum_ext.type = m_type;
 	pgstat_unlock_entry(entry_ref);
 }
 
@@ -1042,15 +1043,31 @@ pgstat_accumulate_extvac_stats(ExtVacReport *dst, ExtVacReport *src,
 	if (!accumulate_reltype_specific_info)
 		return;
 
-	dst->blks_fetched += src->blks_fetched;
-	dst->blks_hit += src->blks_hit;
+	if (dst->type == PGSTAT_EXTVAC_INVALID)
+		dst->type = src->type;
 
-	dst->pages_scanned += src->pages_scanned;
-	dst->pages_removed += src->pages_removed;
-	dst->pages_frozen += src->pages_frozen;
-	dst->pages_all_visible += src->pages_all_visible;
-	dst->tuples_deleted += src->tuples_deleted;
-	dst->tuples_frozen += src->tuples_frozen;
-	dst->dead_tuples += src->dead_tuples;
-	dst->index_vacuum_count += src->index_vacuum_count;
+	Assert(src->type == PGSTAT_EXTVAC_INVALID || src->type == dst->type);
+
+	if (dst->type == src->type)
+	{
+		dst->blks_fetched += src->blks_fetched;
+		dst->blks_hit += src->blks_hit;
+
+		if (dst->type == PGSTAT_EXTVAC_HEAP)
+		{
+			dst->heap.pages_scanned += src->heap.pages_scanned;
+			dst->heap.pages_removed += src->heap.pages_removed;
+			dst->heap.pages_frozen += src->heap.pages_frozen;
+			dst->heap.pages_all_visible += src->heap.pages_all_visible;
+			dst->heap.tuples_deleted += src->heap.tuples_deleted;
+			dst->heap.tuples_frozen += src->heap.tuples_frozen;
+			dst->heap.dead_tuples += src->heap.dead_tuples;
+			dst->heap.index_vacuum_count += src->heap.index_vacuum_count;
+		}
+		else if (dst->type == PGSTAT_EXTVAC_INDEX)
+		{
+			dst->index.pages_deleted += src->index.pages_deleted;
+			dst->index.tuples_deleted += src->index.tuples_deleted;
+		}
+	}
 }

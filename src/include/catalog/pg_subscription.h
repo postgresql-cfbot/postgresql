@@ -20,6 +20,7 @@
 #include "access/xlogdefs.h"
 #include "catalog/genbki.h"
 #include "catalog/pg_subscription_d.h"
+#include "lib/stringinfo.h"
 
 #include "nodes/pg_list.h"
 

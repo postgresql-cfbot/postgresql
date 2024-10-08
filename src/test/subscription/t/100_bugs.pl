@@ -391,7 +391,7 @@ $node_publisher->safe_psql(
 	ALTER TABLE dropped_cols REPLICA IDENTITY FULL;
 	CREATE TABLE generated_cols (a int, b_gen int GENERATED ALWAYS AS (5 * a) STORED, c int);
 	ALTER TABLE generated_cols REPLICA IDENTITY FULL;
-	CREATE PUBLICATION pub_dropped_cols FOR TABLE dropped_cols, generated_cols;
+	CREATE PUBLICATION pub_dropped_cols FOR TABLE dropped_cols, generated_cols with (publish_generated_columns = true);
 	-- some initial data
 	INSERT INTO dropped_cols VALUES (1, 1, 1);
 	INSERT INTO generated_cols (a, c) VALUES (1, 1);
@@ -400,7 +400,7 @@ $node_publisher->safe_psql(
 $node_subscriber->safe_psql(
 	'postgres', qq(
 	 CREATE TABLE dropped_cols (a int, b_drop int, c int);
-	 CREATE TABLE generated_cols (a int, b_gen int GENERATED ALWAYS AS (5 * a) STORED, c int);
+	 CREATE TABLE generated_cols (a int, b_gen int, c int);
 ));
 
 $publisher_connstr = $node_publisher->connstr . ' dbname=postgres';

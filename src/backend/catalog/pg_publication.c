@@ -511,7 +511,6 @@ pub_collist_validate(Relation targetrel, List *columns)
 {
 	Bitmapset  *set = NULL;
 	ListCell   *lc;
-	TupleDesc	tupdesc = RelationGetDescr(targetrel);
 
 	foreach(lc, columns)
 	{
@@ -528,12 +527,6 @@ pub_collist_validate(Relation targetrel, List *columns)
 			ereport(ERROR,
 					errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
 					errmsg("cannot use system column \"%s\" in publication column list",
-						   colname));
-
-		if (TupleDescAttr(tupdesc, attnum - 1)->attgenerated)
-			ereport(ERROR,
-					errcode(ERRCODE_INVALID_COLUMN_REFERENCE),
-					errmsg("cannot use generated column \"%s\" in publication column list",
 						   colname));
 
 		if (bms_is_member(attnum, set))
@@ -1006,6 +999,7 @@ GetPublication(Oid pubid)
 	pub->pubactions.pubdelete = pubform->pubdelete;
 	pub->pubactions.pubtruncate = pubform->pubtruncate;
 	pub->pubviaroot = pubform->pubviaroot;
+	pub->pubgencols = pubform->pubgencols;
 
 	ReleaseSysCache(tup);
 
@@ -1213,7 +1207,10 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 			{
 				Form_pg_attribute att = TupleDescAttr(desc, i);
 
-				if (att->attisdropped || att->attgenerated)
+				if (att->attisdropped)
+					continue;
+
+				if (att->attgenerated && !pub->pubgencols)
 					continue;
 
 				attnums[nattnums++] = att->attnum;

@@ -18,6 +18,8 @@
 #include "fmgr.h"
 #include "nodes/lockoptions.h"
 #include "nodes/parsenodes.h"
+#include "replication/logicalproto.h"
+#include "replication/logicalrelation.h"
 #include "utils/memutils.h"
 
 
@@ -667,7 +669,8 @@ extern bool RelationFindReplTupleSeq(Relation rel, LockTupleMode lockmode,
 									 TupleTableSlot *searchslot, TupleTableSlot *outslot);
 
 extern void ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
-									 EState *estate, TupleTableSlot *slot);
+									 EState *estate, TupleTableSlot *slot,
+									 TupleTableSlot **conflictsloty, Oid subid);
 extern void ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 									 EState *estate, EPQState *epqstate,
 									 TupleTableSlot *searchslot, TupleTableSlot *slot);

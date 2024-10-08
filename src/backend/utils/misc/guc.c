@@ -3115,7 +3115,6 @@ config_enum_get_options(struct config_enum *record, const char *prefix,
  * and also calls any check hook the parameter may have.
  *
  * record: GUC variable's info record
- * name: variable name (should match the record of course)
  * value: proposed value, as a string
  * source: identifies source of value (check hooks may need this)
  * elevel: level to log any error reports at
@@ -3127,7 +3126,7 @@ config_enum_get_options(struct config_enum *record, const char *prefix,
  */
 static bool
 parse_and_validate_value(struct config_generic *record,
-						 const char *name, const char *value,
+						 const char *value,
 						 GucSource source, int elevel,
 						 union config_var_val *newval, void **newextra)
 {
@@ -3142,7 +3141,7 @@ parse_and_validate_value(struct config_generic *record,
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("parameter \"%s\" requires a Boolean value",
-									name)));
+									conf->gen.name)));
 					return false;
 				}
 
@@ -3162,7 +3161,7 @@ parse_and_validate_value(struct config_generic *record,
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("invalid value for parameter \"%s\": \"%s\"",
-									name, value),
+									conf->gen.name, value),
 							 hintmsg ? errhint("%s", _(hintmsg)) : 0));
 					return false;
 				}
@@ -3181,7 +3180,7 @@ parse_and_validate_value(struct config_generic *record,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("%d%s%s is outside the valid range for parameter \"%s\" (%d%s%s .. %d%s%s)",
 									newval->intval, unitspace, unit,
-									name,
+									conf->gen.name,
 									conf->min, unitspace, unit,
 									conf->max, unitspace, unit)));
 					return false;
@@ -3203,7 +3202,7 @@ parse_and_validate_value(struct config_generic *record,
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("invalid value for parameter \"%s\": \"%s\"",
-									name, value),
+									conf->gen.name, value),
 							 hintmsg ? errhint("%s", _(hintmsg)) : 0));
 					return false;
 				}
@@ -3222,7 +3221,7 @@ parse_and_validate_value(struct config_generic *record,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("%g%s%s is outside the valid range for parameter \"%s\" (%g%s%s .. %g%s%s)",
 									newval->realval, unitspace, unit,
-									name,
+									conf->gen.name,
 									conf->min, unitspace, unit,
 									conf->max, unitspace, unit)));
 					return false;
@@ -3278,7 +3277,7 @@ parse_and_validate_value(struct config_generic *record,
 					ereport(elevel,
 							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							 errmsg("invalid value for parameter \"%s\": \"%s\"",
-									name, value),
+									conf->gen.name, value),
 							 hintmsg ? errhint("%s", _(hintmsg)) : 0));
 
 					if (hintmsg)
@@ -3391,57 +3390,18 @@ set_config_option_ext(const char *name, const char *value,
 }
 
 
-/*
- * set_config_with_handle: sets option `name' to given value.
- *
- * This API adds the ability to pass a 'handle' argument, which can be
- * obtained by the caller from get_config_handle().  NULL has no effect,
- * but a non-null value avoids the need to search the GUC tables.
- *
- * This should be used by callers which repeatedly set the same config
- * option(s), and want to avoid the overhead of a hash lookup each time.
- */
-int
-set_config_with_handle(const char *name, config_handle *handle,
+/* see set_config_with_handle. */
+static int
+set_config_with_handle_guts(struct config_generic *record,
 					   const char *value,
 					   GucContext context, GucSource source, Oid srole,
 					   GucAction action, bool changeVal, int elevel,
 					   bool is_reload)
 {
-	struct config_generic *record;
 	union config_var_val newval_union;
 	void	   *newextra = NULL;
 	bool		prohibitValueChange = false;
 	bool		makeDefault;
-
-	if (elevel == 0)
-	{
-		if (source == PGC_S_DEFAULT || source == PGC_S_FILE)
-		{
-			/*
-			 * To avoid cluttering the log, only the postmaster bleats loudly
-			 * about problems with the config file.
-			 */
-			elevel = IsUnderPostmaster ? DEBUG3 : LOG;
-		}
-		else if (source == PGC_S_GLOBAL ||
-				 source == PGC_S_DATABASE ||
-				 source == PGC_S_USER ||
-				 source == PGC_S_DATABASE_USER)
-			elevel = WARNING;
-		else
-			elevel = ERROR;
-	}
-
-	/* if handle is specified, no need to look up option */
-	if (!handle)
-	{
-		record = find_option(name, true, false, elevel);
-		if (record == NULL)
-			return 0;
-	}
-	else
-		record = handle;
 
 	/*
 	 * GUC_ACTION_SAVE changes are acceptable during a parallel operation,
@@ -3460,7 +3420,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 		ereport(elevel,
 				(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 				 errmsg("parameter \"%s\" cannot be set during a parallel operation",
-						name)));
+						record->name)));
 		return 0;
 	}
 
@@ -3476,7 +3436,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 				ereport(elevel,
 						(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 						 errmsg("parameter \"%s\" cannot be changed",
-								name)));
+								record->name)));
 				return 0;
 			}
 			break;
@@ -3499,7 +3459,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 				ereport(elevel,
 						(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 						 errmsg("parameter \"%s\" cannot be changed without restarting the server",
-								name)));
+								record->name)));
 				return 0;
 			}
 			break;
@@ -3509,7 +3469,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 				ereport(elevel,
 						(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 						 errmsg("parameter \"%s\" cannot be changed now",
-								name)));
+								record->name)));
 				return 0;
 			}
 
@@ -3529,14 +3489,14 @@ set_config_with_handle(const char *name, config_handle *handle,
 				 */
 				AclResult	aclresult;
 
-				aclresult = pg_parameter_aclcheck(name, srole, ACL_SET);
+				aclresult = pg_parameter_aclcheck(record->name, srole, ACL_SET);
 				if (aclresult != ACLCHECK_OK)
 				{
 					/* No granted privilege */
 					ereport(elevel,
 							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 							 errmsg("permission denied to set parameter \"%s\"",
-									name)));
+									record->name)));
 					return 0;
 				}
 			}
@@ -3578,7 +3538,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 				ereport(elevel,
 						(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 						 errmsg("parameter \"%s\" cannot be set after connection start",
-								name)));
+								record->name)));
 				return 0;
 			}
 			break;
@@ -3591,14 +3551,14 @@ set_config_with_handle(const char *name, config_handle *handle,
 				 */
 				AclResult	aclresult;
 
-				aclresult = pg_parameter_aclcheck(name, srole, ACL_SET);
+				aclresult = pg_parameter_aclcheck(record->name, srole, ACL_SET);
 				if (aclresult != ACLCHECK_OK)
 				{
 					/* No granted privilege */
 					ereport(elevel,
 							(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 							 errmsg("permission denied to set parameter \"%s\"",
-									name)));
+									record->name)));
 					return 0;
 				}
 			}
@@ -3637,7 +3597,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 			ereport(elevel,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("cannot set parameter \"%s\" within security-definer function",
-							name)));
+							record->name)));
 			return 0;
 		}
 		if (InSecurityRestrictedOperation())
@@ -3645,7 +3605,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 			ereport(elevel,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("cannot set parameter \"%s\" within security-restricted operation",
-							name)));
+							record->name)));
 			return 0;
 		}
 	}
@@ -3657,7 +3617,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 		{
 			ereport(elevel,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("parameter \"%s\" cannot be reset", name)));
+					 errmsg("parameter \"%s\" cannot be reset", record->name)));
 			return 0;
 		}
 		if (action == GUC_ACTION_SAVE)
@@ -3665,7 +3625,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 			ereport(elevel,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("parameter \"%s\" cannot be set locally in functions",
-							name)));
+							record->name)));
 			return 0;
 		}
 	}
@@ -3691,7 +3651,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 		if (changeVal && !makeDefault)
 		{
 			elog(DEBUG3, "\"%s\": setting ignored because previous source is higher priority",
-				 name);
+				 record->name);
 			return -1;
 		}
 		changeVal = false;
@@ -3710,7 +3670,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, name, value,
+					if (!parse_and_validate_value(record, value,
 												  source, elevel,
 												  &newval_union, &newextra))
 						return 0;
@@ -3743,7 +3703,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 						ereport(elevel,
 								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
-										name)));
+										conf->gen.name)));
 						return 0;
 					}
 					record->status &= ~GUC_PENDING_RESTART;
@@ -3808,7 +3768,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, name, value,
+					if (!parse_and_validate_value(record, value,
 												  source, elevel,
 												  &newval_union, &newextra))
 						return 0;
@@ -3841,7 +3801,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 						ereport(elevel,
 								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
-										name)));
+										conf->gen.name)));
 						return 0;
 					}
 					record->status &= ~GUC_PENDING_RESTART;
@@ -3906,7 +3866,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, name, value,
+					if (!parse_and_validate_value(record, value,
 												  source, elevel,
 												  &newval_union, &newextra))
 						return 0;
@@ -3939,7 +3899,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 						ereport(elevel,
 								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
-										name)));
+										conf->gen.name)));
 						return 0;
 					}
 					record->status &= ~GUC_PENDING_RESTART;
@@ -4004,7 +3964,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, name, value,
+					if (!parse_and_validate_value(record, value,
 												  source, elevel,
 												  &newval_union, &newextra))
 						return 0;
@@ -4063,7 +4023,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 						ereport(elevel,
 								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
-										name)));
+										conf->gen.name)));
 						return 0;
 					}
 					record->status &= ~GUC_PENDING_RESTART;
@@ -4133,7 +4093,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 
 				if (value)
 				{
-					if (!parse_and_validate_value(record, name, value,
+					if (!parse_and_validate_value(record, value,
 												  source, elevel,
 												  &newval_union, &newextra))
 						return 0;
@@ -4166,7 +4126,7 @@ set_config_with_handle(const char *name, config_handle *handle,
 						ereport(elevel,
 								(errcode(ERRCODE_CANT_CHANGE_RUNTIME_PARAM),
 								 errmsg("parameter \"%s\" cannot be changed without restarting the server",
-										name)));
+										conf->gen.name)));
 						return 0;
 					}
 					record->status &= ~GUC_PENDING_RESTART;
@@ -4234,6 +4194,57 @@ set_config_with_handle(const char *name, config_handle *handle,
 	return changeVal ? 1 : -1;
 }
 
+/*
+ * set_config_with_handle: sets option `name' to given value.
+ *
+ * This API adds the ability to pass a 'handle' argument, which can be
+ * obtained by the caller from get_config_handle().  NULL has no effect,
+ * but a non-null value avoids the need to search the GUC tables.
+ *
+ * This should be used by callers which repeatedly set the same config
+ * option(s), and want to avoid the overhead of a hash lookup each time.
+ */
+int
+set_config_with_handle(const char *name, config_handle *handle,
+					   const char *value,
+					   GucContext context, GucSource source, Oid srole,
+					   GucAction action, bool changeVal, int elevel,
+					   bool is_reload)
+{
+	struct config_generic *record;
+
+	if (elevel == 0)
+	{
+		if (source == PGC_S_DEFAULT || source == PGC_S_FILE)
+		{
+			/*
+			 * To avoid cluttering the log, only the postmaster bleats loudly
+			 * about problems with the config file.
+			 */
+			elevel = IsUnderPostmaster ? DEBUG3 : LOG;
+		}
+		else if (source == PGC_S_GLOBAL ||
+				 source == PGC_S_DATABASE ||
+				 source == PGC_S_USER ||
+				 source == PGC_S_DATABASE_USER)
+			elevel = WARNING;
+		else
+			elevel = ERROR;
+	}
+
+	/* if handle is specified, no need to look up option */
+	if (!handle)
+	{
+		record = find_option(name, true, false, elevel);
+		if (record == NULL)
+			return 0;
+	}
+	else
+		record = handle;
+
+	return set_config_with_handle_guts(record,
+			   value, context, source, srole, action, changeVal, elevel, is_reload);
+}
 
 /*
  * Retrieve a config_handle for the given name, suitable for calling
@@ -4660,7 +4671,7 @@ AlterSystemSetConfigFile(AlterSystemStmt *altersysstmt)
 				union config_var_val newval;
 				void	   *newextra = NULL;
 
-				if (!parse_and_validate_value(record, name, value,
+				if (!parse_and_validate_value(record, value,
 											  PGC_S_FILE, ERROR,
 											  &newval, &newextra))
 					ereport(ERROR,

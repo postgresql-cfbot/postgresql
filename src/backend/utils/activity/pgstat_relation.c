@@ -48,6 +48,8 @@ static void add_tabstat_xact_level(PgStat_TableStatus *pgstat_info, int nest_lev
 static void ensure_tabstat_xact_level(PgStat_TableStatus *pgstat_info);
 static void save_truncdrop_counters(PgStat_TableXactStatus *trans, bool is_drop);
 static void restore_truncdrop_counters(PgStat_TableXactStatus *trans);
+static void pgstat_accumulate_extvac_stats(ExtVacReport *dst, ExtVacReport *src,
+							   bool accumulate_reltype_specific_info);
 
 
 /*
@@ -204,12 +206,40 @@ pgstat_drop_relation(Relation rel)
 	}
 }
 
+/* ---------
+ * pgstat_report_vacuum_error() -
+ *
+ *	Tell the collector about an (auto)vacuum interruption.
+ * ---------
+ */
+void
+pgstat_report_vacuum_error(Oid tableoid)
+{
+	PgStat_EntryRef *entry_ref;
+	PgStatShared_Relation *shtabentry;
+	PgStat_StatTabEntry *tabentry;
+	Oid			dboid =  MyDatabaseId;
+
+	if (!pgstat_track_counts)
+		return;
+
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
+											dboid, tableoid, false);
+
+	shtabentry = (PgStatShared_Relation *) entry_ref->shared_stats;
+	tabentry = &shtabentry->stats;
+
+	tabentry->vacuum_ext.interrupts++;
+	pgstat_unlock_entry(entry_ref);
+}
+
 /*
  * Report that the table was just vacuumed and flush IO statistics.
  */
 void
 pgstat_report_vacuum(Oid tableoid, bool shared,
-					 PgStat_Counter livetuples, PgStat_Counter deadtuples)
+					 PgStat_Counter livetuples, PgStat_Counter deadtuples,
+					 ExtVacReport *params)
 {
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_Relation *shtabentry;
@@ -232,6 +262,8 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 
 	tabentry->live_tuples = livetuples;
 	tabentry->dead_tuples = deadtuples;
+
+	pgstat_accumulate_extvac_stats(&tabentry->vacuum_ext, params, true);
 
 	/*
 	 * It is quite possible that a non-aggressive VACUUM ended up skipping
@@ -861,6 +893,9 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	tabentry->blocks_fetched += lstats->counts.blocks_fetched;
 	tabentry->blocks_hit += lstats->counts.blocks_hit;
 
+	tabentry->rev_all_frozen_pages += lstats->counts.rev_all_frozen_pages;
+	tabentry->rev_all_visible_pages += lstats->counts.rev_all_visible_pages;
+
 	/* Clamp live_tuples in case of negative delta_live_tuples */
 	tabentry->live_tuples = Max(tabentry->live_tuples, 0);
 	/* Likewise for dead_tuples */
@@ -983,4 +1018,39 @@ restore_truncdrop_counters(PgStat_TableXactStatus *trans)
 		trans->tuples_updated = trans->updated_pre_truncdrop;
 		trans->tuples_deleted = trans->deleted_pre_truncdrop;
 	}
+}
+
+static void
+pgstat_accumulate_extvac_stats(ExtVacReport *dst, ExtVacReport *src,
+							   bool accumulate_reltype_specific_info)
+{
+	dst->total_blks_read += src->total_blks_read;
+	dst->total_blks_hit += src->total_blks_hit;
+	dst->total_blks_dirtied += src->total_blks_dirtied;
+	dst->total_blks_written += src->total_blks_written;
+	dst->wal_bytes += src->wal_bytes;
+	dst->wal_fpi += src->wal_fpi;
+	dst->wal_records += src->wal_records;
+	dst->blk_read_time += src->blk_read_time;
+	dst->blk_write_time += src->blk_write_time;
+	dst->delay_time += src->delay_time;
+	dst->system_time += src->system_time;
+	dst->user_time += src->user_time;
+	dst->total_time += src->total_time;
+	dst->interrupts += src->interrupts;
+
+	if (!accumulate_reltype_specific_info)
+		return;
+
+	dst->blks_fetched += src->blks_fetched;
+	dst->blks_hit += src->blks_hit;
+
+	dst->pages_scanned += src->pages_scanned;
+	dst->pages_removed += src->pages_removed;
+	dst->pages_frozen += src->pages_frozen;
+	dst->pages_all_visible += src->pages_all_visible;
+	dst->tuples_deleted += src->tuples_deleted;
+	dst->tuples_frozen += src->tuples_frozen;
+	dst->dead_tuples += src->dead_tuples;
+	dst->index_vacuum_count += src->index_vacuum_count;
 }

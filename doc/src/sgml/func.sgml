@@ -4565,6 +4565,27 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>get_bytes</primary>
+        </indexterm>
+        <function>get_bytes</function> ( <parameter>bytes</parameter> <type>bytea</type>,
+        <parameter>offset</parameter> <type>integer</type>,
+        <parameter>size</parameter> <type>integer</type> )
+        <returnvalue>bigint</returnvalue>
+       </para>
+       <para>
+        Extracts <parameter>size</parameter> bytes at a given
+        <link linkend="functions-zerobased-note">offset</link>
+        from binary string.
+       </para>
+       <para>
+        <literal>get_bytes('\x0123456789ABCDEF'::bytea, 5, 2)</literal>
+        <returnvalue>43981</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>length</primary>
         </indexterm>
         <indexterm>
@@ -4659,6 +4680,28 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
        <para>
         <literal>set_byte('\x1234567890'::bytea, 4, 64)</literal>
         <returnvalue>\x1234567840</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>set_bytes</primary>
+        </indexterm>
+        <function>set_bytes</function> ( <parameter>bytes</parameter> <type>bytea</type>,
+        <parameter>offset</parameter> <type>integer</type>,
+        <parameter>size</parameter> <type>integer</type>,
+        <parameter>newvalue</parameter> <type>bigint</type> )
+        <returnvalue>bytea</returnvalue>
+       </para>
+       <para>
+        Sets <parameter>size</parameter> bytes at a given
+        <link linkend="functions-zerobased-note">offset</link>
+        in binary string to <parameter>newvalue</parameter>.
+       </para>
+       <para>
+        <literal>set_bytes('\x0123456789abcdef'::bytea, 5, 2, 0x1122)</literal>
+        <returnvalue>\x01234567891122ef</returnvalue>
        </para></entry>
       </row>
 
@@ -4761,7 +4804,8 @@ SELECT format('Testing %3$s, %2$s, %s', 'one', 'two', 'three');
   </table>
 
   <para id="functions-zerobased-note">
-   Functions <function>get_byte</function> and <function>set_byte</function>
+   Functions <function>get_byte</function>, <function>set_byte</function>,
+   <function>get_bytes</function> and <function>set_bytes</function>
    number the first byte of a binary string as byte 0.
    Functions <function>get_bit</function> and <function>set_bit</function>
    number bits from the right within each byte; for example bit 0 is the least

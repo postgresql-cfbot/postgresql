@@ -425,7 +425,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				OptTableElementList TableElementList OptInherit definition
 				OptTypedTableElementList TypedTableElementList
 				reloptions opt_reloptions
-				OptWith opt_definition func_args func_args_list
+				OptWith opt_definition opt_resolver_definition func_args func_args_list
 				func_args_with_defaults func_args_with_defaults_list
 				aggr_args aggr_args_list
 				func_as createfunc_opt_list opt_createfunc_opt_list alterfunc_opt_list
@@ -613,6 +613,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	opt_check_option
 
 %type <str>		opt_provider security_label
+%type <str>		conflict_type
 
 %type <target>	xml_attribute_el
 %type <list>	xml_attribute_list xml_attributes
@@ -770,7 +771,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	RANGE READ REAL REASSIGN RECURSIVE REF_P REFERENCES REFERENCING
 	REFRESH REINDEX RELATIVE_P RELEASE RENAME REPEATABLE REPLACE REPLICA
-	RESET RESTART RESTRICT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
+	RESET RESOLVER RESTART RESTRICT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
 
 	SAVEPOINT SCALAR SCHEMA SCHEMAS SCROLL SEARCH SECOND_P SECURITY SELECT
@@ -8813,6 +8814,11 @@ opt_definition:
 			| /*EMPTY*/								{ $$ = NIL; }
 		;
 
+opt_resolver_definition:
+			CONFLICT RESOLVER definition			{ $$ = $3; }
+			| /*EMPTY*/								{ $$ = NIL; }
+		;
+
 table_func_column:	param_name func_type
 				{
 					FunctionParameter *n = makeNode(FunctionParameter);
@@ -10747,14 +10753,15 @@ AlterPublicationStmt:
  *****************************************************************************/
 
 CreateSubscriptionStmt:
-			CREATE SUBSCRIPTION name CONNECTION Sconst PUBLICATION name_list opt_definition
+	CREATE SUBSCRIPTION name CONNECTION Sconst PUBLICATION name_list opt_resolver_definition opt_definition
 				{
 					CreateSubscriptionStmt *n =
 						makeNode(CreateSubscriptionStmt);
 					n->subname = $3;
 					n->conninfo = $5;
 					n->publication = $7;
-					n->options = $8;
+					n->resolvers = $8;
+					n->options = $9;
 					$$ = (Node *) n;
 				}
 		;
@@ -10861,6 +10868,38 @@ AlterSubscriptionStmt:
 					n->options = $5;
 					$$ = (Node *) n;
 				}
+			| ALTER SUBSCRIPTION name opt_resolver_definition
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+
+					n->kind = ALTER_SUBSCRIPTION_CONFLICT_RESOLVERS;
+					n->subname = $3;
+					n->resolvers = $4;
+					$$ = (Node *) n;
+				}
+			| ALTER SUBSCRIPTION name RESET CONFLICT RESOLVER ALL
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+
+					n->kind = ALTER_SUBSCRIPTION_CONFLICT_RESOLVER_RESET_ALL;
+					n->subname = $3;
+					$$ = (Node *) n;
+				}
+			| ALTER SUBSCRIPTION name RESET CONFLICT RESOLVER FOR conflict_type
+				{
+					AlterSubscriptionStmt *n =
+						makeNode(AlterSubscriptionStmt);
+
+					n->kind = ALTER_SUBSCRIPTION_CONFLICT_RESOLVER_RESET;
+					n->subname = $3;
+					n->conflict_type_name = $8;
+					$$ = (Node *) n;
+				}
+		;
+conflict_type:
+			Sconst								{ $$ = $1; }
 		;
 
 /*****************************************************************************
@@ -17785,6 +17824,7 @@ unreserved_keyword:
 			| REPLACE
 			| REPLICA
 			| RESET
+			| RESOLVER
 			| RESTART
 			| RESTRICT
 			| RETURN
@@ -18414,6 +18454,7 @@ bare_label_keyword:
 			| REPLACE
 			| REPLICA
 			| RESET
+			| RESOLVER
 			| RESTART
 			| RESTRICT
 			| RETURN

@@ -2181,7 +2181,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       <para>
        Number of times a row insertion violated a
        <literal>NOT DEFERRABLE</literal> unique constraint during the
-       application of changes. See <xref linkend="conflict-insert-exists"/>
+       application of changes. See <xref linkend="sql-createsubscription-params-with-conflict_type-insert-exists"/>
        for details about this conflict.
       </para></entry>
      </row>
@@ -2193,7 +2193,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       <para>
        Number of times an update was applied to a row that had been previously
        modified by another source during the application of changes. See
-       <xref linkend="conflict-update-origin-differs"/> for details about this
+       <xref linkend="sql-createsubscription-params-with-conflict_type-update-origin-differs"/> for details about this
        conflict.
       </para></entry>
      </row>
@@ -2205,7 +2205,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       <para>
        Number of times that an updated row value violated a
        <literal>NOT DEFERRABLE</literal> unique constraint during the
-       application of changes. See <xref linkend="conflict-update-exists"/>
+       application of changes. See <xref linkend="sql-createsubscription-params-with-conflict_type-update-exists"/>
        for details about this conflict.
       </para></entry>
      </row>
@@ -2216,7 +2216,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       </para>
       <para>
        Number of times the tuple to be updated was not found during the
-       application of changes. See <xref linkend="conflict-update-missing"/>
+       application of changes. See <xref linkend="sql-createsubscription-params-with-conflict_type-update-missing
+"/>
        for details about this conflict.
       </para></entry>
      </row>
@@ -2228,7 +2229,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       <para>
        Number of times a delete operation was applied to row that had been
        previously modified by another source during the application of changes.
-       See <xref linkend="conflict-delete-origin-differs"/> for details about
+       See <xref linkend="sql-createsubscription-params-with-conflict_type-delete-origin-differs"/> for details about
        this conflict.
       </para></entry>
      </row>
@@ -2239,7 +2240,7 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       </para>
       <para>
        Number of times the tuple to be deleted was not found during the application
-       of changes. See <xref linkend="conflict-delete-missing"/> for details
+       of changes. See <xref linkend="sql-createsubscription-params-with-conflict_type-delete-missing"/> for details
        about this conflict.
       </para></entry>
      </row>

@@ -1568,7 +1568,7 @@ test_sub=# SELECT * FROM t1 ORDER BY id;
  </sect1>
 
  <sect1 id="logical-replication-conflicts">
-  <title>Conflicts</title>
+  <title>Conflicts and Conflict Resolution</title>
 
   <para>
    Logical replication behaves similarly to normal DML operations in that
@@ -1582,86 +1582,19 @@ test_sub=# SELECT * FROM t1 ORDER BY id;
   </para>
 
   <para>
-   Additional logging is triggered, and the conflict statistics are collected (displayed in the
-   <link linkend="monitoring-pg-stat-subscription-stats"><structname>pg_stat_subscription_stats</structname></link> view)
-   in the following <firstterm>conflict</firstterm> cases:
-   <variablelist>
-    <varlistentry id="conflict-insert-exists" xreflabel="insert_exists">
-     <term><literal>insert_exists</literal></term>
-     <listitem>
-      <para>
-       Inserting a row that violates a <literal>NOT DEFERRABLE</literal>
-       unique constraint. Note that to log the origin and commit
-       timestamp details of the conflicting key,
-       <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
-       should be enabled on the subscriber. In this case, an error will be
-       raised until the conflict is resolved manually.
-      </para>
-     </listitem>
-    </varlistentry>
-    <varlistentry id="conflict-update-origin-differs" xreflabel="update_origin_differs">
-     <term><literal>update_origin_differs</literal></term>
-     <listitem>
-      <para>
-       Updating a row that was previously modified by another origin.
-       Note that this conflict can only be detected when
-       <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
-       is enabled on the subscriber. Currently, the update is always applied
-       regardless of the origin of the local row.
-      </para>
-     </listitem>
-    </varlistentry>
-    <varlistentry id="conflict-update-exists" xreflabel="update_exists">
-     <term><literal>update_exists</literal></term>
-     <listitem>
-      <para>
-       The updated value of a row violates a <literal>NOT DEFERRABLE</literal>
-       unique constraint. Note that to log the origin and commit
-       timestamp details of the conflicting key,
-       <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
-       should be enabled on the subscriber. In this case, an error will be
-       raised until the conflict is resolved manually. Note that when updating a
-       partitioned table, if the updated row value satisfies another partition
-       constraint resulting in the row being inserted into a new partition, the
-       <literal>insert_exists</literal> conflict may arise if the new row
-       violates a <literal>NOT DEFERRABLE</literal> unique constraint.
-      </para>
-     </listitem>
-    </varlistentry>
-    <varlistentry id="conflict-update-missing" xreflabel="update_missing">
-     <term><literal>update_missing</literal></term>
-     <listitem>
-      <para>
-       The tuple to be updated was not found. The update will simply be
-       skipped in this scenario.
-      </para>
-     </listitem>
-    </varlistentry>
-    <varlistentry id="conflict-delete-origin-differs" xreflabel="delete_origin_differs">
-     <term><literal>delete_origin_differs</literal></term>
-     <listitem>
-      <para>
-       Deleting a row that was previously modified by another origin. Note that
-       this conflict can only be detected when
-       <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
-       is enabled on the subscriber. Currently, the delete is always applied
-       regardless of the origin of the local row.
-      </para>
-     </listitem>
-    </varlistentry>
-    <varlistentry id="conflict-delete-missing" xreflabel="delete_missing">
-     <term><literal>delete_missing</literal></term>
-     <listitem>
-      <para>
-       The tuple to be deleted was not found. The delete will simply be
-       skipped in this scenario.
-      </para>
-     </listitem>
-    </varlistentry>
-   </variablelist>
-    Note that there are other conflict scenarios, such as exclusion constraint
-    violations. Currently, we do not provide additional details for them in the
-    log.
+   There are various conflict scenarios, each identified as a <firstterm>conflict type</firstterm>.
+   Users can configure a <firstterm>conflict resolver</firstterm> for each
+   conflict type when creating a subscription. For more information, refer to
+   <link linkend="sql-createsubscription-params-with-conflict-resolver">
+   <command>CREATE SUBSCRIPTION ... CONFLICT RESOLVER</command></link>.
+  </para>
+  <para>
+   When a conflict occurs the details about it are logged, and the conflict
+   statistics are recorded in the <link linkend="monitoring-pg-stat-subscription-stats">
+   <structname>pg_stat_subscription_stats</structname></link> view.
+   Note that there are other conflict scenarios, such as exclusion constraint
+   violations. Currently, we do not provide additional details for them in the
+   log.
   </para>
 
   <para>

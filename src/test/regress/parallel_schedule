@@ -140,4 +140,5 @@ test: tablespace
 # ----------
 # Check vacuum statistics
 # ----------
+test: vacuum_index_statistics
 test: vacuum_tables_statistics

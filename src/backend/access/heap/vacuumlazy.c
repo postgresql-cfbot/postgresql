@@ -168,6 +168,7 @@ typedef struct LVRelState
 	char	   *dbname;
 	char	   *relnamespace;
 	Oid			reloid;
+	Oid			indoid;
 	char	   *relname;
 	char	   *indname;		/* Current index name */
 	BlockNumber blkno;			/* used only for heap operations */
@@ -245,6 +246,13 @@ typedef struct LVExtStatCounters
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
 } LVExtStatCounters;
+
+typedef struct LVExtStatCountersIdx
+{
+	LVExtStatCounters common;
+	int64		pages_deleted;
+	int64		tuples_removed;
+} LVExtStatCountersIdx;
 
 /* non-export function prototypes */
 static void lazy_scan_heap(LVRelState *vacrel);
@@ -406,6 +414,46 @@ extvac_stats_end(Relation rel, LVExtStatCounters *counters,
 		rel->pgstat_info->counts.blocks_fetched - counters->blocks_fetched;
 	report->blks_hit =
 		rel->pgstat_info->counts.blocks_hit - counters->blocks_hit;
+}
+
+static void
+extvac_stats_start_idx(Relation rel, IndexBulkDeleteResult *stats,
+					   LVExtStatCountersIdx *counters)
+{
+	extvac_stats_start(rel, &counters->common);
+	counters->pages_deleted = counters->tuples_removed = 0;
+
+	if (stats != NULL)
+	{
+		/*
+		 * XXX: Why do we need this code here? If it is needed, I feel lack of
+		 * comments, describing the reason.
+		 */
+		counters->tuples_removed = stats->tuples_removed;
+		counters->pages_deleted = stats->pages_deleted;
+	}
+}
+
+static void
+extvac_stats_end_idx(Relation rel, IndexBulkDeleteResult *stats,
+					 LVExtStatCountersIdx *counters, ExtVacReport *report)
+{
+	extvac_stats_end(rel, &counters->common, report);
+	report->type = PGSTAT_EXTVAC_INDEX;
+
+	if (stats != NULL)
+	{
+		/*
+		 * if something goes wrong or an user doesn't want to track a database
+		 * activity - just suppress it.
+		 */
+
+		/* Fill index-specific extended stats fields */
+		report->index.tuples_deleted =
+							stats->tuples_removed - counters->tuples_removed;
+		report->index.pages_deleted =
+							stats->pages_deleted - counters->pages_deleted;
+	}
 }
 
 /*
@@ -711,14 +759,15 @@ heap_vacuum_rel(Relation rel, VacuumParams *params,
 	extvac_stats_end(rel, &extVacCounters, &extVacReport);
 
 	/* Fill heap-specific extended stats fields */
-	extVacReport.pages_scanned = vacrel->scanned_pages;
-	extVacReport.pages_removed = vacrel->removed_pages;
-	extVacReport.pages_frozen = vacrel->set_frozen_pages;
-	extVacReport.pages_all_visible = vacrel->set_all_visible_pages;
-	extVacReport.tuples_deleted = vacrel->tuples_deleted;
-	extVacReport.tuples_frozen = vacrel->tuples_frozen;
-	extVacReport.dead_tuples = vacrel->recently_dead_tuples + vacrel->missed_dead_tuples;
-	extVacReport.index_vacuum_count = vacrel->num_index_scans;
+	extVacReport.type = PGSTAT_EXTVAC_HEAP;
+	extVacReport.heap.pages_scanned = vacrel->scanned_pages;
+	extVacReport.heap.pages_removed = vacrel->removed_pages;
+	extVacReport.heap.pages_frozen = vacrel->set_frozen_pages;
+	extVacReport.heap.pages_all_visible = vacrel->set_all_visible_pages;
+	extVacReport.heap.tuples_deleted = vacrel->tuples_deleted;
+	extVacReport.heap.tuples_frozen = vacrel->tuples_frozen;
+	extVacReport.heap.dead_tuples = vacrel->recently_dead_tuples + vacrel->missed_dead_tuples;
+	extVacReport.heap.index_vacuum_count = vacrel->num_index_scans;
 
 	/*
 	 * Report results to the cumulative stats system, too.
@@ -2583,6 +2632,10 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 {
 	IndexVacuumInfo ivinfo;
 	LVSavedErrInfo saved_err_info;
+	LVExtStatCountersIdx extVacCounters;
+	ExtVacReport extVacReport;
+
+	extvac_stats_start_idx(indrel, istat, &extVacCounters);
 
 	ivinfo.index = indrel;
 	ivinfo.heaprel = vacrel->rel;
@@ -2601,6 +2654,7 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	 */
 	Assert(vacrel->indname == NULL);
 	vacrel->indname = pstrdup(RelationGetRelationName(indrel));
+	vacrel->indoid = RelationGetRelid(indrel);
 	update_vacuum_error_info(vacrel, &saved_err_info,
 							 VACUUM_ERRCB_PHASE_VACUUM_INDEX,
 							 InvalidBlockNumber, InvalidOffsetNumber);
@@ -2608,6 +2662,13 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	/* Do bulk deletion */
 	istat = vac_bulkdel_one_index(&ivinfo, istat, (void *) vacrel->dead_items,
 								  vacrel->dead_items_info);
+
+	/* Make extended vacuum stats report for index */
+	extvac_stats_end_idx(indrel, istat, &extVacCounters, &extVacReport);
+
+	pgstat_report_vacuum(RelationGetRelid(indrel),
+							indrel->rd_rel->relisshared,
+							0, 0, &extVacReport);
 
 	/* Revert to the previous phase information for error traceback */
 	restore_vacuum_error_info(vacrel, &saved_err_info);
@@ -2633,6 +2694,10 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 {
 	IndexVacuumInfo ivinfo;
 	LVSavedErrInfo saved_err_info;
+	LVExtStatCountersIdx extVacCounters;
+	ExtVacReport extVacReport;
+
+	extvac_stats_start_idx(indrel, istat, &extVacCounters);
 
 	ivinfo.index = indrel;
 	ivinfo.heaprel = vacrel->rel;
@@ -2652,11 +2717,19 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	 */
 	Assert(vacrel->indname == NULL);
 	vacrel->indname = pstrdup(RelationGetRelationName(indrel));
+	vacrel->indoid = RelationGetRelid(indrel);
 	update_vacuum_error_info(vacrel, &saved_err_info,
 							 VACUUM_ERRCB_PHASE_INDEX_CLEANUP,
 							 InvalidBlockNumber, InvalidOffsetNumber);
 
 	istat = vac_cleanup_one_index(&ivinfo, istat);
+
+	/* Make extended vacuum stats report for index */
+	extvac_stats_end_idx(indrel, istat, &extVacCounters, &extVacReport);
+
+	pgstat_report_vacuum(RelationGetRelid(indrel),
+							indrel->rd_rel->relisshared,
+							0, 0, &extVacReport);
 
 	/* Revert to the previous phase information for error traceback */
 	restore_vacuum_error_info(vacrel, &saved_err_info);
@@ -3274,7 +3347,7 @@ vacuum_error_callback(void *arg)
 	{
 		case VACUUM_ERRCB_PHASE_SCAN_HEAP:
 			if(geterrelevel() == ERROR)
-				pgstat_report_vacuum_error(errinfo->reloid);
+				pgstat_report_vacuum_error(errinfo->reloid, PGSTAT_EXTVAC_HEAP);
 			if (BlockNumberIsValid(errinfo->blkno))
 			{
 				if (OffsetNumberIsValid(errinfo->offnum))
@@ -3291,7 +3364,7 @@ vacuum_error_callback(void *arg)
 
 		case VACUUM_ERRCB_PHASE_VACUUM_HEAP:
 			if(geterrelevel() == ERROR)
-				pgstat_report_vacuum_error(errinfo->reloid);
+				pgstat_report_vacuum_error(errinfo->reloid, PGSTAT_EXTVAC_HEAP);
 			if (BlockNumberIsValid(errinfo->blkno))
 			{
 				if (OffsetNumberIsValid(errinfo->offnum))
@@ -3307,16 +3380,22 @@ vacuum_error_callback(void *arg)
 			break;
 
 		case VACUUM_ERRCB_PHASE_VACUUM_INDEX:
+			if(geterrelevel() == ERROR)
+				pgstat_report_vacuum_error(errinfo->indoid, PGSTAT_EXTVAC_INDEX);
 			errcontext("while vacuuming index \"%s\" of relation \"%s.%s\"",
 					   errinfo->indname, errinfo->relnamespace, errinfo->relname);
 			break;
 
 		case VACUUM_ERRCB_PHASE_INDEX_CLEANUP:
+			if(geterrelevel() == ERROR)
+				pgstat_report_vacuum_error(errinfo->indoid, PGSTAT_EXTVAC_INDEX);
 			errcontext("while cleaning up index \"%s\" of relation \"%s.%s\"",
 					   errinfo->indname, errinfo->relnamespace, errinfo->relname);
 			break;
 
 		case VACUUM_ERRCB_PHASE_TRUNCATE:
+			if(geterrelevel() == ERROR)
+				pgstat_report_vacuum_error(errinfo->reloid, PGSTAT_EXTVAC_HEAP);
 			if (BlockNumberIsValid(errinfo->blkno))
 				errcontext("while truncating relation \"%s.%s\" to %u blocks",
 						   errinfo->relnamespace, errinfo->relname, errinfo->blkno);

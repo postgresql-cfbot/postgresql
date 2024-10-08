@@ -1434,3 +1434,43 @@ WHERE
   rel.oid = stats.relid AND
   ns.oid = rel.relnamespace AND
   rel.relkind = 'r';
+
+CREATE VIEW pg_stat_vacuum_indexes AS
+SELECT
+  rel.oid as relid,
+  ns.nspname AS "schema",
+  rel.relname AS relname,
+
+  stats.total_blks_read,
+  stats.total_blks_hit,
+  stats.total_blks_dirtied,
+  stats.total_blks_written,
+
+  stats.rel_blks_read,
+  stats.rel_blks_hit,
+
+  stats.pages_deleted,
+  stats.tuples_deleted,
+
+  stats.wal_records,
+  stats.wal_fpi,
+  stats.wal_bytes,
+
+  stats.blk_read_time,
+  stats.blk_write_time,
+
+  stats.delay_time,
+  stats.system_time,
+  stats.user_time,
+  stats.total_time,
+  stats.interrupts
+FROM
+  pg_database db,
+  pg_class rel,
+  pg_namespace ns,
+  pg_stat_vacuum_indexes(rel.oid) stats
+WHERE
+  db.datname = current_database() AND
+  rel.oid = stats.relid AND
+  ns.oid = rel.relnamespace AND
+  rel.relkind = 'i';

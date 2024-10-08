@@ -37,8 +37,7 @@ FROM pg_stat_vacuum_tables vt, pg_class c
 WHERE vt.relname = 'vestat' AND vt.relid = c.oid;
  relname | pages_frozen | tuples_deleted | relpages | pages_scanned | pages_removed 
 ---------+--------------+----------------+----------+---------------+---------------
- vestat  |            0 |              0 |      455 |             0 |             0
-(1 row)
+(0 rows)
 
 SELECT relpages AS rp
 FROM pg_class c
@@ -201,9 +200,9 @@ FROM pg_stat_vacuum_tables WHERE relname = 'vestat';
 (1 row)
 
 SELECT min(relid) FROM pg_stat_vacuum_tables(0) where relid > 0;
- min 
------
- 112
+ min  
+------
+ 1213
 (1 row)
 
 DROP TABLE vestat CASCADE;

@@ -62,6 +62,8 @@ CREATE FUNCTION pg_stat_statements(IN showtext boolean,
     OUT jit_deform_time float8,
     OUT parallel_workers_to_launch int8,
     OUT parallel_workers_launched int8,
+    OUT parallel_queries_planned int8,
+    OUT parallel_queries_launched int8,
     OUT stats_since timestamp with time zone,
     OUT minmax_stats_since timestamp with time zone
 )

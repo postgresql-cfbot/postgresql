@@ -222,6 +222,8 @@ ExecGatherMerge(PlanState *pstate)
 			LaunchParallelWorkers(pcxt);
 			/* We save # workers launched for the benefit of EXPLAIN */
 			node->nworkers_launched = pcxt->nworkers_launched;
+			 if (pcxt->nworkers_launched > 0)
+				 estate->es_used_parallel_mode = true;
 
 			/*
 			 * Count number of workers originally wanted and actually

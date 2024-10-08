@@ -707,6 +707,7 @@ typedef struct EState
 	struct EPQState *es_epq_active;
 
 	bool		es_use_parallel_mode;	/* can we use parallel workers? */
+	bool		es_used_parallel_mode;	/* was executed in parallel */
 
 	int			es_parallel_workers_to_launch;	/* number of workers to
 												 * launch. */

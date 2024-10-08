@@ -397,6 +397,8 @@ AlTER EXTENSION pg_stat_statements UPDATE TO '1.12';
  jit_deform_time            | double precision         |           |          | 
  parallel_workers_to_launch | bigint                   |           |          | 
  parallel_workers_launched  | bigint                   |           |          | 
+ parallel_queries_planned   | bigint                   |           |          | 
+ parallel_queries_launched  | bigint                   |           |          | 
  stats_since                | timestamp with time zone |           |          | 
  minmax_stats_since         | timestamp with time zone |           |          | 
 

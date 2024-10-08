@@ -18,7 +18,9 @@ SELECT count(*) FROM pgss_parallel_tab;
 
 SELECT query,
   parallel_workers_to_launch > 0 AS has_workers_to_launch,
-  parallel_workers_launched > 0 AS has_workers_launched
+  parallel_workers_launched > 0 AS has_workers_launched,
+  parallel_queries_planned > 0 AS has_queries_planned,
+  parallel_queries_launched > 0 AS has_queries_launched
   FROM pg_stat_statements
   WHERE query ~ 'SELECT count'
   ORDER BY query COLLATE "C";

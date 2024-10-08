@@ -209,6 +209,10 @@ typedef struct Counters
 											 * be launched */
 	int64       parallel_workers_launched;	/* # of parallel workers actually
 											 * launched */
+	int64       parallel_queries_planned;	/* # of times query was planned
+												 * to use parallelism */
+	int64       parallel_queries_launched;	/* # of times query was executed
+												 * using parallelism */
 } Counters;
 
 /*
@@ -355,7 +359,9 @@ static void pgss_store(const char *query, uint64 queryId,
 					   const struct JitInstrumentation *jitusage,
 					   JumbleState *jstate,
 					   int parallel_workers_to_launch,
-					   int parallel_workers_launched);
+					   int parallel_workers_launched,
+					   bool parallel_queries_planned,
+					   bool parallel_queries_launched);
 static void pg_stat_statements_internal(FunctionCallInfo fcinfo,
 										pgssVersion api_version,
 										bool showtext);
@@ -877,7 +883,9 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, JumbleState *jstate)
 				   NULL,
 				   jstate,
 				   0,
-				   0);
+				   0,
+				   false,
+				   false);
 }
 
 /*
@@ -957,7 +965,9 @@ pgss_planner(Query *parse,
 				   NULL,
 				   NULL,
 				   0,
-				   0);
+				   0,
+				   false,
+				   false);
 	}
 	else
 	{
@@ -1092,7 +1102,9 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 				   queryDesc->estate->es_jit ? &queryDesc->estate->es_jit->instr : NULL,
 				   NULL,
 				   queryDesc->estate->es_parallel_workers_to_launch,
-				   queryDesc->estate->es_parallel_workers_launched);
+				   queryDesc->estate->es_parallel_workers_launched,
+				   queryDesc->plannedstmt->parallelModeNeeded,
+				   queryDesc->estate->es_used_parallel_mode);
 	}
 
 	if (prev_ExecutorEnd)
@@ -1225,7 +1237,9 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				   NULL,
 				   NULL,
 				   0,
-				   0);
+				   0,
+				   false,
+				   false);
 	}
 	else
 	{
@@ -1288,7 +1302,9 @@ pgss_store(const char *query, uint64 queryId,
 		   const struct JitInstrumentation *jitusage,
 		   JumbleState *jstate,
 		   int parallel_workers_to_launch,
-		   int parallel_workers_launched)
+		   int parallel_workers_launched,
+		   bool parallel_queries_planned,
+		   bool parallel_queries_launched)
 {
 	pgssHashKey key;
 	pgssEntry  *entry;
@@ -1494,6 +1510,10 @@ pgss_store(const char *query, uint64 queryId,
 		/* parallel worker counters */
 		entry->counters.parallel_workers_to_launch += parallel_workers_to_launch;
 		entry->counters.parallel_workers_launched += parallel_workers_launched;
+		if (parallel_queries_planned)
+			entry->counters.parallel_queries_planned += 1;
+		if (parallel_queries_launched)
+			entry->counters.parallel_queries_launched += 1;
 
 		SpinLockRelease(&entry->mutex);
 	}
@@ -1561,8 +1581,8 @@ pg_stat_statements_reset(PG_FUNCTION_ARGS)
 #define PG_STAT_STATEMENTS_COLS_V1_9	33
 #define PG_STAT_STATEMENTS_COLS_V1_10	43
 #define PG_STAT_STATEMENTS_COLS_V1_11	49
-#define PG_STAT_STATEMENTS_COLS_V1_12	51
-#define PG_STAT_STATEMENTS_COLS			51	/* maximum of above */
+#define PG_STAT_STATEMENTS_COLS_V1_12	53
+#define PG_STAT_STATEMENTS_COLS			53	/* maximum of above */
 
 /*
  * Retrieve statement statistics.
@@ -1974,6 +1994,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		{
 			values[i++] = Int64GetDatumFast(tmp.parallel_workers_to_launch);
 			values[i++] = Int64GetDatumFast(tmp.parallel_workers_launched);
+			values[i++] = Int64GetDatumFast(tmp.parallel_queries_planned);
+			values[i++] = Int64GetDatumFast(tmp.parallel_queries_launched);
 		}
 		if (api_version >= PGSS_V1_11)
 		{

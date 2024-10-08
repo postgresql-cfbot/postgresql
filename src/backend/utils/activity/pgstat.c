@@ -1124,6 +1124,8 @@ pgstat_update_snapshot(PgStat_Kind kind)
 		pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_SNAPSHOT;
 		if (kind == PGSTAT_KIND_RELATION)
 			pgstat_build_snapshot(PGSTAT_KIND_RELATION);
+		else if (kind == PGSTAT_KIND_DATABASE)
+			pgstat_build_snapshot(PGSTAT_KIND_DATABASE);
 	}
 	PG_FINALLY();
 	{

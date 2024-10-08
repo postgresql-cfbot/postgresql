@@ -430,6 +430,7 @@ pgstat_database_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	pgstat_unlock_entry(entry_ref);
 
 	memset(pendingent, 0, sizeof(*pendingent));
+	memset(&(pendingent)->vacuum_ext, 0, sizeof(ExtVacReport));
 
 	return true;
 }

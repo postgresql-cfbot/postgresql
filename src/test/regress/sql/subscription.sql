@@ -272,6 +272,69 @@ CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUB
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;
 
+-- fail - invalid conflict type
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (foo = 'keep_local') WITH (connect = false);
+
+-- fail - invalid conflict resolver
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (insert_exists = foo) WITH (connect = false);
+
+-- fail - invalid resolver for that conflict type
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub
+ CONFLICT RESOLVER (update_missing = 'apply_remote') WITH (connect = false);
+
+-- fail - duplicate conflict type
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (insert_exists = 'keep_local', insert_exists = 'keep_local');
+
+-- creating subscription with no explicit conflict resolvers should
+-- configure default conflict resolvers
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false);
+
+\dRs+
+
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub;
+
+-- ok - valid conflict types and resolvers
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (insert_exists = 'keep_local', update_missing = 'skip', delete_origin_differs = 'keep_local' ) WITH (connect = false);
+
+--check if above are configured; for non specified conflict types, default resolvers should be seen
+\dRs+
+
+-- fail - altering with invalid conflict type
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (foo = 'keep_local');
+
+-- fail - altering with invalid conflict resolver
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (insert_exists = 'foo');
+
+-- fail - altering with duplicate conflict type
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (insert_exists = 'apply_remote', insert_exists = 'apply_remote');
+
+-- ok - valid conflict types and resolvers
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (insert_exists = 'apply_remote', update_missing = 'skip', delete_origin_differs = 'keep_local' );
+
+\dRs+
+
+-- ok - valid conflict types and resolvers
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (update_exists = 'keep_local', delete_missing = 'error', update_origin_differs = 'error');
+
+\dRs+
+
+-- fail - reset with an invalid conflit type
+ALTER SUBSCRIPTION regress_testsub RESET CONFLICT RESOLVER for 'foo';
+
+-- ok - valid conflict type
+ALTER SUBSCRIPTION regress_testsub RESET CONFLICT RESOLVER for 'insert_exists';
+
+\dRs+
+
+-- ok - reset ALL
+ALTER SUBSCRIPTION regress_testsub RESET CONFLICT RESOLVER ALL;
+
+\dRs+
+
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub;
+
 -- fail - disable_on_error must be boolean
 CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false, disable_on_error = foo);
 

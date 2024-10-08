@@ -468,7 +468,9 @@ ConditionVariableMinimallyPadded
 ConditionalStack
 ConfigData
 ConfigVariable
+ConflictResolver
 ConflictType
+ConflictTypeResolver
 ConnCacheEntry
 ConnCacheKey
 ConnParams
@@ -863,6 +865,7 @@ FormData_pg_statistic
 FormData_pg_statistic_ext
 FormData_pg_statistic_ext_data
 FormData_pg_subscription
+FormData_pg_subscription_conflict
 FormData_pg_subscription_rel
 FormData_pg_tablespace
 FormData_pg_transform

@@ -1045,6 +1045,12 @@ PG_STAT_GET_DBENTRY_INT64(parallel_workers_to_launch)
 /* pg_stat_get_db_parallel_workers_launched*/
 PG_STAT_GET_DBENTRY_INT64(parallel_workers_launched)
 
+/* pg_stat_get_db_parallel_maint_workers_to_launch*/
+PG_STAT_GET_DBENTRY_INT64(parallel_maint_workers_to_launch)
+
+/* pg_stat_get_db_parallel_maint_workers_launched*/
+PG_STAT_GET_DBENTRY_INT64(parallel_maint_workers_launched)
+
 /* pg_stat_get_db_temp_bytes */
 PG_STAT_GET_DBENTRY_INT64(temp_bytes)
 

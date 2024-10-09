@@ -317,21 +317,24 @@ extern BulkInsertState GetBulkInsertState(void);
 extern void FreeBulkInsertState(BulkInsertState);
 extern void ReleaseBulkInsertStatePin(BulkInsertState bistate);
 
-extern void heap_insert(Relation relation, HeapTuple tup, CommandId cid,
-						int options, BulkInsertState bistate);
+extern void heap_insert(Relation relation, HeapTuple tup, TransactionId xid,
+						CommandId cid, int options, BulkInsertState bistate);
 extern void heap_multi_insert(Relation relation, struct TupleTableSlot **slots,
 							  int ntuples, CommandId cid, int options,
 							  BulkInsertState bistate);
 extern TM_Result heap_delete(Relation relation, ItemPointer tid,
-							 CommandId cid, Snapshot crosscheck, bool wait,
-							 struct TM_FailureData *tmfd, bool changingPart);
+							 TransactionId xid, CommandId cid,
+							 Snapshot crosscheck, bool wait,
+							 struct TM_FailureData *tmfd, bool changingPart,
+							 bool wal_logical);
 extern void heap_finish_speculative(Relation relation, ItemPointer tid);
 extern void heap_abort_speculative(Relation relation, ItemPointer tid);
 extern TM_Result heap_update(Relation relation, ItemPointer otid,
-							 HeapTuple newtup,
+							 HeapTuple newtup, TransactionId xid,
 							 CommandId cid, Snapshot crosscheck, bool wait,
 							 struct TM_FailureData *tmfd, LockTupleMode *lockmode,
-							 TU_UpdateIndexes *update_indexes);
+							 TU_UpdateIndexes *update_indexes,
+							 bool wal_logical);
 extern TM_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
 								 CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
 								 bool follow_updates,

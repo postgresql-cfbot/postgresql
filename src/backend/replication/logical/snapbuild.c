@@ -155,7 +155,7 @@ static bool ExportInProgress = false;
 static void SnapBuildPurgeOlderTxn(SnapBuild *builder);
 
 /* snapshot building/manipulation/distribution functions */
-static Snapshot SnapBuildBuildSnapshot(SnapBuild *builder);
+static Snapshot SnapBuildBuildSnapshot(SnapBuild *builder, XLogRecPtr lsn);
 
 static void SnapBuildFreeSnapshot(Snapshot snap);
 
@@ -352,12 +352,17 @@ SnapBuildSnapDecRefcount(Snapshot snap)
  * Build a new snapshot, based on currently committed catalog-modifying
  * transactions.
  *
+ * 'lsn' is the location of the commit record (of a catalog-changing
+ * transaction) that triggered creation of the snapshot. Pass
+ * InvalidXLogRecPtr for the transaction base snapshot or if it the user of
+ * the snapshot should not need the LSN.
+ *
  * In-progress transactions with catalog access are *not* allowed to modify
  * these snapshots; they have to copy them and fill in appropriate ->curcid
  * and ->subxip/subxcnt values.
  */
 static Snapshot
-SnapBuildBuildSnapshot(SnapBuild *builder)
+SnapBuildBuildSnapshot(SnapBuild *builder, XLogRecPtr lsn)
 {
 	Snapshot	snapshot;
 	Size		ssize;
@@ -425,6 +430,7 @@ SnapBuildBuildSnapshot(SnapBuild *builder)
 	snapshot->active_count = 0;
 	snapshot->regd_count = 0;
 	snapshot->snapXactCompletionCount = 0;
+	snapshot->lsn = lsn;
 
 	return snapshot;
 }
@@ -461,7 +467,7 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 	if (TransactionIdIsValid(MyProc->xmin))
 		elog(ERROR, "cannot build an initial slot snapshot when MyProc->xmin already is valid");
 
-	snap = SnapBuildBuildSnapshot(builder);
+	snap = SnapBuildBuildSnapshot(builder, InvalidXLogRecPtr);
 
 	/*
 	 * We know that snap->xmin is alive, enforced by the logical xmin
@@ -502,7 +508,7 @@ SnapBuildInitialSnapshotForCluster(SnapBuild *builder)
 
 	Assert(builder->state == SNAPBUILD_CONSISTENT);
 
-	snap = SnapBuildBuildSnapshot(builder);
+	snap = SnapBuildBuildSnapshot(builder, InvalidXLogRecPtr);
 	return SnapBuildMVCCFromHistoric(snap, false);
 }
 
@@ -636,7 +642,7 @@ SnapBuildGetOrBuildSnapshot(SnapBuild *builder)
 	/* only build a new snapshot if we don't have a prebuilt one */
 	if (builder->snapshot == NULL)
 	{
-		builder->snapshot = SnapBuildBuildSnapshot(builder);
+		builder->snapshot = SnapBuildBuildSnapshot(builder, InvalidXLogRecPtr);
 		/* increase refcount for the snapshot builder */
 		SnapBuildSnapIncRefcount(builder->snapshot);
 	}
@@ -716,7 +722,7 @@ SnapBuildProcessChange(SnapBuild *builder, TransactionId xid, XLogRecPtr lsn)
 		/* only build a new snapshot if we don't have a prebuilt one */
 		if (builder->snapshot == NULL)
 		{
-			builder->snapshot = SnapBuildBuildSnapshot(builder);
+			builder->snapshot = SnapBuildBuildSnapshot(builder, lsn);
 			/* increase refcount for the snapshot builder */
 			SnapBuildSnapIncRefcount(builder->snapshot);
 		}
@@ -1085,7 +1091,7 @@ SnapBuildCommitTxn(SnapBuild *builder, XLogRecPtr lsn, TransactionId xid,
 		if (builder->snapshot)
 			SnapBuildSnapDecRefcount(builder->snapshot);
 
-		builder->snapshot = SnapBuildBuildSnapshot(builder);
+		builder->snapshot = SnapBuildBuildSnapshot(builder, lsn);
 
 		/* we might need to execute invalidations, add snapshot */
 		if (!ReorderBufferXidHasBaseSnapshot(builder->reorder, xid))
@@ -1910,7 +1916,7 @@ SnapBuildRestore(SnapBuild *builder, XLogRecPtr lsn)
 	{
 		SnapBuildSnapDecRefcount(builder->snapshot);
 	}
-	builder->snapshot = SnapBuildBuildSnapshot(builder);
+	builder->snapshot = SnapBuildBuildSnapshot(builder, InvalidXLogRecPtr);
 	SnapBuildSnapIncRefcount(builder->snapshot);
 
 	ReorderBufferSetRestartPoint(builder->reorder, lsn);

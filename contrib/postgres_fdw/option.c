@@ -228,6 +228,22 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 						 errmsg("invalid value for string option \"%s\": %s",
 								def->defname, value)));
 		}
+		else if (strcmp(def->defname, "column_name") == 0 ||
+				 strcmp(def->defname, "schema_name") == 0 ||
+				 strcmp(def->defname, "table_name") == 0)
+		{
+			char	   *obj_name_opt = defGetString(def);
+
+			/*
+			 * PostgreSQL follows SQL syntax, so we do not allow empty
+			 * column_name, schema_name & table_name options.
+			 */
+			if (obj_name_opt && obj_name_opt[0] == '\0')
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("cannot use empty value for option \"%s\"",
+								def->defname)));
+		}
 	}
 
 	PG_RETURN_VOID();

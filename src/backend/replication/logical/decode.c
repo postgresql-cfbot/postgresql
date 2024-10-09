@@ -33,6 +33,7 @@
 #include "access/xlogreader.h"
 #include "access/xlogrecord.h"
 #include "catalog/pg_control.h"
+#include "commands/cluster.h"
 #include "replication/decode.h"
 #include "replication/logical.h"
 #include "replication/message.h"
@@ -466,6 +467,29 @@ heap_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	uint8		info = XLogRecGetInfo(buf->record) & XLOG_HEAP_OPMASK;
 	TransactionId xid = XLogRecGetXid(buf->record);
 	SnapBuild  *builder = ctx->snapshot_builder;
+
+	/*
+	 * Check if CLUSTER CONCURRENTLY is being performed by this backend. If
+	 * so, only decode data changes of the table that it is processing, and
+	 * the changes of its TOAST relation.
+	 *
+	 * (TOAST locator should not be set unless the main is.)
+	 */
+	Assert(!OidIsValid(clustered_rel_toast_locator.relNumber) ||
+		   OidIsValid(clustered_rel_locator.relNumber));
+
+	if (OidIsValid(clustered_rel_locator.relNumber))
+	{
+		XLogReaderState *r = buf->record;
+		RelFileLocator locator;
+
+		/* Not all records contain the block. */
+		if (XLogRecGetBlockTagExtended(r, 0, &locator, NULL, NULL, NULL) &&
+			!RelFileLocatorEquals(locator, clustered_rel_locator) &&
+			(!OidIsValid(clustered_rel_toast_locator.relNumber) ||
+			 !RelFileLocatorEquals(locator, clustered_rel_toast_locator)))
+			return;
+	}
 
 	ReorderBufferProcessXid(ctx->reorder, xid, buf->origptr);
 

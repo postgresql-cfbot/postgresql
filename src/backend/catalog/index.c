@@ -1416,22 +1416,7 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 	for (int i = 0; i < newInfo->ii_NumIndexAttrs; i++)
 		opclassOptions[i] = get_attoptions(oldIndexId, i + 1);
 
-	/* Extract statistic targets for each attribute */
-	stattargets = palloc0_array(NullableDatum, newInfo->ii_NumIndexAttrs);
-	for (int i = 0; i < newInfo->ii_NumIndexAttrs; i++)
-	{
-		HeapTuple	tp;
-		Datum		dat;
-
-		tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(oldIndexId), Int16GetDatum(i + 1));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for attribute %d of relation %u",
-				 i + 1, oldIndexId);
-		dat = SysCacheGetAttr(ATTNUM, tp, Anum_pg_attribute_attstattarget, &isnull);
-		ReleaseSysCache(tp);
-		stattargets[i].value = dat;
-		stattargets[i].isnull = isnull;
-	}
+	stattargets = get_index_stattargets(oldIndexId, newInfo);
 
 	/*
 	 * Now create the new index.
@@ -1468,6 +1453,32 @@ index_concurrently_create_copy(Relation heapRelation, Oid oldIndexId,
 	ReleaseSysCache(classTuple);
 
 	return newIndexId;
+}
+
+NullableDatum *
+get_index_stattargets(Oid indexid, IndexInfo *indInfo)
+{
+	NullableDatum *stattargets;
+
+	/* Extract statistic targets for each attribute */
+	stattargets = palloc0_array(NullableDatum, indInfo->ii_NumIndexAttrs);
+	for (int i = 0; i < indInfo->ii_NumIndexAttrs; i++)
+	{
+		HeapTuple	tp;
+		Datum		dat;
+		bool		isnull;
+
+		tp = SearchSysCache2(ATTNUM, ObjectIdGetDatum(indexid), Int16GetDatum(i + 1));
+		if (!HeapTupleIsValid(tp))
+			elog(ERROR, "cache lookup failed for attribute %d of relation %u",
+				 i + 1, indexid);
+		dat = SysCacheGetAttr(ATTNUM, tp, Anum_pg_attribute_attstattarget, &isnull);
+		ReleaseSysCache(tp);
+		stattargets[i].value = dat;
+		stattargets[i].isnull = isnull;
+	}
+
+	return stattargets;
 }
 
 /*

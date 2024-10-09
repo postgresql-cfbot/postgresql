@@ -487,6 +487,26 @@ SnapBuildInitialSnapshot(SnapBuild *builder)
 }
 
 /*
+ * Build an MVCC snapshot for the initial data load performed by CLUSTER
+ * CONCURRENTLY command.
+ *
+ * The snapshot will only be used to scan one particular relation, which is
+ * treated like a catalog (therefore ->building_full_snapshot is not
+ * important), and the caller should already have a replication slot setup (so
+ * we do not set MyProc->xmin). XXX Do we yet need to add some restrictions?
+ */
+Snapshot
+SnapBuildInitialSnapshotForCluster(SnapBuild *builder)
+{
+	Snapshot	snap;
+
+	Assert(builder->state == SNAPBUILD_CONSISTENT);
+
+	snap = SnapBuildBuildSnapshot(builder);
+	return SnapBuildMVCCFromHistoric(snap, false);
+}
+
+/*
  * Turn a historic MVCC snapshot into an ordinary MVCC snapshot.
  *
  * Unlike a regular (non-historic) MVCC snapshot, the xip array of this

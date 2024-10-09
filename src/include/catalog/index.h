@@ -100,6 +100,9 @@ extern Oid	index_concurrently_create_copy(Relation heapRelation,
 										   Oid tablespaceOid,
 										   const char *newName);
 
+extern NullableDatum *get_index_stattargets(Oid indexid,
+											IndexInfo *indInfo);
+
 extern void index_concurrently_build(Oid heapRelationId,
 									 Oid indexRelationId);
 

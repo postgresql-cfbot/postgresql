@@ -22,8 +22,6 @@
 #include "access/table.h"		/* for backward compatibility */
 #include "access/tableam.h"
 #include "nodes/lockoptions.h"
-/* XXX: temporary include so prefetch lift and shift works */
-#include "nodes/execnodes.h"
 #include "nodes/primnodes.h"
 #include "storage/bufpage.h"
 #include "storage/dsm.h"
@@ -101,9 +99,28 @@ typedef struct HeapScanDescData
 }			HeapScanDescData;
 typedef struct HeapScanDescData *HeapScanDesc;
 
+
+/*
+* For prefetching, we use *two* iterators, one for the pages we are
+* actually scanning and another that runs ahead of the first for
+* prefetching. prefetch_pages tracks exactly how many pages ahead
+* the prefetch iterator is.  Also, prefetch_target tracks the
+* desired prefetch distance, which starts small and increases up to the
+* prefetch_maximum.  This is to avoid doing a lot of prefetching in
+* a scan that stops after a few tuples because of a LIMIT.
+*/
 typedef struct BitmapHeapScanDescData
 {
 	HeapScanDescData rs_heap_base;
+
+	/* used to validate prefetch block stays ahead of current block */
+	BlockNumber rs_prefetch_blockno;
+	/* maximum value for prefetch_target */
+	int			rs_prefetch_maximum;
+	/* Current target for prefetch distance */
+	int			rs_prefetch_target;
+	/* # pages prefetch iterator is ahead of current */
+	int			rs_prefetch_pages;
 
 	/*
 	 * These fields are only used for bitmap scans for the "skip fetch"
@@ -115,6 +132,8 @@ typedef struct BitmapHeapScanDescData
 
 	/* page of VM containing info for current block */
 	Buffer		rs_vmbuffer;
+	/* page of VM containing info for prefetch block */
+	Buffer		rs_pvmbuffer;
 	int			rs_empty_tuples_pending;
 }			BitmapHeapScanDescData;
 typedef struct BitmapHeapScanDescData *BitmapHeapScanDesc;
@@ -300,7 +319,8 @@ typedef enum
 extern TableScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
 									int nkeys, ScanKey key,
 									ParallelTableScanDesc parallel_scan,
-									uint32 flags);
+									uint32 flags,
+									int prefetch_maximum);
 extern void heap_setscanlimits(TableScanDesc sscan, BlockNumber startBlk,
 							   BlockNumber numBlks);
 extern void heap_prepare_pagescan(TableScanDesc sscan);
@@ -425,11 +445,6 @@ extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
 extern bool HeapTupleIsSurelyDead(HeapTuple htup,
 								  struct GlobalVisState *vistest);
-
-/* in heapam_handler.c */
-extern void BitmapAdjustPrefetchIterator(BitmapHeapScanState *node);
-extern void BitmapAdjustPrefetchTarget(BitmapHeapScanState *node);
-extern void BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan);
 
 /*
  * To avoid leaking too much knowledge about reorderbuffer implementation

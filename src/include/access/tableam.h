@@ -324,12 +324,16 @@ typedef struct TableAmRoutine
 	 * the scan's behaviour (ScanOptions's SO_ALLOW_*, several may be
 	 * specified, an AM may ignore unsupported ones) and whether the snapshot
 	 * needs to be deallocated at scan_end (ScanOptions's SO_TEMP_SNAPSHOT).
+	 *
+	 * `prefetch_maximum` is the maximum prefetch distance for use by bitmap
+	 * table scans as needed.
 	 */
 	TableScanDesc (*scan_begin) (Relation rel,
 								 Snapshot snapshot,
 								 int nkeys, struct ScanKeyData *key,
 								 ParallelTableScanDesc pscan,
-								 uint32 flags);
+								 uint32 flags,
+								 int prefetch_maximum);
 
 	/*
 	 * Release resources and deallocate scan. If TableScanDesc.temp_snap,
@@ -780,9 +784,10 @@ typedef struct TableAmRoutine
 	 */
 
 	/*
-	 * Prepare to fetch / check / return tuples from `blockno` as part of a
-	 * bitmap table scan. `scan` was started via table_beginscan_bm(). Return
-	 * false if the bitmap is exhausted and true otherwise.
+	 * Prepare to fetch / check / return tuples from the next block yielded by
+	 * the iterator as part of a bitmap table scan. `scan` was started via
+	 * table_beginscan_bm(). Return false if the bitmap is exhausted and true
+	 * otherwise.
 	 *
 	 * This will typically read and pin the target block, and do the necessary
 	 * work to allow scan_bitmap_next_tuple() to return tuples (e.g. it might
@@ -797,28 +802,13 @@ typedef struct TableAmRoutine
 	 * always need to be rechecked, but some non-lossy pages' tuples may also
 	 * require recheck.
 	 *
-	 * `blockno` is the current block and is set by the table AM. The table AM
-	 * is responsible for advancing the main iterator, but the bitmap table
-	 * scan code still advances the prefetch iterator. `blockno` is used by
-	 * bitmap table scan code to validate that the prefetch block stays ahead
-	 * of the current block.
-	 *
-	 * XXX: Currently this may only be implemented if the AM uses md.c as its
-	 * storage manager, and uses ItemPointer->ip_blkid in a manner that maps
-	 * blockids directly to the underlying storage. nodeBitmapHeapscan.c
-	 * performs prefetching directly using that interface.  This probably
-	 * needs to be rectified at a later point.
-	 *
-	 * XXX: Currently this may only be implemented if the AM uses the
-	 * visibilitymap, as nodeBitmapHeapscan.c unconditionally accesses it to
-	 * perform prefetching.  This probably needs to be rectified at a later
-	 * point.
+	 * Prefetching future blocks indicated in the bitmap is left to the table
+	 * AM.
 	 *
 	 * Optional callback, but either both scan_bitmap_next_block and
 	 * scan_bitmap_next_tuple need to exist, or neither.
 	 */
 	bool		(*scan_bitmap_next_block) (TableScanDesc scan,
-										   BlockNumber *blockno,
 										   bool *recheck,
 										   uint64 *lossy_pages,
 										   uint64 *exact_pages);
@@ -916,7 +906,8 @@ table_beginscan(Relation rel, Snapshot snapshot,
 	uint32		flags = SO_TYPE_SEQSCAN |
 		SO_ALLOW_STRAT | SO_ALLOW_SYNC | SO_ALLOW_PAGEMODE;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key,
+									   NULL, flags, 0);
 }
 
 /*
@@ -945,7 +936,8 @@ table_beginscan_strat(Relation rel, Snapshot snapshot,
 	if (allow_sync)
 		flags |= SO_ALLOW_SYNC;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key,
+									   NULL, flags, 0);
 }
 
 /*
@@ -956,15 +948,21 @@ table_beginscan_strat(Relation rel, Snapshot snapshot,
  */
 static inline TableScanDesc
 table_beginscan_bm(Relation rel, Snapshot snapshot,
-				   int nkeys, struct ScanKeyData *key, bool need_tuple)
+				   struct ParallelBitmapHeapState *pstate,
+				   int nkeys, struct ScanKeyData *key, bool need_tuple,
+				   int prefetch_maximum)
 {
+	TableScanDesc result;
 	uint32		flags = SO_TYPE_BITMAPSCAN | SO_ALLOW_PAGEMODE;
 
 	if (need_tuple)
 		flags |= SO_NEED_TUPLES;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key,
-									   NULL, flags);
+	result = rel->rd_tableam->scan_begin(rel, snapshot, nkeys,
+										 key, NULL, flags,
+										 prefetch_maximum);
+	result->st.bitmap.rs_pstate = pstate;
+	return result;
 }
 
 /*
@@ -989,7 +987,8 @@ table_beginscan_sampling(Relation rel, Snapshot snapshot,
 	if (allow_pagemode)
 		flags |= SO_ALLOW_PAGEMODE;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, nkeys, key,
+									   NULL, flags, 0);
 }
 
 /*
@@ -1002,7 +1001,8 @@ table_beginscan_tid(Relation rel, Snapshot snapshot)
 {
 	uint32		flags = SO_TYPE_TIDSCAN;
 
-	return rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL,
+									   NULL, flags, 0);
 }
 
 /*
@@ -1015,7 +1015,7 @@ table_beginscan_analyze(Relation rel)
 {
 	uint32		flags = SO_TYPE_ANALYZE;
 
-	return rel->rd_tableam->scan_begin(rel, NULL, 0, NULL, NULL, flags);
+	return rel->rd_tableam->scan_begin(rel, NULL, 0, NULL, NULL, flags, 0);
 }
 
 /*
@@ -1094,7 +1094,8 @@ table_beginscan_tidrange(Relation rel, Snapshot snapshot,
 	TableScanDesc sscan;
 	uint32		flags = SO_TYPE_TIDRANGESCAN | SO_ALLOW_PAGEMODE;
 
-	sscan = rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL, NULL, flags);
+	sscan = rel->rd_tableam->scan_begin(rel, snapshot, 0, NULL,
+										NULL, flags, 0);
 
 	/* Set the range of TIDs to scan */
 	sscan->rs_rd->rd_tableam->scan_set_tidrange(sscan, mintid, maxtid);
@@ -1966,16 +1967,11 @@ table_relation_estimate_size(Relation rel, int32 *attr_widths,
  * `recheck` is set by the table AM to indicate whether or not the tuples
  * from this block should be rechecked.
  *
- * `blockno` is the current block and is set by the table AM and is used by
- * bitmap table scan code to validate that the prefetch block stays ahead of
- * the current block.
- *
  * Note, this is an optionally implemented function, therefore should only be
  * used after verifying the presence (at plan time or such).
  */
 static inline bool
 table_scan_bitmap_next_block(TableScanDesc scan,
-							 BlockNumber *blockno,
 							 bool *recheck,
 							 uint64 *lossy_pages,
 							 uint64 *exact_pages)
@@ -1989,7 +1985,7 @@ table_scan_bitmap_next_block(TableScanDesc scan,
 		elog(ERROR, "unexpected table_scan_bitmap_next_block call during logical decoding");
 
 	return scan->rs_rd->rd_tableam->scan_bitmap_next_block(scan,
-														   blockno, recheck,
+														   recheck,
 														   lossy_pages,
 														   exact_pages);
 }

@@ -1846,10 +1846,6 @@ typedef struct BitmapHeapScanState
 	ExprState  *bitmapqualorig;
 	TIDBitmap  *tbm;
 	BitmapHeapScanInstrumentation stats;
-	TBMIterator prefetch_iterator;
-	int			prefetch_pages;
-	int			prefetch_target;
-	int			prefetch_maximum;
 	bool		initialized;
 	ParallelBitmapHeapState *pstate;
 	SharedBitmapHeapInstrumentation *sinstrument;

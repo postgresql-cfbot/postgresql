@@ -378,6 +378,9 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	ItemPointerSetInvalid(&scan->rs_ctup.t_self);
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
+	scan->rs_cindex = 0;
+	scan->rs_ntuples = 0;
+
 
 	/*
 	 * Initialize to ForwardScanDirection because it is most common and
@@ -1072,6 +1075,7 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	scan->rs_base.rs_flags = flags;
 	scan->rs_base.rs_parallel = parallel_scan;
 	scan->rs_strategy = NULL;	/* set in initscan */
+	scan->rs_cbuf = InvalidBuffer;
 
 	/*
 	 * Disable page-at-a-time mode if it's not a MVCC-safe snapshot.
@@ -1185,7 +1189,10 @@ heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 	 * unpin scan buffers
 	 */
 	if (BufferIsValid(scan->rs_cbuf))
+	{
 		ReleaseBuffer(scan->rs_cbuf);
+		scan->rs_cbuf = InvalidBuffer;
+	}
 
 	if (scan->rs_base.rs_flags & SO_TYPE_BITMAPSCAN)
 	{

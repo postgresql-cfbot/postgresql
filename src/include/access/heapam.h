@@ -22,6 +22,8 @@
 #include "access/table.h"		/* for backward compatibility */
 #include "access/tableam.h"
 #include "nodes/lockoptions.h"
+/* XXX: temporary include so prefetch lift and shift works */
+#include "nodes/execnodes.h"
 #include "nodes/primnodes.h"
 #include "storage/bufpage.h"
 #include "storage/dsm.h"
@@ -423,6 +425,11 @@ extern void HeapTupleSetHintBits(HeapTupleHeader tuple, Buffer buffer,
 extern bool HeapTupleHeaderIsOnlyLocked(HeapTupleHeader tuple);
 extern bool HeapTupleIsSurelyDead(HeapTuple htup,
 								  struct GlobalVisState *vistest);
+
+/* in heapam_handler.c */
+extern void BitmapAdjustPrefetchIterator(BitmapHeapScanState *node);
+extern void BitmapAdjustPrefetchTarget(BitmapHeapScanState *node);
+extern void BitmapPrefetch(BitmapHeapScanState *node, TableScanDesc scan);
 
 /*
  * To avoid leaking too much knowledge about reorderbuffer implementation

@@ -57,6 +57,9 @@ static bool SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 static void BitmapAdjustPrefetchIterator(BitmapHeapScanDesc bscan);
 static void BitmapAdjustPrefetchTarget(BitmapHeapScanDesc bscan);
 static void BitmapPrefetch(BitmapHeapScanDesc bscan);
+static bool BitmapHeapScanNextBlock(TableScanDesc scan,
+									bool *recheck,
+									uint64 *lossy_pages, uint64 *exact_pages);
 
 static BlockNumber heapam_scan_get_blocks_done(HeapScanDesc hscan);
 
@@ -2117,10 +2120,15 @@ heapam_estimate_rel_size(Relation rel, int32 *attr_widths,
  * ------------------------------------------------------------------------
  */
 
+/*
+ * Helper function get the next block of a bitmap heap scan. Returns true when
+ * it got the next block and saved it in the scan descriptor and false when
+ * the bitmap and or relation are exhausted.
+ */
 static bool
-heapam_scan_bitmap_next_block(TableScanDesc scan,
-							  bool *recheck,
-							  uint64 *lossy_pages, uint64 *exact_pages)
+BitmapHeapScanNextBlock(TableScanDesc scan,
+						bool *recheck,
+						uint64 *lossy_pages, uint64 *exact_pages)
 {
 	BitmapHeapScanDesc bscan = (BitmapHeapScanDesc) scan;
 	HeapScanDesc hscan = (HeapScanDesc) bscan;
@@ -2292,15 +2300,17 @@ heapam_scan_bitmap_next_block(TableScanDesc scan,
 	 * Return true to indicate that a valid block was found and the bitmap is
 	 * not exhausted. If there are no visible tuples on this page,
 	 * hscan->rs_ntuples will be 0 and heapam_scan_bitmap_next_tuple() will
-	 * return false returning control to this function to advance to the next
-	 * block in the bitmap.
+	 * invoke this function again.
 	 */
 	return true;
 }
 
 static bool
 heapam_scan_bitmap_next_tuple(TableScanDesc scan,
-							  TupleTableSlot *slot)
+							  TupleTableSlot *slot,
+							  bool *recheck,
+							  uint64 *lossy_pages,
+							  uint64 *exact_pages)
 {
 	BitmapHeapScanDesc bscan = (BitmapHeapScanDesc) scan;
 	HeapScanDesc hscan = (HeapScanDesc) bscan;
@@ -2311,23 +2321,32 @@ heapam_scan_bitmap_next_tuple(TableScanDesc scan,
 	ParallelBitmapHeapState *pstate = scan->st.bitmap.rs_pstate;
 #endif							/* USE_PREFETCH */
 
-	if (bscan->rs_empty_tuples_pending > 0)
-	{
-		/*
-		 * If we don't have to fetch the tuple, just return nulls.
-		 */
-		ExecStoreAllNullTuple(slot);
-		bscan->rs_empty_tuples_pending--;
-		BitmapPrefetch(bscan);
-		return true;
-	}
-
 	/*
 	 * Out of range?  If so, nothing more to look at on this page
 	 */
-	Assert(hscan->rs_cindex >= 0);
-	if (hscan->rs_cindex >= hscan->rs_ntuples)
-		return false;
+	while (hscan->rs_cindex >= hscan->rs_ntuples)
+	{
+		/*
+		 * Emit empty tuples before advancing to the next block
+		 */
+		if (bscan->rs_empty_tuples_pending > 0)
+		{
+			/*
+			 * If we don't have to fetch the tuple, just return nulls.
+			 */
+			ExecStoreAllNullTuple(slot);
+			bscan->rs_empty_tuples_pending--;
+			BitmapPrefetch(bscan);
+			return true;
+		}
+
+		/*
+		 * Returns false if the bitmap is exhausted and there are no further
+		 * blocks we need to scan.
+		 */
+		if (!BitmapHeapScanNextBlock(scan, recheck, lossy_pages, exact_pages))
+			return false;
+	}
 
 #ifdef USE_PREFETCH
 
@@ -2953,7 +2972,6 @@ static const TableAmRoutine heapam_methods = {
 
 	.relation_estimate_size = heapam_estimate_rel_size,
 
-	.scan_bitmap_next_block = heapam_scan_bitmap_next_block,
 	.scan_bitmap_next_tuple = heapam_scan_bitmap_next_tuple,
 	.scan_sample_next_block = heapam_scan_sample_next_block,
 	.scan_sample_next_tuple = heapam_scan_sample_next_tuple

@@ -127,6 +127,34 @@ step wakeup_before_lock
 	SELECT injection_points_wakeup('cluster-concurrently-before-lock');
 }
 
+session s3
+setup
+{
+	SELECT injection_points_set_local();
+	SELECT injection_points_attach('cluster-concurrently-after-lock', 'wait');
+	SET cluster_max_xlock_time TO '1s';
+}
+# Perform the initial load, lock the table in exclusive mode and wait. s4 will
+# cancel the waiting.
+step wait_after_lock
+{
+	CLUSTER (CONCURRENTLY) clstr_test USING clstr_test_pkey;
+}
+teardown
+{
+    SELECT injection_points_detach('cluster-concurrently-after-lock');
+}
+
+session s4
+step wakeup_after_lock
+{
+	SELECT injection_points_wakeup('cluster-concurrently-after-lock');
+}
+step after_lock_delay
+{
+    SELECT pg_sleep(1.5);
+}
+
 # Test if data changes introduced while one session is performing CLUSTER
 # (CONCURRENTLY) find their way into the table.
 permutation
@@ -138,3 +166,17 @@ permutation
 	check2
 	wakeup_before_lock
 	check1
+
+# Test the cluster_max_xlock_time configuration variable.
+#
+# First, cancel waiting on the injection point immediately. That way, CLUSTER
+# should complete.
+permutation
+	wait_after_lock
+	wakeup_after_lock
+# Second, cancel the waiting with a delay that violates
+# cluster_max_xlock_time.
+permutation
+	wait_after_lock
+	after_lock_delay
+	wakeup_after_lock

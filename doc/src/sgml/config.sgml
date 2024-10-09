@@ -10566,6 +10566,38 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-cluster-max-xclock-time" xreflabel="cluster_max_xlock_time">
+      <term><varname>cluster_max_xlock_time</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>cluster_max_xlock_time</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        This is the maximum amount of time to hold an exclusive lock on a
+        table by commands <command>CLUSTER</command> and <command>VACUUM
+        FULL</command> with the <literal>CONCURRENTLY</literal>
+        option. Typically, these commands should not need the lock for longer
+        time than <command>TRUNCATE</command> does. However, additional time
+        might be needed if the system is too busy. (See
+        <xref linkend="sql-cluster"/> for explanation how
+        the <literal>CONCURRENTLY</literal> option works.)
+       </para>
+
+       <para>
+        If you want to restrict the lock time, set this variable to the
+        highest acceptable value. If it appears during the processing that
+        additional time is needed to release the lock, the command will be
+        cancelled.
+       </para>
+
+       <para>
+        The default value is 0, which means that the lock is not released
+        until the concurrent data changes are processed.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
    </sect1>
 

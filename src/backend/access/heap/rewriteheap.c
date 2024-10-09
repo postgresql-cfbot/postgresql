@@ -214,9 +214,7 @@ static void raw_heap_insert(RewriteState state, HeapTuple tup);
 
 /* internal logical remapping prototypes */
 static void logical_begin_heap_rewrite(RewriteState state);
-static void logical_rewrite_heap_tuple(RewriteState state, ItemPointerData old_tid, HeapTuple new_tuple);
 static void logical_end_heap_rewrite(RewriteState state);
-
 
 /*
  * Begin a rewrite of a table
@@ -226,18 +224,19 @@ static void logical_end_heap_rewrite(RewriteState state);
  * oldest_xmin	xid used by the caller to determine which tuples are dead
  * freeze_xid	xid before which tuples will be frozen
  * cutoff_multi	multixact before which multis will be removed
+ * tid_chains	need to maintain TID chains?
  *
  * Returns an opaque RewriteState, allocated in current memory context,
  * to be used in subsequent calls to the other functions.
  */
 RewriteState
 begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xmin,
-				   TransactionId freeze_xid, MultiXactId cutoff_multi)
+				   TransactionId freeze_xid, MultiXactId cutoff_multi,
+				   bool tid_chains)
 {
 	RewriteState state;
 	MemoryContext rw_cxt;
 	MemoryContext old_cxt;
-	HASHCTL		hash_ctl;
 
 	/*
 	 * To ease cleanup, make a separate context that will contain the
@@ -262,28 +261,33 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 	state->rs_cxt = rw_cxt;
 	state->rs_bulkstate = smgr_bulk_start_rel(new_heap, MAIN_FORKNUM);
 
-	/* Initialize hash tables used to track update chains */
-	hash_ctl.keysize = sizeof(TidHashKey);
-	hash_ctl.entrysize = sizeof(UnresolvedTupData);
-	hash_ctl.hcxt = state->rs_cxt;
+	if (tid_chains)
+	{
+		HASHCTL		hash_ctl;
 
-	state->rs_unresolved_tups =
-		hash_create("Rewrite / Unresolved ctids",
-					128,		/* arbitrary initial size */
-					&hash_ctl,
-					HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+		/* Initialize hash tables used to track update chains */
+		hash_ctl.keysize = sizeof(TidHashKey);
+		hash_ctl.entrysize = sizeof(UnresolvedTupData);
+		hash_ctl.hcxt = state->rs_cxt;
 
-	hash_ctl.entrysize = sizeof(OldToNewMappingData);
+		state->rs_unresolved_tups =
+			hash_create("Rewrite / Unresolved ctids",
+						128,		/* arbitrary initial size */
+						&hash_ctl,
+						HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
 
-	state->rs_old_new_tid_map =
-		hash_create("Rewrite / Old to new tid map",
-					128,		/* arbitrary initial size */
-					&hash_ctl,
-					HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+		hash_ctl.entrysize = sizeof(OldToNewMappingData);
 
-	MemoryContextSwitchTo(old_cxt);
+		state->rs_old_new_tid_map =
+			hash_create("Rewrite / Old to new tid map",
+						128,		/* arbitrary initial size */
+						&hash_ctl,
+						HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	}
 
 	logical_begin_heap_rewrite(state);
+
+	MemoryContextSwitchTo(old_cxt);
 
 	return state;
 }
@@ -303,12 +307,15 @@ end_heap_rewrite(RewriteState state)
 	 * Write any remaining tuples in the UnresolvedTups table. If we have any
 	 * left, they should in fact be dead, but let's err on the safe side.
 	 */
-	hash_seq_init(&seq_status, state->rs_unresolved_tups);
-
-	while ((unresolved = hash_seq_search(&seq_status)) != NULL)
+	if (state->rs_unresolved_tups)
 	{
-		ItemPointerSetInvalid(&unresolved->tuple->t_data->t_ctid);
-		raw_heap_insert(state, unresolved->tuple);
+		hash_seq_init(&seq_status, state->rs_unresolved_tups);
+
+		while ((unresolved = hash_seq_search(&seq_status)) != NULL)
+		{
+			ItemPointerSetInvalid(&unresolved->tuple->t_data->t_ctid);
+			raw_heap_insert(state, unresolved->tuple);
+		}
 	}
 
 	/* Write the last page, if any */
@@ -995,7 +1002,7 @@ logical_rewrite_log_mapping(RewriteState state, TransactionId xid,
  * Perform logical remapping for a tuple that's mapped from old_tid to
  * new_tuple->t_self by rewrite_heap_tuple() if necessary for the tuple.
  */
-static void
+void
 logical_rewrite_heap_tuple(RewriteState state, ItemPointerData old_tid,
 						   HeapTuple new_tuple)
 {

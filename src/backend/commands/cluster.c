@@ -17,6 +17,8 @@
  */
 #include "postgres.h"
 
+#include <sys/time.h>
+
 #include "access/amapi.h"
 #include "access/heapam.h"
 #include "access/multixact.h"
@@ -104,6 +106,15 @@ RelFileLocator	clustered_rel_toast_locator = {.relNumber = InvalidOid};
 	"relation \"%s\" is already being processed by CLUSTER CONCURRENTLY"
 
 /*
+ * The maximum time to hold AccessExclusiveLock during the final
+ * processing. Note that only the execution time of
+ * process_concurrent_changes() is included here. The very last steps like
+ * swap_relation_files() shouldn't get blocked and it'd be wrong to consider
+ * them a reason to abort otherwise completed processing.
+ */
+int			cluster_max_xlock_time = 0;
+
+/*
  * Everything we need to call ExecInsertIndexTuples().
  */
 typedef struct IndexInsertState
@@ -189,7 +200,8 @@ static LogicalDecodingContext *setup_logical_decoding(Oid relid,
 static HeapTuple get_changed_tuple(ConcurrentChange *change);
 static void apply_concurrent_changes(ClusterDecodingState *dstate,
 									 Relation rel, ScanKey key, int nkeys,
-									 IndexInsertState *iistate);
+									 IndexInsertState *iistate,
+									 struct timeval *must_complete);
 static void apply_concurrent_insert(Relation rel, ConcurrentChange *change,
 									HeapTuple tup, IndexInsertState *iistate,
 									TupleTableSlot *index_slot);
@@ -206,13 +218,15 @@ static HeapTuple find_target_tuple(Relation rel, ScanKey key, int nkeys,
 								   IndexInsertState *iistate,
 								   TupleTableSlot *ident_slot,
 								   IndexScanDesc *scan_p);
-static void process_concurrent_changes(LogicalDecodingContext *ctx,
+static bool process_concurrent_changes(LogicalDecodingContext *ctx,
 									   XLogRecPtr end_of_wal,
 									   Relation rel_dst,
 									   Relation rel_src,
 									   ScanKey ident_key,
 									   int ident_key_nentries,
-									   IndexInsertState *iistate);
+									   IndexInsertState *iistate,
+									   struct timeval *must_complete);
+static bool processing_time_elapsed(struct timeval *must_complete);
 static IndexInsertState *get_index_insert_state(Relation relation,
 												Oid ident_index_id);
 static ScanKey build_identity_key(Oid ident_idx_oid, Relation rel_src,
@@ -3040,7 +3054,8 @@ get_changed_tuple(ConcurrentChange *change)
  */
 void
 cluster_decode_concurrent_changes(LogicalDecodingContext *ctx,
-								  XLogRecPtr end_of_wal)
+								  XLogRecPtr end_of_wal,
+								  struct timeval *must_complete)
 {
 	ClusterDecodingState *dstate;
 	ResourceOwner resowner_old;
@@ -3077,6 +3092,9 @@ cluster_decode_concurrent_changes(LogicalDecodingContext *ctx,
 
 			if (record != NULL)
 				LogicalDecodingProcessRecord(ctx, ctx->reader);
+
+			if (processing_time_elapsed(must_complete))
+				break;
 
 			/*
 			 * If WAL segment boundary has been crossed, inform the decoding
@@ -3120,7 +3138,8 @@ cluster_decode_concurrent_changes(LogicalDecodingContext *ctx,
  */
 static void
 apply_concurrent_changes(ClusterDecodingState *dstate, Relation rel,
-						 ScanKey key, int nkeys, IndexInsertState *iistate)
+						 ScanKey key, int nkeys, IndexInsertState *iistate,
+						 struct timeval *must_complete)
 {
 	TupleTableSlot *index_slot, *ident_slot;
 	HeapTuple	tup_old = NULL;
@@ -3149,6 +3168,9 @@ apply_concurrent_changes(ClusterDecodingState *dstate, Relation rel,
 		Datum		values[1];
 
 		CHECK_FOR_INTERRUPTS();
+
+		Assert(dstate->nchanges > 0);
+		dstate->nchanges--;
 
 		/* Get the change from the single-column tuple. */
 		tup_change = ExecFetchSlotHeapTuple(dstate->tsslot, false, &shouldFree);
@@ -3274,10 +3296,22 @@ apply_concurrent_changes(ClusterDecodingState *dstate, Relation rel,
 		/* TTSOpsMinimalTuple has .get_heap_tuple==NULL. */
 		Assert(shouldFree);
 		pfree(tup_change);
+
+		/*
+		 * If there is a limit on the time of completion, check it
+		 * now. However, make sure the loop does not break if tup_old was set
+		 * in the previous iteration. In such a case we could not resume the
+		 * processing in the next call.
+		 */
+		if (must_complete && tup_old == NULL &&
+			processing_time_elapsed(must_complete))
+			/* The next call will process the remaining changes. */
+			break;
 	}
 
-	tuplestore_clear(dstate->tstore);
-	dstate->nchanges = 0;
+	/* If we could not apply all the changes, the next call will do. */
+	if (dstate->nchanges == 0)
+		tuplestore_clear(dstate->tstore);
 
 	/* Cleanup. */
 	ExecDropSingleTupleTableSlot(index_slot);
@@ -3480,11 +3514,15 @@ find_target_tuple(Relation rel, ScanKey key, int nkeys, HeapTuple tup_key,
  * Decode and apply concurrent changes.
  *
  * Pass rel_src iff its reltoastrelid is needed.
+ *
+ * Returns true if must_complete is NULL or if managed to complete by the time
+ * *must_complete indicates.
  */
-static void
+static bool
 process_concurrent_changes(LogicalDecodingContext *ctx, XLogRecPtr end_of_wal,
 						   Relation rel_dst, Relation rel_src, ScanKey ident_key,
-						   int ident_key_nentries, IndexInsertState *iistate)
+						   int ident_key_nentries, IndexInsertState *iistate,
+						   struct timeval *must_complete)
 {
 	ClusterDecodingState *dstate;
 
@@ -3493,10 +3531,19 @@ process_concurrent_changes(LogicalDecodingContext *ctx, XLogRecPtr end_of_wal,
 
 	dstate = (ClusterDecodingState *) ctx->output_writer_private;
 
-	cluster_decode_concurrent_changes(ctx, end_of_wal);
+	cluster_decode_concurrent_changes(ctx, end_of_wal, must_complete);
 
+	if (processing_time_elapsed(must_complete))
+		/* Caller is responsible for applying the changes. */
+		return false;
+
+	/*
+	 * *must_complete not reached, so there are really no changes. (It's
+	 * possible to see no changes just because not enough time was left for
+	 * the decoding.)
+	 */
 	if (dstate->nchanges == 0)
-		return;
+		return true;
 
 	PG_TRY();
 	{
@@ -3508,7 +3555,7 @@ process_concurrent_changes(LogicalDecodingContext *ctx, XLogRecPtr end_of_wal,
 			rel_dst->rd_toastoid = rel_src->rd_rel->reltoastrelid;
 
 		apply_concurrent_changes(dstate, rel_dst, ident_key,
-								 ident_key_nentries, iistate);
+								 ident_key_nentries, iistate, must_complete);
 	}
 	PG_FINALLY();
 	{
@@ -3518,6 +3565,28 @@ process_concurrent_changes(LogicalDecodingContext *ctx, XLogRecPtr end_of_wal,
 			rel_dst->rd_toastoid = InvalidOid;
 	}
 	PG_END_TRY();
+
+	/*
+	 * apply_concurrent_changes() does check the processing time, so if some
+	 * changes are left, we ran out of time.
+	 */
+	return dstate->nchanges == 0;
+}
+
+/*
+ * Check if the current time is beyond *must_complete.
+ */
+static bool
+processing_time_elapsed(struct timeval *must_complete)
+{
+	struct timeval now;
+
+	if (must_complete == NULL)
+		return false;
+
+	gettimeofday(&now, NULL);
+
+	return timercmp(&now, must_complete, >);
 }
 
 static IndexInsertState *
@@ -3678,6 +3747,8 @@ rebuild_relation_finish_concurrent(Relation NewHeap, Relation OldHeap,
 	RelReopenInfo	*rri = NULL;
 	int		nrel;
 	Relation	*ind_refs_all, *ind_refs_p;
+	struct timeval t_end;
+	struct timeval *t_end_ptr = NULL;
 
 	/* Like in cluster_rel(). */
 	lockmode_old = LOCK_CLUSTER_CONCURRENT;
@@ -3757,7 +3828,8 @@ rebuild_relation_finish_concurrent(Relation NewHeap, Relation OldHeap,
 	 */
 	process_concurrent_changes(ctx, end_of_wal, NewHeap,
 							   swap_toast_by_content ? OldHeap : NULL,
-							   ident_key, ident_key_nentries, iistate);
+							   ident_key, ident_key_nentries, iistate,
+							   NULL);
 
 	/*
 	 * Release the locks that allowed concurrent data changes, in order to
@@ -3879,9 +3951,38 @@ rebuild_relation_finish_concurrent(Relation NewHeap, Relation OldHeap,
 	end_of_wal = GetFlushRecPtr(NULL);
 
 	/* Apply the concurrent changes again. */
-	process_concurrent_changes(ctx, end_of_wal, NewHeap,
-							   swap_toast_by_content ? OldHeap : NULL,
-							   ident_key, ident_key_nentries, iistate);
+	/*
+	 * This time we have the exclusive lock on the table, so make sure that
+	 * cluster_max_xlock_time is not exceeded.
+	 */
+	if (cluster_max_xlock_time > 0)
+	{
+		int64		usec;
+		struct timeval t_start;
+
+		gettimeofday(&t_start, NULL);
+		/* Add the whole seconds. */
+		t_end.tv_sec = t_start.tv_sec + cluster_max_xlock_time / 1000;
+		/* Add the rest, expressed in microseconds. */
+		usec = t_start.tv_usec + 1000 * (cluster_max_xlock_time % 1000);
+		/* The number of microseconds could have overflown. */
+		t_end.tv_sec += usec / USECS_PER_SEC;
+		t_end.tv_usec = usec % USECS_PER_SEC;
+		t_end_ptr = &t_end;
+	}
+	/*
+	 * During testing, stop here to simulate excessive processing time.
+	 */
+	INJECTION_POINT("cluster-concurrently-after-lock");
+
+	if (!process_concurrent_changes(ctx, end_of_wal, NewHeap,
+									swap_toast_by_content ? OldHeap : NULL,
+									ident_key, ident_key_nentries, iistate,
+									t_end_ptr))
+		ereport(ERROR,
+				(errmsg("could not process concurrent data changes in time"),
+				 errhint("Please consider adjusting \"cluster_max_xlock_time\".")));
+
 
 	/* Remember info about rel before closing OldHeap */
 	relpersistence = OldHeap->rd_rel->relpersistence;

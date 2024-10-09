@@ -1004,7 +1004,8 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 			end_of_wal = GetFlushRecPtr(NULL);
 			if ((end_of_wal - end_of_wal_prev) > wal_segment_size)
 			{
-				cluster_decode_concurrent_changes(decoding_ctx, end_of_wal);
+				cluster_decode_concurrent_changes(decoding_ctx, end_of_wal,
+												  NULL);
 				end_of_wal_prev = end_of_wal;
 			}
 		}

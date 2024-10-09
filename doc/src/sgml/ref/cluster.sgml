@@ -141,7 +141,14 @@ CLUSTER [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <r
       (<xref linkend="logicaldecoding"/>) and applied before
       the <literal>ACCESS EXCLUSIVE</literal> lock is requested. Thus the lock
       is typically held only for the time needed to swap the files, which
-      should be pretty short.
+      should be pretty short. However, the time might still be noticeable if
+      too many data changes have been done to the table while
+      <command>CLUSTER</command> was waiting for the lock: those changes must
+      be processed just before the files are swapped, while the
+      <literal>ACCESS EXCLUSIVE</literal> lock is being held. If you are
+      worried about this situation, set
+      the <link linkend="guc-cluster-max-xclock-time"><varname>cluster_max_xlock_time</varname></link>
+      configuration parameter to a value that your applications can tolerate.
      </para>
 
      <para>

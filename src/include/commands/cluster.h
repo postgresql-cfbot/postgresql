@@ -44,6 +44,8 @@ typedef struct ClusterParams
 extern RelFileLocator	clustered_rel_locator;
 extern RelFileLocator	clustered_rel_toast_locator;
 
+extern PGDLLIMPORT int	cluster_max_xlock_time;
+
 /*
  * Lock level for the concurrent variant of CLUSTER / VACUUM FULL.
  *
@@ -149,7 +151,8 @@ extern void mark_index_clustered(Relation rel, Oid indexOid, bool is_internal);
 extern bool check_relation_is_clusterable_concurrently(Relation rel, int elevel,
 													   const char *stmt);
 extern void cluster_decode_concurrent_changes(LogicalDecodingContext *ctx,
-											  XLogRecPtr end_of_wal);
+											  XLogRecPtr end_of_wal,
+											  struct timeval *must_complete);
 extern Oid	make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
 						  char relpersistence, LOCKMODE lockmode_old,
 						  LOCKMODE *lockmode_new_p);

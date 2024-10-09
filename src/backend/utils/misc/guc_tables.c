@@ -39,6 +39,7 @@
 #include "catalog/namespace.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/cluster.h"
 #include "commands/event_trigger.h"
 #include "commands/tablespace.h"
 #include "commands/trigger.h"
@@ -2770,6 +2771,19 @@ struct config_int ConfigureNamesInt[] =
 		},
 		&vacuum_multixact_failsafe_age,
 		1600000000, 0, 2100000000,
+		NULL, NULL, NULL
+	},
+	{
+		{"cluster_max_xlock_time", PGC_USERSET, LOCK_MANAGEMENT,
+			gettext_noop("Maximum time for VACUUM FULL / CLUSTER (CONCURRENTLY) to keep table locked."),
+			gettext_noop(
+				"The table is locked in exclusive mode during the final stage of processing. "
+				"If the lock time exceeds this value, error is raised and the lock is "
+				"released. Set to zero if you don't care how long the lock can be held."),
+			GUC_UNIT_MS
+		},
+		&cluster_max_xlock_time,
+		0, 0, INT_MAX,
 		NULL, NULL, NULL
 	},
 

@@ -71,10 +71,6 @@
 #include <limits.h>
 #include <wctype.h>
 
-#ifdef USE_ICU
-#include <unicode/ustring.h>
-#endif
-
 #include "catalog/pg_collation.h"
 #include "catalog/pg_type.h"
 #include "common/unicode_case.h"

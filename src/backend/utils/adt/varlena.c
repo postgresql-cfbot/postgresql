@@ -17,6 +17,10 @@
 #include <ctype.h>
 #include <limits.h>
 
+#ifdef USE_ICU
+#include <unicode/uchar.h>
+#endif
+
 #include "access/detoast.h"
 #include "access/toast_compression.h"
 #include "catalog/pg_collation.h"

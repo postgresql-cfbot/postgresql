@@ -54,6 +54,10 @@
 
 #include <time.h>
 
+#ifdef USE_ICU
+#include <unicode/ucol.h>
+#endif
+
 #include "access/htup_details.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"

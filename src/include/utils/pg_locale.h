@@ -14,10 +14,6 @@
 
 #include "mb/pg_wchar.h"
 
-#ifdef USE_ICU
-#include <unicode/ucol.h>
-#endif
-
 /*
  * Character properties for regular expressions.
  */
@@ -30,19 +26,6 @@
 #define PG_ISPRINT     0x20
 #define PG_ISPUNCT     0x40
 #define PG_ISSPACE     0x80
-
-#ifdef USE_ICU
-/*
- * ucol_strcollUTF8() was introduced in ICU 50, but it is buggy before ICU 53.
- * (see
- * <https://www.postgresql.org/message-id/flat/f1438ec6-22aa-4029-9a3b-26f79d330e72%40manitou-mail.org>)
- */
-#if U_ICU_VERSION_MAJOR_NUM >= 53
-#define HAVE_UCOL_STRCOLLUTF8 1
-#else
-#undef HAVE_UCOL_STRCOLLUTF8
-#endif
-#endif
 
 /* use for libc locale names */
 #define LOCALE_NAME_BUFLEN 128

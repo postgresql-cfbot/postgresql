@@ -33,7 +33,8 @@ static void plugin_truncate(struct LogicalDecodingContext *ctx,
 							Relation relations[],
 							ReorderBufferChange *change);
 static void store_change(LogicalDecodingContext *ctx,
-						 ConcurrentChangeKind kind, HeapTuple tuple);
+						 ConcurrentChangeKind kind, HeapTuple tuple,
+						 TransactionId xid);
 
 void
 _PG_output_plugin_init(OutputPluginCallbacks *cb)
@@ -101,12 +102,55 @@ plugin_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 			  Relation relation, ReorderBufferChange *change)
 {
 	ClusterDecodingState *dstate;
+	Snapshot	snapshot;
 
 	dstate = (ClusterDecodingState *) ctx->output_writer_private;
 
 	/* Only interested in one particular relation. */
 	if (relation->rd_id != dstate->relid)
 		return;
+
+	/*
+	 * Catalog snapshot is fine because the table we are processing is
+	 * temporarily considered a user catalog table.
+	 */
+	snapshot = GetCatalogSnapshot(InvalidOid);
+	Assert(snapshot->snapshot_type == SNAPSHOT_HISTORIC_MVCC);
+	Assert(!snapshot->suboverflowed);
+
+	/*
+	 * This should not happen, but if we don't have enough information to
+	 * apply a new snapshot, the consequences would be bad. Thus prefer ERROR
+	 * to Assert().
+	 */
+	if (XLogRecPtrIsInvalid(snapshot->lsn))
+		ereport(ERROR, (errmsg("snapshot has invalid LSN")));
+
+	/*
+	 * reorderbuffer.c changes the catalog snapshot as soon as it sees a new
+	 * CID or a commit record of a catalog-changing transaction.
+	 */
+	if (dstate->snapshot == NULL || snapshot->lsn != dstate->snapshot_lsn ||
+		snapshot->curcid != dstate->snapshot->curcid)
+	{
+		/* CID should not go backwards. */
+		Assert(dstate->snapshot == NULL ||
+			   snapshot->curcid >= dstate->snapshot->curcid ||
+			   change->txn->xid != dstate->last_change_xid);
+
+		/*
+		 * XXX Is it a problem that the copy is created in
+		 * TopTransactionContext?
+		 *
+		 * XXX Wouldn't it be o.k. for SnapBuildMVCCFromHistoric() to set xcnt
+		 * to 0 instead of converting xip in this case? The point is that
+		 * transactions which are still in progress from the perspective of
+		 * reorderbuffer.c could not be replayed yet, so we do not need to
+		 * examine their XIDs.
+		 */
+		dstate->snapshot = SnapBuildMVCCFromHistoric(snapshot, false);
+		dstate->snapshot_lsn = snapshot->lsn;
+	}
 
 	/* Decode entry depending on its type */
 	switch (change->action)
@@ -125,7 +169,7 @@ plugin_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				if (newtuple == NULL)
 					elog(ERROR, "Incomplete insert info.");
 
-				store_change(ctx, CHANGE_INSERT, newtuple);
+				store_change(ctx, CHANGE_INSERT, newtuple, change->txn->xid);
 			}
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
@@ -142,9 +186,11 @@ plugin_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 					elog(ERROR, "Incomplete update info.");
 
 				if (oldtuple != NULL)
-					store_change(ctx, CHANGE_UPDATE_OLD, oldtuple);
+					store_change(ctx, CHANGE_UPDATE_OLD, oldtuple,
+								 change->txn->xid);
 
-				store_change(ctx, CHANGE_UPDATE_NEW, newtuple);
+				store_change(ctx, CHANGE_UPDATE_NEW, newtuple,
+							 change->txn->xid);
 			}
 			break;
 		case REORDER_BUFFER_CHANGE_DELETE:
@@ -157,7 +203,7 @@ plugin_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				if (oldtuple == NULL)
 					elog(ERROR, "Incomplete delete info.");
 
-				store_change(ctx, CHANGE_DELETE, oldtuple);
+				store_change(ctx, CHANGE_DELETE, oldtuple, change->txn->xid);
 			}
 			break;
 		default:
@@ -191,13 +237,13 @@ plugin_truncate(struct LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	if (i == nrelations)
 		return;
 
-	store_change(ctx, CHANGE_TRUNCATE, NULL);
+	store_change(ctx, CHANGE_TRUNCATE, NULL, InvalidTransactionId);
 }
 
 /* Store concurrent data change. */
 static void
 store_change(LogicalDecodingContext *ctx, ConcurrentChangeKind kind,
-			 HeapTuple tuple)
+			 HeapTuple tuple, TransactionId xid)
 {
 	ClusterDecodingState *dstate;
 	char	   *change_raw;
@@ -257,6 +303,11 @@ store_change(LogicalDecodingContext *ctx, ConcurrentChangeKind kind,
 	dst = (char *) change + sizeof(ConcurrentChange);
 	memcpy(dst, tuple->t_data, tuple->t_len);
 
+	/* Initialize the other fields. */
+	change->xid = xid;
+	change->snapshot = dstate->snapshot;
+	dstate->snapshot->active_count++;
+
 	/* The data has been copied. */
 	if (flattened)
 		pfree(tuple);
@@ -267,6 +318,9 @@ store:
 	isnull[0] = false;
 	tuplestore_putvalues(dstate->tstore, dstate->tupdesc_change,
 						 values, isnull);
+#ifdef USE_ASSERT_CHECKING
+	dstate->last_change_xid = xid;
+#endif
 
 	/* Accounting. */
 	dstate->nchanges++;

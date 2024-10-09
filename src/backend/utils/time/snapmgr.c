@@ -156,7 +156,6 @@ static List *exportedSnapshots = NIL;
 
 /* Prototypes for local functions */
 static void UnregisterSnapshotNoOwner(Snapshot snapshot);
-static void FreeSnapshot(Snapshot snapshot);
 static void SnapshotResetXmin(void);
 
 /* ResourceOwner callbacks to track snapshot references */
@@ -625,7 +624,7 @@ CopySnapshot(Snapshot snapshot)
  * FreeSnapshot
  *		Free the memory associated with a snapshot.
  */
-static void
+void
 FreeSnapshot(Snapshot snapshot)
 {
 	Assert(snapshot->regd_count == 0);

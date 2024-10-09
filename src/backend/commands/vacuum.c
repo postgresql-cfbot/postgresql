@@ -112,7 +112,8 @@ static void vac_truncate_clog(TransactionId frozenXID,
 							  TransactionId lastSaneFrozenXid,
 							  MultiXactId lastSaneMinMulti);
 static bool vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
-					   BufferAccessStrategy bstrategy);
+					   BufferAccessStrategy bstrategy, bool isTopLevel,
+					   bool whole_database);
 static double compute_parallel_delay(void);
 static VacOptValue get_vacoptval_from_boolean(DefElem *def);
 static bool vac_tid_reaped(ItemPointer itemptr, void *state);
@@ -153,6 +154,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 	bool		analyze = false;
 	bool		freeze = false;
 	bool		full = false;
+	bool		concurrent = false;
 	bool		disable_page_skipping = false;
 	bool		process_main = true;
 	bool		process_toast = true;
@@ -226,6 +228,8 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 			freeze = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "full") == 0)
 			full = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "concurrently") == 0)
+			concurrent = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "disable_page_skipping") == 0)
 			disable_page_skipping = defGetBoolean(opt);
 		else if (strcmp(opt->defname, "index_cleanup") == 0)
@@ -300,7 +304,7 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 		(skip_locked ? VACOPT_SKIP_LOCKED : 0) |
 		(analyze ? VACOPT_ANALYZE : 0) |
 		(freeze ? VACOPT_FREEZE : 0) |
-		(full ? VACOPT_FULL : 0) |
+		(full ? (concurrent ? VACOPT_FULL_CONCURRENT : VACOPT_FULL_EXCLUSIVE) : 0) |
 		(disable_page_skipping ? VACOPT_DISABLE_PAGE_SKIPPING : 0) |
 		(process_main ? VACOPT_PROCESS_MAIN : 0) |
 		(process_toast ? VACOPT_PROCESS_TOAST : 0) |
@@ -379,6 +383,12 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("ONLY_DATABASE_STATS cannot be specified with other VACUUM options")));
 	}
+
+	/* This problem cannot be identified from the options. */
+	if (concurrent && !full)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("CONCURRENTLY can only be specified with VACUUM FULL")));
 
 	/*
 	 * All freeze ages are zero if the FREEZE option is given; otherwise pass
@@ -483,6 +493,7 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 	const char *stmttype;
 	volatile bool in_outer_xact,
 				use_own_xacts;
+	bool		whole_database = false;
 
 	Assert(params != NULL);
 
@@ -543,7 +554,15 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 		relations = newrels;
 	}
 	else
+	{
 		relations = get_all_vacuum_rels(vac_context, params->options);
+		/*
+		 * If all tables should be processed, the CONCURRENTLY option implies
+		 * that we should skip system relations rather than raising ERRORs.
+		 */
+		if (params->options & VACOPT_FULL_CONCURRENT)
+			whole_database = true;
+	}
 
 	/*
 	 * Decide whether we need to start/commit our own transactions.
@@ -616,7 +635,8 @@ vacuum(List *relations, VacuumParams *params, BufferAccessStrategy bstrategy,
 
 			if (params->options & VACOPT_VACUUM)
 			{
-				if (!vacuum_rel(vrel->oid, vrel->relation, params, bstrategy))
+				if (!vacuum_rel(vrel->oid, vrel->relation, params, bstrategy,
+								isTopLevel, whole_database))
 					continue;
 			}
 
@@ -1954,10 +1974,14 @@ vac_truncate_clog(TransactionId frozenXID,
 /*
  *	vacuum_rel() -- vacuum one heap relation
  *
- *		relid identifies the relation to vacuum.  If relation is supplied,
- *		use the name therein for reporting any failure to open/lock the rel;
- *		do not use it once we've successfully opened the rel, since it might
- *		be stale.
+ *		relid identifies the relation to vacuum.  If relation is supplied, use
+ *		the name therein for reporting any failure to open/lock the rel; do
+ *		not use it once we've successfully opened the rel, since it might be
+ *		stale.
+ *
+ *		If whole_database is true, we are processing all the relations of the
+ *		current database. In that case we might need to silently skip
+ *		relations which could otherwise cause ERROR.
  *
  *		Returns true if it's okay to proceed with a requested ANALYZE
  *		operation on this table.
@@ -1972,7 +1996,8 @@ vac_truncate_clog(TransactionId frozenXID,
  */
 static bool
 vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
-		   BufferAccessStrategy bstrategy)
+		   BufferAccessStrategy bstrategy, bool isTopLevel,
+		   bool whole_database)
 {
 	LOCKMODE	lmode;
 	Relation	rel;
@@ -2035,10 +2060,11 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 
 	/*
 	 * Determine the type of lock we want --- hard exclusive lock for a FULL
-	 * vacuum, but just ShareUpdateExclusiveLock for concurrent vacuum. Either
-	 * way, we can be sure that no other backend is vacuuming the same table.
+	 * exclusive vacuum, but a weaker lock (ShareUpdateExclusiveLock) for
+	 * concurrent vacuum. Either way, we can be sure that no other backend is
+	 * vacuuming the same table.
 	 */
-	lmode = (params->options & VACOPT_FULL) ?
+	lmode = (params->options & VACOPT_FULL_EXCLUSIVE) ?
 		AccessExclusiveLock : ShareUpdateExclusiveLock;
 
 	/* open the relation and get the appropriate lock on it */
@@ -2048,6 +2074,39 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	/* leave if relation could not be opened or locked */
 	if (!rel)
 	{
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+		return false;
+	}
+
+	/*
+	 * Leave if the CONCURRENTLY option was passed, but the relation is not
+	 * suitable for that. Note that we only skip such relations if the user
+	 * wants to vacuum the whole database. In contrast, if he specified
+	 * inappropriate relation(s) explicitly, the command will end up with
+	 * ERROR.
+	 */
+	if (whole_database && (params->options & VACOPT_FULL_CONCURRENT) &&
+		!check_relation_is_clusterable_concurrently(rel, DEBUG1,
+													"VACUUM (FULL, CONCURRENTLY)"))
+	{
+		relation_close(rel, lmode);
+		PopActiveSnapshot();
+		CommitTransactionCommand();
+		return false;
+	}
+
+	/*
+	 * Skip the relation if VACUUM FULL / CLUSTER CONCURRENTLY is in progress
+	 * as it will drop the current storage of the relation.
+	 *
+	 * This check should not take place until we have a lock that prevents
+	 * another backend from starting VACUUM FULL / CLUSTER CONCURRENTLY later.
+	 */
+	Assert(lmode >= LOCK_CLUSTER_CONCURRENT);
+	if (is_concurrent_cluster_in_progress(relid))
+	{
+		relation_close(rel, lmode);
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		return false;
@@ -2127,19 +2186,6 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	}
 
 	/*
-	 * Get a session-level lock too. This will protect our access to the
-	 * relation across multiple transactions, so that we can vacuum the
-	 * relation's TOAST table (if any) secure in the knowledge that no one is
-	 * deleting the parent relation.
-	 *
-	 * NOTE: this cannot block, even if someone else is waiting for access,
-	 * because the lock manager knows that both lock requests are from the
-	 * same process.
-	 */
-	lockrelid = rel->rd_lockInfo.lockRelId;
-	LockRelationIdForSession(&lockrelid, lmode);
-
-	/*
 	 * Set index_cleanup option based on index_cleanup reloption if it wasn't
 	 * specified in VACUUM command, or when running in an autovacuum worker
 	 */
@@ -2192,6 +2238,30 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 		toast_relid = InvalidOid;
 
 	/*
+	 * Get a session-level lock too. This will protect our access to the
+	 * relation across multiple transactions, so that we can vacuum the
+	 * relation's TOAST table (if any) secure in the knowledge that no one is
+	 * deleting the parent relation.
+	 *
+	 * NOTE: this cannot block, even if someone else is waiting for access,
+	 * because the lock manager knows that both lock requests are from the
+	 * same process.
+	 */
+	if (OidIsValid(toast_relid))
+	{
+		/*
+		 * You might worry that, in the VACUUM (FULL, CONCURRENTLY) case,
+		 * cluster_rel() needs to release all the locks on the relation at
+		 * some point, but this session lock makes it impossible. In fact,
+		 * cluster_rel() will will eventually be called for the TOAST relation
+		 * and raise ERROR because, in the concurrent mode, it cannot process
+		 * TOAST relation alone anyway.
+		 */
+		lockrelid = rel->rd_lockInfo.lockRelId;
+		LockRelationIdForSession(&lockrelid, lmode);
+	}
+
+	/*
 	 * Switch to the table owner's userid, so that any index functions are run
 	 * as that user.  Also lock down security-restricted operations and
 	 * arrange to make GUC variable changes local to this command. (This is
@@ -2218,11 +2288,22 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 		{
 			ClusterParams cluster_params = {0};
 
+			/*
+			 * Invalid toast_relid means that there is no session lock on the
+			 * relation. Such a lock would be a problem because it would
+			 * prevent cluster_rel() from releasing all locks when it tries to
+			 * get AccessExclusiveLock.
+			 */
+			Assert(!OidIsValid(toast_relid));
+
 			if ((params->options & VACOPT_VERBOSE) != 0)
 				cluster_params.options |= CLUOPT_VERBOSE;
 
+			if ((params->options & VACOPT_FULL_CONCURRENT) != 0)
+				cluster_params.options |= CLUOPT_CONCURRENT;
+
 			/* VACUUM FULL is now a variant of CLUSTER; see cluster.c */
-			cluster_rel(rel, InvalidOid, &cluster_params);
+			cluster_rel(rel, InvalidOid, &cluster_params, isTopLevel);
 
 			/*
 			 * cluster_rel() should have closed the relation, lock is kept
@@ -2271,13 +2352,15 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 		toast_vacuum_params.options |= VACOPT_PROCESS_MAIN;
 		toast_vacuum_params.toast_parent = relid;
 
-		vacuum_rel(toast_relid, NULL, &toast_vacuum_params, bstrategy);
+		vacuum_rel(toast_relid, NULL, &toast_vacuum_params, bstrategy,
+				   isTopLevel, whole_database);
 	}
 
 	/*
 	 * Now release the session-level lock on the main table.
 	 */
-	UnlockRelationIdForSession(&lockrelid, lmode);
+	if (OidIsValid(toast_relid))
+		UnlockRelationIdForSession(&lockrelid, lmode);
 
 	/* Report that we really did it. */
 	return true;

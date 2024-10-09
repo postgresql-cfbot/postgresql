@@ -955,15 +955,30 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
  * did TransactionIdIsInProgress in each call --- to no avail, as long as the
  * inserting/deleting transaction was still running --- which was more cycles
  * and more contention on ProcArrayLock.
+ *
+ * The checks are split into two functions, HeapTupleMVCCInserted() and
+ * HeapTupleMVCCNotDeleted(), because they are also useful separately.
  */
 static bool
 HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 					   Buffer buffer)
 {
-	HeapTupleHeader tuple = htup->t_data;
-
 	Assert(ItemPointerIsValid(&htup->t_self));
 	Assert(htup->t_tableOid != InvalidOid);
+
+	return HeapTupleMVCCInserted(htup, snapshot, buffer) &&
+		HeapTupleMVCCNotDeleted(htup, snapshot, buffer);
+}
+
+/*
+ * HeapTupleMVCCInserted
+ *		True iff heap tuple was successfully inserted for the given MVCC
+ *		snapshot.
+ */
+bool
+HeapTupleMVCCInserted(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+{
+	HeapTupleHeader tuple = htup->t_data;
 
 	if (!HeapTupleHeaderXminCommitted(tuple))
 	{
@@ -1073,6 +1088,17 @@ HeapTupleSatisfiesMVCC(HeapTuple htup, Snapshot snapshot,
 	}
 
 	/* by here, the inserting transaction has committed */
+	return true;
+}
+
+/*
+ * HeapTupleMVCCNotDeleted
+ *		True iff heap tuple was not deleted for the given MVCC snapshot.
+ */
+bool
+HeapTupleMVCCNotDeleted(HeapTuple htup, Snapshot snapshot, Buffer buffer)
+{
+	HeapTupleHeader tuple = htup->t_data;
 
 	if (tuple->t_infomask & HEAP_XMAX_INVALID)	/* xid invalid or aborted */
 		return true;

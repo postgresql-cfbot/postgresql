@@ -163,3 +163,19 @@ pgstat_progress_end_command(void)
 	beentry->st_progress.command_target = InvalidOid;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
+
+void
+pgstat_progress_restore_state(PgBackendProgress *backup)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry || !pgstat_track_activities)
+		return;
+
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->st_progress.command = backup->command;
+	beentry->st_progress.command_target = backup->command_target;
+	memcpy(MyBEEntry->st_progress.param, backup->param,
+		   sizeof(beentry->st_progress.param));
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}

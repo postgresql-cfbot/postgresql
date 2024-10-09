@@ -181,13 +181,16 @@ typedef struct VacAttrStats
 #define VACOPT_ANALYZE 0x02		/* do ANALYZE */
 #define VACOPT_VERBOSE 0x04		/* output INFO instrumentation messages */
 #define VACOPT_FREEZE 0x08		/* FREEZE option */
-#define VACOPT_FULL 0x10		/* FULL (non-concurrent) vacuum */
-#define VACOPT_SKIP_LOCKED 0x20 /* skip if cannot get lock */
-#define VACOPT_PROCESS_MAIN 0x40	/* process main relation */
-#define VACOPT_PROCESS_TOAST 0x80	/* process the TOAST table, if any */
-#define VACOPT_DISABLE_PAGE_SKIPPING 0x100	/* don't skip any pages */
-#define VACOPT_SKIP_DATABASE_STATS 0x200	/* skip vac_update_datfrozenxid() */
-#define VACOPT_ONLY_DATABASE_STATS 0x400	/* only vac_update_datfrozenxid() */
+#define VACOPT_FULL_EXCLUSIVE 0x10	/* FULL (non-concurrent) vacuum */
+#define VACOPT_FULL_CONCURRENT 0x20	/* FULL (concurrent) vacuum */
+#define VACOPT_SKIP_LOCKED 0x40 /* skip if cannot get lock */
+#define VACOPT_PROCESS_MAIN 0x80	/* process main relation */
+#define VACOPT_PROCESS_TOAST 0x100	/* process the TOAST table, if any */
+#define VACOPT_DISABLE_PAGE_SKIPPING 0x200	/* don't skip any pages */
+#define VACOPT_SKIP_DATABASE_STATS 0x400	/* skip vac_update_datfrozenxid() */
+#define VACOPT_ONLY_DATABASE_STATS 0x800	/* only vac_update_datfrozenxid() */
+
+#define VACOPT_FULL (VACOPT_FULL_EXCLUSIVE | VACOPT_FULL_CONCURRENT)
 
 /*
  * Values used by index_cleanup and truncate params.

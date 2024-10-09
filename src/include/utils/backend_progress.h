@@ -35,7 +35,7 @@ typedef enum ProgressCommandType
 
 /*
  * Any command which wishes can advertise that it is running by setting
- * command, command_target, and param[].  command_target should be the OID of
+ * ommand, command_target, and param[].  command_target should be the OID of
  * the relation which the command targets (we assume there's just one, as this
  * is meant for utility commands), but the meaning of each element in the
  * param array is command-specific.
@@ -55,6 +55,7 @@ extern void pgstat_progress_parallel_incr_param(int index, int64 incr);
 extern void pgstat_progress_update_multi_param(int nparam, const int *index,
 											   const int64 *val);
 extern void pgstat_progress_end_command(void);
+extern void pgstat_progress_restore_state(PgBackendProgress *backup);
 
 
 #endif							/* BACKEND_PROGRESS_H */

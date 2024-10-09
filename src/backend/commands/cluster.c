@@ -201,6 +201,7 @@ static void apply_concurrent_delete(Relation rel, HeapTuple tup_target,
 									ConcurrentChange *change);
 static HeapTuple find_target_tuple(Relation rel, ScanKey key, int nkeys,
 								   HeapTuple tup_key,
+								   Snapshot snapshot,
 								   IndexInsertState *iistate,
 								   TupleTableSlot *ident_slot,
 								   IndexScanDesc *scan_p);
@@ -2987,6 +2988,9 @@ setup_logical_decoding(Oid relid, const char *slotname, TupleDesc tupdesc)
 	dstate->relid = relid;
 	dstate->tstore = tuplestore_begin_heap(false, false,
 										   maintenance_work_mem);
+#ifdef USE_ASSERT_CHECKING
+	dstate->last_change_xid = InvalidTransactionId;
+#endif
 	dstate->tupdesc = tupdesc;
 
 	/* Initialize the descriptor to store the changes ... */
@@ -3139,6 +3143,7 @@ apply_concurrent_changes(ClusterDecodingState *dstate, Relation rel,
 					tup_exist;
 		char	   *change_raw;
 		ConcurrentChange *change;
+		Snapshot	snapshot;
 		bool		isnull[1];
 		Datum		values[1];
 
@@ -3207,8 +3212,30 @@ apply_concurrent_changes(ClusterDecodingState *dstate, Relation rel,
 
 			/*
 			 * Find the tuple to be updated or deleted.
+			 *
+			 * As the table being CLUSTERed concurrently is considered an
+			 * "user catalog", new CID is WAL-logged and decoded. And since we
+			 * use the same XID that the original DMLs did, the snapshot used
+			 * for the logical decoding (by now converted to a non-historic
+			 * MVCC snapshot) should see the tuples inserted previously into
+			 * the new heap and/or updated there.
 			 */
-			tup_exist = find_target_tuple(rel, key, nkeys, tup_key,
+			snapshot = change->snapshot;
+
+			/*
+			 * Set what should be considered current transaction (and
+			 * subtransactions) during visibility check.
+			 *
+			 * Note that this snapshot was created from a historic snapshot
+			 * using SnapBuildMVCCFromHistoric(), which does not touch
+			 * 'subxip'. Thus, unlike in a regular MVCC snapshot, the array
+			 * only contains the transactions whose data changes we are
+			 * applying, and its subtransactions. That's exactly what we need
+			 * to check if particular xact is a "current transaction:".
+			 */
+			SetClusterCurrentXids(snapshot->subxip, snapshot->subxcnt);
+
+			tup_exist = find_target_tuple(rel, key, nkeys, tup_key, snapshot,
 										  iistate, ident_slot, &ind_scan);
 			if (tup_exist == NULL)
 				elog(ERROR, "Failed to find target tuple");
@@ -3218,6 +3245,8 @@ apply_concurrent_changes(ClusterDecodingState *dstate, Relation rel,
 										index_slot);
 			else
 				apply_concurrent_delete(rel, tup_exist, change);
+
+			ResetClusterCurrentXids();
 
 			if (tup_old != NULL)
 			{
@@ -3231,11 +3260,14 @@ apply_concurrent_changes(ClusterDecodingState *dstate, Relation rel,
 		else
 			elog(ERROR, "Unrecognized kind of change: %d", change->kind);
 
-		/* If there's any change, make it visible to the next iteration. */
-		if (change->kind != CHANGE_UPDATE_OLD)
+		/* Free the snapshot if this is the last change that needed it. */
+		Assert(change->snapshot->active_count > 0);
+		change->snapshot->active_count--;
+		if (change->snapshot->active_count == 0)
 		{
-			CommandCounterIncrement();
-			UpdateActiveSnapshotCommandId();
+			if (change->snapshot == dstate->snapshot)
+				dstate->snapshot = NULL;
+			FreeSnapshot(change->snapshot);
 		}
 
 		/* TTSOpsMinimalTuple has .get_heap_tuple==NULL. */
@@ -3255,10 +3287,30 @@ static void
 apply_concurrent_insert(Relation rel, ConcurrentChange *change, HeapTuple tup,
 						IndexInsertState *iistate, TupleTableSlot *index_slot)
 {
+	Snapshot	snapshot = change->snapshot;
 	List	   *recheck;
 
+	/*
+	 * For INSERT, the visibility information is not important, but we use the
+	 * snapshot to get CID. Index functions might need the whole snapshot
+	 * anyway.
+	 */
+	SetClusterCurrentXids(snapshot->subxip, snapshot->subxcnt);
 
-	heap_insert(rel, tup, GetCurrentCommandId(true), HEAP_INSERT_NO_LOGICAL, NULL);
+	/*
+	 * Write the tuple into the new heap.
+	 *
+	 * The snapshot is the one we used to decode the insert (though converted
+	 * to "non-historic" MVCC snapshot), i.e. the snapshot's curcid is the
+	 * tuple CID incremented by one (due to the "new CID" WAL record that got
+	 * written along with the INSERT record). Thus if we want to use the
+	 * original CID, we need to subtract 1 from curcid.
+	 */
+	Assert(snapshot->curcid != InvalidCommandId &&
+		   snapshot->curcid > FirstCommandId);
+
+	heap_insert(rel, tup, change->xid, snapshot->curcid - 1,
+				HEAP_INSERT_NO_LOGICAL, NULL);
 
 	/*
 	 * Update indexes.
@@ -3266,6 +3318,7 @@ apply_concurrent_insert(Relation rel, ConcurrentChange *change, HeapTuple tup,
 	 * In case functions in the index need the active snapshot and caller
 	 * hasn't set one.
 	 */
+	PushActiveSnapshot(snapshot);
 	ExecStoreHeapTuple(tup, index_slot, false);
 	recheck = ExecInsertIndexTuples(iistate->rri,
 									index_slot,
@@ -3276,6 +3329,8 @@ apply_concurrent_insert(Relation rel, ConcurrentChange *change, HeapTuple tup,
 									NIL, /* arbiterIndexes */
 									false	/* onlySummarizing */
 		);
+	PopActiveSnapshot();
+	ResetClusterCurrentXids();
 
 	/*
 	 * If recheck is required, it must have been preformed on the source
@@ -3293,18 +3348,36 @@ apply_concurrent_update(Relation rel, HeapTuple tup, HeapTuple tup_target,
 						TupleTableSlot *index_slot)
 {
 	List	   *recheck;
+	LockTupleMode	lockmode;
 	TU_UpdateIndexes	update_indexes;
+	TM_Result	res;
+	Snapshot snapshot	= change->snapshot;
+	TM_FailureData tmfd;
 
 	/*
 	 * Write the new tuple into the new heap. ('tup' gets the TID assigned
 	 * here.)
+	 *
+	 * Regarding CID, see the comment in apply_concurrent_insert().
 	 */
-	simple_heap_update(rel, &tup_target->t_self, tup, &update_indexes);
+	Assert(snapshot->curcid != InvalidCommandId &&
+		   snapshot->curcid > FirstCommandId);
+
+	res = heap_update(rel, &tup_target->t_self, tup,
+					  change->xid, snapshot->curcid - 1,
+					  InvalidSnapshot,
+					  false, /* no wait - only we are doing changes */
+					  &tmfd, &lockmode, &update_indexes,
+					  /* wal_logical */
+					  false);
+	if (res != TM_Ok)
+		ereport(ERROR, (errmsg("failed to apply concurrent UPDATE")));
 
 	ExecStoreHeapTuple(tup, index_slot, false);
 
 	if (update_indexes != TU_None)
 	{
+		PushActiveSnapshot(snapshot);
 		recheck = ExecInsertIndexTuples(iistate->rri,
 										index_slot,
 										iistate->estate,
@@ -3314,6 +3387,7 @@ apply_concurrent_update(Relation rel, HeapTuple tup, HeapTuple tup_target,
 										NIL, /* arbiterIndexes */
 										/* onlySummarizing */
 										update_indexes == TU_Summarizing);
+		PopActiveSnapshot();
 		list_free(recheck);
 	}
 
@@ -3324,7 +3398,22 @@ static void
 apply_concurrent_delete(Relation rel, HeapTuple tup_target,
 						ConcurrentChange *change)
 {
-	simple_heap_delete(rel, &tup_target->t_self);
+	TM_Result	res;
+	TM_FailureData tmfd;
+	Snapshot	snapshot = change->snapshot;
+
+	/* Regarding CID, see the comment in apply_concurrent_insert(). */
+	Assert(snapshot->curcid != InvalidCommandId &&
+		   snapshot->curcid > FirstCommandId);
+
+	res = heap_delete(rel, &tup_target->t_self, change->xid,
+					  snapshot->curcid - 1, InvalidSnapshot, false,
+					  &tmfd, false,
+					  /* wal_logical */
+					  false);
+
+	if (res != TM_Ok)
+		ereport(ERROR, (errmsg("failed to apply concurrent DELETE")));
 
 	pgstat_progress_incr_param(PROGRESS_CLUSTER_HEAP_TUPLES_DELETED, 1);
 }
@@ -3342,7 +3431,7 @@ apply_concurrent_delete(Relation rel, HeapTuple tup_target,
  */
 static HeapTuple
 find_target_tuple(Relation rel, ScanKey key, int nkeys, HeapTuple tup_key,
-				  IndexInsertState *iistate,
+				  Snapshot snapshot, IndexInsertState *iistate,
 				  TupleTableSlot *ident_slot, IndexScanDesc *scan_p)
 {
 	IndexScanDesc scan;
@@ -3350,7 +3439,7 @@ find_target_tuple(Relation rel, ScanKey key, int nkeys, HeapTuple tup_key,
 	int2vector *ident_indkey;
 	HeapTuple	result = NULL;
 
-	scan = index_beginscan(rel, iistate->ident_index, GetActiveSnapshot(),
+	scan = index_beginscan(rel, iistate->ident_index, snapshot,
 						   nkeys, 0);
 	*scan_p = scan;
 	index_rescan(scan, key, nkeys, NULL, 0);
@@ -3422,6 +3511,8 @@ process_concurrent_changes(LogicalDecodingContext *ctx, XLogRecPtr end_of_wal,
 	}
 	PG_FINALLY();
 	{
+		ResetClusterCurrentXids();
+
 		if (rel_src)
 			rel_dst->rd_toastoid = InvalidOid;
 	}

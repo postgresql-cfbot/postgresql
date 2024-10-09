@@ -30,8 +30,22 @@ typedef enum ProgressCommandType
 	PROGRESS_COMMAND_COPY,
 } ProgressCommandType;
 
+
 #define PGSTAT_NUM_PROGRESS_PARAM	20
 
+/*
+ * Any command which wishes can advertise that it is running by setting
+ * command, command_target, and param[].  command_target should be the OID of
+ * the relation which the command targets (we assume there's just one, as this
+ * is meant for utility commands), but the meaning of each element in the
+ * param array is command-specific.
+ */
+typedef struct PgBackendProgress
+{
+	ProgressCommandType command;
+	Oid			command_target;
+	int64		param[PGSTAT_NUM_PROGRESS_PARAM];
+} PgBackendProgress;
 
 extern void pgstat_progress_start_command(ProgressCommandType cmdtype,
 										  Oid relid);

@@ -987,11 +987,13 @@ DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	xl_heap_insert *xlrec;
 	ReorderBufferChange *change;
 	RelFileLocator target_locator;
+	BlockNumber		blknum;
+	HeapTupleHeader	tuphdr;
 
 	xlrec = (xl_heap_insert *) XLogRecGetData(r);
 
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
+	XLogRecGetBlockTag(r, 0, &target_locator, NULL, &blknum);
 	if (target_locator.dbOid != ctx->slot->data.database)
 		return;
 
@@ -1016,6 +1018,13 @@ DecodeInsert(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 	DecodeXLogTuple(tupledata, datalen, change->data.tp.newtuple);
 
+	/*
+	 * CTID is needed for logical_rewrite_heap_tuple(), when doing CLUSTER
+	 * CONCURRENTLY.
+	 */
+	tuphdr = change->data.tp.newtuple->t_data;
+	ItemPointerSet(&tuphdr->t_ctid, blknum, xlrec->offnum);
+
 	change->data.tp.clear_toast_afterwards = true;
 
 	ReorderBufferQueueChange(ctx->reorder, XLogRecGetXid(r), buf->origptr,
@@ -1037,11 +1046,14 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	ReorderBufferChange *change;
 	char	   *data;
 	RelFileLocator target_locator;
+	BlockNumber		old_blknum, new_blknum;
 
 	xlrec = (xl_heap_update *) XLogRecGetData(r);
 
+	/* Retrieve blknum, so that we can compose CTID below. */
+	XLogRecGetBlockTag(r, 0, &target_locator, NULL, &new_blknum);
+
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
 	if (target_locator.dbOid != ctx->slot->data.database)
 		return;
 
@@ -1058,6 +1070,7 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	{
 		Size		datalen;
 		Size		tuplelen;
+		HeapTupleHeader	tuphdr;
 
 		data = XLogRecGetBlockData(r, 0, &datalen);
 
@@ -1067,6 +1080,13 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 			ReorderBufferGetTupleBuf(ctx->reorder, tuplelen);
 
 		DecodeXLogTuple(data, datalen, change->data.tp.newtuple);
+
+		/*
+		 * CTID is needed for logical_rewrite_heap_tuple(), when doing CLUSTER
+		 * CONCURRENTLY.
+		 */
+		tuphdr = change->data.tp.newtuple->t_data;
+		ItemPointerSet(&tuphdr->t_ctid, new_blknum, xlrec->new_offnum);
 	}
 
 	if (xlrec->flags & XLH_UPDATE_CONTAINS_OLD)
@@ -1084,6 +1104,14 @@ DecodeUpdate(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 		DecodeXLogTuple(data, datalen, change->data.tp.oldtuple);
 	}
+
+	/*
+	 * Remember the old tuple CTID, for the sake of
+	 * logical_rewrite_heap_tuple().
+	 */
+	if (!XLogRecGetBlockTagExtended(r, 1, NULL, NULL, &old_blknum, NULL))
+		old_blknum = new_blknum;
+	ItemPointerSet(&change->data.tp.old_tid, old_blknum, xlrec->old_offnum);
 
 	change->data.tp.clear_toast_afterwards = true;
 
@@ -1103,11 +1131,12 @@ DecodeDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 	xl_heap_delete *xlrec;
 	ReorderBufferChange *change;
 	RelFileLocator target_locator;
+	BlockNumber		blknum;
 
 	xlrec = (xl_heap_delete *) XLogRecGetData(r);
 
 	/* only interested in our database */
-	XLogRecGetBlockTag(r, 0, &target_locator, NULL, NULL);
+	XLogRecGetBlockTag(r, 0, &target_locator, NULL, &blknum);
 	if (target_locator.dbOid != ctx->slot->data.database)
 		return;
 
@@ -1139,6 +1168,12 @@ DecodeDelete(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 
 		DecodeXLogTuple((char *) xlrec + SizeOfHeapDelete,
 						datalen, change->data.tp.oldtuple);
+
+		/*
+		 * CTID is needed for logical_rewrite_heap_tuple(), when doing CLUSTER
+		 * CONCURRENTLY.
+		 */
+		ItemPointerSet(&change->data.tp.old_tid, blknum, xlrec->offnum);
 	}
 
 	change->data.tp.clear_toast_afterwards = true;

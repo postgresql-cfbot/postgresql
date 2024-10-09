@@ -70,8 +70,8 @@ typedef struct
 
 
 static void cluster_multiple_rels(List *rtcs, ClusterParams *params);
-static void rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose);
-static void copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex,
+static void rebuild_relation(Relation OldHeap, Relation index, bool verbose);
+static void copy_table_data(Relation NewHeap, Relation OldHeap, Relation OldIndex,
 							bool verbose, bool *pSwapToastByContent,
 							TransactionId *pFreezeXid, MultiXactId *pCutoffMulti);
 static List *get_tables_to_cluster(MemoryContext cluster_context);
@@ -194,11 +194,11 @@ cluster(ParseState *pstate, ClusterStmt *stmt, bool isTopLevel)
 
 		if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
 		{
-			/* close relation, keep lock till commit */
-			table_close(rel, NoLock);
-
-			/* Do the job. */
-			cluster_rel(tableOid, indexOid, &params);
+			/*
+			 * Do the job. (The function will close the relation, lock is kept
+			 * till commit.)
+			 */
+			cluster_rel(rel, indexOid, &params);
 
 			return;
 		}
@@ -275,6 +275,7 @@ cluster_multiple_rels(List *rtcs, ClusterParams *params)
 	foreach(lc, rtcs)
 	{
 		RelToCluster *rtc = (RelToCluster *) lfirst(lc);
+		Relation	rel;
 
 		/* Start a new transaction for each relation. */
 		StartTransactionCommand();
@@ -282,8 +283,13 @@ cluster_multiple_rels(List *rtcs, ClusterParams *params)
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
 
-		/* Do the job. */
-		cluster_rel(rtc->tableOid, rtc->indexOid, params);
+		rel = table_open(rtc->tableOid, AccessExclusiveLock);
+
+		/*
+		 * Do the job. (The function will close the relation, lock is kept
+		 * till commit.)
+		 */
+		cluster_rel(rel, rtc->indexOid, params);
 
 		PopActiveSnapshot();
 		CommitTransactionCommand();
@@ -306,16 +312,19 @@ cluster_multiple_rels(List *rtcs, ClusterParams *params)
  * If indexOid is InvalidOid, the table will be rewritten in physical order
  * instead of index order.  This is the new implementation of VACUUM FULL,
  * and error messages should refer to the operation as VACUUM not CLUSTER.
+ *
+ * We expect that OldHeap is already locked in AccessExclusiveLock mode.
  */
 void
-cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
+cluster_rel(Relation OldHeap, Oid indexOid, ClusterParams *params)
 {
-	Relation	OldHeap;
+	Oid			tableOid = RelationGetRelid(OldHeap);
 	Oid			save_userid;
 	int			save_sec_context;
 	int			save_nestlevel;
 	bool		verbose = ((params->options & CLUOPT_VERBOSE) != 0);
 	bool		recheck = ((params->options & CLUOPT_RECHECK) != 0);
+	Relation	index = NULL;
 
 	/* Check for user-requested abort. */
 	CHECK_FOR_INTERRUPTS();
@@ -327,21 +336,6 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 	else
 		pgstat_progress_update_param(PROGRESS_CLUSTER_COMMAND,
 									 PROGRESS_CLUSTER_COMMAND_VACUUM_FULL);
-
-	/*
-	 * We grab exclusive access to the target rel and index for the duration
-	 * of the transaction.  (This is redundant for the single-transaction
-	 * case, since cluster() already did it.)  The index lock is taken inside
-	 * check_index_is_clusterable.
-	 */
-	OldHeap = try_relation_open(tableOid, AccessExclusiveLock);
-
-	/* If the table has gone away, we can skip processing it */
-	if (!OldHeap)
-	{
-		pgstat_progress_end_command();
-		return;
-	}
 
 	/*
 	 * Switch to the table owner's userid, so that any index functions are run
@@ -445,7 +439,11 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 
 	/* Check heap and index are valid to cluster on */
 	if (OidIsValid(indexOid))
+	{
 		check_index_is_clusterable(OldHeap, indexOid, AccessExclusiveLock);
+		/* Open the index (It should already be locked.) */
+		index = index_open(indexOid, NoLock);
+	}
 
 	/*
 	 * Quietly ignore the request if this is a materialized view which has not
@@ -474,9 +472,12 @@ cluster_rel(Oid tableOid, Oid indexOid, ClusterParams *params)
 	TransferPredicateLocksToHeapRelation(OldHeap);
 
 	/* rebuild_relation does all the dirty work */
-	rebuild_relation(OldHeap, indexOid, verbose);
+	rebuild_relation(OldHeap, index, verbose);
 
-	/* NB: rebuild_relation does table_close() on OldHeap */
+	/*
+	 * NB: rebuild_relation does table_close() on OldHeap, and also on index,
+	 * if the pointer is valid.
+	 */
 
 out:
 	/* Roll back any GUC changes executed by index functions */
@@ -625,22 +626,27 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
  * rebuild_relation: rebuild an existing relation in index or physical order
  *
  * OldHeap: table to rebuild --- must be opened and exclusive-locked!
- * indexOid: index to cluster by, or InvalidOid to rewrite in physical order.
+ * index: index to cluster by, or NULL to rewrite in physical order. Must be
+ * opened and locked.
  *
- * NB: this routine closes OldHeap at the right time; caller should not.
+ * On exit, the heap (and also the index, if one was passed) are closed, but
+ * still locked with AccessExclusiveLock.
  */
 static void
-rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
+rebuild_relation(Relation OldHeap, Relation index, bool verbose)
 {
 	Oid			tableOid = RelationGetRelid(OldHeap);
+	Oid			indexOid = index ? RelationGetRelid(index) : InvalidOid;
 	Oid			accessMethod = OldHeap->rd_rel->relam;
 	Oid			tableSpace = OldHeap->rd_rel->reltablespace;
 	Oid			OIDNewHeap;
+	Relation	NewHeap;
 	char		relpersistence;
 	bool		is_system_catalog;
 	bool		swap_toast_by_content;
 	TransactionId frozenXid;
 	MultiXactId cutoffMulti;
+	LOCKMODE	lockmode_new;
 
 	if (OidIsValid(indexOid))
 		/* Mark the correct index as clustered */
@@ -650,18 +656,39 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
 	relpersistence = OldHeap->rd_rel->relpersistence;
 	is_system_catalog = IsSystemRelation(OldHeap);
 
-	/* Close relcache entry, but keep lock until transaction commit */
-	table_close(OldHeap, NoLock);
-
-	/* Create the transient table that will receive the re-ordered data */
+	/*
+	 * Create the transient table that will receive the re-ordered data.
+	 *
+	 * NoLock for the old heap because we already have it locked and want to
+	 * keep unlocking straightforward.
+	 */
+	lockmode_new = AccessExclusiveLock;
 	OIDNewHeap = make_new_heap(tableOid, tableSpace,
 							   accessMethod,
 							   relpersistence,
-							   AccessExclusiveLock);
+							   NoLock, &lockmode_new);
+	Assert(lockmode_new == AccessExclusiveLock || lockmode_new == NoLock);
+	/* Lock iff not done above. */
+	NewHeap = table_open(OIDNewHeap, lockmode_new == NoLock ?
+						 AccessExclusiveLock : NoLock);
 
 	/* Copy the heap data into the new table in the desired order */
-	copy_table_data(OIDNewHeap, tableOid, indexOid, verbose,
+	copy_table_data(NewHeap, OldHeap, index, verbose,
 					&swap_toast_by_content, &frozenXid, &cutoffMulti);
+
+
+	/* Close relcache entries, but keep lock until transaction commit */
+	table_close(OldHeap, NoLock);
+	if (index)
+		index_close(index, NoLock);
+
+	/*
+	 * Close the new relation so it can be dropped as soon as the storage is
+	 * swapped. The relation is not visible to others, so we could unlock it
+	 * completely, but it's simpler to pass NoLock than to track all the locks
+	 * acquired so far.
+	 */
+	table_close(NewHeap, NoLock);
 
 	/*
 	 * Swap the physical files of the target and transient tables, then
@@ -683,10 +710,15 @@ rebuild_relation(Relation OldHeap, Oid indexOid, bool verbose)
  *
  * After this, the caller should load the new heap with transferred/modified
  * data, then call finish_heap_swap to complete the operation.
+ *
+ * If a specific lock mode is needed for the new relation, pass it via the
+ * in/out parameter lockmode_new_p. On exit, the output value tells whether
+ * the lock was actually acquired.
  */
 Oid
 make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
-			  char relpersistence, LOCKMODE lockmode)
+			  char relpersistence, LOCKMODE lockmode_old,
+			  LOCKMODE *lockmode_new_p)
 {
 	TupleDesc	OldHeapDesc;
 	char		NewHeapName[NAMEDATALEN];
@@ -697,8 +729,17 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
 	Datum		reloptions;
 	bool		isNull;
 	Oid			namespaceid;
+	LOCKMODE	lockmode_new;
 
-	OldHeap = table_open(OIDOldHeap, lockmode);
+	if (lockmode_new_p)
+	{
+		lockmode_new = *lockmode_new_p;
+		*lockmode_new_p = NoLock;
+	}
+	else
+		lockmode_new = lockmode_old;
+
+	OldHeap = table_open(OIDOldHeap, lockmode_old);
 	OldHeapDesc = RelationGetDescr(OldHeap);
 
 	/*
@@ -792,7 +833,9 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
 		if (isNull)
 			reloptions = (Datum) 0;
 
-		NewHeapCreateToastTable(OIDNewHeap, reloptions, lockmode, toastid);
+		NewHeapCreateToastTable(OIDNewHeap, reloptions, lockmode_new, toastid);
+		if (lockmode_new_p)
+			*lockmode_new_p = lockmode_new;
 
 		ReleaseSysCache(tuple);
 	}
@@ -811,13 +854,13 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
  * *pCutoffMulti receives the MultiXactId used as a cutoff point.
  */
 static void
-copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
+copy_table_data(Relation NewHeap, Relation OldHeap, Relation OldIndex, bool verbose,
 				bool *pSwapToastByContent, TransactionId *pFreezeXid,
 				MultiXactId *pCutoffMulti)
 {
-	Relation	NewHeap,
-				OldHeap,
-				OldIndex;
+	Oid		OIDOldHeap = RelationGetRelid(OldHeap);
+	Oid		OIDOldIndex = OldIndex ? RelationGetRelid(OldIndex) : InvalidOid;
+	Oid		OIDNewHeap = RelationGetRelid(NewHeap);
 	Relation	relRelation;
 	HeapTuple	reltup;
 	Form_pg_class relform;
@@ -835,16 +878,6 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	char	   *nspname;
 
 	pg_rusage_init(&ru0);
-
-	/*
-	 * Open the relations we need.
-	 */
-	NewHeap = table_open(OIDNewHeap, AccessExclusiveLock);
-	OldHeap = table_open(OIDOldHeap, AccessExclusiveLock);
-	if (OidIsValid(OIDOldIndex))
-		OldIndex = index_open(OIDOldIndex, AccessExclusiveLock);
-	else
-		OldIndex = NULL;
 
 	/* Store a copy of the namespace name for logging purposes */
 	nspname = get_namespace_name(RelationGetNamespace(OldHeap));
@@ -1000,11 +1033,6 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 					   "%s.",
 					   tups_recently_dead,
 					   pg_rusage_show(&ru0))));
-
-	if (OldIndex != NULL)
-		index_close(OldIndex, NoLock);
-	table_close(OldHeap, NoLock);
-	table_close(NewHeap, NoLock);
 
 	/* Update pg_class to reflect the correct values of pages and tuples. */
 	relRelation = table_open(RelationRelationId, RowExclusiveLock);

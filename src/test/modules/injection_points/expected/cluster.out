@@ -1,4 +1,4 @@
-Parsed test spec with 2 sessions
+Parsed test spec with 4 sessions
 
 starting permutation: wait_before_lock change_existing change_new change_subxact1 change_subxact2 check2 wakeup_before_lock check1
 injection_points_attach
@@ -104,6 +104,78 @@ count
 count
 -----
     0
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: wait_after_lock wakeup_after_lock
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step wait_after_lock: 
+	CLUSTER (CONCURRENTLY) clstr_test USING clstr_test_pkey;
+ <waiting ...>
+step wakeup_after_lock: 
+	SELECT injection_points_wakeup('cluster-concurrently-after-lock');
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step wait_after_lock: <... completed>
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+
+starting permutation: wait_after_lock after_lock_delay wakeup_after_lock
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step wait_after_lock: 
+	CLUSTER (CONCURRENTLY) clstr_test USING clstr_test_pkey;
+ <waiting ...>
+step after_lock_delay: 
+    SELECT pg_sleep(1.5);
+
+pg_sleep
+--------
+        
+(1 row)
+
+step wakeup_after_lock: 
+	SELECT injection_points_wakeup('cluster-concurrently-after-lock');
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step wait_after_lock: <... completed>
+ERROR:  could not process concurrent data changes in time
+injection_points_detach
+-----------------------
+                       
 (1 row)
 
 injection_points_detach

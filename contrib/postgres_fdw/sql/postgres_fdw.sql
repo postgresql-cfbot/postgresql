@@ -153,6 +153,24 @@ CREATE FOREIGN TABLE ft7 (
 	c3 text
 ) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 4');
 
+CREATE FOREIGN TABLE ft8 (
+	c1 int OPTIONS (column_name '') NOT NULL,
+	c2 int NOT NULL,
+	c3 text
+) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 4');
+
+CREATE FOREIGN TABLE ft8 (
+	c1 int NOT NULL,
+	c2 int NOT NULL,
+	c3 text
+) SERVER loopback3 OPTIONS (schema_name '', table_name 'T 4');
+
+CREATE FOREIGN TABLE ft8 (
+	c1 int NOT NULL,
+	c2 int NOT NULL,
+	c3 text
+) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name '');
+
 -- ===================================================================
 -- tests for validator
 -- ===================================================================
@@ -213,10 +231,13 @@ ALTER USER MAPPING FOR public SERVER testserver1
 ALTER USER MAPPING FOR public SERVER testserver1
 	OPTIONS (ADD sslkey 'value', ADD sslcert 'value');
 
+ALTER FOREIGN TABLE ft1 OPTIONS (schema_name '', table_name 'T 1');
+ALTER FOREIGN TABLE ft1 OPTIONS (schema_name 'S 1', table_name '');
 ALTER FOREIGN TABLE ft1 OPTIONS (schema_name 'S 1', table_name 'T 1');
 ALTER FOREIGN TABLE ft2 OPTIONS (schema_name 'S 1', table_name 'T 1');
 ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
 ALTER FOREIGN TABLE ft2 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+ALTER FOREIGN TABLE ft2 ALTER COLUMN c2 OPTIONS (column_name '');
 \det+
 
 -- Test that alteration of server options causes reconnection

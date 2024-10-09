@@ -73,6 +73,7 @@ extern void FreeSnapshotBuilder(SnapBuild *builder);
 extern void SnapBuildSnapDecRefcount(Snapshot snap);
 
 extern Snapshot SnapBuildInitialSnapshot(SnapBuild *builder);
+extern Snapshot SnapBuildMVCCFromHistoric(Snapshot snapshot, bool in_place);
 extern const char *SnapBuildExportSnapshot(SnapBuild *builder);
 extern void SnapBuildClearExportedSnapshot(void);
 extern void SnapBuildResetExportedSnapshotState(void);

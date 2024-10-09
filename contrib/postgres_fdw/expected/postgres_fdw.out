@@ -139,6 +139,24 @@ CREATE FOREIGN TABLE ft7 (
 	c2 int NOT NULL,
 	c3 text
 ) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 4');
+CREATE FOREIGN TABLE ft8 (
+	c1 int OPTIONS (column_name '') NOT NULL,
+	c2 int NOT NULL,
+	c3 text
+) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name 'T 4');
+ERROR:  cannot use empty value for option "column_name"
+CREATE FOREIGN TABLE ft8 (
+	c1 int NOT NULL,
+	c2 int NOT NULL,
+	c3 text
+) SERVER loopback3 OPTIONS (schema_name '', table_name 'T 4');
+ERROR:  cannot use empty value for option "schema_name"
+CREATE FOREIGN TABLE ft8 (
+	c1 int NOT NULL,
+	c2 int NOT NULL,
+	c3 text
+) SERVER loopback3 OPTIONS (schema_name 'S 1', table_name '');
+ERROR:  cannot use empty value for option "table_name"
 -- ===================================================================
 -- tests for validator
 -- ===================================================================
@@ -196,10 +214,16 @@ ALTER USER MAPPING FOR public SERVER testserver1
 -- permitted to check validation.
 ALTER USER MAPPING FOR public SERVER testserver1
 	OPTIONS (ADD sslkey 'value', ADD sslcert 'value');
+ALTER FOREIGN TABLE ft1 OPTIONS (schema_name '', table_name 'T 1');
+ERROR:  cannot use empty value for option "schema_name"
+ALTER FOREIGN TABLE ft1 OPTIONS (schema_name 'S 1', table_name '');
+ERROR:  cannot use empty value for option "table_name"
 ALTER FOREIGN TABLE ft1 OPTIONS (schema_name 'S 1', table_name 'T 1');
 ALTER FOREIGN TABLE ft2 OPTIONS (schema_name 'S 1', table_name 'T 1');
 ALTER FOREIGN TABLE ft1 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
 ALTER FOREIGN TABLE ft2 ALTER COLUMN c1 OPTIONS (column_name 'C 1');
+ALTER FOREIGN TABLE ft2 ALTER COLUMN c2 OPTIONS (column_name '');
+ERROR:  cannot use empty value for option "column_name"
 \det+
                               List of foreign tables
  Schema | Table |  Server   |              FDW options              | Description 

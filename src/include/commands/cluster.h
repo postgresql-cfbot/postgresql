@@ -76,6 +76,9 @@ typedef struct ConcurrentChange
 	/* Transaction that changes the data. */
 	TransactionId	xid;
 
+	/* For UPDATE / DELETE, the location of the old tuple version. */
+	ItemPointerData	old_tid;
+
 	/*
 	 * Historic catalog snapshot that was used to decode this change.
 	 */

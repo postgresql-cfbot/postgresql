@@ -34,7 +34,7 @@ static void plugin_truncate(struct LogicalDecodingContext *ctx,
 							ReorderBufferChange *change);
 static void store_change(LogicalDecodingContext *ctx,
 						 ConcurrentChangeKind kind, HeapTuple tuple,
-						 TransactionId xid);
+						 TransactionId xid, ItemPointer old_tid);
 
 void
 _PG_output_plugin_init(OutputPluginCallbacks *cb)
@@ -169,7 +169,8 @@ plugin_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				if (newtuple == NULL)
 					elog(ERROR, "Incomplete insert info.");
 
-				store_change(ctx, CHANGE_INSERT, newtuple, change->txn->xid);
+				store_change(ctx, CHANGE_INSERT, newtuple, change->txn->xid,
+							 NULL);
 			}
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
@@ -187,10 +188,10 @@ plugin_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 
 				if (oldtuple != NULL)
 					store_change(ctx, CHANGE_UPDATE_OLD, oldtuple,
-								 change->txn->xid);
+								 change->txn->xid, NULL);
 
 				store_change(ctx, CHANGE_UPDATE_NEW, newtuple,
-							 change->txn->xid);
+							 change->txn->xid, &change->data.tp.old_tid);
 			}
 			break;
 		case REORDER_BUFFER_CHANGE_DELETE:
@@ -203,7 +204,8 @@ plugin_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 				if (oldtuple == NULL)
 					elog(ERROR, "Incomplete delete info.");
 
-				store_change(ctx, CHANGE_DELETE, oldtuple, change->txn->xid);
+				store_change(ctx, CHANGE_DELETE, oldtuple, change->txn->xid,
+							 &change->data.tp.old_tid);
 			}
 			break;
 		default:
@@ -237,13 +239,13 @@ plugin_truncate(struct LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	if (i == nrelations)
 		return;
 
-	store_change(ctx, CHANGE_TRUNCATE, NULL, InvalidTransactionId);
+	store_change(ctx, CHANGE_TRUNCATE, NULL, InvalidTransactionId, NULL);
 }
 
 /* Store concurrent data change. */
 static void
 store_change(LogicalDecodingContext *ctx, ConcurrentChangeKind kind,
-			 HeapTuple tuple, TransactionId xid)
+			 HeapTuple tuple, TransactionId xid, ItemPointer old_tid)
 {
 	ClusterDecodingState *dstate;
 	char	   *change_raw;
@@ -307,6 +309,11 @@ store_change(LogicalDecodingContext *ctx, ConcurrentChangeKind kind,
 	change->xid = xid;
 	change->snapshot = dstate->snapshot;
 	dstate->snapshot->active_count++;
+
+	if (old_tid)
+		ItemPointerCopy(old_tid, &change->old_tid);
+	else
+		ItemPointerSetInvalid(&change->old_tid);
 
 	/* The data has been copied. */
 	if (flattened)

@@ -222,6 +222,22 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry id="sql-createpublication-params-with-publish-generated-columns">
+        <term><literal>publish_generated_columns</literal> (<type>boolean</type>)</term>
+        <listitem>
+         <para>
+          Specifies whether the generated columns present in the tables
+          associated with the publication should be replicated.
+          The default is <literal>false</literal>.
+         </para>
+         <para>
+          See <xref linkend="logical-replication-gencols"/> for more details about
+          logical replication of generated columns.
+         </para>
+        </listitem>
+       </varlistentry>
+
       </variablelist></para>
     </listitem>
    </varlistentry>

@@ -71,7 +71,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
   PRIMARY KEY <replaceable class="parameter">index_parameters</replaceable> |
   REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> ) ] [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ]
     [ ON DELETE <replaceable class="parameter">referential_action</replaceable> ] [ ON UPDATE <replaceable class="parameter">referential_action</replaceable> ] }
-[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
+[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ] [ ENFORCED | NOT ENFORCED ]
 
 <phrase>and <replaceable class="parameter">table_constraint</replaceable> is:</phrase>
 
@@ -83,7 +83,7 @@ CREATE [ [ GLOBAL | LOCAL ] { TEMPORARY | TEMP } | UNLOGGED ] TABLE [ IF NOT EXI
   FOREIGN KEY ( <replaceable class="parameter">column_name</replaceable> [, ... ] [, PERIOD <replaceable class="parameter">column_name</replaceable> ] ) REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> [, ... ] [, PERIOD <replaceable class="parameter">column_name</replaceable> ] ) ]
     [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ] [ ON DELETE <replaceable
 class="parameter">referential_action</replaceable> ] [ ON UPDATE <replaceable class="parameter">referential_action</replaceable> ] }
-[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
+[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ] [ ENFORCED | NOT ENFORCED ]
 
 <phrase>and <replaceable class="parameter">like_option</replaceable> is:</phrase>
 
@@ -1358,6 +1358,20 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       <literal>INITIALLY DEFERRED</literal>, it is checked only at the
       end of the transaction.  The constraint check time can be
       altered with the <link linkend="sql-set-constraints"><command>SET CONSTRAINTS</command></link> command.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createtable-parms-enforce">
+    <term><literal>ENFORCED</literal></term>
+    <term><literal>NOT ENFORCED</literal></term>
+    <listitem>
+     <para>
+      This is currently only allowed for foreign key and <literal>CHECK</literal>
+      constraints.  If the constraint is <literal>NOT ENFORCED</literal>, this
+      clause specifies that the constraint check will be skipped.  When the
+      constraint is <literal>ENFORCED</literal>, check is performed after each
+      statement.  This is the default.
      </para>
     </listitem>
    </varlistentry>

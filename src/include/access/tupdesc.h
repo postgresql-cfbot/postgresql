@@ -30,6 +30,7 @@ typedef struct ConstrCheck
 	char	   *ccname;
 	char	   *ccbin;			/* nodeToString representation of expr */
 	bool		ccvalid;
+	bool		ccenforced;
 	bool		ccnoinherit;	/* this is a non-inheritable constraint */
 } ConstrCheck;
 

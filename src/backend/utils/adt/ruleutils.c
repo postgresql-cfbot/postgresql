@@ -2372,6 +2372,9 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 					appendStringInfoChar(&buf, ')');
 				}
 
+				if (!conForm->conenforced)
+					appendStringInfoString(&buf, " NOT ENFORCED");
+
 				break;
 			}
 		case CONSTRAINT_PRIMARY:
@@ -2514,6 +2517,10 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 				appendStringInfo(&buf, "CHECK (%s)%s",
 								 consrc,
 								 conForm->connoinherit ? " NO INHERIT" : "");
+
+				if (!conForm->conenforced)
+					appendStringInfoString(&buf, " NOT ENFORCED");
+
 				break;
 			}
 		case CONSTRAINT_TRIGGER:

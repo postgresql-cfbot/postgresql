@@ -581,7 +581,10 @@ CREATE TABLE products (
     consists of the key word <literal>CHECK</literal> followed by an
     expression in parentheses.  The check constraint expression should
     involve the column thus constrained, otherwise the constraint
-    would not make too much sense.
+    would not make too much sense. The check constraint expression can be
+    followed by the <literal>ENFORCED</literal>, which is the default, or
+    <literal>NOT ENFORCED</literal> keyword, determining whether the
+    constraint check is performed or skipped after each statement.
    </para>
 
    <indexterm>
@@ -717,7 +720,8 @@ CREATE TABLE products (
      to implement that.  (This approach avoids the dump/restore problem because
      <application>pg_dump</application> does not reinstall triggers until after
      restoring data, so that the check will not be enforced during a
-     dump/restore.)
+     dump/restore.)  You can add that CHECK constraint with <literal>NOT ENFORCED</literal>,
+     allowing the underlying constraint rule to be represented without being enforced.
     </para>
    </note>
 
@@ -1026,11 +1030,13 @@ CREATE TABLE example (
    </indexterm>
 
    <para>
-    A foreign key constraint specifies that the values in a column (or
-    a group of columns) must match the values appearing in some row
-    of another table.
-    We say this maintains the <firstterm>referential
-    integrity</firstterm> between two related tables.
+    A foreign key constraint with <literal>ENFORCED</literal>, the default
+    setting, specifies that the values in a column (or a group of columns)
+    must match the values appearing in some row of another table.  We say this
+    maintains the <firstterm>referential integrity</firstterm> between two
+    related tables.  If a foreign key constraint is created with <literal>NOT ENFORCED</literal>,
+    the check for aforementioned <firstterm>referential integrity</firstterm>
+    will not be performed.
    </para>
 
    <para>

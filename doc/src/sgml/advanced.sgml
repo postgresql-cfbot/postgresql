@@ -125,6 +125,19 @@ ERROR:  insert or update on table "weather" violates foreign key constraint "wea
 DETAIL:  Key (city)=(Berkeley) is not present in table "cities".
 </screen>
    </para>
+   <para>
+    If, for some reason, you do not want to enforce this constraint and wish to
+    avoid the error, you can modify the foreign key constraint to <literal>NOT ENFORCED</literal>,
+    or specify it in the <link linkend="sql-createtable"><command>CREATE TABLE</command></link>.
+   </para>
+   <para>
+    Let's change the constraint to <literal>NOT ENFORCED</literal>, and when you
+    attempt to reinsert the same record, it will not result in any error.
+<programlisting>
+ALTER TABLE weather ALTER CONSTRAINT weather_city_fkey NOT ENFORCED;
+INSERT INTO weather VALUES ('Berkeley', 45, 53, 0.0, '1994-11-28');
+</programlisting>
+   </para>
 
    <para>
     The behavior of foreign keys can be finely tuned to your

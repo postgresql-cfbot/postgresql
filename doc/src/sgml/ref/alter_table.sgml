@@ -58,7 +58,7 @@ ALTER TABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
     ALTER [ COLUMN ] <replaceable class="parameter">column_name</replaceable> SET COMPRESSION <replaceable class="parameter">compression_method</replaceable>
     ADD <replaceable class="parameter">table_constraint</replaceable> [ NOT VALID ]
     ADD <replaceable class="parameter">table_constraint_using_index</replaceable>
-    ALTER CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
+    ALTER CONSTRAINT <replaceable class="parameter">constraint_name</replaceable> [ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ] [ ENFORCED | NOT ENFORCED ]
     VALIDATE CONSTRAINT <replaceable class="parameter">constraint_name</replaceable>
     DROP CONSTRAINT [ IF EXISTS ]  <replaceable class="parameter">constraint_name</replaceable> [ RESTRICT | CASCADE ]
     DISABLE TRIGGER [ <replaceable class="parameter">trigger_name</replaceable> | ALL | USER ]
@@ -108,7 +108,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
   PRIMARY KEY <replaceable class="parameter">index_parameters</replaceable> |
   REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> ) ] [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ]
     [ ON DELETE <replaceable class="parameter">referential_action</replaceable> ] [ ON UPDATE <replaceable class="parameter">referential_action</replaceable> ] }
-[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
+[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ] [ ENFORCED | NOT ENFORCED ]
 
 <phrase>and <replaceable class="parameter">table_constraint</replaceable> is:</phrase>
 
@@ -119,7 +119,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
   EXCLUDE [ USING <replaceable class="parameter">index_method</replaceable> ] ( <replaceable class="parameter">exclude_element</replaceable> WITH <replaceable class="parameter">operator</replaceable> [, ... ] ) <replaceable class="parameter">index_parameters</replaceable> [ WHERE ( <replaceable class="parameter">predicate</replaceable> ) ] |
   FOREIGN KEY ( <replaceable class="parameter">column_name</replaceable> [, ... ] ) REFERENCES <replaceable class="parameter">reftable</replaceable> [ ( <replaceable class="parameter">refcolumn</replaceable> [, ... ] ) ]
     [ MATCH FULL | MATCH PARTIAL | MATCH SIMPLE ] [ ON DELETE <replaceable class="parameter">referential_action</replaceable> ] [ ON UPDATE <replaceable class="parameter">referential_action</replaceable> ] }
-[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ]
+[ DEFERRABLE | NOT DEFERRABLE ] [ INITIALLY DEFERRED | INITIALLY IMMEDIATE ] [ ENFORCED | NOT ENFORCED ]
 
 <phrase>and <replaceable class="parameter">table_constraint_using_index</replaceable> is:</phrase>
 
@@ -553,6 +553,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       This form alters the attributes of a constraint that was previously
       created. Currently only foreign key constraints may be altered.
+     </para>
+     <para>
+      Note that changing constraints to <literal>ENFORCED</literal>, which were
+      previously marked as valid and <literal>NOT ENFORCED</literal>, will
+      trigger validation, similar to <literal>VALIDATE CONSTRAINT</literal>.
      </para>
     </listitem>
    </varlistentry>
@@ -1427,9 +1432,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </para>
 
    <para>
-    Adding a <literal>CHECK</literal> or <literal>NOT NULL</literal> constraint requires
-    scanning the table to verify that existing rows meet the constraint,
-    but does not require a table rewrite.
+    Adding a enforced <literal>CHECK</literal> or <literal>NOT NULL</literal>
+    constraint requires scanning the table to verify that existing rows meet the
+    constraint, but does not require a table rewrite.  If a <literal>CHECK</literal>
+    constraint is added as <literal>NOT ENFORCED</literal>, the validation will
+    not be performed.
    </para>
 
    <para>

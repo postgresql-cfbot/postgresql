@@ -52,6 +52,7 @@ CreateConstraintEntry(const char *constraintName,
 					  bool isDeferrable,
 					  bool isDeferred,
 					  bool isValidated,
+					  bool isEnforced,
 					  Oid parentConstrId,
 					  Oid relId,
 					  const int16 *constraintKey,
@@ -96,6 +97,10 @@ CreateConstraintEntry(const char *constraintName,
 	ObjectAddress conobject;
 	ObjectAddresses *addrs_auto;
 	ObjectAddresses *addrs_normal;
+
+	/* Only CHECK or FOREIGN KEY constraint can be not enforced */
+	Assert(isEnforced || constraintType == CONSTRAINT_CHECK ||
+		   constraintType == CONSTRAINT_FOREIGN);
 
 	conDesc = table_open(ConstraintRelationId, RowExclusiveLock);
 
@@ -181,6 +186,7 @@ CreateConstraintEntry(const char *constraintName,
 	values[Anum_pg_constraint_condeferrable - 1] = BoolGetDatum(isDeferrable);
 	values[Anum_pg_constraint_condeferred - 1] = BoolGetDatum(isDeferred);
 	values[Anum_pg_constraint_convalidated - 1] = BoolGetDatum(isValidated);
+	values[Anum_pg_constraint_conenforced - 1] = BoolGetDatum(isEnforced);
 	values[Anum_pg_constraint_conrelid - 1] = ObjectIdGetDatum(relId);
 	values[Anum_pg_constraint_contypid - 1] = ObjectIdGetDatum(domainId);
 	values[Anum_pg_constraint_conindid - 1] = ObjectIdGetDatum(indexRelId);

@@ -835,6 +835,8 @@ transformColumnDefinition(CreateStmtContext *cxt, ColumnDef *column)
 			case CONSTR_ATTR_NOT_DEFERRABLE:
 			case CONSTR_ATTR_DEFERRED:
 			case CONSTR_ATTR_IMMEDIATE:
+			case CONSTR_ATTR_ENFORCED:
+			case CONSTR_ATTR_NOT_ENFORCED:
 				/* transformConstraintAttrs took care of these */
 				break;
 
@@ -955,6 +957,8 @@ transformTableConstraint(CreateStmtContext *cxt, Constraint *constraint)
 		case CONSTR_ATTR_NOT_DEFERRABLE:
 		case CONSTR_ATTR_DEFERRED:
 		case CONSTR_ATTR_IMMEDIATE:
+		case CONSTR_ATTR_ENFORCED:
+		case CONSTR_ATTR_NOT_ENFORCED:
 			elog(ERROR, "invalid context for constraint type %d",
 				 constraint->contype);
 			break;
@@ -1317,6 +1321,7 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 			n->is_no_inherit = ccnoinherit;
 			n->raw_expr = NULL;
 			n->cooked_expr = nodeToString(ccbin_node);
+			n->is_enforced = true;
 
 			/* We can skip validation, since the new table should be empty. */
 			n->skip_validation = true;
@@ -3715,6 +3720,7 @@ transformConstraintAttrs(CreateStmtContext *cxt, List *constraintList)
 	Constraint *lastprimarycon = NULL;
 	bool		saw_deferrability = false;
 	bool		saw_initially = false;
+	bool		saw_enforced = false;
 	ListCell   *clist;
 
 #define SUPPORTS_ATTRS(node)				\
@@ -3810,12 +3816,47 @@ transformConstraintAttrs(CreateStmtContext *cxt, List *constraintList)
 				lastprimarycon->initdeferred = false;
 				break;
 
+			case CONSTR_ATTR_ENFORCED:
+				if (lastprimarycon &&
+					lastprimarycon->contype != CONSTR_CHECK &&
+					lastprimarycon->contype != CONSTR_FOREIGN)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("misplaced ENFORCED clause"),
+							 parser_errposition(cxt->pstate, con->location)));
+				if (saw_enforced)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("multiple ENFORCED/NOT ENFORCED clauses not allowed"),
+							 parser_errposition(cxt->pstate, con->location)));
+				saw_enforced = true;
+				lastprimarycon->is_enforced = true;
+				break;
+
+			case CONSTR_ATTR_NOT_ENFORCED:
+				if (lastprimarycon &&
+					lastprimarycon->contype != CONSTR_CHECK &&
+					lastprimarycon->contype != CONSTR_FOREIGN)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("misplaced NOT ENFORCED clause"),
+							 parser_errposition(cxt->pstate, con->location)));
+				if (saw_enforced)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("multiple ENFORCED/NOT ENFORCED clauses not allowed"),
+							 parser_errposition(cxt->pstate, con->location)));
+				saw_enforced = true;
+				lastprimarycon->is_enforced = false;
+				break;
+
 			default:
 				/* Otherwise it's not an attribute */
 				lastprimarycon = con;
 				/* reset flags for new primary node */
 				saw_deferrability = false;
 				saw_initially = false;
+				saw_enforced = false;
 				break;
 		}
 	}

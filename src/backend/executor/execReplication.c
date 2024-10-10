@@ -583,7 +583,7 @@ has_conflicting_tuple(Oid subid, ConflictType type, ItemPointer tupleid,
 	 * Get the configured resolver and determine if remote changes should be
 	 * applied.
 	 */
-	resolver = GetConflictResolver(subid, type, rel, NULL, &apply_remote);
+	resolver = GetConflictResolver(subid, type, rel, NULL, NULL, NULL);
 
 	/*
 	 * Proceed to find conflict if the resolver is set to a non-default value;
@@ -604,6 +604,14 @@ has_conflicting_tuple(Oid subid, ConflictType type, ItemPointer tupleid,
 			TransactionId xmin;
 
 			GetTupleTransactionInfo(*conflictslot, &xmin, &origin, &committs);
+
+			/*
+			 * Get the configured resolver and determine if remote changes
+			 * should be applied.
+			 */
+			resolver = GetConflictResolver(subid, type, rel, *conflictslot,
+										   NULL, &apply_remote);
+
 			ReportApplyConflict(estate, resultRelInfo, type, resolver,
 								NULL, *conflictslot, slot, uniqueidx,
 								xmin, origin, committs, apply_remote);

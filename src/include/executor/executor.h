@@ -673,7 +673,8 @@ extern void ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 									 TupleTableSlot **conflictsloty, Oid subid);
 extern void ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 									 EState *estate, EPQState *epqstate,
-									 TupleTableSlot *searchslot, TupleTableSlot *slot);
+									 TupleTableSlot *searchslot, TupleTableSlot *slot,
+									 TupleTableSlot **conflictslot, Oid subid);
 extern void ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 									 EState *estate, EPQState *epqstate,
 									 TupleTableSlot *searchslot);

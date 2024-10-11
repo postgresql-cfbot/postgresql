@@ -577,7 +577,7 @@ main(int argc, char *argv[])
 		mode == PG_MODE_DISABLE)
 		pg_fatal("data checksums are already disabled in cluster");
 
-	if (ControlFile->data_checksum_version > 0 &&
+	if (ControlFile->data_checksum_version == DATA_CHECKSUMS_ON &&
 		mode == PG_MODE_ENABLE)
 		pg_fatal("data checksums are already enabled in cluster");
 

@@ -186,6 +186,7 @@ xlog_decode(LogicalDecodingContext *ctx, XLogRecordBuffer *buf)
 		case XLOG_FPW_CHANGE:
 		case XLOG_FPI_FOR_HINT:
 		case XLOG_FPI:
+		case XLOG_CHECKSUMS:
 		case XLOG_OVERWRITE_CONTRECORD:
 		case XLOG_CHECKPOINT_REDO:
 			break;

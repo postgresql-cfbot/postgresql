@@ -396,6 +396,7 @@ CheckPointStmt
 CheckpointStatsData
 CheckpointerRequest
 CheckpointerShmemStruct
+ChecksumType
 Chromosome
 CkptSortItem
 CkptTsStatus
@@ -582,6 +583,10 @@ DataPageDeleteStack
 DataTypesUsageChecks
 DataTypesUsageVersionCheck
 DatabaseInfo
+DataChecksumsWorkerDatabase
+DataChecksumsWorkerResult
+DataChecksumsWorkerResultEntry
+DataChecksumsWorkerShmemStruct
 DateADT
 DateTimeErrorExtra
 Datum
@@ -4081,6 +4086,7 @@ xl_btree_split
 xl_btree_unlink_page
 xl_btree_update
 xl_btree_vacuum
+xl_checksum_state
 xl_clog_truncate
 xl_commit_ts_truncate
 xl_dbase_create_file_copy_rec

@@ -673,6 +673,13 @@ LANGUAGE INTERNAL
 CALLED ON NULL INPUT VOLATILE
 AS 'pg_set_attribute_stats';
 
+CREATE OR REPLACE FUNCTION
+  pg_enable_data_checksums(cost_delay integer DEFAULT 0,
+                           cost_limit integer DEFAULT 100,
+						   fast boolean DEFAULT false)
+  RETURNS void STRICT VOLATILE LANGUAGE internal AS 'enable_data_checksums'
+  PARALLEL RESTRICTED;
+
 --
 -- The default permissions for functions mean that anyone can execute them.
 -- A number of functions shouldn't be executable by just anyone, but rather
@@ -795,6 +802,10 @@ REVOKE EXECUTE ON FUNCTION pg_ls_logicalsnapdir() FROM PUBLIC;
 REVOKE EXECUTE ON FUNCTION pg_ls_logicalmapdir() FROM PUBLIC;
 
 REVOKE EXECUTE ON FUNCTION pg_ls_replslotdir(text) FROM PUBLIC;
+
+REVOKE EXECUTE ON FUNCTION pg_enable_data_checksums(integer, integer, boolean) FROM public;
+
+REVOKE EXECUTE ON FUNCTION pg_disable_data_checksums() FROM public;
 
 --
 -- We also set up some things as accessible to standard roles.

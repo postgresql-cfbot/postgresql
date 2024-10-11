@@ -445,9 +445,10 @@ extern PGDLLIMPORT PGPROC *PreparedXactProcs;
  * Background writer, checkpointer, WAL writer, WAL summarizer, and archiver
  * run during normal operation.  Startup process and WAL receiver also consume
  * 2 slots, but WAL writer is launched only after startup has exited, so we
- * only need 6 slots.
+ * only need 6 slots to cover these. The DataChecksums worker and launcher
+ * can consume 2 slots when data checksums are enabled or disabled.
  */
-#define NUM_AUXILIARY_PROCS		6
+#define NUM_AUXILIARY_PROCS		8
 
 /* configurable options */
 extern PGDLLIMPORT int DeadlockTimeout;

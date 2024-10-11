@@ -18,6 +18,7 @@
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
 #include "catalog/pg_control.h"
+#include "storage/bufpage.h"
 #include "utils/guc.h"
 #include "utils/timestamp.h"
 
@@ -167,6 +168,26 @@ xlog_desc(StringInfo buf, XLogReaderState *record)
 		memcpy(&wal_level, rec, sizeof(int));
 		appendStringInfo(buf, "wal_level %s", get_wal_level_string(wal_level));
 	}
+	else if (info == XLOG_CHECKSUMS)
+	{
+		xl_checksum_state xlrec;
+
+		memcpy(&xlrec, rec, sizeof(xl_checksum_state));
+		switch (xlrec.new_checksumtype)
+		{
+			case PG_DATA_CHECKSUM_VERSION:
+				appendStringInfoString(buf, "on");
+				break;
+			case PG_DATA_CHECKSUM_INPROGRESS_OFF_VERSION:
+				appendStringInfoString(buf, "inprogress-off");
+				break;
+			case PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION:
+				appendStringInfoString(buf, "inprogress-on");
+				break;
+			default:
+				appendStringInfoString(buf, "off");
+		}
+	}
 }
 
 const char *
@@ -217,6 +238,9 @@ xlog_identify(uint8 info)
 			break;
 		case XLOG_CHECKPOINT_REDO:
 			id = "CHECKPOINT_REDO";
+			break;
+		case XLOG_CHECKSUMS:
+			id = "CHECKSUMS";
 			break;
 	}
 

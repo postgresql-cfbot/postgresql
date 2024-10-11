@@ -443,6 +443,13 @@ parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 {
 	Assert(!IsParallelWorker());
 
+	if (LoggingParallelWorkers(log_parallel_workers,
+							   pvs->nworkers_to_launch,
+							   pvs->nworkers_launched))
+		elog(LOG, "%i workers planned to be launched for index cleanup and bulkdelete (%i workers launched)",
+			pvs->nworkers_to_launch,
+			pvs->nworkers_launched);
+
 	/* Copy the updated statistics */
 	for (int i = 0; i < pvs->nindexes; i++)
 	{

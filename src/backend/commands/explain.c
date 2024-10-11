@@ -37,6 +37,7 @@
 #include "utils/rel.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
+#include "utils/syscache.h"
 #include "utils/tuplesort.h"
 #include "utils/typcache.h"
 #include "utils/xml.h"
@@ -92,9 +93,6 @@ static void show_expression(Node *node, const char *qlabel,
 static void show_qual(List *qual, const char *qlabel,
 					  PlanState *planstate, List *ancestors,
 					  bool useprefix, ExplainState *es);
-static void show_scan_qual(List *qual, const char *qlabel,
-						   PlanState *planstate, List *ancestors,
-						   ExplainState *es);
 static void show_upper_qual(List *qual, const char *qlabel,
 							PlanState *planstate, List *ancestors,
 							ExplainState *es);
@@ -156,6 +154,8 @@ static void ExplainModifyTarget(ModifyTable *plan, ExplainState *es);
 static void ExplainTargetRel(Plan *plan, Index rti, ExplainState *es);
 static void show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 								  ExplainState *es);
+static void show_amindex_info(Plan *plan, PlanState *planstate,
+								List *ancestors, ExplainState *es);
 static void ExplainMemberNodes(PlanState **planstates, int nplans,
 							   List *ancestors, ExplainState *es);
 static void ExplainMissingMembers(int nplans, int nchildren, ExplainState *es);
@@ -2096,6 +2096,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (plan->qual)
 				show_instrumentation_count("Rows Removed by Filter", 1,
 										   planstate, es);
+			show_amindex_info(plan, planstate, ancestors, es);
+			// TODO: add ANALYZE. filterd tuples
 			break;
 		case T_IndexOnlyScan:
 			show_scan_qual(((IndexOnlyScan *) plan)->indexqual,
@@ -2112,10 +2114,12 @@ ExplainNode(PlanState *planstate, List *ancestors,
 			if (es->analyze)
 				ExplainPropertyFloat("Heap Fetches", NULL,
 									 planstate->instrument->ntuples2, 0, es);
+			show_amindex_info(plan, planstate, ancestors, es);
 			break;
 		case T_BitmapIndexScan:
 			show_scan_qual(((BitmapIndexScan *) plan)->indexqualorig,
 						   "Index Cond", planstate, ancestors, es);
+			show_amindex_info(plan, planstate, ancestors, es);
 			break;
 		case T_BitmapHeapScan:
 			show_scan_qual(((BitmapHeapScan *) plan)->bitmapqualorig,
@@ -2658,7 +2662,7 @@ show_qual(List *qual, const char *qlabel,
 /*
  * Show a qualifier expression for a scan plan node
  */
-static void
+void
 show_scan_qual(List *qual, const char *qlabel,
 			   PlanState *planstate, List *ancestors,
 			   ExplainState *es)
@@ -4680,6 +4684,50 @@ show_modifytable_info(ModifyTableState *mtstate, List *ancestors,
 
 	if (labeltargets)
 		ExplainCloseGroup("Target Tables", "Target Tables", false, es);
+}
+
+/*
+ * Show extra information for Index AM
+ */
+static void
+show_amindex_info(Plan *plan, PlanState *planstate,
+					List *ancestors, ExplainState *es)
+{
+	Oid indexoid;
+	HeapTuple	ht_idxrel;
+	Form_pg_class	idxrelrec;
+	IndexAmRoutine	*amroutine;
+
+	/* Fetch the index oid */
+	switch (nodeTag(plan))
+	{
+		case T_IndexScan:
+			indexoid = ((IndexScan *) plan)->indexid;
+			break;
+		case T_IndexOnlyScan:
+			indexoid = ((IndexOnlyScan *) plan)->indexid;
+			break;
+		case T_BitmapIndexScan:
+			indexoid = ((BitmapIndexScan *) plan)->indexid;
+			break;
+		default:
+			elog(ERROR, "unsupported expression type: %d", (int) nodeTag(plan));
+	}
+
+	/* Fetch the index AM's API struct */
+	ht_idxrel = SearchSysCache1(RELOID, ObjectIdGetDatum(indexoid));
+	if (!HeapTupleIsValid(ht_idxrel))
+			elog(ERROR, "cache lookup failed for relation %u", indexoid);
+	idxrelrec = (Form_pg_class) GETSTRUCT(ht_idxrel);
+
+	amroutine = GetIndexAmRoutineByAmId(idxrelrec->relam, true);
+
+	/* Let the AM emit whatever fields it wants */
+	if (amroutine != NULL && amroutine->amexplain != NULL)
+		amroutine->amexplain(plan, planstate, ancestors, es);
+
+	pfree(amroutine);
+	ReleaseSysCache(ht_idxrel);
 }
 
 /*

@@ -21,10 +21,13 @@
 #include "access/nbtree.h"
 #include "access/relscan.h"
 #include "access/xloginsert.h"
+#include "commands/explain.h"
 #include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "miscadmin.h"
 #include "nodes/execnodes.h"
+#include "nodes/nodeFuncs.h"
+#include "nodes/plannodes.h"
 #include "pgstat.h"
 #include "storage/bulk_write.h"
 #include "storage/condition_variable.h"
@@ -34,6 +37,7 @@
 #include "storage/smgr.h"
 #include "utils/fmgrprotos.h"
 #include "utils/index_selfuncs.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 
 
@@ -148,6 +152,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->amendscan = btendscan;
 	amroutine->ammarkpos = btmarkpos;
 	amroutine->amrestrpos = btrestrpos;
+	amroutine->amexplain = btexplain;
 	amroutine->amestimateparallelscan = btestimateparallelscan;
 	amroutine->aminitparallelscan = btinitparallelscan;
 	amroutine->amparallelrescan = btparallelrescan;
@@ -530,6 +535,267 @@ btrestrpos(IndexScanDesc scan)
 		}
 		else
 			BTScanPosInvalidate(so->currPos);
+	}
+}
+
+/*
+ * btexplain -- add some additional details for EXPLAIN
+ */
+void
+btexplain(Plan *plan, PlanState *planstate,
+			List *ancestors, ExplainState *es)
+{
+	if (es->verbose)
+	{
+		Oid indexoid;
+		List *fixed_indexquals = NIL;
+		List *stripped_indexquals = NIL;
+		List		*indexBoundQuals = NIL;
+		List		*indexFilterQuals = NIL;
+		ListCell	*qual_cell;
+		Relation	index;
+		LOCKMODE	lockmode;
+		int		indexcol;
+		int		qualno;
+		int		indnkeyatts;
+		bool	eqQualHere;
+		AttrNumber	varattno_pre;
+
+		/* Fetch the indexoid and qual */
+		switch (nodeTag(plan))
+		{
+			case T_IndexScan:
+				indexoid = ((IndexScan *) plan)->indexid;
+				fixed_indexquals = ((IndexScan *) plan)->indexqual;
+				stripped_indexquals = ((IndexScan *) plan)->indexqualorig;
+				break;
+			case T_IndexOnlyScan:
+				indexoid = ((IndexOnlyScan *) plan)->indexid;
+				fixed_indexquals = ((IndexOnlyScan *) plan)->indexqual;
+				break;
+			case T_BitmapIndexScan:
+				indexoid = ((BitmapIndexScan *) plan)->indexid;
+				fixed_indexquals = ((BitmapIndexScan *) plan)->indexqual;
+				stripped_indexquals = ((BitmapIndexScan *) plan)->indexqualorig;
+				break;
+			default:
+				elog(ERROR, "unsupported expression type: %d", (int) nodeTag(plan));
+		}
+
+		/* Open the target index relations to fetch op families */
+		lockmode = AccessShareLock;
+		index = index_open(indexoid, lockmode);
+
+		/* Determine boundary quals (see btcostestimate()) */
+		indexBoundQuals = NIL;
+		indexcol = 0;
+		qualno = 0;
+		eqQualHere = false;
+		varattno_pre = 0;
+
+		indnkeyatts = IndexRelationGetNumberOfKeyAttributes(index);
+		foreach(qual_cell, fixed_indexquals)
+		{
+			AttrNumber	varattno;
+			Expr	   *clause = (Expr *) lfirst(qual_cell);
+			Oid			clause_op = InvalidOid;
+
+			/* Examine varattno */
+			if (IsA(clause, OpExpr))
+			{
+				Expr	   *leftop;
+
+				/*
+				 * leftop should be the index key Var, possibly relabeled
+				 */
+				leftop = (Expr *) get_leftop(clause);
+
+				if (leftop && IsA(leftop, RelabelType))
+					leftop = ((RelabelType *) leftop)->arg;
+
+				Assert(leftop != NULL);
+
+				if (!(IsA(leftop, Var) &&
+					  ((Var *) leftop)->varno == INDEX_VAR))
+					elog(ERROR, "indexqual doesn't have key on left side");
+
+				varattno = ((Var *) leftop)->varattno;
+			}
+			else if (IsA(clause, RowCompareExpr))
+			{
+				Expr	   *leftop;
+				RowCompareExpr *rc = (RowCompareExpr *) clause;
+
+				/*
+				 * leftop should be the index key Var, possibly relabeled
+				 */
+				leftop = (Expr *) linitial(rc->largs);
+
+				if (leftop && IsA(leftop, RelabelType))
+					leftop = ((RelabelType *) leftop)->arg;
+
+				Assert(leftop != NULL);
+
+				if (!(IsA(leftop, Var) &&
+					  ((Var *) leftop)->varno == INDEX_VAR))
+					elog(ERROR, "indexqual doesn't have key on left side");
+
+				varattno = ((Var *) leftop)->varattno;
+			}
+			else if (IsA(clause, ScalarArrayOpExpr))
+			{
+				Expr	   *leftop;
+				ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+
+				/*
+				 * leftop should be the index key Var, possibly relabeled
+				 */
+				leftop = (Expr *) linitial(saop->args);
+
+				if (leftop && IsA(leftop, RelabelType))
+					leftop = ((RelabelType *) leftop)->arg;
+
+				Assert(leftop != NULL);
+
+				if (!(IsA(leftop, Var) &&
+					  ((Var *) leftop)->varno == INDEX_VAR))
+					elog(ERROR, "indexqual doesn't have key on left side");
+
+				varattno = ((Var *) leftop)->varattno;
+			}
+			else if (IsA(clause, NullTest))
+			{
+				Expr	   *leftop;
+				NullTest   *ntest = (NullTest *) clause;
+
+				/*
+				 * argument should be the index key Var, possibly relabeled
+				 */
+				leftop = ntest->arg;
+
+				if (leftop && IsA(leftop, RelabelType))
+					leftop = ((RelabelType *) leftop)->arg;
+
+				Assert(leftop != NULL);
+
+				if (!(IsA(leftop, Var) &&
+					  ((Var *) leftop)->varno == INDEX_VAR))
+					elog(ERROR, "NullTest indexqual has wrong key");
+
+				varattno = ((Var *) leftop)->varattno;
+			}
+			else
+				elog(ERROR, "unsupported indexqual type: %d",
+					 (int) nodeTag(clause));
+
+			if (varattno < 1 || varattno > indnkeyatts)
+				elog(ERROR, "bogus index qualification");
+
+			/* Check for the boundary qual */
+			if ((varattno != varattno_pre) && (indexcol != varattno - 1))
+			{
+				/* Beginning of a new column's quals */
+				if (!eqQualHere)
+					break;			/* done if no '=' qual for indexcol */
+				eqQualHere = false;
+				indexcol++;
+				if (indexcol != varattno - 1)
+					break;
+			}
+			varattno_pre = varattno;
+
+			/* Check for equaliy operator */
+			if (IsA(clause, OpExpr))
+			{
+				OpExpr	   *op = (OpExpr *) clause;
+
+				clause_op = op->opno;
+			}
+			else if (IsA(clause, RowCompareExpr))
+			{
+				RowCompareExpr *rc = (RowCompareExpr *) clause;
+
+				clause_op = linitial_oid(rc->opnos);
+			}
+			else if (IsA(clause, ScalarArrayOpExpr))
+			{
+				ScalarArrayOpExpr *saop = (ScalarArrayOpExpr *) clause;
+
+				clause_op = saop->opno;
+			}
+			else if (IsA(clause, NullTest))
+			{
+				NullTest   *nt = (NullTest *) clause;
+
+				if (nt->nulltesttype == IS_NULL)
+				{
+					/* IS NULL is like = for selectivity purposes */
+					eqQualHere = true;
+				}
+			}
+			else
+				elog(ERROR, "unsupported indexqual type: %d",
+					 (int) nodeTag(clause));
+
+
+			if (OidIsValid(clause_op))
+			{
+				int	op_strategy;
+
+				op_strategy = get_op_opfamily_strategy(clause_op,
+													   index->rd_opfamily[indexcol]);
+				Assert(op_strategy != 0);	/* not a member of opfamily?? */
+				if (op_strategy == BTEqualStrategyNumber)
+					eqQualHere = true;
+			}
+
+			/*
+			 * Add as boundary qual
+			 *
+			 * To reuse show_scan_qual(), decide whether to store stripped_indexquals or
+			 * fixed_indexquals depending on each Node type. It might be better to deparse
+			 * it without using show_scan_qual().
+			 *
+			 * In the case of T_IndexScan and T_BitmapIndexScan, even if it passes
+			 * fixed_indexquals to show_scan_qual(), it will cause an error because it does
+			 * not hold indextlist and does not save deparse_namespace->index_tlist in
+			 * set_deparse_plan(). They only store information equivalent to index_tlist
+			 * in fixed_indexquals.
+			 */
+			switch (nodeTag(plan))
+			{
+				case T_IndexScan:
+				case T_BitmapIndexScan:
+					indexBoundQuals = lappend(indexBoundQuals, list_nth(stripped_indexquals, qualno));
+					break;
+				case T_IndexOnlyScan:
+					indexBoundQuals = lappend(indexBoundQuals, list_nth(fixed_indexquals, qualno));
+					break;
+				default:
+					elog(ERROR, "unsupported expression type: %d", (int) nodeTag(plan));
+			}
+			qualno++;
+		}
+
+		index_close(index, lockmode);
+
+		/*
+		 * Maybe, it's better to change "Skip Scan Cond" after it's supported.
+		 * https://www.postgresql.org/message-id/flat/CAH2-Wzmn1YsLzOGgjAQZdn1STSG_y8qP__vggTaPAYXJP+G4bw@mail.gmail.com
+		 */
+		switch (nodeTag(plan))
+		{
+			case T_IndexScan:
+			case T_BitmapIndexScan:
+				indexFilterQuals = list_difference_ptr(stripped_indexquals, indexBoundQuals);
+				break;
+			case T_IndexOnlyScan:
+				indexFilterQuals = list_difference_ptr(fixed_indexquals, indexBoundQuals);
+				break;
+			default:
+				elog(ERROR, "unsupported expression type: %d", (int) nodeTag(plan));
+		}
+		show_scan_qual(indexFilterQuals, "Non Key Filter", planstate, ancestors, es);
 	}
 }
 

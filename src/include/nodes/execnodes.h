@@ -713,6 +713,10 @@ typedef struct EState
 	int			es_parallel_workers_launched;	/* number of workers actually
 												 * launched. */
 
+	int			es_parallel_nodes;
+	int			es_parallel_nodes_success;
+	int			es_parallel_nodes_no_workers;
+
 	/* The per-query shared memory area to use for parallel execution. */
 	struct dsa_area *es_query_dsa;
 

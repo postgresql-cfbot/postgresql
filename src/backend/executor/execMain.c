@@ -483,6 +483,17 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 
 	Assert(estate != NULL);
 
+	if (LoggingParallelWorkers(log_parallel_workers,
+							   estate->es_parallel_workers_to_launch,
+							   estate->es_parallel_workers_launched))
+		elog(LOG, "%i parallel nodes planned (%i obtained all their workers, %i obtained none), "
+				  "%i workers planned to be launched (%i workers launched)",
+			estate->es_parallel_nodes,
+			estate->es_parallel_nodes_success,
+			estate->es_parallel_nodes_no_workers,
+			estate->es_parallel_workers_to_launch,
+			estate->es_parallel_workers_launched);
+
 	/*
 	 * Check that ExecutorFinish was called, unless in EXPLAIN-only mode. This
 	 * Assert is needed because ExecutorFinish is new as of 9.1, and callers

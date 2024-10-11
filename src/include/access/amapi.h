@@ -25,6 +25,10 @@ struct IndexPath;
 /* Likewise, this file shouldn't depend on execnodes.h. */
 struct IndexInfo;
 
+/* Likewise, this file shouldn't depend on execnodes.h. */
+struct Plan;
+struct PlanState;
+struct ExplainState;
 
 /*
  * Properties for amproperty API.  This list covers properties known to the
@@ -197,6 +201,12 @@ typedef void (*ammarkpos_function) (IndexScanDesc scan);
 /* restore marked scan position */
 typedef void (*amrestrpos_function) (IndexScanDesc scan);
 
+/* add some additional details for explain */
+typedef void (*amexplain_function) (struct Plan *plan,
+									struct PlanState *planstate,
+									List *ancestors,
+									struct ExplainState *es);
+
 /*
  * Callback function signatures - for parallel index scans.
  */
@@ -292,6 +302,7 @@ typedef struct IndexAmRoutine
 	amendscan_function amendscan;
 	ammarkpos_function ammarkpos;	/* can be NULL */
 	amrestrpos_function amrestrpos; /* can be NULL */
+	amexplain_function amexplain; /* can be NULL */
 
 	/* interface functions to support parallel index scans */
 	amestimateparallelscan_function amestimateparallelscan; /* can be NULL */

@@ -21,6 +21,7 @@
 #include "access/xlogreader.h"
 #include "catalog/pg_am_d.h"
 #include "catalog/pg_index.h"
+#include "commands/explain.h"
 #include "lib/stringinfo.h"
 #include "storage/bufmgr.h"
 #include "storage/shm_toc.h"
@@ -1170,6 +1171,8 @@ extern void btparallelrescan(IndexScanDesc scan);
 extern void btendscan(IndexScanDesc scan);
 extern void btmarkpos(IndexScanDesc scan);
 extern void btrestrpos(IndexScanDesc scan);
+extern void btexplain(Plan *plan, PlanState *planstate,
+						List *ancestors, ExplainState *es);
 extern IndexBulkDeleteResult *btbulkdelete(IndexVacuumInfo *info,
 										   IndexBulkDeleteResult *stats,
 										   IndexBulkDeleteCallback callback,

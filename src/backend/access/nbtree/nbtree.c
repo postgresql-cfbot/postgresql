@@ -70,12 +70,15 @@ typedef struct BTParallelScanDescData
 	BTPS_State	btps_pageStatus;	/* indicates whether next page is
 									 * available for scan. see above for
 									 * possible states of parallel scan. */
+	uint32		btps_arrElemsGen;	/* number of new prim scan opportunities */
+	bool		btps_checkPrimScan;	/* did we skid past the most opportune
+									 * endpoint of a primitive scan? */
 	slock_t		btps_mutex;		/* protects above variables, btps_arrElems */
 	ConditionVariable btps_cv;	/* used to synchronize parallel scan */
 
 	/*
 	 * btps_arrElems is used when scans need to schedule another primitive
-	 * index scan.  Holds BTArrayKeyInfo.cur_elem offsets for scan keys.
+	 * index scan.  Holds the values for BTScanOpaque->arrayKeys[.].cur_elem.
 	 */
 	int			btps_arrElems[FLEXIBLE_ARRAY_MEMBER];
 }			BTParallelScanDescData;
@@ -336,6 +339,9 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	so->arrayKeys = NULL;
 	so->orderProcs = NULL;
 	so->arrayContext = NULL;
+	
+	so->testPrimScan = false;
+	so->arrElemsGen = 0;
 
 	so->killedItems = NULL;		/* until needed */
 	so->numKilled = 0;
@@ -552,6 +558,8 @@ btinitparallelscan(void *target)
 	SpinLockInit(&bt_target->btps_mutex);
 	bt_target->btps_scanPage = InvalidBlockNumber;
 	bt_target->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
+	bt_target->btps_arrElemsGen = 0;
+	bt_target->btps_checkPrimScan = false;
 	ConditionVariableInit(&bt_target->btps_cv);
 }
 
@@ -577,13 +585,15 @@ btparallelrescan(IndexScanDesc scan)
 	SpinLockAcquire(&btscan->btps_mutex);
 	btscan->btps_scanPage = InvalidBlockNumber;
 	btscan->btps_pageStatus = BTPARALLEL_NOT_INITIALIZED;
+	btscan->btps_arrElemsGen = 0;
+	btscan->btps_checkPrimScan = false;
 	SpinLockRelease(&btscan->btps_mutex);
 }
 
 /*
  * _bt_parallel_seize() -- Begin the process of advancing the scan to a new
- *		page.  Other scans must wait until we call _bt_parallel_release()
- *		or _bt_parallel_done().
+ *		page.  Other scans must wait until we call _bt_parallel_done(),
+ *		[_btp]_opt_release_early/late(), or [_btp]_primscan_schedule().
  *
  * The return value is true if we successfully seized the scan and false
  * if we did not.  The latter case occurs when no pages remain, or when
@@ -643,6 +653,8 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 		{
 			/* We're done with this parallel index scan */
 			status = false;
+			so->testPrimScan = false;
+			so->arrElemsGen = 0;
 		}
 		else if (btscan->btps_pageStatus == BTPARALLEL_NEED_PRIMSCAN)
 		{
@@ -662,6 +674,8 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 				}
 				*pageno = InvalidBlockNumber;
 				exit_loop = true;
+				so->arrElemsGen = btscan->btps_arrElemsGen;
+				so->testPrimScan = false;
 			}
 			else
 			{
@@ -689,6 +703,9 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 			 */
 			btscan->btps_pageStatus = BTPARALLEL_ADVANCING;
 			*pageno = btscan->btps_scanPage;
+
+			so->arrElemsGen = btscan->btps_arrElemsGen;
+
 			exit_loop = true;
 		}
 		SpinLockRelease(&btscan->btps_mutex);
@@ -702,7 +719,7 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
 }
 
 /*
- * _bt_parallel_release() -- Complete the process of advancing the scan to a
+ * _bt_parallel_opt_release_early() -- Complete the process of advancing the scan to a
  *		new page.  We now have the new value btps_scanPage; some other backend
  *		can now begin advancing the scan.
  *
@@ -713,7 +730,7 @@ _bt_parallel_seize(IndexScanDesc scan, BlockNumber *pageno, bool first)
  * scan lands on scan_page).
  */
 void
-_bt_parallel_release(IndexScanDesc scan, BlockNumber scan_page)
+_bt_parallel_opt_release_early(IndexScanDesc scan, BlockNumber scan_page)
 {
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
@@ -722,10 +739,67 @@ _bt_parallel_release(IndexScanDesc scan, BlockNumber scan_page)
 												  parallel_scan->ps_offset);
 
 	SpinLockAcquire(&btscan->btps_mutex);
+	/*
+	 * If a parallel worker noticed that it had skipped past the end of a
+	 * primitive scan after another backend already acquired the parallel scan
+	 * status, we don't release the scan before reading the page's contents.
+	 * Instead, we transition to a position which will 
+	 */
+	if (likely(!btscan->btps_checkPrimScan))
+	{
+		btscan->btps_scanPage = scan_page;
+		btscan->btps_pageStatus = BTPARALLEL_IDLE;
+		SpinLockRelease(&btscan->btps_mutex);
+		ConditionVariableSignal(&btscan->btps_cv);
+	}
+	else
+	{
+		BTScanOpaque	so = (BTScanOpaque) scan->opaque;
+		so->testPrimScan = true;
+		SpinLockRelease(&btscan->btps_mutex);
+	}
+}
+
+/*
+ * _bt_parallel_opt_release_late() -- Complete the process of advancing the
+ *		scan to a new page.
+ *
+ * We're only called when a concurrent backend wanted to schedule a skip scan,
+ * but failed to do so because the parallel scan already advanced past its
+ * own page.  
+ */
+void
+_bt_parallel_opt_release_late(IndexScanDesc scan, BlockNumber scan_page)
+{
+	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	BTParallelScanDesc btscan;
+	
+	if (!so->testPrimScan)
+		return;
+
+	btscan = (BTParallelScanDesc) OffsetToPointer((void *) parallel_scan,
+												  parallel_scan->ps_offset);
+
+	SpinLockAcquire(&btscan->btps_mutex);
+	Assert(btscan->btps_checkPrimScan);
 	btscan->btps_scanPage = scan_page;
 	btscan->btps_pageStatus = BTPARALLEL_IDLE;
+
+	/*
+	 * A late release implies that 1) a concurrent backend noticed we
+	 * should've started a new primitive scan, and that 2) the current scan
+	 * position is already at-or-past the point where that scan would've
+	 * started.  So, we do what a new primitive scan would've done with the
+	 * shared state: we increase the generation number, and unset
+	 * checkPrimScan.
+	 */
+	btscan->btps_checkPrimScan = false;
+	btscan->btps_arrElemsGen += 1;
 	SpinLockRelease(&btscan->btps_mutex);
 	ConditionVariableSignal(&btscan->btps_cv);
+
+	so->testPrimScan = false;
 }
 
 /*
@@ -742,6 +816,7 @@ _bt_parallel_done(IndexScanDesc scan)
 	ParallelIndexScanDesc parallel_scan = scan->parallel_scan;
 	BTParallelScanDesc btscan;
 	bool		status_changed = false;
+	so->testPrimScan = false;
 
 	/* Do nothing, for non-parallel scans */
 	if (parallel_scan == NULL)
@@ -778,10 +853,10 @@ _bt_parallel_done(IndexScanDesc scan)
 /*
  * _bt_parallel_primscan_schedule() -- Schedule another primitive index scan.
  *
- * Caller passes the block number most recently passed to _bt_parallel_release
- * by its backend.  Caller successfully schedules the next primitive index scan
- * if the shared parallel state hasn't been seized since caller's backend last
- * advanced the scan.
+ * Caller passes the block number most recently passed to
+ * _bt_parallel_opt_release_early by its backend.  Caller successfully
+ * schedules the next primitive index scan if the shared parallel state hasn't
+ * been seized since caller's backend last advanced the scan.
  */
 void
 _bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber prev_scan_page)
@@ -796,11 +871,13 @@ _bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber prev_scan_page)
 												  parallel_scan->ps_offset);
 
 	SpinLockAcquire(&btscan->btps_mutex);
-	if (btscan->btps_scanPage == prev_scan_page &&
-		btscan->btps_pageStatus == BTPARALLEL_IDLE)
+	if ((btscan->btps_scanPage == prev_scan_page &&
+		 btscan->btps_pageStatus == BTPARALLEL_IDLE) ||
+		unlikely(so->testPrimScan))
 	{
 		btscan->btps_scanPage = InvalidBlockNumber;
 		btscan->btps_pageStatus = BTPARALLEL_NEED_PRIMSCAN;
+		btscan->btps_arrElemsGen += 1;
 
 		/* Serialize scan's current array keys */
 		for (int i = 0; i < so->numArrayKeys; i++)
@@ -810,7 +887,20 @@ _bt_parallel_primscan_schedule(IndexScanDesc scan, BlockNumber prev_scan_page)
 			btscan->btps_arrElems[i] = array->cur_elem;
 		}
 	}
+	/*
+	 * If the shared array keys are still those of the primitive scan we used
+	 * to access prev_scan_page, make a note that the next page may be a good
+	 * opportunity to start a new primitive scan.  Once marked, a worker will
+	 * not release the scan until it has processed its page and knows for
+	 * sure whether a new prim scan is needed.
+	 */
+	else if (btscan->btps_arrElemsGen == so->arrElemsGen)
+	{
+		btscan->btps_checkPrimScan = true;
+	}
 	SpinLockRelease(&btscan->btps_mutex);
+
+	so->testPrimScan = false;
 }
 
 /*

@@ -594,6 +594,11 @@ locate_var_of_level_walker(Node *node,
  *	  Vars within a PHV's expression are included in the result only
  *	  when PVC_RECURSE_PLACEHOLDERS is specified.
  *
+ *	  ConvertRowtypeExprs encapsulating whole row references are handled
+ *	  according to these bits in 'flags':
+ *	  	PVC_INCLUDE_CONVERTROWTYPES include ConvertRowtypeExprs in output list
+ *	  	by default - recurse into ConvertRowtypeExprs arguments
+ *
  *	  GroupingFuncs are treated exactly like Aggrefs, and so do not need
  *	  their own flag bits.
  *
@@ -706,6 +711,19 @@ pull_var_clause_walker(Node *node, pull_var_clause_context *context)
 		}
 		else
 			elog(ERROR, "PlaceHolderVar found where not expected");
+	}
+	else if (is_converted_whole_row_reference(node))
+	{
+		if (context->flags & PVC_INCLUDE_CONVERTROWTYPES)
+		{
+			context->varlist = lappend(context->varlist, node);
+			/* we do NOT descend into the contained expression */
+			return false;
+		}
+		else
+		{
+			/* fall through to recurse into the ConvertRowtype's argument. */
+		}
 	}
 	return expression_tree_walker(node, pull_var_clause_walker,
 								  (void *) context);

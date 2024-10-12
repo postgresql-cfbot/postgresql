@@ -9947,6 +9947,11 @@ ALTER TABLE fprt1_p1 SET (autovacuum_enabled = 'false');
 ALTER TABLE fprt1_p2 SET (autovacuum_enabled = 'false');
 INSERT INTO fprt1_p1 SELECT i, i, to_char(i/50, 'FM0000') FROM generate_series(0, 249, 2) i;
 INSERT INTO fprt1_p2 SELECT i, i, to_char(i/50, 'FM0000') FROM generate_series(250, 499, 2) i;
+-- Add and drop column from the parent partition so that the number of
+-- attributes in tuple descriptors of parent and child do not match exactly.
+-- Used for testing ConvertRowtypeExpr.
+ALTER TABLE fprt1 DROP COLUMN c;
+ALTER TABLE fprt1 ADD COLUMN c varchar;
 CREATE FOREIGN TABLE ftprt1_p1 PARTITION OF fprt1 FOR VALUES FROM (0) TO (250)
 	SERVER loopback OPTIONS (table_name 'fprt1_p1', use_remote_estimate 'true');
 CREATE FOREIGN TABLE ftprt1_p2 PARTITION OF fprt1 FOR VALUES FROM (250) TO (500)
@@ -10013,23 +10018,19 @@ SELECT t1.a,t2.b,t2.c FROM fprt1 t1 LEFT JOIN (SELECT * FROM fprt2 WHERE a < 10)
  8 |   | 
 (5 rows)
 
--- with whole-row reference; partitionwise join does not apply
+-- with whole-row reference
 EXPLAIN (COSTS OFF)
 SELECT t1.wr, t2.wr FROM (SELECT t1 wr, a FROM fprt1 t1 WHERE t1.a % 25 = 0) t1 FULL JOIN (SELECT t2 wr, b FROM fprt2 t2 WHERE t2.b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY 1,2;
-                       QUERY PLAN                       
---------------------------------------------------------
+                              QUERY PLAN                              
+----------------------------------------------------------------------
  Sort
    Sort Key: ((t1.*)::fprt1), ((t2.*)::fprt2)
-   ->  Hash Full Join
-         Hash Cond: (t1.a = t2.b)
-         ->  Append
-               ->  Foreign Scan on ftprt1_p1 t1_1
-               ->  Foreign Scan on ftprt1_p2 t1_2
-         ->  Hash
-               ->  Append
-                     ->  Foreign Scan on ftprt2_p1 t2_1
-                     ->  Foreign Scan on ftprt2_p2 t2_2
-(11 rows)
+   ->  Append
+         ->  Foreign Scan
+               Relations: (ftprt1_p1 t1_1) FULL JOIN (ftprt2_p1 t2_1)
+         ->  Foreign Scan
+               Relations: (ftprt1_p2 t1_2) FULL JOIN (ftprt2_p2 t2_2)
+(7 rows)
 
 SELECT t1.wr, t2.wr FROM (SELECT t1 wr, a FROM fprt1 t1 WHERE t1.a % 25 = 0) t1 FULL JOIN (SELECT t2 wr, b FROM fprt2 t2 WHERE t2.b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY 1,2;
        wr       |       wr       
@@ -10112,22 +10113,26 @@ SELECT t1.a, t1.phv, t2.b, t2.phv FROM (SELECT 't1_phv' phv, * FROM fprt1 WHERE 
      |        | 475 | t2_phv
 (14 rows)
 
--- test FOR UPDATE; partitionwise join does not apply
+-- test FOR UPDATE
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY 1,2 FOR UPDATE OF t1;
-                       QUERY PLAN                       
---------------------------------------------------------
+                                 QUERY PLAN                                  
+-----------------------------------------------------------------------------
  LockRows
-   ->  Nested Loop
-         Join Filter: (t1.a = t2.b)
+   ->  Sort
+         Sort Key: t1.a
          ->  Append
-               ->  Foreign Scan on ftprt1_p1 t1_1
-               ->  Foreign Scan on ftprt1_p2 t1_2
-         ->  Materialize
-               ->  Append
-                     ->  Foreign Scan on ftprt2_p1 t2_1
-                     ->  Foreign Scan on ftprt2_p2 t2_2
-(10 rows)
+               ->  Foreign Scan
+                     Relations: (ftprt1_p1 t1_1) INNER JOIN (ftprt2_p1 t2_1)
+                     ->  Nested Loop
+                           ->  Foreign Scan on ftprt1_p1 t1_1
+                           ->  Foreign Scan on ftprt2_p1 t2_1
+               ->  Foreign Scan
+                     Relations: (ftprt1_p2 t1_2) INNER JOIN (ftprt2_p2 t2_2)
+                     ->  Nested Loop
+                           ->  Foreign Scan on ftprt1_p2 t1_2
+                           ->  Foreign Scan on ftprt2_p2 t2_2
+(14 rows)
 
 SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY 1,2 FOR UPDATE OF t1;
   a  |  b  
@@ -10136,6 +10141,207 @@ SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a 
  150 | 150
  250 | 250
  400 | 400
+(4 rows)
+
+-- test sort paths and whole-row references
+set enable_sort to off;
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY t2.a FOR UPDATE OF t1;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ LockRows
+   ->  Merge Append
+         Sort Key: t2.a
+         ->  Foreign Scan
+               Relations: (ftprt1_p1 t1_1) INNER JOIN (ftprt2_p1 t2_1)
+               ->  Result
+                     Disabled Nodes: 1
+                     ->  Sort
+                           Disabled Nodes: 1
+                           Sort Key: t2_1.a
+                           ->  Nested Loop
+                                 ->  Foreign Scan on ftprt1_p1 t1_1
+                                 ->  Foreign Scan on ftprt2_p1 t2_1
+         ->  Foreign Scan
+               Relations: (ftprt1_p2 t1_2) INNER JOIN (ftprt2_p2 t2_2)
+               ->  Result
+                     Disabled Nodes: 1
+                     ->  Sort
+                           Disabled Nodes: 1
+                           Sort Key: t2_2.a
+                           ->  Nested Loop
+                                 ->  Foreign Scan on ftprt1_p2 t1_2
+                                 ->  Foreign Scan on ftprt2_p2 t2_2
+(23 rows)
+
+SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY t2.a FOR UPDATE OF t1;
+  a  |  b  
+-----+-----
+   0 |   0
+ 150 | 150
+ 250 | 250
+ 400 | 400
+(4 rows)
+
+reset enable_sort;
+-- test partition-wise DML
+EXPLAIN (COSTS OFF, VERBOSE)
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+                                                                  QUERY PLAN                                                                  
+----------------------------------------------------------------------------------------------------------------------------------------------
+ Update on public.fprt1
+   Foreign Update on public.ftprt1_p1 fprt1_1
+   Foreign Update on public.ftprt1_p2 fprt1_2
+   ->  Append
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p1 r3 SET b = (r3.b + 1) FROM public.fprt2_p1 r5 WHERE ((r3.a = r5.b)) AND (((r5.a % 25) = 0))
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p2 r4 SET b = (r4.b + 1) FROM public.fprt2_p2 r6 WHERE ((r4.a = r6.b)) AND (((r6.a % 25) = 0))
+(8 rows)
+
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+EXPLAIN (COSTS OFF, VERBOSE)
+UPDATE fprt1 SET b=(fprt1.a+fprt2.b)/2 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+                                                                      QUERY PLAN                                                                       
+-------------------------------------------------------------------------------------------------------------------------------------------------------
+ Update on public.fprt1
+   Foreign Update on public.ftprt1_p1 fprt1_1
+   Foreign Update on public.ftprt1_p2 fprt1_2
+   ->  Append
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p1 r3 SET b = ((r3.a + r5.b) / 2) FROM public.fprt2_p1 r5 WHERE ((r3.a = r5.b)) AND (((r5.a % 25) = 0))
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p2 r4 SET b = ((r4.a + r6.b) / 2) FROM public.fprt2_p2 r6 WHERE ((r4.a = r6.b)) AND (((r6.a % 25) = 0))
+(8 rows)
+
+UPDATE fprt1 SET b=(fprt1.a+fprt2.b)/2 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+-- returning whole row references
+EXPLAIN (COSTS OFF)
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING fprt1, fprt2;
+              QUERY PLAN               
+---------------------------------------
+ Update on fprt1
+   Foreign Update on ftprt1_p1 fprt1_1
+   Foreign Update on ftprt1_p2 fprt1_2
+   ->  Append
+         ->  Foreign Update
+         ->  Foreign Update
+(6 rows)
+
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING fprt1, fprt2;
+     fprt1      |     fprt2      
+----------------+----------------
+ (0,1,0000)     | (0,0,0000)
+ (150,151,0003) | (150,150,0003)
+ (250,251,0005) | (250,250,0005)
+ (400,401,0008) | (400,400,0008)
+(4 rows)
+
+-- tableoids are returned correctly
+EXPLAIN (COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING t2.tableoid::regclass;
+             QUERY PLAN             
+------------------------------------
+ Update on fprt1 t1
+   Foreign Update on ftprt1_p1 t1_1
+   Foreign Update on ftprt1_p2 t1_2
+   ->  Append
+         ->  Foreign Update
+         ->  Foreign Update
+(6 rows)
+
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING t2.tableoid::regclass;
+ tableoid  
+-----------
+ ftprt2_p1
+ ftprt2_p1
+ ftprt2_p2
+ ftprt2_p2
+(4 rows)
+
+-- join of several tables
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2, fprt1 t3 WHERE t1.a = t2.b AND t2.b = t3.a AND t1.a % 25 = 0  RETURNING *;
+                                                                                                                                QUERY PLAN                                                                                                                                 
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Update on public.fprt1 t1
+   Output: t1_1.a, t1_1.b, t1_1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c
+   Foreign Update on public.ftprt1_p1 t1_1
+   Foreign Update on public.ftprt1_p2 t1_2
+   ->  Append
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p1 r4 SET b = (r4.b + 1) FROM (public.fprt2_p1 r6 INNER JOIN public.fprt1_p1 r8 ON (TRUE)) WHERE ((r4.a = r8.a)) AND ((r4.a = r6.b)) AND (((r4.a % 25) = 0)) RETURNING r4.a, r4.b, r4.c, r6.a, r6.b, r6.c, r8.a, r8.b, r8.c
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p2 r5 SET b = (r5.b + 1) FROM (public.fprt2_p2 r7 INNER JOIN public.fprt1_p2 r9 ON (TRUE)) WHERE ((r5.a = r9.a)) AND ((r5.a = r7.b)) AND (((r5.a % 25) = 0)) RETURNING r5.a, r5.b, r5.c, r7.a, r7.b, r7.c, r9.a, r9.b, r9.c
+(9 rows)
+
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2, fprt1 t3 WHERE t1.a = t2.b AND t2.b = t3.a AND t1.a % 25 = 0  RETURNING *;
+  a  |  b  |  c   |  a  |  b  |  c   |  a  |  b  |  c   
+-----+-----+------+-----+-----+------+-----+-----+------
+   0 |   3 | 0000 |   0 |   0 | 0000 |   0 |   2 | 0000
+ 150 | 153 | 0003 | 150 | 150 | 0003 | 150 | 152 | 0003
+ 250 | 253 | 0005 | 250 | 250 | 0005 | 250 | 252 | 0005
+ 400 | 403 | 0008 | 400 | 400 | 0008 | 400 | 402 | 0008
+(4 rows)
+
+-- left join
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 LEFT JOIN fprt1 t3 ON (t2.b = t3.a) WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING *;
+                                                                                                                              QUERY PLAN                                                                                                                              
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Update on public.fprt1 t1
+   Output: t1_1.a, t1_1.b, t1_1.c, t2.a, t2.b, t2.c, t3.a, t3.b, t3.c
+   Foreign Update on public.ftprt1_p1 t1_1
+   Foreign Update on public.ftprt1_p2 t1_2
+   ->  Append
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p1 r5 SET b = (r5.b + 1) FROM (public.fprt2_p1 r7 LEFT JOIN public.fprt1_p1 r9 ON (((r7.b = r9.a)))) WHERE ((r5.a = r7.b)) AND (((r5.a % 25) = 0)) RETURNING r5.a, r5.b, r5.c, r7.a, r7.b, r7.c, r9.a, r9.b, r9.c
+         ->  Foreign Update
+               Remote SQL: UPDATE public.fprt1_p2 r6 SET b = (r6.b + 1) FROM (public.fprt2_p2 r8 LEFT JOIN public.fprt1_p2 r10 ON (((r8.b = r10.a)))) WHERE ((r6.a = r8.b)) AND (((r6.a % 25) = 0)) RETURNING r6.a, r6.b, r6.c, r8.a, r8.b, r8.c, r10.a, r10.b, r10.c
+(9 rows)
+
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 LEFT JOIN fprt1 t3 ON (t2.b = t3.a) WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING *;
+  a  |  b  |  c   |  a  |  b  |  c   |  a  |  b  |  c   
+-----+-----+------+-----+-----+------+-----+-----+------
+   0 |   4 | 0000 |   0 |   0 | 0000 |   0 |   3 | 0000
+ 150 | 154 | 0003 | 150 | 150 | 0003 | 150 | 153 | 0003
+ 250 | 254 | 0005 | 250 | 250 | 0005 | 250 | 253 | 0005
+ 400 | 404 | 0008 | 400 | 400 | 0008 | 400 | 403 | 0008
+(4 rows)
+
+-- delete
+EXPLAIN (COSTS OFF)
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 30 = 29;
+              QUERY PLAN               
+---------------------------------------
+ Delete on fprt1
+   Foreign Delete on ftprt1_p1 fprt1_1
+   Foreign Delete on ftprt1_p2 fprt1_2
+   ->  Append
+         ->  Foreign Delete
+         ->  Foreign Delete
+(6 rows)
+
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 30 = 29;
+EXPLAIN (COSTS OFF)
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING *;
+              QUERY PLAN               
+---------------------------------------
+ Delete on fprt1
+   Foreign Delete on ftprt1_p1 fprt1_1
+   Foreign Delete on ftprt1_p2 fprt1_2
+   ->  Append
+         ->  Foreign Delete
+         ->  Foreign Delete
+(6 rows)
+
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING *;
+  a  |  b  |  c   |  a  |  b  |  c   
+-----+-----+------+-----+-----+------
+   0 |   4 | 0000 |   0 |   0 | 0000
+ 150 | 154 | 0003 | 150 | 150 | 0003
+ 250 | 254 | 0005 | 250 | 250 | 0005
+ 400 | 404 | 0008 | 400 | 400 | 0008
 (4 rows)
 
 RESET enable_partitionwise_join;

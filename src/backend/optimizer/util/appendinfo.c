@@ -691,7 +691,7 @@ adjust_inherited_attnums_multilevel(PlannerInfo *root, List *attnums,
  * relied on for this purpose.)
  */
 void
-get_translated_update_targetlist(PlannerInfo *root, Index relid,
+get_translated_update_targetlist(PlannerInfo *root, Index relid, Relids child_joinrel_relids,
 								 List **processed_tlist, List **update_colnos)
 {
 	/* This is pretty meaningless for commands other than UPDATE. */
@@ -709,11 +709,31 @@ get_translated_update_targetlist(PlannerInfo *root, Index relid,
 	else
 	{
 		Assert(bms_is_member(relid, root->all_result_relids));
-		*processed_tlist = (List *)
-			adjust_appendrel_attrs_multilevel(root,
-											  (Node *) root->processed_tlist,
-											  find_base_rel(root, relid),
-											  find_base_rel(root, root->parse->resultRelation));
+
+		/*
+		 * UPDATE targetlist corresponds to SET clause and so can contain
+		 * arbitrary expressions, including those which contain references not
+		 * only to result relation, but also to other vars. So in case of join
+		 * we should also translate these vars to their parents.
+		 */
+		if (bms_is_empty(child_joinrel_relids))
+		{
+			*processed_tlist = (List *)
+				adjust_appendrel_attrs_multilevel(root,
+												  (Node *) root->processed_tlist,
+												  find_base_rel(root, relid),
+												  find_base_rel(root, root->parse->resultRelation));
+		}
+		else
+		{
+			RelOptInfo *child_joinrel = find_join_rel(root, child_joinrel_relids);
+
+			*processed_tlist = (List *)
+				adjust_appendrel_attrs_multilevel(root,
+												  (Node *) root->processed_tlist,
+												  child_joinrel,
+												  child_joinrel->top_parent);
+		}
 		if (update_colnos)
 			*update_colnos =
 				adjust_inherited_attnums_multilevel(root, root->update_colnos,

@@ -18,6 +18,7 @@
 
 
 extern TargetEntry *tlist_member(Expr *node, List *targetlist);
+extern TargetEntry *tlist_member_match_converted_whole_row(Expr *node, List *targetlist);
 
 extern List *add_to_flat_tlist(List *tlist, List *exprs);
 

@@ -3115,6 +3115,11 @@ ALTER TABLE fprt1_p1 SET (autovacuum_enabled = 'false');
 ALTER TABLE fprt1_p2 SET (autovacuum_enabled = 'false');
 INSERT INTO fprt1_p1 SELECT i, i, to_char(i/50, 'FM0000') FROM generate_series(0, 249, 2) i;
 INSERT INTO fprt1_p2 SELECT i, i, to_char(i/50, 'FM0000') FROM generate_series(250, 499, 2) i;
+-- Add and drop column from the parent partition so that the number of
+-- attributes in tuple descriptors of parent and child do not match exactly.
+-- Used for testing ConvertRowtypeExpr.
+ALTER TABLE fprt1 DROP COLUMN c;
+ALTER TABLE fprt1 ADD COLUMN c varchar;
 CREATE FOREIGN TABLE ftprt1_p1 PARTITION OF fprt1 FOR VALUES FROM (0) TO (250)
 	SERVER loopback OPTIONS (table_name 'fprt1_p1', use_remote_estimate 'true');
 CREATE FOREIGN TABLE ftprt1_p2 PARTITION OF fprt1 FOR VALUES FROM (250) TO (500)
@@ -3149,7 +3154,7 @@ EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.a,t2.b,t2.c FROM fprt1 t1 LEFT JOIN (SELECT * FROM fprt2 WHERE a < 10) t2 ON (t1.a = t2.b and t1.b = t2.a) WHERE t1.a < 10 ORDER BY 1,2,3;
 SELECT t1.a,t2.b,t2.c FROM fprt1 t1 LEFT JOIN (SELECT * FROM fprt2 WHERE a < 10) t2 ON (t1.a = t2.b and t1.b = t2.a) WHERE t1.a < 10 ORDER BY 1,2,3;
 
--- with whole-row reference; partitionwise join does not apply
+-- with whole-row reference
 EXPLAIN (COSTS OFF)
 SELECT t1.wr, t2.wr FROM (SELECT t1 wr, a FROM fprt1 t1 WHERE t1.a % 25 = 0) t1 FULL JOIN (SELECT t2 wr, b FROM fprt2 t2 WHERE t2.b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY 1,2;
 SELECT t1.wr, t2.wr FROM (SELECT t1 wr, a FROM fprt1 t1 WHERE t1.a % 25 = 0) t1 FULL JOIN (SELECT t2 wr, b FROM fprt2 t2 WHERE t2.b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY 1,2;
@@ -3164,10 +3169,55 @@ EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.phv, t2.b, t2.phv FROM (SELECT 't1_phv' phv, * FROM fprt1 WHERE a % 25 = 0) t1 FULL JOIN (SELECT 't2_phv' phv, * FROM fprt2 WHERE b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY t1.a, t2.b;
 SELECT t1.a, t1.phv, t2.b, t2.phv FROM (SELECT 't1_phv' phv, * FROM fprt1 WHERE a % 25 = 0) t1 FULL JOIN (SELECT 't2_phv' phv, * FROM fprt2 WHERE b % 25 = 0) t2 ON (t1.a = t2.b) ORDER BY t1.a, t2.b;
 
--- test FOR UPDATE; partitionwise join does not apply
+-- test FOR UPDATE
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY 1,2 FOR UPDATE OF t1;
 SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY 1,2 FOR UPDATE OF t1;
+
+-- test sort paths and whole-row references
+set enable_sort to off;
+EXPLAIN (COSTS OFF)
+SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY t2.a FOR UPDATE OF t1;
+SELECT t1.a, t2.b FROM fprt1 t1 INNER JOIN fprt2 t2 ON (t1.a = t2.b) WHERE t1.a % 25 = 0 ORDER BY t2.a FOR UPDATE OF t1;
+reset enable_sort;
+
+-- test partition-wise DML
+EXPLAIN (COSTS OFF, VERBOSE)
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+
+EXPLAIN (COSTS OFF, VERBOSE)
+UPDATE fprt1 SET b=(fprt1.a+fprt2.b)/2 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+UPDATE fprt1 SET b=(fprt1.a+fprt2.b)/2 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0;
+
+-- returning whole row references
+EXPLAIN (COSTS OFF)
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING fprt1, fprt2;
+UPDATE fprt1 SET b=fprt1.b+1 FROM fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING fprt1, fprt2;
+
+-- tableoids are returned correctly
+EXPLAIN (COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING t2.tableoid::regclass;
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING t2.tableoid::regclass;
+
+-- join of several tables
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2, fprt1 t3 WHERE t1.a = t2.b AND t2.b = t3.a AND t1.a % 25 = 0  RETURNING *;
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2, fprt1 t3 WHERE t1.a = t2.b AND t2.b = t3.a AND t1.a % 25 = 0  RETURNING *;
+
+-- left join
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 LEFT JOIN fprt1 t3 ON (t2.b = t3.a) WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING *;
+UPDATE fprt1 t1 SET b = t1.b + 1 FROM fprt2 t2 LEFT JOIN fprt1 t3 ON (t2.b = t3.a) WHERE t1.a = t2.b AND t1.a % 25 = 0  RETURNING *;
+
+-- delete
+EXPLAIN (COSTS OFF)
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 30 = 29;
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 30 = 29;
+
+EXPLAIN (COSTS OFF)
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING *;
+DELETE FROM fprt1 USING fprt2 WHERE fprt1.a = fprt2.b AND fprt2.a % 25 = 0 RETURNING *;
 
 RESET enable_partitionwise_join;
 

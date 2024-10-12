@@ -120,6 +120,29 @@ tlist_member_match_var(Var *var, List *targetlist)
 }
 
 /*
+ * tlist_member_match_converted_whole_row
+ * 	tlist_member() variant, which compares whole var references
+ * 	based on their varno/varattno
+ */
+TargetEntry *
+tlist_member_match_converted_whole_row(Expr *node, List *targetlist)
+{
+	ListCell   *temp;
+
+	foreach(temp, targetlist)
+	{
+		TargetEntry *tlentry = (TargetEntry *) lfirst(temp);
+
+		if (equal(node, tlentry->expr))
+			return tlentry;
+
+		if (is_equal_converted_whole_row_references((Node *)node, (Node *)tlentry->expr))
+			return tlentry;
+	}
+	return NULL;
+}
+
+/*
  * add_to_flat_tlist
  *		Add more items to a flattened tlist (if they're not already in it)
  *

@@ -548,6 +548,7 @@ offset_relid_set(Relids relids, int offset)
  * to 'new_index'.  The varnosyn fields are changed too.  Also, adjust other
  * nodes that contain rangetable indexes, such as RangeTblRef and JoinExpr.
  *
+ * change_RangeTblRef: do we change RangeTblRef or not. see ChangeVarNodesExtended.
  * NOTE: although this has the form of a walker, we cheat and modify the
  * nodes in-place.  The given expression tree should have been copied
  * earlier to ensure that no unwanted side-effects occur!
@@ -558,6 +559,7 @@ typedef struct
 	int			rt_index;
 	int			new_index;
 	int			sublevels_up;
+	bool		change_RangeTblRef;
 } ChangeVarNodes_context;
 
 static bool
@@ -590,7 +592,7 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 			cexpr->cvarno = context->new_index;
 		return false;
 	}
-	if (IsA(node, RangeTblRef))
+	if (IsA(node, RangeTblRef) && context->change_RangeTblRef)
 	{
 		RangeTblRef *rtr = (RangeTblRef *) node;
 
@@ -637,6 +639,75 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 		}
 		return false;
 	}
+	if (IsA(node, RestrictInfo))
+	{
+		RestrictInfo *rinfo = (RestrictInfo *) node;
+		int			relid = -1;
+		bool		is_req_equal =
+			(rinfo->required_relids == rinfo->clause_relids);
+		bool		clause_relids_is_multiple =
+			(bms_membership(rinfo->clause_relids) == BMS_MULTIPLE);
+
+		if (bms_is_member(context->rt_index, rinfo->clause_relids))
+		{
+			expression_tree_walker((Node *) rinfo->clause, ChangeVarNodes_walker, (void *) context);
+			expression_tree_walker((Node *) rinfo->orclause, ChangeVarNodes_walker, (void *) context);
+
+			rinfo->clause_relids =
+				adjust_relid_set(rinfo->clause_relids, context->rt_index, context->new_index);
+			rinfo->num_base_rels = bms_num_members(rinfo->clause_relids);
+			rinfo->left_relids =
+				adjust_relid_set(rinfo->left_relids, context->rt_index, context->new_index);
+			rinfo->right_relids =
+				adjust_relid_set(rinfo->right_relids, context->rt_index, context->new_index);
+		}
+
+		if (is_req_equal)
+			rinfo->required_relids = rinfo->clause_relids;
+		else
+			rinfo->required_relids =
+				adjust_relid_set(rinfo->required_relids, context->rt_index, context->new_index);
+
+		rinfo->outer_relids =
+			adjust_relid_set(rinfo->outer_relids, context->rt_index, context->new_index);
+		rinfo->incompatible_relids =
+			adjust_relid_set(rinfo->incompatible_relids, context->rt_index, context->new_index);
+
+		if (rinfo->mergeopfamilies &&
+			bms_get_singleton_member(rinfo->clause_relids, &relid) &&
+			clause_relids_is_multiple &&
+			relid == context->new_index && IsA(rinfo->clause, OpExpr))
+		{
+			Expr	   *leftOp;
+			Expr	   *rightOp;
+
+			leftOp = (Expr *) get_leftop(rinfo->clause);
+			rightOp = (Expr *) get_rightop(rinfo->clause);
+
+			/*
+			 * for SJE (self join elimination), changing varnos will make t1.a = t2.a
+			 * to "t1.a = t1.a", which is always true, we can optizmied it out.
+			 * to optimzied it out, we use equal to validate,
+			 * but we also need to add a not null qual (NullTest).
+			 *
+			*/
+			if (leftOp != NULL && equal(leftOp, rightOp))
+			{
+				NullTest   *ntest = makeNode(NullTest);
+
+				ntest->arg = leftOp;
+				ntest->nulltesttype = IS_NOT_NULL;
+				ntest->argisrow = false;
+				ntest->location = -1;
+				rinfo->clause = (Expr *) ntest;
+				rinfo->mergeopfamilies = NIL;
+				rinfo->left_em = NULL;
+				rinfo->right_em = NULL;
+			}
+			Assert(rinfo->orclause == NULL);
+		}
+		return false;
+	}
 	if (IsA(node, AppendRelInfo))
 	{
 		AppendRelInfo *appinfo = (AppendRelInfo *) node;
@@ -670,32 +741,29 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 								  (void *) context);
 }
 
+/*
+ * almost equivalent to ChangeVarNodes. also see comments in ChangeVarNodes.
+ * difference with ChangeVarNodes:
+ * when we use ChangeVarNodes for node we change all of it's underlying nodes.
+ * but for SJE we don't want to change node type: RangeTblRef, in some occasion.
+ * because SJE last step, remove_rel_from_joinlist is to
+ * remove left node (RangeTblRef) one by one. if in any case while using
+ * ChangeVarNodes, by accidently leaf node RangeTblRef also being updated
+ * then remove_rel_from_joinlist will have error.
+*/
 void
-ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
+ChangeVarNodesExtended(Node *node, int rt_index, int new_index,
+					   int sublevels_up, bool change_RangeTblRef)
 {
-	ChangeVarNodes_context context;
-
+	ChangeVarNodes_context	context;
 	context.rt_index = rt_index;
 	context.new_index = new_index;
 	context.sublevels_up = sublevels_up;
+	context.change_RangeTblRef = change_RangeTblRef;
 
-	/*
-	 * Must be prepared to start with a Query or a bare expression tree; if
-	 * it's a Query, go straight to query_tree_walker to make sure that
-	 * sublevels_up doesn't get incremented prematurely.
-	 */
 	if (node && IsA(node, Query))
 	{
 		Query	   *qry = (Query *) node;
-
-		/*
-		 * If we are starting at a Query, and sublevels_up is zero, then we
-		 * must also fix rangetable indexes in the Query itself --- namely
-		 * resultRelation, mergeTargetRelation, exclRelIndex  and rowMarks
-		 * entries.  sublevels_up cannot be zero when recursing into a
-		 * subquery, so there's no need to have the same logic inside
-		 * ChangeVarNodes_walker.
-		 */
 		if (sublevels_up == 0)
 		{
 			ListCell   *l;
@@ -706,7 +774,6 @@ ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
 			if (qry->mergeTargetRelation == rt_index)
 				qry->mergeTargetRelation = new_index;
 
-			/* this is unlikely to ever be used, but ... */
 			if (qry->onConflict && qry->onConflict->exclRelIndex == rt_index)
 				qry->onConflict->exclRelIndex = new_index;
 
@@ -723,6 +790,11 @@ ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
 	}
 	else
 		ChangeVarNodes_walker(node, &context);
+}
+void
+ChangeVarNodes(Node *node, int rt_index, int new_index, int sublevels_up)
+{
+	ChangeVarNodesExtended(node, rt_index, new_index, sublevels_up, true);
 }
 
 /*

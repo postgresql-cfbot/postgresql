@@ -218,8 +218,9 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
      <para>
       Selects the data format to be read or written:
       <literal>text</literal>,
-      <literal>csv</literal> (Comma Separated Values),
-      or <literal>binary</literal>.
+      <literal>CSV</literal> (Comma Separated Values),
+      <literal>binary</literal>,
+      or <literal>raw</literal>
       The default is <literal>text</literal>.
       See <xref linkend="sql-copy-file-formats"/> below for details.
      </para>
@@ -257,7 +258,8 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       (line) of the file.  The default is a tab character in text format,
       a comma in <literal>CSV</literal> format.
       This must be a single one-byte character.
-      This option is not allowed when using <literal>binary</literal> format.
+      This option is allowed only when using <literal>text</literal> or
+      <literal>CSV</literal> format.
      </para>
     </listitem>
    </varlistentry>
@@ -271,7 +273,8 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       string in <literal>CSV</literal> format. You might prefer an
       empty string even in text format for cases where you don't want to
       distinguish nulls from empty strings.
-      This option is not allowed when using <literal>binary</literal> format.
+      This option is allowed only when using <literal>text</literal> or
+      <literal>CSV</literal> format.
      </para>
 
      <note>
@@ -294,7 +297,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       is found in the input file, the default value of the corresponding column
       will be used.
       This option is allowed only in <command>COPY FROM</command>, and only when
-      not using <literal>binary</literal> format.
+      using <literal>text</literal> or <literal>CSV</literal> format.
      </para>
     </listitem>
    </varlistentry>
@@ -400,7 +403,8 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
      </para>
      <para>
       The <literal>ignore</literal> option is applicable only for <command>COPY FROM</command>
-      when the <literal>FORMAT</literal> is <literal>text</literal> or <literal>csv</literal>.
+      when the <literal>FORMAT</literal> is <literal>text</literal>,
+      <literal>CSV</literal> or <literal>raw</literal>.
      </para>
      <para>
       A <literal>NOTICE</literal> message containing the ignored row count is
@@ -890,6 +894,88 @@ COPY <replaceable class="parameter">count</replaceable>
      programs cannot process.
     </para>
    </note>
+
+  </refsect2>
+
+  <refsect2>
+   <title>Raw Format</title>
+
+   <para>
+    This format option is used for importing and exporting files containing
+    unstructured text, where each line is treated as a single field. It is
+    ideal for data that does not conform to a structured, tabular format and
+    lacks delimiters.
+   </para>
+
+   <para>
+    In the <literal>raw</literal> format, each line of the input or output is
+    considered a complete value without any field separation. There are no
+    field delimiters, and all characters are taken literally. There is no
+    special handling for quotes, backslashes, or escape sequences. All
+    characters, including whitespace and special characters, are preserved
+    exactly as they appear in the file. However, it's important to note that
+    the text is still interpreted according to the specified <literal>ENCODING</literal>
+    option or the current client encoding for input, and encoded using the
+    specified <literal>ENCODING</literal> or the current client encoding for output.
+   </para>
+
+   <para>
+    When using this format, the <command>COPY</command> command must specify
+    exactly one column. Specifying multiple columns will result in an error.
+    If the table has multiple columns and no column list is provided, an error
+    will occur.
+   </para>
+
+   <para>
+    The <literal>raw</literal> format does not distinguish a <literal>NULL</literal>
+    value from an empty string. Empty lines are imported as empty strings, not
+    as <literal>NULL</literal> values.
+   </para>
+
+   <para>
+    Encoding works the same as in the <literal>text</literal> and <literal>CSV</literal> formats.
+   </para>
+
+  </refsect2>
+
+  <refsect2>
+   <title>Raw Format</title>
+
+   <para>
+    This format option is used for importing and exporting files containing
+    unstructured text, where each line is treated as a single field. It is
+    ideal for data that does not conform to a structured, tabular format and
+    lacks delimiters.
+   </para>
+
+   <para>
+    In the <literal>raw</literal> format, each line of the input or output is
+    considered a complete value without any field separation. There are no
+    field delimiters, and all characters are taken literally. There is no
+    special handling for quotes, backslashes, or escape sequences. All
+    characters, including whitespace and special characters, are preserved
+    exactly as they appear in the file. However, it's important to note that
+    the text is still interpreted according to the specified <literal>ENCODING</literal>
+    option or the current client encoding for input, and encoded using the
+    specified <literal>ENCODING</literal> or the current client encoding for output.
+   </para>
+
+   <para>
+    When using this format, the <command>COPY</command> command must specify
+    exactly one column. Specifying multiple columns will result in an error.
+    If the table has multiple columns and no column list is provided, an error
+    will occur.
+   </para>
+
+   <para>
+    The <literal>raw</literal> format does not distinguish a <literal>NULL</literal>
+    value from an empty string. Empty lines are imported as empty strings, not
+    as <literal>NULL</literal> values.
+   </para>
+
+   <para>
+    Encoding works the same as in the <literal>text</literal> and <literal>CSV</literal> formats.
+   </para>
 
   </refsect2>
 

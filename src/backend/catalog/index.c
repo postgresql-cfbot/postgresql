@@ -3930,7 +3930,7 @@ reindex_relation(const ReindexStmt *stmt, Oid relid, int flags,
 			 get_namespace_name(RelationGetNamespace(rel)),
 			 RelationGetRelationName(rel));
 
-	toast_relid = rel->rd_rel->reltoastrelid;
+	toast_relid = RelationGetToastRelid(rel);
 
 	/*
 	 * Get the list of index OIDs for this relation.  (We trust the relcache

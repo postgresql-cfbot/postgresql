@@ -3680,9 +3680,9 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 				}
 
 				/* Also add the toast indexes */
-				if (OidIsValid(heapRelation->rd_rel->reltoastrelid))
+				if (OidIsValid(RelationGetToastRelid(heapRelation)))
 				{
-					Oid			toastOid = heapRelation->rd_rel->reltoastrelid;
+					Oid			toastOid = RelationGetToastRelid(heapRelation);
 					Relation	toastRelation = table_open(toastOid,
 														   ShareUpdateExclusiveLock);
 

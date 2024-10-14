@@ -780,7 +780,7 @@ make_new_heap(Oid OIDOldHeap, Oid NewTableSpace, Oid NewAccessMethod,
 	 * Note that NewHeapCreateToastTable ends with CommandCounterIncrement, so
 	 * that the TOAST table will be visible for insertion.
 	 */
-	toastid = OldHeap->rd_rel->reltoastrelid;
+	toastid = RelationGetToastRelid(OldHeap);
 	if (OidIsValid(toastid))
 	{
 		/* keep the existing toast table's reloptions, if any */
@@ -870,8 +870,8 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	 * We don't need to open the toast relation here, just lock it.  The lock
 	 * will be held till end of transaction.
 	 */
-	if (OldHeap->rd_rel->reltoastrelid)
-		LockRelationOid(OldHeap->rd_rel->reltoastrelid, AccessExclusiveLock);
+	if (RelationGetToastRelid(OldHeap))
+		LockRelationOid(RelationGetToastRelid(OldHeap), AccessExclusiveLock);
 
 	/*
 	 * If both tables have TOAST tables, perform toast swap by content.  It is
@@ -880,7 +880,8 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 	 * swap by links.  This is okay because swap by content is only essential
 	 * for system catalogs, and we don't support schema changes for them.
 	 */
-	if (OldHeap->rd_rel->reltoastrelid && NewHeap->rd_rel->reltoastrelid)
+	if (OidIsValid(RelationGetToastRelid(OldHeap)) &&
+		OidIsValid(RelationGetToastRelid(NewHeap)))
 	{
 		*pSwapToastByContent = true;
 
@@ -902,7 +903,7 @@ copy_table_data(Oid OIDNewHeap, Oid OIDOldHeap, Oid OIDOldIndex, bool verbose,
 		 * work for values copied over from the old toast table, but not for
 		 * any values that we toast which were previously not toasted.)
 		 */
-		NewHeap->rd_toastoid = OldHeap->rd_rel->reltoastrelid;
+		NewHeap->rd_toastoid = RelationGetToastRelid(OldHeap);
 	}
 	else
 		*pSwapToastByContent = false;
@@ -1581,19 +1582,19 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 		Relation	newrel;
 
 		newrel = table_open(OIDOldHeap, NoLock);
-		if (OidIsValid(newrel->rd_rel->reltoastrelid))
+		if (OidIsValid(RelationGetToastRelid(newrel)))
 		{
 			Oid			toastidx;
 			char		NewToastName[NAMEDATALEN];
 
 			/* Get the associated valid index to be renamed */
-			toastidx = toast_get_valid_index(newrel->rd_rel->reltoastrelid,
+			toastidx = toast_get_valid_index(RelationGetToastRelid(newrel),
 											 NoLock);
 
 			/* rename the toast table ... */
 			snprintf(NewToastName, NAMEDATALEN, "pg_toast_%u",
 					 OIDOldHeap);
-			RenameRelationInternal(newrel->rd_rel->reltoastrelid,
+			RenameRelationInternal(RelationGetToastRelid(newrel),
 								   NewToastName, true, false);
 
 			/* ... and its valid index too. */
@@ -1609,7 +1610,7 @@ finish_heap_swap(Oid OIDOldHeap, Oid OIDNewHeap,
 			 * that is updated as part of RenameRelationInternal.
 			 */
 			CommandCounterIncrement();
-			ResetRelRewrite(newrel->rd_rel->reltoastrelid);
+			ResetRelRewrite(RelationGetToastRelid(newrel));
 		}
 		relation_close(newrel, NoLock);
 	}

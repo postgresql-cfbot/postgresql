@@ -378,6 +378,12 @@ process_syncing_tables_for_sync(XLogRecPtr current_lsn)
 		replorigin_session_origin_timestamp = 0;
 
 		/*
+		 * Updating pg_replication_origin might involve TOAST table access, so
+		 * ensure we have a valid snapshot.
+		 */
+		PushActiveSnapshot(GetTransactionSnapshot());
+
+		/*
 		 * Drop the tablesync's origin tracking if exists.
 		 *
 		 * There is a chance that the user is concurrently performing refresh
@@ -386,6 +392,8 @@ process_syncing_tables_for_sync(XLogRecPtr current_lsn)
 		 * missing_ok = true.
 		 */
 		replorigin_drop_by_name(originname, true, false);
+
+		PopActiveSnapshot();
 
 		finish_sync_worker();
 	}
@@ -484,6 +492,12 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 				}
 
 				/*
+				 * Updating pg_replication_origin might involve TOAST table
+				 * access, so ensure we have a valid snapshot.
+				 */
+				PushActiveSnapshot(GetTransactionSnapshot());
+
+				/*
 				 * Remove the tablesync origin tracking if exists.
 				 *
 				 * There is a chance that the user is concurrently performing
@@ -499,6 +513,8 @@ process_syncing_tables_for_apply(XLogRecPtr current_lsn)
 												   originname,
 												   sizeof(originname));
 				replorigin_drop_by_name(originname, true, false);
+
+				PopActiveSnapshot();
 
 				/*
 				 * Update the state to READY only after the origin cleanup.
@@ -1455,8 +1471,13 @@ LogicalRepSyncTableStart(XLogRecPtr *origin_startpos)
 		 * Then advance to the LSN got from walrcv_create_slot. This is WAL
 		 * logged for the purpose of recovery. Locks are to prevent the
 		 * replication origin from vanishing while advancing.
+		 *
+		 * Updating pg_replication_origin might involve TOAST table access, so
+		 * ensure we have a valid snapshot.
 		 */
+		PushActiveSnapshot(GetTransactionSnapshot());
 		originid = replorigin_create(originname);
+		PopActiveSnapshot();
 
 		LockRelationOid(ReplicationOriginRelationId, RowExclusiveLock);
 		replorigin_advance(originid, *origin_startpos, InvalidXLogRecPtr,

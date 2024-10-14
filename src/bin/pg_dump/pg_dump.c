@@ -395,6 +395,8 @@ static void setupDumpWorker(Archive *AH);
 static TableInfo *getRootTableInfo(const TableInfo *tbinfo);
 static bool forcePartitionRootLoad(const TableInfo *tbinfo);
 static void read_dump_filters(const char *filename, DumpOptions *dopt);
+static bool is_default_resolver(const char *confType, const char *confRes);
+static void destroyConcflictResolverList(SimplePtrList *list);
 
 
 int
@@ -4830,7 +4832,9 @@ getSubscriptions(Archive *fout)
 {
 	DumpOptions *dopt = fout->dopt;
 	PQExpBuffer query;
+	PQExpBuffer confQuery;
 	PGresult   *res;
+	PGresult   *confRes;
 	SubscriptionInfo *subinfo;
 	int			i_tableoid;
 	int			i_oid;
@@ -4851,7 +4855,9 @@ getSubscriptions(Archive *fout)
 	int			i_subenabled;
 	int			i_subfailover;
 	int			i,
-				ntups;
+				j,
+				ntups,
+				conf_ntuples;
 
 	if (dopt->no_subscriptions || fout->remoteVersion < 100000)
 		return;
@@ -5011,6 +5017,38 @@ getSubscriptions(Archive *fout)
 			pg_strdup(PQgetvalue(res, i, i_subenabled));
 		subinfo[i].subfailover =
 			pg_strdup(PQgetvalue(res, i, i_subfailover));
+
+		/* Populate conflict type fields using the new query */
+		confQuery = createPQExpBuffer();
+		appendPQExpBuffer(confQuery,
+						  "SELECT conftype, confres FROM pg_catalog.pg_subscription_conflict "
+						  "WHERE confsubid = %u order by conftype;", subinfo[i].dobj.catId.oid);
+		confRes = ExecuteSqlQuery(fout, confQuery->data, PGRES_TUPLES_OK);
+
+		conf_ntuples = PQntuples(confRes);
+
+		/* Initialize pointers in the list to NULL */
+		subinfo[i].conflict_resolvers = (SimplePtrList)
+		{
+			.head = NULL, .tail = NULL 
+		
+		};
+
+		/* Store conflict types and resolvers from the query result in subinfo */
+		for (j = 0; j < conf_ntuples; j++)
+		{
+			/* Create the ConflictTypeResolver node */
+			ConflictTypeResolver *conftyperesolver = palloc(sizeof(ConflictTypeResolver));
+
+			conftyperesolver->conflict_type = pg_strdup(PQgetvalue(confRes, j, 0));
+			conftyperesolver->resolver = pg_strdup(PQgetvalue(confRes, j, 1));
+
+			/* Append the node to subinfo's list */
+			simple_ptr_list_append(&subinfo[i].conflict_resolvers, conftyperesolver);
+		}
+
+		PQclear(confRes);
+		destroyPQExpBuffer(confQuery);
 
 		/* Decide whether we want to dump it */
 		selectDumpableObject(&(subinfo[i].dobj), fout);
@@ -5222,7 +5260,43 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 		appendPQExpBufferStr(publications, fmtId(pubnames[i]));
 	}
 
-	appendPQExpBuffer(query, " PUBLICATION %s WITH (connect = false, slot_name = ", publications->data);
+	appendPQExpBuffer(query, " PUBLICATION %s ", publications->data);
+
+	/* Add conflict resolvers, if any */
+	if (fout->remoteVersion >= 180000)
+	{
+		bool		first_resolver = true;
+		SimplePtrListCell *cell = NULL;
+		ConflictTypeResolver *conftyperesolver = NULL;
+
+		for (cell = subinfo->conflict_resolvers.head; cell; cell = cell->next)
+		{
+			conftyperesolver = (ConflictTypeResolver *) cell->ptr;
+
+			if (!is_default_resolver(conftyperesolver->conflict_type,
+									 conftyperesolver->resolver))
+			{
+				if (first_resolver)
+				{
+					appendPQExpBuffer(query, "CONFLICT RESOLVER (%s = '%s'",
+									  conftyperesolver->conflict_type,
+									  conftyperesolver->resolver);
+					first_resolver = false;
+				}
+				else
+					appendPQExpBuffer(query, ", %s = '%s'",
+									  conftyperesolver->conflict_type,
+									  conftyperesolver->resolver);
+			}
+		}
+
+		/* If there was at least one resolver, close the braces */
+		if (!first_resolver)
+			appendPQExpBufferStr(query, ") ");
+	}
+
+	appendPQExpBuffer(query, "WITH (connect = false, slot_name = ");
+
 	if (subinfo->subslotname)
 		appendStringLiteralAH(query, subinfo->subslotname, fout);
 	else
@@ -5314,6 +5388,9 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 		dumpSecLabel(fout, "SUBSCRIPTION", qsubname,
 					 NULL, subinfo->rolname,
 					 subinfo->dobj.catId, 0, subinfo->dobj.dumpId);
+
+	/* Clean-up the conflict_resolver list */
+	destroyConcflictResolverList((SimplePtrList *) &subinfo->conflict_resolvers);
 
 	destroyPQExpBuffer(publications);
 	free(pubnames);
@@ -19050,4 +19127,49 @@ read_dump_filters(const char *filename, DumpOptions *dopt)
 	}
 
 	filter_free(&fstate);
+}
+
+/*
+ * is_default_resolver - checks if the given resolver is the default for the
+ * specified conflict type.
+ */
+static bool
+is_default_resolver(const char *confType, const char *confRes)
+{
+	/*
+	 * The default resolvers for each conflict type are taken from the
+	 * predefined mapping ConflictTypeDefaultResolvers[] in conflict.c.
+	 *
+	 * Only modify these defaults if the corresponding values in conflict.c
+	 * are changed.
+	 */
+
+	if (strcmp(confType, "insert_exists") == 0 ||
+		strcmp(confType, "update_exists") == 0)
+		return strcmp(confRes, "error") == 0;
+	else if (strcmp(confType, "update_missing") == 0 ||
+			 strcmp(confType, "delete_missing") == 0)
+		return strcmp(confRes, "skip") == 0;
+	else if (strcmp(confType, "update_origin_differs") == 0 ||
+			 strcmp(confType, "delete_origin_differs") == 0)
+		return strcmp(confRes, "apply_remote") == 0;
+
+	return false;
+}
+
+/*
+ * destroyConflictResolverList - frees up the SimplePtrList containing
+ * cells pointing to struct ConflictTypeResolver nodes.
+ */
+static void
+destroyConcflictResolverList(SimplePtrList *conflictlist)
+{
+	SimplePtrListCell *cell = NULL;
+
+	/* Free the list items */
+	for (cell = conflictlist->head; cell; cell = cell->next)
+		pfree((ConflictTypeResolver *) cell->ptr);
+
+	/* Destroy the pointer list */
+	simple_ptr_list_destroy(conflictlist);
 }

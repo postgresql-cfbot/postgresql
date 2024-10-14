@@ -6541,9 +6541,10 @@ describeSubscriptions(const char *pattern, bool verbose)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
+	char	  **footers = NULL;
 	static const bool translate_columns[] = {false, false, false, false,
 		false, false, false, false, false, false, false, false, false, false,
-	false};
+	false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6623,12 +6624,13 @@ describeSubscriptions(const char *pattern, bool verbose)
 			appendPQExpBuffer(&buf,
 							  ", subskiplsn AS \"%s\"\n",
 							  gettext_noop("Skip LSN"));
+
 	}
 
 	/* Only display subscriptions in current database. */
 	appendPQExpBufferStr(&buf,
-						 "FROM pg_catalog.pg_subscription\n"
-						 "WHERE subdbid = (SELECT oid\n"
+						 "FROM pg_catalog.pg_subscription s\n"
+						 "WHERE s.subdbid = (SELECT oid\n"
 						 "                 FROM pg_catalog.pg_database\n"
 						 "                 WHERE datname = pg_catalog.current_database())");
 
@@ -6644,7 +6646,6 @@ describeSubscriptions(const char *pattern, bool verbose)
 	appendPQExpBufferStr(&buf, "ORDER BY 1;");
 
 	res = PSQLexec(buf.data);
-	termPQExpBuffer(&buf);
 	if (!res)
 		return false;
 
@@ -6653,9 +6654,118 @@ describeSubscriptions(const char *pattern, bool verbose)
 	myopt.translate_columns = translate_columns;
 	myopt.n_translate_columns = lengthof(translate_columns);
 
+	if (verbose && pset.sversion >= 180000)
+	{
+		PGresult   *result;
+		int			i,
+					tuples,
+					max_len = 0;
+		char	   *prev_subname = NULL;
+
+		printfPQExpBuffer(&buf,
+						  "SELECT s.subname, c.conftype, c.confres \n"
+						  " FROM pg_catalog.pg_subscription_conflict c \n"
+						  " JOIN pg_catalog.pg_subscription s \n"
+						  " ON c.confsubid = s.oid \n"
+						  " WHERE s.subdbid = (SELECT oid\n"
+						  " FROM pg_catalog.pg_database\n"
+						  " WHERE datname = pg_catalog.current_database())");
+
+		if (!validateSQLNamePattern(&buf, pattern, true, false,
+									NULL, "s.subname", NULL,
+									NULL,
+									NULL, 1))
+		{
+			termPQExpBuffer(&buf);
+			return false;
+		}
+
+		appendPQExpBufferStr(&buf, "ORDER BY s.subname, c.conftype");
+
+		result = PSQLexec(buf.data);
+		if (!result)
+		{
+			termPQExpBuffer(&buf);
+			return false;
+		}
+		else
+			tuples = PQntuples(result);
+
+		/* Calculate the maximum length of the conflict type (conftype) */
+		for (i = 0; i < tuples; i++)
+		{
+			int len = strlen(PQgetvalue(result, i, 1));
+			if (len > max_len)
+				max_len = len;
+		}
+
+		if (tuples > 0)
+		{
+			/*
+			 * Allocate memory for footers. Size of footers will be
+			 * 1 (for storing "Conflict Resolvers" string) + conflict
+			 * resolver count + subscription count + 1 (for storing NULL).
+			 * Subscription count is determined by dividing the number of
+			 * conflict resolvers by 6. This needs to be changed when
+			 * CONFLICT_NUM_RESOLVERS in conflict.h changes
+			 */
+			int subscription_count = tuples / 6;
+			int footer_idx = 1;
+
+			footers = (char **) pg_malloc((1 + tuples + subscription_count + 1)
+										   * sizeof(char *));
+			footers[0] = pg_strdup(_("\nConflict Resolvers:"));
+
+			for (i = 0; i < tuples; i++)
+			{
+				const char *subname = PQgetvalue(result, i, 0);
+				const char *conftype = PQgetvalue(result, i, 1);
+				const char *confres = PQgetvalue(result, i, 2);
+
+				/*
+				 * Print the subscription name only if it changes
+				 * (group by subname).
+				 */
+				if (!prev_subname || strcmp(prev_subname, subname) != 0)
+				{
+					printfPQExpBuffer(&buf, "\n(%s)", subname);
+					footers[footer_idx++] = pg_strdup(buf.data);
+					prev_subname = pg_strdup(subname);
+				}
+
+				/* Adjust the padding to align the "=" */
+				printfPQExpBuffer(&buf, "%s%*s = \"%s\"",
+								  conftype,
+								  (int)(max_len - strlen(conftype) + 2),
+								   "",
+								   confres);
+
+				footers[footer_idx++] = pg_strdup(buf.data);
+			}
+
+			footers[footer_idx] = NULL;
+			myopt.footers = footers;
+		}
+
+		PQclear(result);
+	}
+
 	printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+	termPQExpBuffer(&buf);
 
 	PQclear(res);
+
+	/* Free the memory allocated for the footer */
+	if (footers)
+	{
+		char	**footer = NULL;
+
+		for (footer = footers; *footer; footer++)
+			pg_free(*footer);
+
+		pg_free(footers);
+	}
+
 	return true;
 }
 

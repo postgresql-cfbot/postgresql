@@ -3012,9 +3012,10 @@ my %tests = (
 		create_order => 50,
 		create_sql => 'CREATE SUBSCRIPTION sub3
 						 CONNECTION \'dbname=doesnotexist\' PUBLICATION pub1
+						 CONFLICT RESOLVER (insert_exists = "apply_remote", update_missing = "error")
 						 WITH (connect = false, origin = any);',
 		regexp => qr/^
-			\QCREATE SUBSCRIPTION sub3 CONNECTION 'dbname=doesnotexist' PUBLICATION pub1 WITH (connect = false, slot_name = 'sub3');\E
+			\QCREATE SUBSCRIPTION sub3 CONNECTION 'dbname=doesnotexist' PUBLICATION pub1 CONFLICT RESOLVER (insert_exists = 'apply_remote', update_missing = 'error') WITH (connect = false, slot_name = 'sub3');\E
 			/xm,
 		like => { %full_runs, section_post_data => 1, },
 	},

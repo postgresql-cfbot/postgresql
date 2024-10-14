@@ -32,6 +32,9 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SET ( <repl
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> SKIP ( <replaceable class="parameter">skip_option</replaceable> = <replaceable class="parameter">value</replaceable> )
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> OWNER TO { <replaceable>new_owner</replaceable> | CURRENT_ROLE | CURRENT_USER | SESSION_USER }
 ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <replaceable>new_name</replaceable>
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> CONFLICT RESOLVER ( <replaceable class="parameter">conflict_type</replaceable> = <replaceable class="parameter">conflict_resolver</replaceable> [, ...] )
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RESET CONFLICT RESOLVER ALL
+ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RESET CONFLICT RESOLVER FOR '<replaceable class="parameter">conflict_type</replaceable>'
 </synopsis>
  </refsynopsisdiv>
 
@@ -343,6 +346,66 @@ ALTER SUBSCRIPTION <replaceable class="parameter">name</replaceable> RENAME TO <
      <para>
       The new name for the subscription.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-altersubscription-params-conflict-resolver">
+    <term><literal>CONFLICT RESOLVER ( <replaceable class="parameter">conflict_type</replaceable> = <replaceable class="parameter">conflict_resolver</replaceable> [, ... ] )</literal></term>
+    <listitem>
+     <para>
+      This clause alters the current conflict resolver for the specified conflict types.
+      Refer to <link linkend="sql-createsubscription-params-with-conflict-resolver">
+      <command>CREATE SUBSCRIBER ... CONFLICT RESOLVER</command></link>
+      for details about different conflict types and what kinds of resolver can
+      be assigned to them.
+     </para>
+     <variablelist>
+      <varlistentry id="sql-altersubscription-params-conflict-resolver-type">
+       <term><replaceable class="parameter">conflict_type</replaceable></term>
+       <listitem>
+        <para>
+         The conflict type.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry id="sql-altersubscription-params-conflict-resolver-resolver">
+       <term><replaceable class="parameter">conflict_resolver</replaceable></term>
+       <listitem>
+        <para>
+         The conflict resolver to use for this conflict type.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-altersubscription-params-reset-conflict-resolver">
+    <term><literal>RESET CONFLICT RESOLVER</literal></term>
+    <listitem>
+     <para>
+     Reset all conflict types, or a specified conflict type, to their default resolvers.
+     For details on conflict types and their default resolvers, refer to
+     section <link linkend="sql-createsubscription-params-with-conflict-resolver"><literal>CREATE SUBSCRIBER ... CONFLICT RESOLVER</literal></link>.
+     </para>
+     <variablelist>
+      <varlistentry id="sql-altersubscription-params-reset-all">
+       <term><literal>ALL</literal></term>
+       <listitem>
+        <para>
+         All conflict types will be reset to their respective default resolvers.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry id="sql-altersubscription-params-reset-conflict-type">
+       <term><literal>FOR</literal> '<replaceable class="parameter">conflict_type</replaceable>'</term>
+       <listitem>
+        <para>
+         The given <replaceable class="parameter">conflict_type</replaceable> will be reset to its default resolver.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
     </listitem>
    </varlistentry>
   </variablelist>

@@ -120,7 +120,16 @@ HINT:  To initiate replication, you must manually create the replication slot, e
        Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 ------------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub4 | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | none   | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub4)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub4 SET (origin = any);
 \dRs+ regress_testsub4
@@ -128,7 +137,16 @@ ALTER SUBSCRIPTION regress_testsub4 SET (origin = any);
        Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 ------------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub4 | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub4)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 DROP SUBSCRIPTION regress_testsub3;
 DROP SUBSCRIPTION regress_testsub4;
@@ -149,7 +167,16 @@ ERROR:  invalid connection string syntax: missing "=" after "foobar" in connecti
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET PUBLICATION testpub2, testpub3 WITH (refresh = false);
 ALTER SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist2';
@@ -161,7 +188,16 @@ ALTER SUBSCRIPTION regress_testsub SET (run_as_owner = true);
       Name       |           Owner           | Enabled |     Publication     | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |           Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+---------------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+------------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub2,testpub3} | f      | off       | d                | f                | any    | f                 | t             | f        | off                | dbname=regress_doesnotexist2 | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (password_required = true);
 ALTER SUBSCRIPTION regress_testsub SET (run_as_owner = false);
@@ -180,7 +216,16 @@ ALTER SUBSCRIPTION regress_testsub SKIP (lsn = '0/12345');
       Name       |           Owner           | Enabled |     Publication     | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |           Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+---------------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+------------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub2,testpub3} | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist2 | 0/12345
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 -- ok - with lsn = NONE
 ALTER SUBSCRIPTION regress_testsub SKIP (lsn = NONE);
@@ -192,7 +237,16 @@ ERROR:  invalid WAL location (LSN): 0/0
       Name       |           Owner           | Enabled |     Publication     | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |           Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+---------------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+------------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub2,testpub3} | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist2 | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 BEGIN;
 ALTER SUBSCRIPTION regress_testsub ENABLE;
@@ -227,7 +281,16 @@ HINT:  Available values: local, remote_write, remote_apply, on, off.
         Name         |           Owner           | Enabled |     Publication     | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |           Conninfo           | Skip LSN 
 ---------------------+---------------------------+---------+---------------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+------------------------------+----------
  regress_testsub_foo | regress_subscription_user | f       | {testpub2,testpub3} | f      | off       | d                | f                | any    | t                 | f             | f        | local              | dbname=regress_doesnotexist2 | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub_foo)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 -- rename back to keep the rest simple
 ALTER SUBSCRIPTION regress_testsub_foo RENAME TO regress_testsub;
@@ -259,7 +322,16 @@ HINT:  To initiate replication, you must manually create the replication slot, e
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | t      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (binary = false);
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
@@ -268,7 +340,16 @@ ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 DROP SUBSCRIPTION regress_testsub;
 -- fail - streaming must be boolean or 'parallel'
@@ -283,7 +364,16 @@ HINT:  To initiate replication, you must manually create the replication slot, e
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | on        | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (streaming = parallel);
 \dRs+
@@ -291,7 +381,16 @@ ALTER SUBSCRIPTION regress_testsub SET (streaming = parallel);
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | parallel  | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (streaming = false);
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
@@ -300,7 +399,16 @@ ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 -- fail - publication already exists
 ALTER SUBSCRIPTION regress_testsub ADD PUBLICATION testpub WITH (refresh = false);
@@ -318,7 +426,16 @@ ERROR:  publication "testpub1" is already in subscription "regress_testsub"
       Name       |           Owner           | Enabled |         Publication         | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-----------------------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub,testpub1,testpub2} | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 -- fail - publication used more than once
 ALTER SUBSCRIPTION regress_testsub DROP PUBLICATION testpub1, testpub1 WITH (refresh = false);
@@ -336,7 +453,16 @@ ALTER SUBSCRIPTION regress_testsub DROP PUBLICATION testpub1, testpub2 WITH (ref
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 DROP SUBSCRIPTION regress_testsub;
 CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION mypub
@@ -375,7 +501,16 @@ HINT:  To initiate replication, you must manually create the replication slot, e
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | p                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 -- we can alter streaming when two_phase enabled
 ALTER SUBSCRIPTION regress_testsub SET (streaming = true);
@@ -384,7 +519,16 @@ ALTER SUBSCRIPTION regress_testsub SET (streaming = true);
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | on        | p                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;
@@ -397,7 +541,169 @@ HINT:  To initiate replication, you must manually create the replication slot, e
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | on        | p                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
+
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub;
+-- fail - invalid conflict type
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (foo = 'keep_local') WITH (connect = false);
+ERROR:  foo is not a valid conflict type
+-- fail - invalid conflict resolver
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (insert_exists = foo) WITH (connect = false);
+ERROR:  foo is not a valid conflict resolver
+-- fail - invalid resolver for that conflict type
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub
+ CONFLICT RESOLVER (update_missing = 'apply_remote') WITH (connect = false);
+ERROR:  apply_remote is not a valid conflict resolver for conflict type update_missing
+-- fail - duplicate conflict type
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (insert_exists = 'keep_local', insert_exists = 'keep_local');
+ERROR:  conflicting or redundant options
+LINE 1: ... CONFLICT RESOLVER (insert_exists = 'keep_local', insert_exi...
+                                                             ^
+-- creating subscription with no explicit conflict resolvers should
+-- configure default conflict resolvers
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub WITH (connect = false);
+WARNING:  subscription was created, but is not connected
+HINT:  To initiate replication, you must manually create the replication slot, enable the subscription, and refresh the subscription.
+\dRs+
+                                                                                                                List of subscriptions
+      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
+-----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
+ regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
+
+ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
+DROP SUBSCRIPTION regress_testsub;
+-- ok - valid conflict types and resolvers
+CREATE SUBSCRIPTION regress_testsub CONNECTION 'dbname=regress_doesnotexist' PUBLICATION testpub CONFLICT RESOLVER (insert_exists = 'keep_local', update_missing = 'skip', delete_origin_differs = 'keep_local' ) WITH (connect = false);
+WARNING:  conflict detection and resolution could be incomplete due to disabled track_commit_timestamp
+DETAIL:  Conflict types 'update_origin_differs' and 'delete_origin_differs'cannot be detected unless 'track_commit_timestamp' is enabled
+WARNING:  subscription was created, but is not connected
+HINT:  To initiate replication, you must manually create the replication slot, enable the subscription, and refresh the subscription.
+--check if above are configured; for non specified conflict types, default resolvers should be seen
+\dRs+
+                                                                                                                List of subscriptions
+      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
+-----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
+ regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "keep_local"
+insert_exists           = "keep_local"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
+
+-- fail - altering with invalid conflict type
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (foo = 'keep_local');
+ERROR:  foo is not a valid conflict type
+-- fail - altering with invalid conflict resolver
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (insert_exists = 'foo');
+ERROR:  foo is not a valid conflict resolver
+-- fail - altering with duplicate conflict type
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (insert_exists = 'apply_remote', insert_exists = 'apply_remote');
+ERROR:  conflicting or redundant options
+LINE 1: ...ONFLICT RESOLVER (insert_exists = 'apply_remote', insert_exi...
+                                                             ^
+-- ok - valid conflict types and resolvers
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (insert_exists = 'apply_remote', update_missing = 'skip', delete_origin_differs = 'keep_local' );
+WARNING:  conflict detection and resolution could be incomplete due to disabled track_commit_timestamp
+DETAIL:  Conflict types 'update_origin_differs' and 'delete_origin_differs'cannot be detected unless 'track_commit_timestamp' is enabled
+\dRs+
+                                                                                                                List of subscriptions
+      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
+-----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
+ regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "keep_local"
+insert_exists           = "apply_remote"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
+
+-- ok - valid conflict types and resolvers
+ALTER SUBSCRIPTION regress_testsub CONFLICT RESOLVER (update_exists = 'keep_local', delete_missing = 'error', update_origin_differs = 'error');
+WARNING:  conflict detection and resolution could be incomplete due to disabled track_commit_timestamp
+DETAIL:  Conflict types 'update_origin_differs' and 'delete_origin_differs'cannot be detected unless 'track_commit_timestamp' is enabled
+\dRs+
+                                                                                                                List of subscriptions
+      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
+-----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
+ regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "error"
+delete_origin_differs   = "keep_local"
+insert_exists           = "apply_remote"
+update_exists           = "keep_local"
+update_missing          = "skip"
+update_origin_differs   = "error"
+
+-- fail - reset with an invalid conflit type
+ALTER SUBSCRIPTION regress_testsub RESET CONFLICT RESOLVER for 'foo';
+ERROR:  foo is not a valid conflict type
+-- ok - valid conflict type
+ALTER SUBSCRIPTION regress_testsub RESET CONFLICT RESOLVER for 'insert_exists';
+\dRs+
+                                                                                                                List of subscriptions
+      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
+-----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
+ regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "error"
+delete_origin_differs   = "keep_local"
+insert_exists           = "error"
+update_exists           = "keep_local"
+update_missing          = "skip"
+update_origin_differs   = "error"
+
+-- ok - reset ALL
+ALTER SUBSCRIPTION regress_testsub RESET CONFLICT RESOLVER ALL;
+\dRs+
+                                                                                                                List of subscriptions
+      Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
+-----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
+ regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;
@@ -413,7 +719,16 @@ HINT:  To initiate replication, you must manually create the replication slot, e
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | f                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (disable_on_error = true);
 \dRs+
@@ -421,7 +736,16 @@ ALTER SUBSCRIPTION regress_testsub SET (disable_on_error = true);
       Name       |           Owner           | Enabled | Publication | Binary | Streaming | Two-phase commit | Disable on error | Origin | Password required | Run as owner? | Failover | Synchronous commit |          Conninfo           | Skip LSN 
 -----------------+---------------------------+---------+-------------+--------+-----------+------------------+------------------+--------+-------------------+---------------+----------+--------------------+-----------------------------+----------
  regress_testsub | regress_subscription_user | f       | {testpub}   | f      | off       | d                | t                | any    | t                 | f             | f        | off                | dbname=regress_doesnotexist | 0/0
-(1 row)
+
+Conflict Resolvers:
+
+(regress_testsub)
+delete_missing          = "skip"
+delete_origin_differs   = "apply_remote"
+insert_exists           = "error"
+update_exists           = "error"
+update_missing          = "skip"
+update_origin_differs   = "apply_remote"
 
 ALTER SUBSCRIPTION regress_testsub SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub;

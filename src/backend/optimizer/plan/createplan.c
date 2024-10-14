@@ -7113,6 +7113,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 				 int epqParam)
 {
 	ModifyTable *node = makeNode(ModifyTable);
+	bool		returning_old_or_new = false;
+	bool		returning_old_or_new_valid = false;
 	List	   *fdw_private_list;
 	Bitmapset  *direct_modify_plans;
 	ListCell   *lc;
@@ -7177,6 +7179,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 	}
 	node->updateColnosLists = updateColnosLists;
 	node->withCheckOptionLists = withCheckOptionLists;
+	node->returningOld = root->parse->returningOld;
+	node->returningNew = root->parse->returningNew;
 	node->returningLists = returningLists;
 	node->rowMarks = rowMarks;
 	node->mergeActionLists = mergeActionLists;
@@ -7257,7 +7261,8 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 		 * callback functions needed for that and (2) there are no local
 		 * structures that need to be run for each modified row: row-level
 		 * triggers on the foreign table, stored generated columns, WITH CHECK
-		 * OPTIONs from parent views.
+		 * OPTIONs from parent views, or Vars returning OLD/NEW in the
+		 * RETURNING list.
 		 */
 		direct_modify = false;
 		if (fdwroutine != NULL &&
@@ -7268,7 +7273,18 @@ make_modifytable(PlannerInfo *root, Plan *subplan,
 			withCheckOptionLists == NIL &&
 			!has_row_triggers(root, rti, operation) &&
 			!has_stored_generated_columns(root, rti))
-			direct_modify = fdwroutine->PlanDirectModify(root, node, rti, i);
+		{
+			/* returning_old_or_new is the same for all result relations */
+			if (!returning_old_or_new_valid)
+			{
+				returning_old_or_new =
+					contain_vars_returning_old_or_new((Node *)
+													  root->parse->returningList);
+				returning_old_or_new_valid = true;
+			}
+			if (!returning_old_or_new)
+				direct_modify = fdwroutine->PlanDirectModify(root, node, rti, i);
+		}
 		if (direct_modify)
 			direct_modify_plans = bms_add_member(direct_modify_plans, i);
 

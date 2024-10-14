@@ -2464,6 +2464,10 @@ RestrictInfo
 Result
 ResultRelInfo
 ResultState
+ReturningClause
+ReturningExpr
+ReturningOption
+ReturningOptionKind
 ReturnSetInfo
 ReturnStmt
 RevmapContents
@@ -2612,6 +2616,7 @@ SetOperationStmt
 SetQuantifier
 SetToDefault
 SetupWorkerPtrType
+SetVarReturningType_context
 ShDependObjectInfo
 SharedAggInfo
 SharedBitmapHeapInstrumentation
@@ -3082,6 +3087,7 @@ VariableSpace
 VariableStatData
 VariableSubstituteHook
 Variables
+VarReturningType
 Vector32
 Vector8
 VersionedQuery

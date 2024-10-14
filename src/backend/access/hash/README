@@ -248,24 +248,24 @@ track of available overflow pages.
 
 The reader algorithm is:
 
-    lock the primary bucket page of the target bucket
-	if the target bucket is still being populated by a split:
-		release the buffer content lock on current bucket page
-		pin and acquire the buffer content lock on old bucket in shared mode
-		release the buffer content lock on old bucket, but not pin
-		retake the buffer content lock on new bucket
-		arrange to scan the old bucket normally and the new bucket for
-         tuples which are not moved-by-split
--- then, per read request:
-	reacquire content lock on current page
-	step to next page if necessary (no chaining of content locks, but keep
-	the pin on the primary bucket throughout the scan)
-	save all the matching tuples from current index page into an items array
-	release pin and content lock (but if it is primary bucket page retain
-	its pin till the end of the scan)
-	get tuple from an item array
--- at scan shutdown:
-	release all pins still held
+	    lock the primary bucket page of the target bucket
+		if the target bucket is still being populated by a split:
+			release the buffer content lock on current bucket page
+			pin and acquire the buffer content lock on old bucket in shared mode
+			release the buffer content lock on old bucket, but not pin
+			retake the buffer content lock on new bucket
+			arrange to scan the old bucket normally and the new bucket for
+		tuples which are not moved-by-split
+	-- then, per read request:
+		reacquire content lock on current page
+		step to next page if necessary (no chaining of content locks, but keep
+		the pin on the primary bucket throughout the scan)
+		save all the matching tuples from current index page into an items array
+		release pin and content lock (but if it is primary bucket page retain
+		its pin till the end of the scan)
+		get tuple from an item array
+	-- at scan shutdown:
+		release all pins still held
 
 Holding the buffer pin on the primary bucket page for the whole scan prevents
 the reader's current-tuple pointer from being invalidated by splits or
@@ -288,8 +288,8 @@ which this bucket is formed by split.
 The insertion algorithm is rather similar:
 
     lock the primary bucket page of the target bucket
--- (so far same as reader, except for acquisition of buffer content lock in
-	exclusive mode on primary bucket page)
+	-- (so far same as reader, except for acquisition of buffer content lock in
+		exclusive mode on primary bucket page)
 	if the bucket-being-split flag is set for a bucket and pin count on it is
 	 one, then finish the split
 		release the buffer content lock on current bucket
@@ -465,24 +465,24 @@ overflow page to the free pool.
 
 Obtaining an overflow page:
 
-	take metapage content lock in exclusive mode
-	determine next bitmap page number; if none, exit loop
-	release meta page content lock
-	pin bitmap page and take content lock in exclusive mode
-	search for a free page (zero bit in bitmap)
-	if found:
-		set bit in bitmap
-		mark bitmap page dirty
-		take metapage buffer content lock in exclusive mode
-		if first-free-bit value did not change,
-			update it and mark meta page dirty
-	else (not found):
-	release bitmap page buffer content lock
-	loop back to try next bitmap page, if any
--- here when we have checked all bitmap pages; we hold meta excl. lock
-	extend index to add another overflow page; update meta information
-	mark meta page dirty
-	return page number
+		take metapage content lock in exclusive mode
+		determine next bitmap page number; if none, exit loop
+		release meta page content lock
+		pin bitmap page and take content lock in exclusive mode
+		search for a free page (zero bit in bitmap)
+		if found:
+			set bit in bitmap
+			mark bitmap page dirty
+			take metapage buffer content lock in exclusive mode
+			if first-free-bit value did not change,
+				update it and mark meta page dirty
+		else (not found):
+		release bitmap page buffer content lock
+		loop back to try next bitmap page, if any
+	-- here when we have checked all bitmap pages; we hold meta excl. lock
+		extend index to add another overflow page; update meta information
+		mark meta page dirty
+		return page number
 
 It is slightly annoying to release and reacquire the metapage lock
 multiple times, but it seems best to do it that way to minimize loss of

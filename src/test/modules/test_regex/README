@@ -5,7 +5,7 @@ aren't currently exposed at the SQL level by PostgreSQL.
 
 Currently, one function is provided:
 
-test_regex(pattern text, string text, flags text) returns setof text[]
+	test_regex(pattern text, string text, flags text) returns setof text[]
 
 Reports an error if the pattern is an invalid regex.  Otherwise,
 the first row of output contains the number of subexpressions,

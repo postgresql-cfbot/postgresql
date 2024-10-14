@@ -12,7 +12,7 @@ be a file here that serves your needs.  If not, you can create your own.
 
 In order to use one of these files, you need to set
 
-   timezone_abbreviations = 'xyz'
+    timezone_abbreviations = 'xyz'
 
 in any of the usual ways for setting a parameter, where xyz is the filename
 that contains the desired time zone abbreviations.

@@ -14,9 +14,9 @@ Functions
 =========
 
 
-test_shm_mq(queue_size int8, message text,
-            repeat_count int4 default 1, num_workers int4 default 1)
-    RETURNS void
+	test_shm_mq(queue_size int8, message text,
+				repeat_count int4 default 1, num_workers int4 default 1)
+		RETURNS void
 
 This function sends and receives messages synchronously.  The user
 backend sends the provided message to the first background worker using
@@ -31,10 +31,10 @@ the user backend verifies that the message finally received matches the
 one originally sent and throws an error if not.
 
 
-test_shm_mq_pipelined(queue_size int8, message text,
-                      repeat_count int4 default 1, num_workers int4 default 1,
-                      verify bool default true)
-    RETURNS void
+	test_shm_mq_pipelined(queue_size int8, message text,
+						  repeat_count int4 default 1, num_workers int4 default 1,
+						  verify bool default true)
+		RETURNS void
 
 This function sends the same message multiple times, as specified by the
 repeat count, to the first background worker using a queue of the given

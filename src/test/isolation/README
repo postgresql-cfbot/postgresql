@@ -12,23 +12,33 @@ serializable isolation level; but tests for other sorts of concurrent
 behaviors have been added as well.
 
 You can run the tests against the current build tree by typing
+
     make check
+
 Alternatively, you can run against an existing installation by typing
+
     make installcheck
+
 (This will contact a server at the default port expected by libpq.
 You can set PGPORT and so forth in your environment to control this.)
 
 To run just specific test(s) against an installed server,
 you can do something like
+
     ./pg_isolation_regress fk-contention fk-deadlock
+
 (look into the specs/ subdirectory to see the available tests).
 
 Certain tests require the server's max_prepared_transactions parameter to be
 set to at least 3; therefore they are not run by default.  To include them in
 the test run, use
+
     make check-prepared-txns
+
 or
+
     make installcheck-prepared-txns
+
 after making sure the server configuration is correct (see TEMP_CONFIG
 to adjust this in the "check" case).
 
@@ -64,7 +74,7 @@ that are to be run.
 
 A test specification consists of four parts, in this order:
 
-setup { <SQL> }
+setup { < SQL > }
 
   The given SQL block is executed once (per permutation) before running
   the test.  Create any test tables or other required objects here.  This
@@ -74,13 +84,13 @@ setup { <SQL> }
   and some statements such as VACUUM cannot be combined with others in such
   a block.)
 
-teardown { <SQL> }
+teardown { < SQL > }
 
   The teardown SQL block is executed once after the test is finished. Use
   this to clean up in preparation for the next permutation, e.g dropping
   any test tables created by setup. This part is optional.
 
-session <name>
+session < name >
 
   There are normally several "session" parts in a spec file. Each
   session is executed in its own connection. A session part consists
@@ -91,13 +101,13 @@ session <name>
 
   Each step has the syntax
 
-  step <name> { <SQL> }
+  step < name > { < SQL > }
 
-  where <name> is a name identifying this step, and <SQL> is a SQL statement
+  where < name > is a name identifying this step, and < SQL > is a SQL statement
   (or statements, separated by semicolons) that is executed in the step.
   Step names must be unique across the whole spec file.
 
-permutation <step name> ...
+permutation < step name > ...
 
   A permutation line specifies a list of steps that are run in that order.
   Any number of permutation lines can appear.  If no permutation lines are
@@ -116,10 +126,10 @@ whether you quote them or not.  You must use quotes if you want to use
 an isolation test keyword (such as "permutation") as a name.
 
 A # character begins a comment, which extends to the end of the line.
-(This does not work inside <SQL> blocks, however.  Use the usual SQL
+(This does not work inside < SQL > blocks, however.  Use the usual SQL
 comment conventions there.)
 
-There is no way to include a "}" character in an <SQL> block.
+There is no way to include a "}" character in an < SQL > block.
 
 For each permutation of the session steps (whether these are manually
 specified in the spec file, or automatically generated), the isolation
@@ -187,9 +197,9 @@ step has completed.  (If the other step is used more than once in the
 current permutation, this step cannot complete while any of those
 instances is active.)
 
-A marker of the form "<other step name> notices <n>" (where <n> is a
+A marker of the form "< other step name > notices < n >" (where < n > is a
 positive integer) indicates that this step may not be reported as
-completing until the other step's session has returned at least <n>
+completing until the other step's session has returned at least < n >
 NOTICE messages, counting from when this step is launched.  This is useful
 for stabilizing cases where a step can return NOTICE messages before it
 actually completes, and those messages must be synchronized with the

@@ -1,27 +1,27 @@
 This directory contains a general purpose data structures, for use anywhere
 in the backend:
 
-binaryheap.c - a binary heap
+* binaryheap.c - a binary heap
 
-bipartite_match.c - Hopcroft-Karp maximum cardinality algorithm for bipartite graphs
+* bipartite_match.c - Hopcroft-Karp maximum cardinality algorithm for bipartite graphs
 
-bloomfilter.c - probabilistic, space-efficient set membership testing
+* bloomfilter.c - probabilistic, space-efficient set membership testing
 
-dshash.c - concurrent hash tables backed by dynamic shared memory areas
+* dshash.c - concurrent hash tables backed by dynamic shared memory areas
 
-hyperloglog.c - a streaming cardinality estimator
+* hyperloglog.c - a streaming cardinality estimator
 
-ilist.c - single and double-linked lists
+* ilist.c - single and double-linked lists
 
-integerset.c - a data structure for holding large set of integers
+* integerset.c - a data structure for holding large set of integers
 
-knapsack.c - knapsack problem solver
+* knapsack.c - knapsack problem solver
 
-pairingheap.c - a pairing heap
+* pairingheap.c - a pairing heap
 
-rbtree.c - a red-black tree
+* rbtree.c - a red-black tree
 
-stringinfo.c - an extensible string type
+* stringinfo.c - an extensible string type
 
 
 Aside from the inherent characteristics of the data structures, there are a

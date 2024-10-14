@@ -10,12 +10,12 @@ which is released by them under a BSD-style license.
 The Snowball project does not often make formal releases; it's best
 to pull from their git repository
 
-git clone https://github.com/snowballstem/snowball.git
+	git clone https://github.com/snowballstem/snowball.git
 
 and then building the derived files is as simple as
 
-cd snowball
-make
+	cd snowball
+	make
 
 At least on Linux, no platform-specific adjustment is needed.
 
@@ -39,10 +39,10 @@ To update the PostgreSQL sources from a new Snowball version:
 1. Copy the *.c files in snowball/src_c/ to src/backend/snowball/libstemmer
 with replacement of "../runtime/header.h" by "header.h", for example
 
-for f in .../snowball/src_c/*.c
-do
-    sed 's|\.\./runtime/header\.h|header.h|' $f >libstemmer/`basename $f`
-done
+	for f in .../snowball/src_c/*.c
+	do
+		sed 's|\.\./runtime/header\.h|header.h|' $f >libstemmer/`basename $f`
+	done
 
 Do not copy stemmers that are listed in libstemmer/modules.txt as
 nonstandard, such as "german2" or "lovins".

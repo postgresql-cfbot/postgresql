@@ -23,29 +23,37 @@ modify the default SHOW display for a variable.
 
 
 If a check_hook is provided, it points to a function of the signature
+
 	bool check_hook(datatype *newvalue, void **extra, GucSource source)
+
 The "newvalue" argument is of type bool *, int *, double *, or char **
 for bool, int/enum, real, or string variables respectively.  The check
 function should validate the proposed new value, and return true if it is
 OK or false if not.  The function can optionally do a few other things:
 
 * When rejecting a bad proposed value, it may be useful to append some
-additional information to the generic "invalid value for parameter FOO"
-complaint that guc.c will emit.  To do that, call
-	void GUC_check_errdetail(const char *format, ...)
-where the format string and additional arguments follow the rules for
-errdetail() arguments.  The resulting string will be emitted as the
-DETAIL line of guc.c's error report, so it should follow the message style
-guidelines for DETAIL messages.  There is also
-	void GUC_check_errhint(const char *format, ...)
-which can be used in the same way to append a HINT message.
-Occasionally it may even be appropriate to override guc.c's generic primary
-message or error code, which can be done with
-	void GUC_check_errcode(int sqlerrcode)
-	void GUC_check_errmsg(const char *format, ...)
-In general, check_hooks should avoid throwing errors directly if possible,
-though this may be impractical to avoid for some corner cases such as
-out-of-memory.
+  additional information to the generic "invalid value for parameter FOO"
+  complaint that guc.c will emit.  To do that, call
+
+		void GUC_check_errdetail(const char *format, ...)
+
+  where the format string and additional arguments follow the rules for
+  errdetail() arguments.  The resulting string will be emitted as the
+  DETAIL line of guc.c's error report, so it should follow the message style
+  guidelines for DETAIL messages.  There is also
+
+		void GUC_check_errhint(const char *format, ...)
+
+  which can be used in the same way to append a HINT message.
+  Occasionally it may even be appropriate to override guc.c's generic primary
+  message or error code, which can be done with
+
+		void GUC_check_errcode(int sqlerrcode)
+		void GUC_check_errmsg(const char *format, ...)
+
+  In general, check_hooks should avoid throwing errors directly if possible,
+  though this may be impractical to avoid for some corner cases such as
+  out-of-memory.
 
 * Since the newvalue is pass-by-reference, the function can modify it.
 This might be used for example to canonicalize the spelling of a string
@@ -76,7 +84,9 @@ assignment will occur.
 
 
 If an assign_hook is provided, it points to a function of the signature
+
 	void assign_hook(datatype newvalue, void *extra)
+
 where the type of "newvalue" matches the kind of variable, and "extra"
 is the derived-information pointer returned by the check_hook (always
 NULL if there is no check_hook).  This function is called immediately
@@ -110,7 +120,9 @@ needing to check GUC values outside a transaction.
 
 
 If a show_hook is provided, it points to a function of the signature
+
 	const char *show_hook(void)
+
 This hook allows variable-specific computation of the value displayed
 by SHOW (and other SQL features for showing GUC variable values).
 The return value can point to a static buffer, since show functions are
@@ -214,23 +226,23 @@ The merged entry will have level N-1 and prior = older prior, so easiest
 to keep older entry and free newer.  There are 12 possibilities since
 we already handled level N state = SAVE:
 
-N-1		N
+	N-1		N
 
-SAVE		SET		discard top prior, set state SET
-SAVE		LOCAL		discard top prior, no change to stack entry
-SAVE		SET+LOCAL	discard top prior, copy masked, state S+L
+	SAVE		SET		discard top prior, set state SET
+	SAVE		LOCAL		discard top prior, no change to stack entry
+	SAVE		SET+LOCAL	discard top prior, copy masked, state S+L
 
-SET		SET		discard top prior, no change to stack entry
-SET		LOCAL		copy top prior to masked, state S+L
-SET		SET+LOCAL	discard top prior, copy masked, state S+L
+	SET		SET		discard top prior, no change to stack entry
+	SET		LOCAL		copy top prior to masked, state S+L
+	SET		SET+LOCAL	discard top prior, copy masked, state S+L
 
-LOCAL		SET		discard top prior, set state SET
-LOCAL		LOCAL		discard top prior, no change to stack entry
-LOCAL		SET+LOCAL	discard top prior, copy masked, state S+L
+	LOCAL		SET		discard top prior, set state SET
+	LOCAL		LOCAL		discard top prior, no change to stack entry
+	LOCAL		SET+LOCAL	discard top prior, copy masked, state S+L
 
-SET+LOCAL	SET		discard top prior and second masked, state SET
-SET+LOCAL	LOCAL		discard top prior, no change to stack entry
-SET+LOCAL	SET+LOCAL	discard top prior, copy masked, state S+L
+	SET+LOCAL	SET		discard top prior and second masked, state SET
+	SET+LOCAL	LOCAL		discard top prior, no change to stack entry
+	SET+LOCAL	SET+LOCAL	discard top prior, copy masked, state S+L
 
 
 RESET is executed like a SET, but using the reset_val as the desired new

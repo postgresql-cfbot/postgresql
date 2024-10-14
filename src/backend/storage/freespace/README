@@ -33,9 +33,9 @@ node stores the max amount of free space on any of its children.
 
 For example:
 
-    4
- 4     2
-3 4   0 2    <- This level represents heap pages
+	    4
+	 4     2
+	3 4   0 2    <- This level represents heap pages
 
 We need two basic operations: search and update.
 
@@ -67,10 +67,10 @@ header takes some space on a page, the binary tree isn't perfect. That is,
 a few right-most leaf nodes are missing, and there are some useless non-leaf
 nodes at the right. So the tree looks something like this:
 
-       0
-   1       2
- 3   4   5   6
-7 8 9 A B
+	       0
+	   1       2
+	 3   4   5   6
+	7 8 9 A B
 
 where the numbers denote each node's position in the array.  Note that the
 tree is guaranteed complete above the leaf level; only some leaf nodes are
@@ -100,27 +100,27 @@ For example, assuming each FSM page can hold information about 4 pages (in
 reality, it holds (BLCKSZ - headers) / 2, or ~4000 with default BLCKSZ),
 we get a disk layout like this:
 
- 0     <-- page 0 at level 2 (root page)
-  0     <-- page 0 at level 1
-   0     <-- page 0 at level 0
-   1     <-- page 1 at level 0
-   2     <-- ...
-   3
-  1     <-- page 1 at level 1
-   4
-   5
-   6
-   7
-  2
-   8
-   9
-   10
-   11
-  3
-   12
-   13
-   14
-   15
+	 0     <-- page 0 at level 2 (root page)
+	  0     <-- page 0 at level 1
+	   0     <-- page 0 at level 0
+	   1     <-- page 1 at level 0
+	   2     <-- ...
+	   3
+	  1     <-- page 1 at level 1
+	   4
+	   5
+	   6
+	   7
+	  2
+	   8
+	   9
+	   10
+	   11
+	  3
+	   12
+	   13
+	   14
+	   15
 
 where the numbers are page numbers *at that level*, starting from 0.
 

@@ -183,70 +183,70 @@ operation.
 findPath is a subroutine of findParent, used when the correct parent page
 can't be found by following the rightlinks at the parent level:
 
-findPath( stack item )
-	push stack, [root, 0, 0] // page, LSN, parent
-	while( stack )
-		ptr = top of stack
-		latch( ptr->page, S-mode )
-		if ( ptr->parent->page->lsn < ptr->page->nsn )
-			push stack, [ ptr->page->rightlink, 0, ptr->parent ]
-		end
-		for( each tuple on page )
-			if ( tuple->pagepointer == item->page )
-				return stack
-			else
-				add to stack at the end [tuple->pagepointer,0, ptr]
+	findPath( stack item )
+		push stack, [root, 0, 0] // page, LSN, parent
+		while( stack )
+			ptr = top of stack
+			latch( ptr->page, S-mode )
+			if ( ptr->parent->page->lsn < ptr->page->nsn )
+				push stack, [ ptr->page->rightlink, 0, ptr->parent ]
 			end
+			for( each tuple on page )
+				if ( tuple->pagepointer == item->page )
+					return stack
+				else
+					add to stack at the end [tuple->pagepointer,0, ptr]
+				end
+			end
+			unlatch( ptr->page )
+			pop stack
 		end
-		unlatch( ptr->page )
-		pop stack
-	end
 
 
 gistFindCorrectParent is used to re-find the parent of a page during
 insertion. It might have migrated to the right since we traversed down the
 tree because of page splits.
 
-findParent( stack item )
-	parent = item->parent
-	if ( parent->page->lsn != parent->lsn )
-		while(true)
-			search parent tuple on parent->page, if found the return
-			rightlink = parent->page->rightlink
-			unlatch( parent->page )
-			if ( rightlink is incorrect )
-				break loop
+	findParent( stack item )
+		parent = item->parent
+		if ( parent->page->lsn != parent->lsn )
+			while(true)
+				search parent tuple on parent->page, if found the return
+				rightlink = parent->page->rightlink
+				unlatch( parent->page )
+				if ( rightlink is incorrect )
+					break loop
+				end
+				parent->page = rightlink
+				latch( parent->page, X-mode )
 			end
-			parent->page = rightlink
+			newstack = findPath( item->parent )
+			replace part of stack to new one
 			latch( parent->page, X-mode )
+			return findParent( item )
 		end
-		newstack = findPath( item->parent )
-		replace part of stack to new one
-		latch( parent->page, X-mode )
-		return findParent( item )
-	end
 
 pageSplit function decides how to distribute keys to the new pages after
 page split:
 
-pageSplit(page, allkeys)
-	(lkeys, rkeys) = pickSplit( allkeys )
-	if ( page is root )
-		lpage = new page
-	else
-		lpage = page
-	rpage = new page
-	if ( no space left on rpage )
-		newkeys = pageSplit( rpage, rkeys )
-	else
-		push newkeys, union(rkeys)
-	end
-	if ( no space left on lpage )
-		push newkeys, pageSplit( lpage, lkeys )
-	else
-		push newkeys, union(lkeys)
-	end
-	return newkeys
+	pageSplit(page, allkeys)
+		(lkeys, rkeys) = pickSplit( allkeys )
+		if ( page is root )
+			lpage = new page
+		else
+			lpage = page
+		rpage = new page
+		if ( no space left on rpage )
+			newkeys = pageSplit( rpage, rkeys )
+		else
+			push newkeys, union(rkeys)
+		end
+		if ( no space left on lpage )
+			push newkeys, pageSplit( lpage, lkeys )
+		else
+			push newkeys, union(lkeys)
+		end
+		return newkeys
 
 
 
@@ -302,18 +302,18 @@ In the algorithm, levels are numbered so that leaf pages have level zero,
 and internal node levels count up from 1. This numbering ensures that a page's
 level number never changes, even when the root page is split.
 
-Level                    Tree
+	Level                    Tree
 
-3                         *
-                      /       \
-2                *                 *
-              /  |  \           /  |  \
-1          *     *     *     *     *     *
-          / \   / \   / \   / \   / \   / \
-0        o   o o   o o   o o   o o   o o   o
+	3                         *
+	                      /       \
+	2                *                 *
+	              /  |  \           /  |  \
+	1          *     *     *     *     *     *
+	          / \   / \   / \   / \   / \   / \
+	0        o   o o   o o   o o   o o   o o   o
 
-* - internal page
-o - leaf page
+	* - internal page
+	o - leaf page
 
 Internal pages that belong to certain levels have buffers associated with
 them. Leaf pages never have buffers. Which levels have buffers is controlled
@@ -322,17 +322,17 @@ have buffers, while others do not. For example, if level_step = 2, then
 pages on levels 2, 4, 6, ... have buffers. If level_step = 1 then every
 internal page has a buffer.
 
-Level        Tree (level_step = 1)                Tree (level_step = 2)
+	Level        Tree (level_step = 1)                Tree (level_step = 2)
 
-3                      *                                     *
-                   /       \                             /       \
-2             *(b)              *(b)                *(b)              *(b)
-           /  |  \           /  |  \             /  |  \           /  |  \
-1       *(b)  *(b)  *(b)  *(b)  *(b)  *(b)    *     *     *     *     *     *
-       / \   / \   / \   / \   / \   / \     / \   / \   / \   / \   / \   / \
-0     o   o o   o o   o o   o o   o o   o   o   o o   o o   o o   o o   o o   o
+	3                      *                                     *
+	                   /       \                             /       \
+	2             *(b)              *(b)                *(b)              *(b)
+	           /  |  \           /  |  \             /  |  \           /  |  \
+	1       *(b)  *(b)  *(b)  *(b)  *(b)  *(b)    *     *     *     *     *     *
+	       / \   / \   / \   / \   / \   / \     / \   / \   / \   / \   / \   / \
+	0     o   o o   o o   o o   o o   o o   o   o   o o   o o   o o   o o   o o   o
 
-(b) - buffer
+	(b) - buffer
 
 Logically, a buffer is just bunch of tuples. Physically, it is divided in
 pages, backed by a temporary file. Each buffer can be in one of two states:
@@ -365,7 +365,7 @@ pages where the tuples finally land on get cached too. If there are, the last
 buffer page of each buffer below is kept in memory. This is illustrated in
 the figures below:
 
-   Buffer being emptied to
+    Buffer being emptied to
      lower-level buffers               Buffer being emptied to leaf pages
 
                +(fb)                                 +(fb)
@@ -374,11 +374,11 @@ the figures below:
       /   \         /   \                    /   \         /   \
     *(ab)   *(ab) *(ab)   *(ab)            x       x     x       x
 
-+    - cached internal page
-x    - cached leaf page
-*    - non-cached internal page
-(fb) - buffer being emptied
-(ab) - buffers being appended to, with last page in memory
+    +    - cached internal page
+    x    - cached leaf page
+    *    - non-cached internal page
+    (fb) - buffer being emptied
+    (ab) - buffers being appended to, with last page in memory
 
 In the beginning of the index build, the level-step is chosen so that all those
 pages involved in emptying one buffer fit in cache, so after each of those
@@ -477,7 +477,7 @@ value. The page is not recycled, until that XID is no longer visible to
 anyone. That's much more conservative than necessary, but let's keep it
 simple.
 
-
-Authors:
-	Teodor Sigaev	<teodor@sigaev.ru>
-	Oleg Bartunov	<oleg@sai.msu.su>
+Authors
+-------
+* Teodor Sigaev <teodor@sigaev.ru>
+* Oleg Bartunov <oleg@sai.msu.su>

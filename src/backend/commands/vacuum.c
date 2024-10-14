@@ -2187,7 +2187,7 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams *params,
 	if ((params->options & VACOPT_PROCESS_TOAST) != 0 &&
 		((params->options & VACOPT_FULL) == 0 ||
 		 (params->options & VACOPT_PROCESS_MAIN) == 0))
-		toast_relid = rel->rd_rel->reltoastrelid;
+		toast_relid = RelationGetToastRelid(rel);
 	else
 		toast_relid = InvalidOid;
 

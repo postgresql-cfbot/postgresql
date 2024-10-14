@@ -3073,7 +3073,7 @@ heap_truncate_one_rel(Relation rel)
 	RelationTruncateIndexes(rel);
 
 	/* If there is a toast table, truncate that too */
-	toastrelid = rel->rd_rel->reltoastrelid;
+	toastrelid = RelationGetToastRelid(rel);
 	if (OidIsValid(toastrelid))
 	{
 		Relation	toastrel = table_open(toastrelid, AccessExclusiveLock);

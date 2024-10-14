@@ -19382,8 +19382,21 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		tab->rel = rel;
 	}
 
+	/*
+	 * Detaching the partition might involve TOAST table access, so ensure we
+	 * have a valid snapshot.  We only expect to get here without a snapshot
+	 * in the concurrent path.
+	 */
+	if (concurrent)
+		PushActiveSnapshot(GetTransactionSnapshot());
+	else
+		Assert(HaveRegisteredOrActiveSnapshot());
+
 	/* Do the final part of detaching */
 	DetachPartitionFinalize(rel, partRel, concurrent, defaultPartOid);
+
+	if (concurrent)
+		PopActiveSnapshot();
 
 	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(partRel));
 

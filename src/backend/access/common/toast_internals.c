@@ -151,7 +151,7 @@ toast_save_datum(Relation rel, Datum value,
 	 * uniqueness of the OID we assign to the toasted item, even though it has
 	 * additional columns besides OID.
 	 */
-	toastrel = table_open(rel->rd_rel->reltoastrelid, RowExclusiveLock);
+	toastrel = table_open(RelationGetToastRelid(rel), RowExclusiveLock);
 	toasttupDesc = toastrel->rd_att;
 
 	/* Open all the toast indexes and look for the valid one */

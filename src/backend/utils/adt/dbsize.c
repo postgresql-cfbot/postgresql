@@ -436,8 +436,8 @@ calculate_table_size(Relation rel)
 	/*
 	 * Size of toast relation
 	 */
-	if (OidIsValid(rel->rd_rel->reltoastrelid))
-		size += calculate_toast_table_size(rel->rd_rel->reltoastrelid);
+	if (OidIsValid(RelationGetToastRelid(rel)))
+		size += calculate_toast_table_size(RelationGetToastRelid(rel));
 
 	return size;
 }

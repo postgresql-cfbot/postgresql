@@ -367,12 +367,12 @@ verify_heapam(PG_FUNCTION_ARGS)
 	}
 
 	/* Optionally open the toast relation, if any. */
-	if (ctx.rel->rd_rel->reltoastrelid && check_toast)
+	if (RelationGetToastRelid(ctx.rel) && check_toast)
 	{
 		int			offset;
 
 		/* Main relation has associated toast relation */
-		ctx.toast_rel = table_open(ctx.rel->rd_rel->reltoastrelid,
+		ctx.toast_rel = table_open(RelationGetToastRelid(ctx.rel),
 								   AccessShareLock);
 		offset = toast_open_indexes(ctx.toast_rel,
 									AccessShareLock,
@@ -1721,7 +1721,7 @@ check_tuple_attribute(HeapCheckContext *ctx)
 	}
 
 	/* The relation better have a toast table */
-	if (!ctx->rel->rd_rel->reltoastrelid)
+	if (!OidIsValid(RelationGetToastRelid(ctx->rel)))
 	{
 		report_corruption(ctx,
 						  psprintf("toast value %u is external but relation has no toast relation",

@@ -7,7 +7,7 @@
  * formats.  The main entry point is NextCopyFrom(), which parses the
  * next input line and returns it as Datums.
  *
- * In text/CSV mode, the parsing happens in multiple stages:
+ * In text/CSV/raw mode, the parsing happens in multiple stages:
  *
  * [data source] --> raw_buf --> input_buf --> line_buf --> attribute_buf
  *                1.          2.            3.           4.
@@ -25,7 +25,7 @@
  *    is copied into 'line_buf', with quotes and escape characters still
  *    intact.
  *
- * 4. CopyReadAttributesText/CSV() function takes the input line from
+ * 4. CopyReadAttributesText/CSV/Raw() function takes the input line from
  *    'line_buf', and splits it into fields, unescaping the data as required.
  *    The fields are stored in 'attribute_buf', and 'raw_fields' array holds
  *    pointers to each field.
@@ -143,8 +143,10 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 /* non-export function prototypes */
 static bool CopyReadLine(CopyFromState cstate);
 static bool CopyReadLineText(CopyFromState cstate);
+static bool CopyReadLineRawText(CopyFromState cstate);
 static int	CopyReadAttributesText(CopyFromState cstate);
 static int	CopyReadAttributesCSV(CopyFromState cstate);
+static int	CopyReadAttributesRaw(CopyFromState cstate);
 static Datum CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
 									 Oid typioparam, int32 typmod,
 									 bool *isnull);
@@ -732,7 +734,7 @@ CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
 }
 
 /*
- * Read raw fields in the next line for COPY FROM in text or csv mode.
+ * Read raw fields in the next line for COPY FROM in text, csv, or raw mode.
  * Return false if no more lines.
  *
  * An internal temporary buffer is returned via 'fields'. It is valid until
@@ -748,7 +750,7 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	int			fldct;
 	bool		done;
 
-	/* only available for text or csv input */
+	/* only available for text, csv, or raw input */
 	Assert(cstate->opts.format != COPY_FORMAT_BINARY);
 
 	/* on input check that the header line is correct if needed */
@@ -768,8 +770,13 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 
 			if (cstate->opts.format == COPY_FORMAT_CSV)
 				fldct = CopyReadAttributesCSV(cstate);
-			else
+			else if (cstate->opts.format == COPY_FORMAT_TEXT)
 				fldct = CopyReadAttributesText(cstate);
+			else
+			{
+				elog(ERROR, "unexpected COPY format: %d", cstate->opts.format);
+				pg_unreachable();
+			}
 
 			if (fldct != list_length(cstate->attnumlist))
 				ereport(ERROR,
@@ -823,8 +830,15 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	/* Parse the line into de-escaped field values */
 	if (cstate->opts.format == COPY_FORMAT_CSV)
 		fldct = CopyReadAttributesCSV(cstate);
-	else
+	else if (cstate->opts.format == COPY_FORMAT_TEXT)
 		fldct = CopyReadAttributesText(cstate);
+	else if (cstate->opts.format == COPY_FORMAT_RAW)
+		fldct = CopyReadAttributesRaw(cstate);
+	else
+	{
+		elog(ERROR, "unexpected COPY format: %d", cstate->opts.format);
+		pg_unreachable();
+	}
 
 	*fields = cstate->raw_fields;
 	*nfields = fldct;
@@ -1096,7 +1110,10 @@ CopyReadLine(CopyFromState cstate)
 	cstate->line_buf_valid = false;
 
 	/* Parse data and transfer into line_buf */
-	result = CopyReadLineText(cstate);
+	if (cstate->opts.format == COPY_FORMAT_RAW)
+		result = CopyReadLineRawText(cstate);
+	else
+		result = CopyReadLineText(cstate);
 
 	if (result)
 	{
@@ -1146,6 +1163,21 @@ CopyReadLine(CopyFromState cstate)
 				Assert(cstate->line_buf.data[cstate->line_buf.len - 1] == '\n');
 				cstate->line_buf.len -= 2;
 				cstate->line_buf.data[cstate->line_buf.len] = '\0';
+				break;
+			case EOL_CUSTOM:
+				{
+					int delim_len;
+					Assert(cstate->opts.format == COPY_FORMAT_RAW);
+					Assert(cstate->opts.delim);
+					delim_len = strlen(cstate->opts.delim);
+					Assert(delim_len > 0);
+					Assert(cstate->line_buf.len >= delim_len);
+					Assert(memcmp(cstate->line_buf.data + cstate->line_buf.len - delim_len,
+								cstate->opts.delim,
+								delim_len) == 0);
+					cstate->line_buf.len -= delim_len;
+					cstate->line_buf.data[cstate->line_buf.len] = '\0';
+				}
 				break;
 			case EOL_UNKNOWN:
 				/* shouldn't get here */
@@ -1461,6 +1493,109 @@ CopyReadLineText(CopyFromState cstate)
 
 	return result;
 }
+
+/*
+ * CopyReadLineRawText - inner loop of CopyReadLine for raw text mode
+ */
+static bool
+CopyReadLineRawText(CopyFromState cstate)
+{
+	char	   *copy_input_buf;
+	int			input_buf_ptr;
+	int			copy_buf_len;
+	bool		need_data = false;
+	bool		hit_eof = false;
+	bool		result = false;
+	bool		read_entire_file = (cstate->opts.delim == NULL);
+	int			delim_len = cstate->opts.delim ? strlen(cstate->opts.delim) : 0;
+
+	/*
+	 * The objective of this loop is to transfer data into line_buf until we
+	 * find the specified delimiter or reach EOF. In raw format, we treat the
+	 * input data as-is, without any parsing, quoting, or escaping. We are
+	 * only interested in locating the delimiter to determine the boundaries
+	 * of each data value.
+	 *
+	 * If a delimiter is specified, we read data until we encounter the
+	 * delimiter string. If no delimiter is specified, we read the entire
+	 * input as a single data value. Unlike text or CSV modes, we do not need
+	 * to handle line endings, escape sequences, or special characters.
+	 *
+	 * The input has already been converted to the database encoding.  All
+	 * supported server encodings have the property that all bytes in a
+	 * multi-byte sequence have the high bit set, so a multibyte character
+	 * cannot contain any newline or escape characters embedded in the
+	 * multibyte sequence.  Therefore, we can process the input byte-by-byte,
+	 * regardless of the encoding.
+	 *
+	 * For speed, we try to move data from input_buf to line_buf in chunks
+	 * rather than one character at a time.  input_buf_ptr points to the next
+	 * character to examine; any characters from input_buf_index to
+	 * input_buf_ptr have been determined to be part of the line, but not yet
+	 * transferred to line_buf.
+	 *
+	 * We handle both single-byte and multi-byte delimiters. For multi-byte
+	 * delimiters, we ensure that we have enough data in the buffer to compare
+	 * the delimiter string.
+	 */
+	copy_input_buf = cstate->input_buf;
+	input_buf_ptr = cstate->input_buf_index;
+	copy_buf_len = cstate->input_buf_len;
+
+	for (;;)
+	{
+		int			prev_raw_ptr;
+
+		/* Load more data if needed */
+		if (input_buf_ptr >= copy_buf_len || need_data)
+		{
+			REFILL_LINEBUF;
+
+			CopyLoadInputBuf(cstate);
+			/* Update local variables */
+			hit_eof = cstate->input_reached_eof;
+			input_buf_ptr = cstate->input_buf_index;
+			copy_buf_len = cstate->input_buf_len;
+
+			/* If no more data, break out of the loop */
+			if (INPUT_BUF_BYTES(cstate) <= 0)
+			{
+				result = true;
+				break;
+			}
+			need_data = false;
+		}
+
+		/* Fetch a character */
+		prev_raw_ptr = input_buf_ptr;
+
+		if (read_entire_file)
+		{
+			/* Continue until EOF if reading entire file */
+			input_buf_ptr++;
+			continue;
+		}
+		else
+		{
+			/* Check for delimiter, possibly multi-byte */
+			IF_NEED_REFILL_AND_NOT_EOF_CONTINUE(delim_len - 1);
+			if (strncmp(&copy_input_buf[input_buf_ptr], cstate->opts.delim,
+						delim_len) == 0)
+			{
+				cstate->eol_type = EOL_CUSTOM;
+				input_buf_ptr += delim_len;
+				break;
+			}
+			input_buf_ptr++;
+		}
+	}
+
+	/* Transfer data to line_buf, including the delimiter if found */
+	REFILL_LINEBUF;
+
+	return result;
+}
+
 
 /*
  *	Return decimal value for a hexadecimal digit
@@ -1938,6 +2073,45 @@ endfield:
 	return fieldno;
 }
 
+/*
+ * Parse the current line as a single attribute for the "raw" COPY format.
+ * No parsing, quoting, or escaping is performed.
+ * Empty lines are treated as empty strings, not NULL.
+ */
+static int
+CopyReadAttributesRaw(CopyFromState cstate)
+{
+	/* Enforce single column requirement */
+	if (cstate->max_fields != 1)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("COPY with format 'raw' must specify exactly one column")));
+	}
+
+	resetStringInfo(&cstate->attribute_buf);
+
+	/*
+	 * The attribute will certainly not be longer than the input
+	 * data line, so we can just force attribute_buf to be large enough and
+	 * then transfer data without any checks for enough space.  We need to do
+	 * it this way because enlarging attribute_buf mid-stream would invalidate
+	 * pointers already stored into cstate->raw_fields[].
+	 */
+	if (cstate->attribute_buf.maxlen <= cstate->line_buf.len)
+		enlargeStringInfo(&cstate->attribute_buf, cstate->line_buf.len);
+
+	/* Copy the entire line into attribute_buf */
+	memcpy(cstate->attribute_buf.data, cstate->line_buf.data,
+		   cstate->line_buf.len);
+	cstate->attribute_buf.data[cstate->line_buf.len] = '\0';
+	cstate->attribute_buf.len = cstate->line_buf.len;
+
+	/* Assign the single field to raw_fields[0] */
+	cstate->raw_fields[0] = cstate->attribute_buf.data;
+
+	return 1;
+}
 
 /*
  * Read a binary attribute

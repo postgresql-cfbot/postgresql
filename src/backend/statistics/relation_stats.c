@@ -99,11 +99,15 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 	{
 		int32		relpages = PG_GETARG_INT32(RELPAGES_ARG);
 
-		if (relpages < 0)
+		/*
+		 * While the default value for relpages is 0, a partitioned table with at
+		 * least one child partition can have a relpages of -1.
+		 */
+		if (relpages < -1)
 		{
 			ereport(elevel,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("relpages cannot be < 0")));
+					 errmsg("relpages cannot be < -1")));
 			table_close(crel, RowExclusiveLock);
 			return false;
 		}

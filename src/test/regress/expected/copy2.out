@@ -90,15 +90,35 @@ COPY x from stdin (format BINARY, delimiter ',');
 ERROR:  cannot specify DELIMITER in BINARY mode
 COPY x from stdin (format BINARY, null 'x');
 ERROR:  cannot specify NULL in BINARY mode
+COPY x from stdin (format RAW, null 'x');
+ERROR:  cannot specify NULL in RAW mode
+COPY x from stdin (format TEXT, escape 'x');
+ERROR:  COPY ESCAPE requires CSV mode
+COPY x from stdin (format BINARY, escape 'x');
+ERROR:  COPY ESCAPE requires CSV mode
+COPY x from stdin (format RAW, escape 'x');
+ERROR:  COPY ESCAPE requires CSV mode
+COPY x from stdin (format TEXT, quote 'x');
+ERROR:  COPY QUOTE requires CSV mode
+COPY x from stdin (format BINARY, quote 'x');
+ERROR:  COPY QUOTE requires CSV mode
+COPY x from stdin (format RAW, quote 'x');
+ERROR:  COPY QUOTE requires CSV mode
+COPY x from stdin (format RAW, header);
+ERROR:  cannot specify HEADER in RAW mode
 COPY x from stdin (format BINARY, on_error ignore);
 ERROR:  only ON_ERROR STOP is allowed in BINARY mode
 COPY x from stdin (on_error unsupported);
 ERROR:  COPY ON_ERROR "unsupported" not recognized
 LINE 1: COPY x from stdin (on_error unsupported);
                            ^
-COPY x from stdin (format TEXT, force_quote(a));
+COPY x to stdout (format TEXT, force_quote(a));
 ERROR:  COPY FORCE_QUOTE requires CSV mode
-COPY x from stdin (format TEXT, force_quote *);
+COPY x to stdout (format TEXT, force_quote *);
+ERROR:  COPY FORCE_QUOTE requires CSV mode
+COPY x to stdout (format RAW, force_quote(a));
+ERROR:  COPY FORCE_QUOTE requires CSV mode
+COPY x to stdout (format RAW, force_quote *);
 ERROR:  COPY FORCE_QUOTE requires CSV mode
 COPY x from stdin (format CSV, force_quote(a));
 ERROR:  COPY FORCE_QUOTE cannot be used with COPY FROM
@@ -108,6 +128,10 @@ COPY x from stdin (format TEXT, force_not_null(a));
 ERROR:  COPY FORCE_NOT_NULL requires CSV mode
 COPY x from stdin (format TEXT, force_not_null *);
 ERROR:  COPY FORCE_NOT_NULL requires CSV mode
+COPY x from stdin (format RAW, force_not_null(a));
+ERROR:  COPY FORCE_NOT_NULL requires CSV mode
+COPY x from stdin (format RAW, force_not_null *);
+ERROR:  COPY FORCE_NOT_NULL requires CSV mode
 COPY x to stdout (format CSV, force_not_null(a));
 ERROR:  COPY FORCE_NOT_NULL cannot be used with COPY TO
 COPY x to stdout (format CSV, force_not_null *);
@@ -115,6 +139,10 @@ ERROR:  COPY FORCE_NOT_NULL cannot be used with COPY TO
 COPY x from stdin (format TEXT, force_null(a));
 ERROR:  COPY FORCE_NULL requires CSV mode
 COPY x from stdin (format TEXT, force_null *);
+ERROR:  COPY FORCE_NULL requires CSV mode
+COPY x from stdin (format RAW, force_null(a));
+ERROR:  COPY FORCE_NULL requires CSV mode
+COPY x from stdin (format RAW, force_null *);
 ERROR:  COPY FORCE_NULL requires CSV mode
 COPY x to stdout (format CSV, force_null(a));
 ERROR:  COPY FORCE_NULL cannot be used with COPY TO
@@ -858,9 +886,11 @@ select id, text_value, ts_value from copy_default;
 (2 rows)
 
 truncate copy_default;
--- DEFAULT cannot be used in binary mode
+-- DEFAULT cannot be used in binary or raw mode
 copy copy_default from stdin with (format binary, default '\D');
 ERROR:  cannot specify DEFAULT in BINARY mode
+copy copy_default from stdin with (format raw, default '\D');
+ERROR:  cannot specify DEFAULT in RAW mode
 -- DEFAULT cannot be new line nor carriage return
 copy copy_default from stdin with (default E'\n');
 ERROR:  COPY default representation cannot use newline or carriage return
@@ -929,3 +959,19 @@ truncate copy_default;
 -- DEFAULT cannot be used in COPY TO
 copy (select 1 as test) TO stdout with (default '\D');
 ERROR:  COPY DEFAULT cannot be used with COPY TO
+--
+-- Test COPY FORMAT errors
+--
+\getenv abs_srcdir PG_ABS_SRCDIR
+\getenv abs_builddir PG_ABS_BUILDDIR
+\set filename :abs_builddir '/results/copy_raw_test_errors.data'
+-- Test single column requirement
+CREATE TABLE copy_raw_test_errors (col1 text, col2 text);
+COPY copy_raw_test_errors TO :'filename' (FORMAT raw);
+ERROR:  COPY with format 'raw' must specify exactly one column
+COPY copy_raw_test_errors (col1, col2) TO :'filename' (FORMAT raw);
+ERROR:  COPY with format 'raw' must specify exactly one column
+COPY copy_raw_test_errors FROM :'filename' (FORMAT raw);
+ERROR:  COPY with format 'raw' must specify exactly one column
+COPY copy_raw_test_errors (col1, col2) FROM :'filename' (FORMAT raw);
+ERROR:  COPY with format 'raw' must specify exactly one column

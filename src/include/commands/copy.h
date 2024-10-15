@@ -59,6 +59,7 @@ typedef enum CopyFormat
 	COPY_FORMAT_TEXT = 0,
 	COPY_FORMAT_BINARY,
 	COPY_FORMAT_CSV,
+	COPY_FORMAT_RAW,
 } CopyFormat;
 
 /*
@@ -79,7 +80,7 @@ typedef struct CopyFormatOptions
 	char	   *null_print_client;	/* same converted to file encoding */
 	char	   *default_print;	/* DEFAULT marker string */
 	int			default_print_len;	/* length of same */
-	char	   *delim;			/* column delimiter (must be 1 byte) */
+	char	   *delim;			/* delimiter (1 byte, except for raw format) */
 	char	   *quote;			/* CSV quote char (must be 1 byte) */
 	char	   *escape;			/* CSV escape char (must be 1 byte) */
 	List	   *force_quote;	/* list of column names */

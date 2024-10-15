@@ -493,6 +493,10 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 	Cost		comparison_cost;
 	double		N;
 	double		logN;
+	int			npathkeys = list_length(((Path *) path)->pathkeys);
+	int			cmpMultiplier = npathkeys;
+
+	Assert(npathkeys > 0);
 
 	/* Mark the path with the correct row estimate */
 	if (rows)
@@ -512,7 +516,7 @@ cost_gather_merge(GatherMergePath *path, PlannerInfo *root,
 	logN = LOG2(N);
 
 	/* Assumed cost per tuple comparison */
-	comparison_cost = 2.0 * cpu_operator_cost;
+	comparison_cost = (1.0 + cmpMultiplier) * cpu_operator_cost;
 
 	/* Heap creation cost */
 	startup_cost += comparison_cost * N * logN;
@@ -1896,7 +1900,7 @@ cost_recursive_union(Path *runion, Path *nrterm, Path *rterm)
  */
 static void
 cost_tuplesort(Cost *startup_cost, Cost *run_cost,
-			   double tuples, int width,
+			   double tuples, int width, int cmpMultiplier,
 			   Cost comparison_cost, int sort_mem,
 			   double limit_tuples)
 {
@@ -1913,7 +1917,7 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 		tuples = 2.0;
 
 	/* Include the default cost-per-comparison */
-	comparison_cost += 2.0 * cpu_operator_cost;
+	comparison_cost += (1.0 + cmpMultiplier) * cpu_operator_cost;
 
 	/* Do we have a useful LIMIT? */
 	if (limit_tuples > 0 && limit_tuples < tuples)
@@ -2086,7 +2090,9 @@ cost_incremental_sort(Path *path,
 	 * are equal.
 	 */
 	cost_tuplesort(&group_startup_cost, &group_run_cost,
-				   group_tuples, width, comparison_cost, sort_mem,
+				   group_tuples, width,
+				   list_length(pathkeys),
+				   comparison_cost, sort_mem,
 				   limit_tuples);
 
 	/*
@@ -2110,7 +2116,7 @@ cost_incremental_sort(Path *path,
 	 * detect the sort groups. This is roughly equal to one extra copy and
 	 * comparison per tuple.
 	 */
-	run_cost += (cpu_tuple_cost + comparison_cost) * input_tuples;
+	run_cost += (cpu_tuple_cost + (list_length(pathkeys) + 1) * comparison_cost) * input_tuples;
 
 	/*
 	 * Additionally, we charge double cpu_tuple_cost for each input group to
@@ -2142,7 +2148,7 @@ cost_incremental_sort(Path *path,
  */
 void
 cost_sort(Path *path, PlannerInfo *root,
-		  List *pathkeys, int input_disabled_nodes,
+		  int npathkeys, int input_disabled_nodes,
 		  Cost input_cost, double tuples, int width,
 		  Cost comparison_cost, int sort_mem,
 		  double limit_tuples)
@@ -2150,9 +2156,12 @@ cost_sort(Path *path, PlannerInfo *root,
 {
 	Cost		startup_cost;
 	Cost		run_cost;
+	int			cmpMultiplier = npathkeys;
+
+	Assert(npathkeys > 0);
 
 	cost_tuplesort(&startup_cost, &run_cost,
-				   tuples, width,
+				   tuples, width, cmpMultiplier,
 				   comparison_cost, sort_mem,
 				   limit_tuples);
 
@@ -2321,7 +2330,7 @@ cost_append(AppendPath *apath)
 					 */
 					cost_sort(&sort_path,
 							  NULL, /* doesn't currently need root */
-							  pathkeys,
+							  list_length(pathkeys),
 							  subpath->disabled_nodes,
 							  subpath->total_cost,
 							  subpath->rows,
@@ -2440,6 +2449,9 @@ cost_merge_append(Path *path, PlannerInfo *root,
 	Cost		comparison_cost;
 	double		N;
 	double		logN;
+	int			cmpMultiplier = list_length(pathkeys);
+
+	Assert(pathkeys != NIL);
 
 	/*
 	 * Avoid log(0)...
@@ -2448,7 +2460,7 @@ cost_merge_append(Path *path, PlannerInfo *root,
 	logN = LOG2(N);
 
 	/* Assumed cost per tuple comparison */
-	comparison_cost = 2.0 * cpu_operator_cost;
+	comparison_cost = (1.0 + cmpMultiplier) * cpu_operator_cost;
 
 	/* Heap creation cost */
 	startup_cost += comparison_cost * N * logN;
@@ -3708,7 +3720,7 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 		{
 			cost_sort(&sort_path,
 					  root,
-					  outersortkeys,
+					  list_length(outersortkeys),
 					  outer_path->disabled_nodes,
 					  outer_path->total_cost,
 					  outer_path_rows,
@@ -3758,7 +3770,7 @@ initial_cost_mergejoin(PlannerInfo *root, JoinCostWorkspace *workspace,
 
 		cost_sort(&sort_path,
 				  root,
-				  innersortkeys,
+				  list_length(innersortkeys),
 				  inner_path->disabled_nodes,
 				  inner_path->total_cost,
 				  inner_path_rows,

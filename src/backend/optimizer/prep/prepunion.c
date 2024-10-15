@@ -1358,7 +1358,7 @@ choose_hashed_setop(PlannerInfo *root, List *groupClauses,
 	sorted_p.startup_cost = input_path->startup_cost;
 	sorted_p.total_cost = input_path->total_cost;
 	/* XXX cost_sort doesn't actually look at pathkeys, so just pass NIL */
-	cost_sort(&sorted_p, root, NIL, sorted_p.disabled_nodes,
+	cost_sort(&sorted_p, root, list_length(input_path->pathtarget->exprs), sorted_p.disabled_nodes,
 			  sorted_p.total_cost,
 			  input_path->rows, input_path->pathtarget->width,
 			  0.0, work_mem, -1.0);

@@ -584,7 +584,7 @@ bringetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 
 	opaque = (BrinOpaque *) scan->opaque;
 	bdesc = opaque->bo_bdesc;
-	pgstat_count_index_scan(idxRel);
+	pgstat_count_index_scan(idxRel, false);
 
 	/*
 	 * We need to know the size of the table so that we know how long to

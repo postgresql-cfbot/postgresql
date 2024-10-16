@@ -281,9 +281,9 @@ U&amp;"d!0061t!+000061" UESCAPE '!'
    </indexterm>
 
    <para>
-    There are three kinds of <firstterm>implicitly-typed
+    There are four kinds of <firstterm>implicitly-typed
     constants</firstterm> in <productname>PostgreSQL</productname>:
-    strings, bit strings, and numbers.
+    strings, bit strings, numbers, and the null value.
     Constants can also be specified with explicit types, which can
     enable more accurate representation and more efficient handling by
     the system. These alternatives are discussed in the following
@@ -832,6 +832,25 @@ CAST ( '<replaceable>string</replaceable>' AS <replaceable>type</replaceable> )
      for all types.  The syntax with
      <literal>::</literal> is historical <productname>PostgreSQL</productname>
      usage, as is the function-call syntax.
+    </para>
+   </sect3>
+
+   <sect3 id="sql-syntax-constants-nullvalue">
+    <title>The Null Value Constant</title>
+    <indexterm>
+     <primary>null value</primary>
+     <secondary>constant</secondary>
+    </indexterm>
+    <para>
+     The null value represents an unknown value and its constant, the keyword <literal>NULL</literal>,
+     when evaluated in an expression, likewise yields a value of <literal>unknown</literal> type.
+     See <xref linkend="nullvalues"/> for an overview of how the system behaves in the presence
+     of a null value in various contexts.
+    </para>
+    <para>
+     Due to the typing of a null value as <literal>unknown</literal> it is often necessary to use
+     a cast, as described in the previous section, to convert it to the specific type needed.
+     However, implicit casting is performed when contextual information is available.
     </para>
    </sect3>
   </sect2>

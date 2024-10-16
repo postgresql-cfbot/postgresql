@@ -168,6 +168,8 @@ DROP TABLE products;
   </para>
  </sect1>
 
+ &nullvalues;
+
  <sect1 id="ddl-default">
   <title>Default Values</title>
 

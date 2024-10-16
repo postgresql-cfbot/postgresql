@@ -717,7 +717,7 @@ init_htab(HTAB *hashp, long nelem)
 		nbuckets <<= 1;
 
 	hctl->max_bucket = hctl->low_mask = nbuckets - 1;
-	hctl->high_mask = (nbuckets << 1) - 1;
+	hctl->high_mask = ((uint32) nbuckets << 1) - 1;
 
 	/*
 	 * Figure number of directory segments needed, round up to a power of 2
@@ -1819,8 +1819,8 @@ next_pow2_long(long num)
 static int
 next_pow2_int(long num)
 {
-	if (num > INT_MAX / 2)
-		num = INT_MAX / 2;
+	if (num > INT_MAX / 2 + 1)
+		num = INT_MAX / 2 + 1;
 	return 1 << my_log2(num);
 }
 

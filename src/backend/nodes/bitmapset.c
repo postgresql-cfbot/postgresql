@@ -67,7 +67,7 @@
  * we get zero.
  *----------
  */
-#define RIGHTMOST_ONE(x) ((signedbitmapword) (x) & -((signedbitmapword) (x)))
+#define RIGHTMOST_ONE(x) ((bitmapword) (x) & (~((bitmapword) (x)) + 1))
 
 #define HAS_MULTIPLE_ONES(x)	((bitmapword) RIGHTMOST_ONE(x) != (x))
 

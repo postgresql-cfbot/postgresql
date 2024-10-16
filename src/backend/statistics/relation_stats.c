@@ -67,7 +67,6 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 	bool		nulls[3] = {0};
 	int			ncols = 0;
 	TupleDesc	tupdesc;
-	HeapTuple	newtup;
 
 
 	stats_check_required_arg(fcinfo, relarginfo, RELATION_ARG);
@@ -99,16 +98,18 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 	{
 		int32		relpages = PG_GETARG_INT32(RELPAGES_ARG);
 
-		if (relpages < 0)
+		/*
+		 * While the default value for relpages is 0, a partitioned table with at
+		 * least one child partition can have a relpages of -1.
+		 */
+		if (relpages < -1)
 		{
 			ereport(elevel,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-					 errmsg("relpages cannot be < 0")));
+					 errmsg("relpages cannot be < -1")));
 			table_close(crel, RowExclusiveLock);
-			return false;
 		}
-
-		if (relpages != pgcform->relpages)
+		else if (relpages != pgcform->relpages)
 		{
 			replaces[ncols] = Anum_pg_class_relpages;
 			values[ncols] = Int32GetDatum(relpages);
@@ -126,10 +127,8 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("reltuples cannot be < -1.0")));
 			table_close(crel, RowExclusiveLock);
-			return false;
 		}
-
-		if (reltuples != pgcform->reltuples)
+		else if (reltuples != pgcform->reltuples)
 		{
 			replaces[ncols] = Anum_pg_class_reltuples;
 			values[ncols] = Float4GetDatum(reltuples);
@@ -147,10 +146,8 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("relallvisible cannot be < 0")));
 			table_close(crel, RowExclusiveLock);
-			return false;
 		}
-
-		if (relallvisible != pgcform->relallvisible)
+		else if (relallvisible != pgcform->relallvisible)
 		{
 			replaces[ncols] = Anum_pg_class_relallvisible;
 			values[ncols] = Int32GetDatum(relallvisible);
@@ -159,22 +156,20 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 	}
 
 	/* only update pg_class if there is a meaningful change */
-	if (ncols == 0)
+	if (ncols > 0)
 	{
-		table_close(crel, RowExclusiveLock);
-		return false;
+		HeapTuple	newtup;
+
+		newtup = heap_modify_tuple_by_cols(ctup, tupdesc, ncols, replaces, values,
+										nulls);
+		CatalogTupleUpdate(crel, &newtup->t_self, newtup);
+		heap_freetuple(newtup);
 	}
-
-	newtup = heap_modify_tuple_by_cols(ctup, tupdesc, ncols, replaces, values,
-									   nulls);
-
-	CatalogTupleUpdate(crel, &newtup->t_self, newtup);
-	heap_freetuple(newtup);
 
 	/* release the lock, consistent with vac_update_relstats() */
 	table_close(crel, RowExclusiveLock);
 
-	return true;
+	return (ncols > 0);
 }
 
 /*

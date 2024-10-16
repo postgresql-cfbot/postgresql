@@ -445,8 +445,18 @@ systable_beginscan(Relation heapRelation,
 				elog(ERROR, "column is not in index");
 		}
 
+		/*
+		 * No batching/prefetch for catalogs. We don't expect that to help
+		 * very much, because we usually need just one row, and even if we
+		 * need multiple rows, they tend to be colocated in heap.
+		 *
+		 * XXX Maybe we could do that, the prefetching only ramps up over
+		 * time. But then we need to be careful about infinite recursion when
+		 * looking up effective_io_concurrency for a tablespace in the
+		 * catalog.
+		 */
 		sysscan->iscan = index_beginscan(heapRelation, irel,
-										 snapshot, nkeys, 0);
+										 snapshot, nkeys, 0, false);
 		index_rescan(sysscan->iscan, idxkey, nkeys, NULL, 0);
 		sysscan->scan = NULL;
 	}
@@ -708,8 +718,17 @@ systable_beginscan_ordered(Relation heapRelation,
 			elog(ERROR, "column is not in index");
 	}
 
+	/*
+	 * No batching/prefetch for catalogs. We don't expect that to help very
+	 * much, because we usually need just one row, and even if we need
+	 * multiple rows, they tend to be colocated in heap.
+	 *
+	 * XXX Maybe we could do that, the prefetching only ramps up over time.
+	 * But then we need to be careful about infinite recursion when looking up
+	 * effective_io_concurrency for a tablespace in the catalog.
+	 */
 	sysscan->iscan = index_beginscan(heapRelation, indexRelation,
-									 snapshot, nkeys, 0);
+									 snapshot, nkeys, 0, false);
 	index_rescan(sysscan->iscan, idxkey, nkeys, NULL, 0);
 	sysscan->scan = NULL;
 

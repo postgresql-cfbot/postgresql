@@ -404,7 +404,8 @@ bool		pid_lock_file_exists(const char *datadir);
 void		cloneFile(const char *src, const char *dst,
 					  const char *schemaName, const char *relName);
 void		copyFile(const char *src, const char *dst,
-					 const char *schemaName, const char *relName);
+					 const char *schemaName, const char *relName,
+					 int segno);
 void		copyFileByRange(const char *src, const char *dst,
 							const char *schemaName, const char *relName);
 void		linkFile(const char *src, const char *dst,

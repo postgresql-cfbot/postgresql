@@ -5,18 +5,13 @@
  *
  * When waiting for a contended spinlock we loop tightly for awhile, then
  * delay using pg_usleep() and try again.  Preferably, "awhile" should be a
- * small multiple of the maximum time we expect a spinlock to be held.  100
- * iterations seems about right as an initial guess.  However, on a
- * uniprocessor the loop is a waste of cycles, while in a multi-CPU scenario
- * it's usually better to spin a bit longer than to call the kernel, so we try
- * to adapt the spin loop count depending on whether we seem to be in a
- * uniprocessor or multiprocessor.
- *
- * Note: you might think MIN_SPINS_PER_DELAY should be just 1, but you'd
- * be wrong; there are platforms where that can result in a "stuck
- * spinlock" failure.  This has been seen particularly on Alphas; it seems
- * that the first TAS after returning from kernel space will always fail
- * on that hardware.
+ * small multiple of the maximum time we expect a spinlock to be held.  1000
+ * iterations has historically worked well for multiprocessors, where it's
+ * usually better to spin a bit longer than to call the kernel.  We used to
+ * try to adapt the spin loop count depending on whether we seem to be in a
+ * uniprocessor or multiprocessor (since the loop is a waste of cycles on a
+ * uniprocessor) but we no longer anticipate any serious usage on
+ * uniprocessor systems.
  *
  * Once we do decide to block, we use randomly increasing pg_usleep()
  * delays. The first delay is 1 msec, then the delay randomly increases to
@@ -55,8 +50,7 @@
 #include "storage/s_lock.h"
 #include "utils/wait_event.h"
 
-#define MIN_SPINS_PER_DELAY 10
-#define MAX_SPINS_PER_DELAY 1000
+#define SPINS_PER_DELAY		1000
 #define NUM_DELAYS			1000
 #define MIN_DELAY_USEC		1000L
 #define MAX_DELAY_USEC		1000000L
@@ -69,8 +63,6 @@
 static uint32 local_my_wait_event_info;
 uint32	   *my_wait_event_info = &local_my_wait_event_info;
 #endif
-
-static int	spins_per_delay = DEFAULT_SPINS_PER_DELAY;
 
 
 /*
@@ -107,8 +99,6 @@ s_lock(volatile slock_t *lock, const char *file, int line, const char *func)
 		perform_spin_delay(&delayStatus);
 	}
 
-	finish_spin_delay(&delayStatus);
-
 	return delayStatus.delays;
 }
 
@@ -129,8 +119,8 @@ perform_spin_delay(SpinDelayStatus *status)
 	/* CPU-specific delay each time through the loop */
 	SPIN_DELAY();
 
-	/* Block the process every spins_per_delay tries */
-	if (++(status->spins) >= spins_per_delay)
+	/* Block the process every SPINS_PER_DELAY tries */
+	if (++(status->spins) >= SPINS_PER_DELAY)
 	{
 		if (++(status->delays) > NUM_DELAYS)
 			s_lock_stuck(status->file, status->line, status->func);
@@ -164,71 +154,6 @@ perform_spin_delay(SpinDelayStatus *status)
 
 		status->spins = 0;
 	}
-}
-
-/*
- * After acquiring a spinlock, update estimates about how long to loop.
- *
- * If we were able to acquire the lock without delaying, it's a good
- * indication we are in a multiprocessor.  If we had to delay, it's a sign
- * (but not a sure thing) that we are in a uniprocessor. Hence, we
- * decrement spins_per_delay slowly when we had to delay, and increase it
- * rapidly when we didn't.  It's expected that spins_per_delay will
- * converge to the minimum value on a uniprocessor and to the maximum
- * value on a multiprocessor.
- *
- * Note: spins_per_delay is local within our current process. We want to
- * average these observations across multiple backends, since it's
- * relatively rare for this function to even get entered, and so a single
- * backend might not live long enough to converge on a good value.  That
- * is handled by the two routines below.
- */
-void
-finish_spin_delay(SpinDelayStatus *status)
-{
-	if (status->cur_delay == 0)
-	{
-		/* we never had to delay */
-		if (spins_per_delay < MAX_SPINS_PER_DELAY)
-			spins_per_delay = Min(spins_per_delay + 100, MAX_SPINS_PER_DELAY);
-	}
-	else
-	{
-		if (spins_per_delay > MIN_SPINS_PER_DELAY)
-			spins_per_delay = Max(spins_per_delay - 1, MIN_SPINS_PER_DELAY);
-	}
-}
-
-/*
- * Set local copy of spins_per_delay during backend startup.
- *
- * NB: this has to be pretty fast as it is called while holding a spinlock
- */
-void
-set_spins_per_delay(int shared_spins_per_delay)
-{
-	spins_per_delay = shared_spins_per_delay;
-}
-
-/*
- * Update shared estimate of spins_per_delay during backend exit.
- *
- * NB: this has to be pretty fast as it is called while holding a spinlock
- */
-int
-update_spins_per_delay(int shared_spins_per_delay)
-{
-	/*
-	 * We use an exponential moving average with a relatively slow adaption
-	 * rate, so that noise in any one backend's result won't affect the shared
-	 * value too much.  As long as both inputs are within the allowed range,
-	 * the result must be too, so we need not worry about clamping the result.
-	 *
-	 * We deliberately truncate rather than rounding; this is so that single
-	 * adjustments inside a backend can affect the shared estimate (see the
-	 * asymmetric adjustment rules above).
-	 */
-	return (shared_spins_per_delay * 15 + spins_per_delay) / 16;
 }
 
 

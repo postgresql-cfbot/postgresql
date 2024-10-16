@@ -1,0 +1,135 @@
+Parsed test spec with 3 sessions
+
+starting permutation: lock_p1 cic insert drop2 commit chk_content
+step lock_p1: lock cictab_part_1 in row exclusive mode;
+step cic: CREATE INDEX CONCURRENTLY ON cictab(i); <waiting ...>
+step insert: insert into cictab values (1, 1), (11, 1);
+step drop2: DROP TABLE cictab_part_2;
+step commit: COMMIT;
+step cic: <... completed>
+step chk_content: 
+  set enable_seqscan to off;
+  explain (costs off) select * from cictab where i > 0;
+  select * from cictab where i > 0;
+
+QUERY PLAN                                                  
+------------------------------------------------------------
+Index Scan using cictab_part_1_i_idx on cictab_part_1 cictab
+  Index Cond: (i > 0)                                       
+(2 rows)
+
+i|j
+-+-
+1|0
+1|1
+(2 rows)
+
+
+starting permutation: lock_p2 cic insert drop1 commit chk_content
+step lock_p2: lock cictab_part_2 in row exclusive mode;
+step cic: CREATE INDEX CONCURRENTLY ON cictab(i); <waiting ...>
+step insert: insert into cictab values (1, 1), (11, 1);
+step drop1: DROP TABLE cictab_part_1;
+step commit: COMMIT;
+step cic: <... completed>
+step chk_content: 
+  set enable_seqscan to off;
+  explain (costs off) select * from cictab where i > 0;
+  select * from cictab where i > 0;
+
+QUERY PLAN                                                  
+------------------------------------------------------------
+Index Scan using cictab_part_2_i_idx on cictab_part_2 cictab
+  Index Cond: (i > 0)                                       
+(2 rows)
+
+ i|j
+--+-
+11|0
+11|1
+(2 rows)
+
+
+starting permutation: lock_p1 cic insert detach2 commit chk_content chk_content_part2
+step lock_p1: lock cictab_part_1 in row exclusive mode;
+step cic: CREATE INDEX CONCURRENTLY ON cictab(i); <waiting ...>
+step insert: insert into cictab values (1, 1), (11, 1);
+step detach2: ALTER TABLE cictab DETACH PARTITION cictab_part_2;
+step commit: COMMIT;
+step cic: <... completed>
+step chk_content: 
+  set enable_seqscan to off;
+  explain (costs off) select * from cictab where i > 0;
+  select * from cictab where i > 0;
+
+QUERY PLAN                                                  
+------------------------------------------------------------
+Index Scan using cictab_part_1_i_idx on cictab_part_1 cictab
+  Index Cond: (i > 0)                                       
+(2 rows)
+
+i|j
+-+-
+1|0
+1|1
+(2 rows)
+
+step chk_content_part2: 
+  set enable_seqscan to off;
+  explain (costs off) select * from cictab_part_2 where i > 0;
+  select * from cictab_part_2 where i > 0;
+
+QUERY PLAN                                           
+-----------------------------------------------------
+Index Scan using cictab_part_2_i_idx on cictab_part_2
+  Index Cond: (i > 0)                                
+(2 rows)
+
+ i|j
+--+-
+11|0
+11|1
+(2 rows)
+
+
+starting permutation: lock_p2 cic insert detach1 commit chk_content chk_content_part1
+step lock_p2: lock cictab_part_2 in row exclusive mode;
+step cic: CREATE INDEX CONCURRENTLY ON cictab(i); <waiting ...>
+step insert: insert into cictab values (1, 1), (11, 1);
+step detach1: ALTER TABLE cictab DETACH PARTITION cictab_part_1;
+step commit: COMMIT;
+step cic: <... completed>
+step chk_content: 
+  set enable_seqscan to off;
+  explain (costs off) select * from cictab where i > 0;
+  select * from cictab where i > 0;
+
+QUERY PLAN                                                  
+------------------------------------------------------------
+Index Scan using cictab_part_2_i_idx on cictab_part_2 cictab
+  Index Cond: (i > 0)                                       
+(2 rows)
+
+ i|j
+--+-
+11|0
+11|1
+(2 rows)
+
+step chk_content_part1: 
+  set enable_seqscan to off;
+  explain (costs off) select * from cictab_part_1 where i > 0;
+  select * from cictab_part_1 where i > 0;
+
+QUERY PLAN                                           
+-----------------------------------------------------
+Index Scan using cictab_part_1_i_idx on cictab_part_1
+  Index Cond: (i > 0)                                
+(2 rows)
+
+i|j
+-+-
+1|0
+1|1
+(2 rows)
+

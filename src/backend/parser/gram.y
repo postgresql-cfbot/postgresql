@@ -768,7 +768,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 	QUOTE QUOTES
 
-	RANGE READ REAL REASSIGN RECURSIVE REF_P REFERENCES REFERENCING
+	RANGE RAW READ REAL REASSIGN RECURSIVE REF_P REFERENCES REFERENCING
 	REFRESH REINDEX RELATIVE_P RELEASE RENAME REPEATABLE REPLACE REPLICA
 	RESET RESTART RESTRICT RETURN RETURNING RETURNS REVOKE RIGHT ROLE ROLLBACK ROLLUP
 	ROUTINE ROUTINES ROW ROWS RULE
@@ -3512,6 +3512,10 @@ copy_opt_item:
 			| ENCODING Sconst
 				{
 					$$ = makeDefElem("encoding", (Node *) makeString($2), @1);
+				}
+			| RAW
+				{
+					$$ = makeDefElem("format", (Node *) makeString("raw"), @1);
 				}
 		;
 
@@ -17771,6 +17775,7 @@ unreserved_keyword:
 			| QUOTE
 			| QUOTES
 			| RANGE
+			| RAW
 			| READ
 			| REASSIGN
 			| RECURSIVE
@@ -18398,6 +18403,7 @@ bare_label_keyword:
 			| QUOTE
 			| QUOTES
 			| RANGE
+			| RAW
 			| READ
 			| REAL
 			| REASSIGN

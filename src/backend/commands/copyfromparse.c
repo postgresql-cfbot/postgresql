@@ -7,7 +7,7 @@
  * formats.  The main entry point is NextCopyFrom(), which parses the
  * next input line and returns it as Datums.
  *
- * In text/CSV mode, the parsing happens in multiple stages:
+ * In text/CSV/raw mode, the parsing happens in multiple stages:
  *
  * [data source] --> raw_buf --> input_buf --> line_buf --> attribute_buf
  *                1.          2.            3.           4.
@@ -25,7 +25,7 @@
  *    is copied into 'line_buf', with quotes and escape characters still
  *    intact.
  *
- * 4. CopyReadAttributesText/CSV() function takes the input line from
+ * 4. CopyReadAttributesText/CSV/Raw() function takes the input line from
  *    'line_buf', and splits it into fields, unescaping the data as required.
  *    The fields are stored in 'attribute_buf', and 'raw_fields' array holds
  *    pointers to each field.
@@ -143,8 +143,10 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 /* non-export function prototypes */
 static bool CopyReadLine(CopyFromState cstate);
 static bool CopyReadLineText(CopyFromState cstate);
+static bool CopyReadLineRawText(CopyFromState cstate);
 static int	CopyReadAttributesText(CopyFromState cstate);
 static int	CopyReadAttributesCSV(CopyFromState cstate);
+static int	CopyReadAttributesRaw(CopyFromState cstate);
 static Datum CopyReadBinaryAttribute(CopyFromState cstate, FmgrInfo *flinfo,
 									 Oid typioparam, int32 typmod,
 									 bool *isnull);
@@ -163,7 +165,7 @@ ReceiveCopyBegin(CopyFromState cstate)
 {
 	StringInfoData buf;
 	int			natts = list_length(cstate->attnumlist);
-	int16		format = (cstate->opts.binary ? 1 : 0);
+	int16		format = (cstate->opts.format == COPY_FORMAT_BINARY ? 1 : 0);
 	int			i;
 
 	pq_beginmessage(&buf, PqMsg_CopyInResponse);
@@ -732,7 +734,7 @@ CopyReadBinaryData(CopyFromState cstate, char *dest, int nbytes)
 }
 
 /*
- * Read raw fields in the next line for COPY FROM in text or csv mode.
+ * Read raw fields in the next line for COPY FROM in text, csv, or raw mode.
  * Return false if no more lines.
  *
  * An internal temporary buffer is returned via 'fields'. It is valid until
@@ -748,8 +750,8 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	int			fldct;
 	bool		done;
 
-	/* only available for text or csv input */
-	Assert(!cstate->opts.binary);
+	/* only available for text, csv, or raw input */
+	Assert(cstate->opts.format != COPY_FORMAT_BINARY);
 
 	/* on input check that the header line is correct if needed */
 	if (cstate->cur_lineno == 0 && cstate->opts.header_line)
@@ -766,10 +768,17 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 		{
 			int			fldnum;
 
-			if (cstate->opts.csv_mode)
+			if (cstate->opts.format == COPY_FORMAT_CSV)
 				fldct = CopyReadAttributesCSV(cstate);
-			else
+			else if (cstate->opts.format == COPY_FORMAT_TEXT)
 				fldct = CopyReadAttributesText(cstate);
+			else if (cstate->opts.format == COPY_FORMAT_RAW)
+				fldct = CopyReadAttributesRaw(cstate);
+			else
+			{
+				elog(ERROR, "unexpected COPY format: %d", cstate->opts.format);
+				pg_unreachable();
+			}
 
 			if (fldct != list_length(cstate->attnumlist))
 				ereport(ERROR,
@@ -821,10 +830,17 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 		return false;
 
 	/* Parse the line into de-escaped field values */
-	if (cstate->opts.csv_mode)
+	if (cstate->opts.format == COPY_FORMAT_CSV)
 		fldct = CopyReadAttributesCSV(cstate);
-	else
+	else if (cstate->opts.format == COPY_FORMAT_TEXT)
 		fldct = CopyReadAttributesText(cstate);
+	else if (cstate->opts.format == COPY_FORMAT_RAW)
+		fldct = CopyReadAttributesRaw(cstate);
+	else
+	{
+		elog(ERROR, "unexpected COPY format: %d", cstate->opts.format);
+		pg_unreachable();
+	}
 
 	*fields = cstate->raw_fields;
 	*nfields = fldct;
@@ -865,7 +881,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 	MemSet(nulls, true, num_phys_attrs * sizeof(bool));
 	MemSet(cstate->defaults, false, num_phys_attrs * sizeof(bool));
 
-	if (!cstate->opts.binary)
+	if (cstate->opts.format != COPY_FORMAT_BINARY)
 	{
 		char	  **field_strings;
 		ListCell   *cur;
@@ -906,7 +922,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 				continue;
 			}
 
-			if (cstate->opts.csv_mode)
+			if (cstate->opts.format == COPY_FORMAT_CSV)
 			{
 				if (string == NULL &&
 					cstate->opts.force_notnull_flags[m])
@@ -1096,7 +1112,10 @@ CopyReadLine(CopyFromState cstate)
 	cstate->line_buf_valid = false;
 
 	/* Parse data and transfer into line_buf */
-	result = CopyReadLineText(cstate);
+	if (cstate->opts.format == COPY_FORMAT_RAW)
+		result = CopyReadLineRawText(cstate);
+	else
+		result = CopyReadLineText(cstate);
 
 	if (result)
 	{
@@ -1179,7 +1198,7 @@ CopyReadLineText(CopyFromState cstate)
 	char		quotec = '\0';
 	char		escapec = '\0';
 
-	if (cstate->opts.csv_mode)
+	if (cstate->opts.format == COPY_FORMAT_CSV)
 	{
 		quotec = cstate->opts.quote[0];
 		escapec = cstate->opts.escape[0];
@@ -1256,7 +1275,7 @@ CopyReadLineText(CopyFromState cstate)
 		prev_raw_ptr = input_buf_ptr;
 		c = copy_input_buf[input_buf_ptr++];
 
-		if (cstate->opts.csv_mode)
+		if (cstate->opts.format == COPY_FORMAT_CSV)
 		{
 			/*
 			 * If character is '\r', we may need to look ahead below.  Force
@@ -1295,7 +1314,7 @@ CopyReadLineText(CopyFromState cstate)
 		}
 
 		/* Process \r */
-		if (c == '\r' && (!cstate->opts.csv_mode || !in_quote))
+		if (c == '\r' && (cstate->opts.format != COPY_FORMAT_CSV || !in_quote))
 		{
 			/* Check for \r\n on first line, _and_ handle \r\n. */
 			if (cstate->eol_type == EOL_UNKNOWN ||
@@ -1323,10 +1342,10 @@ CopyReadLineText(CopyFromState cstate)
 					if (cstate->eol_type == EOL_CRNL)
 						ereport(ERROR,
 								(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-								 !cstate->opts.csv_mode ?
+								 cstate->opts.format != COPY_FORMAT_CSV ?
 								 errmsg("literal carriage return found in data") :
 								 errmsg("unquoted carriage return found in data"),
-								 !cstate->opts.csv_mode ?
+								 cstate->opts.format != COPY_FORMAT_CSV ?
 								 errhint("Use \"\\r\" to represent carriage return.") :
 								 errhint("Use quoted CSV field to represent carriage return.")));
 
@@ -1340,10 +1359,10 @@ CopyReadLineText(CopyFromState cstate)
 			else if (cstate->eol_type == EOL_NL)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errmsg("literal carriage return found in data") :
 						 errmsg("unquoted carriage return found in data"),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errhint("Use \"\\r\" to represent carriage return.") :
 						 errhint("Use quoted CSV field to represent carriage return.")));
 			/* If reach here, we have found the line terminator */
@@ -1351,15 +1370,15 @@ CopyReadLineText(CopyFromState cstate)
 		}
 
 		/* Process \n */
-		if (c == '\n' && (!cstate->opts.csv_mode || !in_quote))
+		if (c == '\n' && (cstate->opts.format != COPY_FORMAT_CSV || !in_quote))
 		{
 			if (cstate->eol_type == EOL_CR || cstate->eol_type == EOL_CRNL)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errmsg("literal newline found in data") :
 						 errmsg("unquoted newline found in data"),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errhint("Use \"\\n\" to represent newline.") :
 						 errhint("Use quoted CSV field to represent newline.")));
 			cstate->eol_type = EOL_NL;	/* in case not set yet */
@@ -1371,7 +1390,7 @@ CopyReadLineText(CopyFromState cstate)
 		 * Process backslash, except in CSV mode where backslash is a normal
 		 * character.
 		 */
-		if (c == '\\' && !cstate->opts.csv_mode)
+		if (c == '\\' && cstate->opts.format != COPY_FORMAT_CSV)
 		{
 			char		c2;
 
@@ -1452,6 +1471,138 @@ CopyReadLineText(CopyFromState cstate)
 				input_buf_ptr++;
 			}
 		}
+	}							/* end of outer loop */
+
+	/*
+	 * Transfer any still-uncopied data to line_buf.
+	 */
+	REFILL_LINEBUF;
+
+	return result;
+}
+
+/*
+ * CopyReadLineRawText - inner loop of CopyReadLine for raw text mode
+ */
+static bool
+CopyReadLineRawText(CopyFromState cstate)
+{
+	char	   *copy_input_buf;
+	int			input_buf_ptr;
+	int			copy_buf_len;
+	bool		need_data = false;
+	bool		hit_eof = false;
+	bool		result = false;
+
+	/*
+	 * The objective of this loop is to transfer the entire next input line
+	 * into line_buf. We only care for detecting newlines (\r and/or \n).
+	 * All other characters are treated as regular data.
+	 *
+	 * For speed, we try to move data from input_buf to line_buf in chunks
+	 * rather than one character at a time.  input_buf_ptr points to the next
+	 * character to examine; any characters from input_buf_index to
+	 * input_buf_ptr have been determined to be part of the line, but not yet
+	 * transferred to line_buf.
+	 *
+	 * For a little extra speed within the loop, we copy input_buf and
+	 * input_buf_len into local variables.
+	 */
+	copy_input_buf = cstate->input_buf;
+	input_buf_ptr = cstate->input_buf_index;
+	copy_buf_len = cstate->input_buf_len;
+
+	for (;;)
+	{
+		int			prev_raw_ptr;
+		char		c;
+
+		/*
+		* Load more data if needed.
+		*/
+		if (input_buf_ptr >= copy_buf_len || need_data)
+		{
+			REFILL_LINEBUF;
+
+			CopyLoadInputBuf(cstate);
+			/* update our local variables */
+			hit_eof = cstate->input_reached_eof;
+			input_buf_ptr = cstate->input_buf_index;
+			copy_buf_len = cstate->input_buf_len;
+
+			/*
+			* If we are completely out of data, break out of the loop,
+			* reporting EOF.
+			*/
+			if (INPUT_BUF_BYTES(cstate) <= 0)
+			{
+				result = true;
+				break;
+			}
+			need_data = false;
+		}
+
+		/* OK to fetch a character */
+		prev_raw_ptr = input_buf_ptr;
+		c = copy_input_buf[input_buf_ptr++];
+
+		/* Process \r */
+		if (c == '\r')
+		{
+			/* Check for \r\n on first line, _and_ handle \r\n. */
+			if (cstate->eol_type == EOL_UNKNOWN ||
+				cstate->eol_type == EOL_CRNL)
+			{
+				/*
+				 * If need more data, go back to loop top to load it.
+				 *
+				 * Note that if we are at EOF, c will wind up as '\0' because
+				 * of the guaranteed pad of input_buf.
+				 */
+				IF_NEED_REFILL_AND_NOT_EOF_CONTINUE(0);
+
+				/* get next char */
+				c = copy_input_buf[input_buf_ptr];
+
+				if (c == '\n')
+				{
+					input_buf_ptr++;	/* eat newline */
+					cstate->eol_type = EOL_CRNL;	/* in case not set yet */
+				}
+				else
+				{
+					if (cstate->eol_type == EOL_CRNL)
+						ereport(ERROR,
+								(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+								errmsg("inconsistent newline style")));
+					/*
+					* if we got here, it is the first line and we didn't find
+					* \n, so don't consume the peeked character
+					*/
+					cstate->eol_type = EOL_CR;
+				}
+			}
+			else if (cstate->eol_type == EOL_NL)
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						errmsg("inconsistent newline style")));
+			/* If reach here, we have found the line terminator */
+			break;
+		}
+
+		/* Process \n */
+		if (c == '\n')
+		{
+			if (cstate->eol_type == EOL_CR || cstate->eol_type == EOL_CRNL)
+				ereport(ERROR,
+						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
+						errmsg("inconsistent newline style")));
+			cstate->eol_type = EOL_NL;	/* in case not set yet */
+			/* If reach here, we have found the line terminator */
+			break;
+		}
+
+		/* All other characters are treated as regular data */
 	}							/* end of outer loop */
 
 	/*
@@ -1938,6 +2089,45 @@ endfield:
 	return fieldno;
 }
 
+/*
+ * Parse the current line as a single attribute for the "raw" COPY format.
+ * No parsing, quoting, or escaping is performed.
+ * Empty lines are treated as empty strings, not NULL.
+ */
+static int
+CopyReadAttributesRaw(CopyFromState cstate)
+{
+	/* Enforce single column requirement */
+	if (cstate->max_fields != 1)
+	{
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("COPY with format 'raw' requires exactly one column")));
+	}
+
+	resetStringInfo(&cstate->attribute_buf);
+
+	/*
+	 * The attribute will certainly not be longer than the input
+	 * data line, so we can just force attribute_buf to be large enough and
+	 * then transfer data without any checks for enough space.  We need to do
+	 * it this way because enlarging attribute_buf mid-stream would invalidate
+	 * pointers already stored into cstate->raw_fields[].
+	 */
+	if (cstate->attribute_buf.maxlen <= cstate->line_buf.len)
+		enlargeStringInfo(&cstate->attribute_buf, cstate->line_buf.len);
+
+	/* Copy the entire line into attribute_buf */
+	memcpy(cstate->attribute_buf.data, cstate->line_buf.data,
+		   cstate->line_buf.len);
+	cstate->attribute_buf.data[cstate->line_buf.len] = '\0';
+	cstate->attribute_buf.len = cstate->line_buf.len;
+
+	/* Assign the single field to raw_fields[0] */
+	cstate->raw_fields[0] = cstate->attribute_buf.data;
+
+	return 1;
+}
 
 /*
  * Read a binary attribute

@@ -348,3 +348,46 @@ COPY parted_si(id, data) FROM :'filename';
 SELECT tableoid::regclass, id % 2 = 0 is_even, count(*) from parted_si GROUP BY 1, 2 ORDER BY 1;
 
 DROP TABLE parted_si;
+
+-- Test COPY FORMAT raw
+\set filename :abs_builddir '/results/copy_raw_test.data'
+CREATE TABLE copy_raw_test (id SERIAL PRIMARY KEY, col text);
+INSERT INTO copy_raw_test (col) VALUES
+(E'",\\'), (E'\\.'), (NULL), (''), (' '), ('test');
+COPY copy_raw_test (col) TO :'filename' (FORMAT raw);
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' (FORMAT raw);
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' RAW;
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;
+
+\set filename :abs_srcdir '/data/newlines_lr.data'
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' (FORMAT raw);
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;
+
+\set filename :abs_srcdir '/data/newlines_lr_nolast.data'
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' (FORMAT raw);
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;
+
+\set filename :abs_srcdir '/data/newlines_cr_lr.data'
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' (FORMAT raw);
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;
+
+\set filename :abs_srcdir '/data/newlines_cr_lr_nolast.data'
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' (FORMAT raw);
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;
+
+\set filename :abs_srcdir '/data/newlines_cr.data'
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' (FORMAT raw);
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;
+
+\set filename :abs_srcdir '/data/newlines_cr_nolast.data'
+TRUNCATE copy_raw_test;
+COPY copy_raw_test (col) FROM :'filename' (FORMAT raw);
+SELECT col, col IS NULL FROM copy_raw_test ORDER BY id;

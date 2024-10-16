@@ -2467,6 +2467,8 @@ begin_concurrent_cluster(Relation *rel_p, Relation *index_p,
 	 * could make us remove that entry (inserted by another backend) during
 	 * ERROR handling.
 	 */
+	ereport(LOG, (errmsg("setting clustered_rel to %u, current value is %u",
+						 relid, clustered_rel)));
 	Assert(!OidIsValid(clustered_rel));
 	clustered_rel = relid;
 
@@ -2548,6 +2550,14 @@ begin_concurrent_cluster(Relation *rel_p, Relation *index_p,
 	reopen_relations(rri, nrel);
 
 	/* Avoid logical decoding of other relations by this backend. */
+	{
+		RelFileLocator	*cur = &clustered_rel_locator;
+		RelFileLocator	*new = &rel->rd_locator;
+
+		ereport(LOG, (errmsg("setting clustered_rel_locator to {%u, %u, %u}, the current value is {%u, %u, %u}",
+							 new->spcOid, new->dbOid, new->relNumber,
+							 cur->spcOid, cur->dbOid, cur->relNumber)));
+	}
 	clustered_rel_locator = rel->rd_locator;
 	if (OidIsValid(toastrelid))
 	{
@@ -2586,6 +2596,10 @@ end_concurrent_cluster(bool error)
 		 * By clearing this variable we also disable
 		 * cluster_before_shmem_exit_callback().
 		 */
+		ereport(LOG,
+				(errmsg("setting clustered_rel to 0, current value is %u",
+						clustered_rel)));
+
 		clustered_rel = InvalidOid;
 	}
 
@@ -2850,10 +2864,22 @@ check_catalog_changes(Relation rel, CatalogState *cat_state)
 	 * avoid data loss. (The original locators are stored outside cat_state,
 	 * but the check belongs to this function.)
 	 */
+	{
+		RelFileLocator	*exp = &clustered_rel_locator;
+		RelFileLocator	*act = &rel->rd_locator;
+
+		ereport(LOG,
+				(errmsg("Expected value of clustered_rel_locator is {%u, %u, %u}, actual value is {%u,%u, %u}",
+						exp->spcOid, exp->dbOid, exp->relNumber,
+						act->spcOid, act->dbOid, act->relNumber)));
+	}
+
 	if (!RelFileLocatorEquals(rel->rd_locator, clustered_rel_locator))
+	{
 		ereport(ERROR,
 				(errmsg("file of relation \"%s\" changed by another transaction",
 						RelationGetRelationName(rel))));
+	}
 	if (OidIsValid(reltoastrelid))
 	{
 		Relation	toastrel;

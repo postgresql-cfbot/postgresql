@@ -1,0 +1,96 @@
+<!-- doc/src/sgml/oauth-validators.sgml -->
+
+<chapter id="oauth-validators">
+ <title>Implementing OAuth Validator Modules</title>
+ <indexterm zone="oauth-validators">
+  <primary>OAuth Validators</primary>
+ </indexterm>
+ <para>
+  <productname>PostgreSQL</productname> provides infrastructure for creating
+  custom modules to perform server-side validation of OAuth tokens.
+ </para>
+ <para>
+  OAuth validation modules must at least consist of an initialization function
+  (see <xref linkend="oauth-validator-init"/>) and the required callback for
+  performing validation (see <xref linkend="oauth-validator-callback-validate"/>).
+ </para>
+
+ <sect1 id="oauth-validator-init">
+  <title>Initialization Functions</title>
+  <indexterm zone="oauth-validator-init">
+   <primary>_PG_oauth_validator_module_init</primary>
+  </indexterm>
+  <para>
+   An OAuth validator module is loaded by dynamically loading a shared library
+   with the <xref linkend="guc-oauth-validator-library"/>'s name as the library
+   base name. The normal library search path is used to locate the library. To
+   provide the validator callbacks and to indicate that the library is an OAuth
+   validator module a function named
+   <function>_PG_oauth_validator_module_init</function> must be provided. The
+   return value of the function must be a pointer to a struct of type
+   <structname>OAuthValidatorCallbacks</structname> which contains all that
+   libpq need to perform token validation using the module. The returned
+   pointer must be of server lifetime, which is typically achieved by defining
+   it as a <literal>static const</literal> variable in global scope.
+<programlisting>
+typedef struct OAuthValidatorCallbacks
+{
+    ValidatorStartupCB startup_cb;
+    ValidatorShutdownCB shutdown_cb;
+    ValidatorValidateCB validate_cb;
+} OAuthValidatorCallbacks;
+
+typedef const OAuthValidatorCallbacks *(*OAuthValidatorModuleInit) (void);
+</programlisting>
+
+   Only the <function>validate_cb</function> callback is required, the others
+   are optional.
+  </para>
+ </sect1>
+
+ <sect1 id="oauth-validator-callbacks">
+  <title>OAuth Validator Callbacks</title>
+  <para>
+   OAuth validator modules implement their functionality by defining a set of
+   callbacks, libpq will call them as required to process the authentication
+   request from the user.
+  </para>
+
+  <sect2 id="oauth-validator-callback-startup">
+   <title>Startup Callback</title>
+   <para>
+    The <function>startup_cb</function> callback is executed directly after
+    loading the module. This callback can be used to set up local state and
+    perform additional initialization if required. If the validator module
+    has state it can use <structfield>state->private_data</structfield> to
+    store it.
+
+<programlisting>
+typedef void (*ValidatorStartupCB) (ValidatorModuleState *state);
+</programlisting>
+   </para>
+  </sect2>
+
+  <sect2 id="oauth-validator-callback-validate">
+   <title>Validate Callback</title>
+   <para>
+<programlisting>
+typedef ValidatorModuleResult *(*ValidatorValidateCB) (ValidatorModuleState *state, const char *token, const char *role);
+</programlisting>
+   </para>
+  </sect2>
+
+  <sect2 id="oauth-validator-callback-shutdown">
+   <title>Shutdown Callback</title>
+   <para>
+    The <function>shutdown_cb</function> callback is executed when the backend
+    process associated with the connection exits. If the validator module has
+    any state, this callback should free it to avoid resource leaks.
+<programlisting>
+typedef void (*ValidatorShutdownCB) (ValidatorModuleState *state);
+</programlisting>
+   </para>
+  </sect2>
+
+ </sect1>
+</chapter>

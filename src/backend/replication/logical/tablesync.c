@@ -692,21 +692,59 @@ process_syncing_tables(XLogRecPtr current_lsn)
 }
 
 /*
- * Create list of columns for COPY based on logical relation mapping.
+ * Create a list of columns for COPY based on logical relation mapping.
+ * Exclude columns that are subscription table generated columns.
  */
 static List *
 make_copy_attnamelist(LogicalRepRelMapEntry *rel)
 {
 	List	   *attnamelist = NIL;
-	int			i;
+	bool	   *localgenlist;
+	TupleDesc	desc;
 
-	for (i = 0; i < rel->remoterel.natts; i++)
+	desc = RelationGetDescr(rel->localrel);
+
+	/*
+	 * localgenlist stores if a generated column on remoterel has a matching
+	 * name corresponding to a generated column on localrel.
+	 */
+	localgenlist = palloc0(rel->remoterel.natts * sizeof(bool));
+
+	/*
+	 * This loop checks for generated columns of the subscription table.
+	 */
+	for (int i = 0; i < desc->natts; i++)
 	{
-		attnamelist = lappend(attnamelist,
-							  makeString(rel->remoterel.attnames[i]));
+		int			remote_attnum;
+		Form_pg_attribute attr = TupleDescAttr(desc, i);
+
+		if (!attr->attgenerated)
+			continue;
+
+		remote_attnum = logicalrep_rel_att_by_name(&rel->remoterel,
+												   NameStr(attr->attname));
+
+		/*
+		 * 'localgenlist' records that this is a generated column in the
+		 * subscription table. Later, we use this information to skip adding
+		 * this column to the column list for COPY.
+		 */
+		if (remote_attnum >= 0)
+			localgenlist[remote_attnum] = true;
 	}
 
+	/*
+	 * Construct a column list for COPY, excluding columns that are
+	 * subscription table generated columns.
+	 */
+	for (int i = 0; i < rel->remoterel.natts; i++)
+	{
+		if (!localgenlist[i])
+			attnamelist = lappend(attnamelist,
+								  makeString(rel->remoterel.attnames[i]));
+	}
 
+	pfree(localgenlist);
 	return attnamelist;
 }
 
@@ -791,19 +829,22 @@ copy_read_data(void *outbuf, int minread, int maxread)
  * qualifications to be used in the COPY command.
  */
 static void
-fetch_remote_table_info(char *nspname, char *relname,
+fetch_remote_table_info(char *nspname, char *relname, bool **remotegenlist_res,
 						LogicalRepRelation *lrel, List **qual)
 {
 	WalRcvExecResult *res;
 	StringInfoData cmd;
 	TupleTableSlot *slot;
 	Oid			tableRow[] = {OIDOID, CHAROID, CHAROID};
-	Oid			attrRow[] = {INT2OID, TEXTOID, OIDOID, BOOLOID};
+	Oid			attrRow[] = {INT2OID, TEXTOID, OIDOID, BOOLOID, BOOLOID};
 	Oid			qualRow[] = {TEXTOID};
 	bool		isnull;
+	bool	   *remotegenlist;
+	bool		has_pub_with_pubgencols = false;
 	int			natt;
 	ListCell   *lc;
 	Bitmapset  *included_cols = NULL;
+	int			server_version = walrcv_server_version(LogRepWorkerWalRcvConn);
 
 	lrel->nspname = nspname;
 	lrel->relname = relname;
@@ -846,7 +887,8 @@ fetch_remote_table_info(char *nspname, char *relname,
 
 
 	/*
-	 * Get column lists for each relation.
+	 * Get column lists for each relation, and check if any of the
+	 * publications have the 'publish_generated_columns' parameter enabled.
 	 *
 	 * We need to do this before fetching info about column names and types,
 	 * so that we can skip columns that should not be replicated.
@@ -873,8 +915,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 		resetStringInfo(&cmd);
 		appendStringInfo(&cmd,
 						 "SELECT DISTINCT"
-						 "  (CASE WHEN (array_length(gpt.attrs, 1) = c.relnatts)"
-						 "   THEN NULL ELSE gpt.attrs END)"
+						 "  (gpt.attrs)"
 						 "  FROM pg_publication p,"
 						 "  LATERAL pg_get_publication_tables(p.pubname) gpt,"
 						 "  pg_class c"
@@ -937,6 +978,43 @@ fetch_remote_table_info(char *nspname, char *relname,
 
 		walrcv_clear_result(pubres);
 
+		/*
+		 * Check if any of the publications have the
+		 * 'publish_generated_columns' parameter enabled.
+		 */
+		if (server_version >= 180000)
+		{
+			WalRcvExecResult *gencolres;
+			Oid			gencolsRow[] = {BOOLOID};
+
+			resetStringInfo(&cmd);
+			appendStringInfo(&cmd,
+							 "SELECT count(*) > 0 FROM pg_catalog.pg_publication "
+							 "WHERE pubname IN ( %s ) AND pubgencols = 't'",
+							 pub_names.data);
+
+			gencolres = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data,
+									lengthof(gencolsRow), gencolsRow);
+			if (gencolres->status != WALRCV_OK_TUPLES)
+				ereport(ERROR,
+						errcode(ERRCODE_CONNECTION_FAILURE),
+						errmsg("could not fetch generated column publication information from publication list: %s",
+							   pub_names.data));
+
+			tslot = MakeSingleTupleTableSlot(gencolres->tupledesc, &TTSOpsMinimalTuple);
+			if (!tuplestore_gettupleslot(gencolres->tuplestore, true, false, tslot))
+				ereport(ERROR,
+						errcode(ERRCODE_UNDEFINED_OBJECT),
+						errmsg("failed to fetch tuple for generated column publication information from publication list: %s",
+							   pub_names.data));
+
+			has_pub_with_pubgencols = DatumGetBool(slot_getattr(tslot, 1, &isnull));
+			Assert(!isnull);
+
+			ExecClearTuple(tslot);
+			walrcv_clear_result(gencolres);
+		}
+
 		pfree(pub_names.data);
 	}
 
@@ -948,20 +1026,22 @@ fetch_remote_table_info(char *nspname, char *relname,
 					 "SELECT a.attnum,"
 					 "       a.attname,"
 					 "       a.atttypid,"
-					 "       a.attnum = ANY(i.indkey)"
+					 "       a.attnum = ANY(i.indkey)");
+
+	if (server_version >= 180000)
+		appendStringInfo(&cmd, ", a.attgenerated != ''");
+
+	appendStringInfo(&cmd,
 					 "  FROM pg_catalog.pg_attribute a"
 					 "  LEFT JOIN pg_catalog.pg_index i"
 					 "       ON (i.indexrelid = pg_get_replica_identity_index(%u))"
 					 " WHERE a.attnum > 0::pg_catalog.int2"
-					 "   AND NOT a.attisdropped %s"
+					 "   AND NOT a.attisdropped"
 					 "   AND a.attrelid = %u"
-					 " ORDER BY a.attnum",
-					 lrel->remoteid,
-					 (walrcv_server_version(LogRepWorkerWalRcvConn) >= 120000 ?
-					  "AND a.attgenerated = ''" : ""),
-					 lrel->remoteid);
+					 " ORDER BY a.attnum", lrel->remoteid, lrel->remoteid);
+
 	res = walrcv_exec(LogRepWorkerWalRcvConn, cmd.data,
-					  lengthof(attrRow), attrRow);
+					  server_version >= 180000 ? lengthof(attrRow) : lengthof(attrRow) - 1, attrRow);
 
 	if (res->status != WALRCV_OK_TUPLES)
 		ereport(ERROR,
@@ -973,6 +1053,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 	lrel->attnames = palloc0(MaxTupleAttributeNumber * sizeof(char *));
 	lrel->atttyps = palloc0(MaxTupleAttributeNumber * sizeof(Oid));
 	lrel->attkeys = NULL;
+	remotegenlist = palloc0(MaxTupleAttributeNumber * sizeof(bool));
 
 	/*
 	 * Store the columns as a list of names.  Ignore those that are not
@@ -995,6 +1076,22 @@ fetch_remote_table_info(char *nspname, char *relname,
 			continue;
 		}
 
+		if (server_version >= 180000)
+		{
+			remotegenlist[natt] = DatumGetBool(slot_getattr(slot, 5, &isnull));
+
+			/*
+			 * If the column is generated and neither the generated column
+			 * option is specified nor it appears in the column list, we will
+			 * skip it.
+			 */
+			if (remotegenlist[natt] && !has_pub_with_pubgencols && !included_cols)
+			{
+				ExecClearTuple(slot);
+				continue;
+			}
+		}
+
 		rel_colname = TextDatumGetCString(slot_getattr(slot, 2, &isnull));
 		Assert(!isnull);
 
@@ -1015,7 +1112,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 	ExecDropSingleTupleTableSlot(slot);
 
 	lrel->natts = natt;
-
+	*remotegenlist_res = remotegenlist;
 	walrcv_clear_result(res);
 
 	/*
@@ -1037,7 +1134,7 @@ fetch_remote_table_info(char *nspname, char *relname,
 	 * 3) one of the subscribed publications is declared as TABLES IN SCHEMA
 	 * that includes this relation
 	 */
-	if (walrcv_server_version(LogRepWorkerWalRcvConn) >= 150000)
+	if (server_version >= 150000)
 	{
 		StringInfoData pub_names;
 
@@ -1123,10 +1220,13 @@ copy_table(Relation rel)
 	List	   *attnamelist;
 	ParseState *pstate;
 	List	   *options = NIL;
+	bool	   *remotegenlist;
+	bool		gencol_copy_needed = false;
 
 	/* Get the publisher relation info. */
 	fetch_remote_table_info(get_namespace_name(RelationGetNamespace(rel)),
-							RelationGetRelationName(rel), &lrel, &qual);
+							RelationGetRelationName(rel), &remotegenlist,
+							&lrel, &qual);
 
 	/* Put the relation into relmap. */
 	logicalrep_relmap_update(&lrel);
@@ -1135,11 +1235,29 @@ copy_table(Relation rel)
 	relmapentry = logicalrep_rel_open(lrel.remoteid, NoLock);
 	Assert(rel == relmapentry->localrel);
 
+	attnamelist = make_copy_attnamelist(relmapentry);
+
 	/* Start copy on the publisher. */
 	initStringInfo(&cmd);
 
-	/* Regular table with no row filter */
-	if (lrel.relkind == RELKIND_RELATION && qual == NIL)
+	/*
+	 * Check if the remote table has any generated columns that should be
+	 * copied.
+	 */
+	for (int i = 0; i < relmapentry->remoterel.natts; i++)
+	{
+		if (remotegenlist[i])
+		{
+			gencol_copy_needed = true;
+			break;
+		}
+	}
+
+	/*
+	 * Regular table with no row filter and copy of generated columns is not
+	 * necessary.
+	 */
+	if (lrel.relkind == RELKIND_RELATION && qual == NIL && !gencol_copy_needed)
 	{
 		appendStringInfo(&cmd, "COPY %s",
 						 quote_qualified_identifier(lrel.nspname, lrel.relname));
@@ -1173,13 +1291,20 @@ copy_table(Relation rel)
 		 * (SELECT ...), but we can't just do SELECT * because we need to not
 		 * copy generated columns. For tables with any row filters, build a
 		 * SELECT query with OR'ed row filters for COPY.
+		 *
+		 * We also need to use this same COPY (SELECT ...) syntax when
+		 * 'publish_generated_columns' is specified as true and the remote
+		 * table has generated columns, because copy of generated columns is
+		 * not supported by the normal COPY.
 		 */
+		int			i = 0;
+
 		appendStringInfoString(&cmd, "COPY (SELECT ");
-		for (int i = 0; i < lrel.natts; i++)
+		foreach_node(String, att_name, attnamelist)
 		{
-			appendStringInfoString(&cmd, quote_identifier(lrel.attnames[i]));
-			if (i < lrel.natts - 1)
+			if (i++)
 				appendStringInfoString(&cmd, ", ");
+			appendStringInfoString(&cmd, quote_identifier(strVal(att_name)));
 		}
 
 		appendStringInfoString(&cmd, " FROM ");
@@ -1237,7 +1362,6 @@ copy_table(Relation rel)
 	(void) addRangeTableEntryForRelation(pstate, rel, AccessShareLock,
 										 NULL, false, false);
 
-	attnamelist = make_copy_attnamelist(relmapentry);
 	cstate = BeginCopyFrom(pstate, rel, NULL, NULL, false, copy_read_data, attnamelist, options);
 
 	/* Do the copy */

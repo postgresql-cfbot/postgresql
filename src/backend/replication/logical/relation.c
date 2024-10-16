@@ -205,7 +205,7 @@ logicalrep_relmap_update(LogicalRepRelation *remoterel)
  *
  * Returns -1 if not found.
  */
-static int
+int
 logicalrep_rel_att_by_name(LogicalRepRelation *remoterel, const char *attname)
 {
 	int			i;

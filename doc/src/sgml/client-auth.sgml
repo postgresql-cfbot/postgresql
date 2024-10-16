@@ -1260,6 +1260,14 @@ omicron         bryanh                  guest1
        server is encrypted for SCRAM (see below), then SCRAM-based
        authentication will automatically be chosen instead.
       </para>
+
+      <warning>
+       <para>
+        Support for MD5-encrypted passwords is deprecated and will be removed
+        in a future release of <productname>PostgreSQL</productname>.  Refer to
+        the text below for details about migrating to another password type.
+       </para>
+      </warning>
      </listitem>
     </varlistentry>
 

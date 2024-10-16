@@ -1,0 +1,836 @@
+--
+-- Test for row pattern definition clause
+--
+CREATE TEMP TABLE stock (
+       company TEXT,
+       tdate DATE,
+       price INTEGER
+);
+INSERT INTO stock VALUES ('company1', '2023-07-01', 100);
+INSERT INTO stock VALUES ('company1', '2023-07-02', 200);
+INSERT INTO stock VALUES ('company1', '2023-07-03', 150);
+INSERT INTO stock VALUES ('company1', '2023-07-04', 140);
+INSERT INTO stock VALUES ('company1', '2023-07-05', 150);
+INSERT INTO stock VALUES ('company1', '2023-07-06', 90);
+INSERT INTO stock VALUES ('company1', '2023-07-07', 110);
+INSERT INTO stock VALUES ('company1', '2023-07-08', 130);
+INSERT INTO stock VALUES ('company1', '2023-07-09', 120);
+INSERT INTO stock VALUES ('company1', '2023-07-10', 130);
+INSERT INTO stock VALUES ('company2', '2023-07-01', 50);
+INSERT INTO stock VALUES ('company2', '2023-07-02', 2000);
+INSERT INTO stock VALUES ('company2', '2023-07-03', 1500);
+INSERT INTO stock VALUES ('company2', '2023-07-04', 1400);
+INSERT INTO stock VALUES ('company2', '2023-07-05', 1500);
+INSERT INTO stock VALUES ('company2', '2023-07-06', 60);
+INSERT INTO stock VALUES ('company2', '2023-07-07', 1100);
+INSERT INTO stock VALUES ('company2', '2023-07-08', 1300);
+INSERT INTO stock VALUES ('company2', '2023-07-09', 1200);
+INSERT INTO stock VALUES ('company2', '2023-07-10', 1300);
+SELECT * FROM stock;
+ company  |   tdate    | price 
+----------+------------+-------
+ company1 | 07-01-2023 |   100
+ company1 | 07-02-2023 |   200
+ company1 | 07-03-2023 |   150
+ company1 | 07-04-2023 |   140
+ company1 | 07-05-2023 |   150
+ company1 | 07-06-2023 |    90
+ company1 | 07-07-2023 |   110
+ company1 | 07-08-2023 |   130
+ company1 | 07-09-2023 |   120
+ company1 | 07-10-2023 |   130
+ company2 | 07-01-2023 |    50
+ company2 | 07-02-2023 |  2000
+ company2 | 07-03-2023 |  1500
+ company2 | 07-04-2023 |  1400
+ company2 | 07-05-2023 |  1500
+ company2 | 07-06-2023 |    60
+ company2 | 07-07-2023 |  1100
+ company2 | 07-08-2023 |  1300
+ company2 | 07-09-2023 |  1200
+ company2 | 07-10-2023 |  1300
+(20 rows)
+
+-- basic test using PREV
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w,
+ nth_value(tdate, 2) OVER w AS nth_second
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value | nth_second 
+----------+------------+-------+-------------+------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        140 | 07-02-2023
+ company1 | 07-02-2023 |   200 |             |            | 
+ company1 | 07-03-2023 |   150 |             |            | 
+ company1 | 07-04-2023 |   140 |             |            | 
+ company1 | 07-05-2023 |   150 |             |            | 
+ company1 | 07-06-2023 |    90 |          90 |        120 | 07-07-2023
+ company1 | 07-07-2023 |   110 |             |            | 
+ company1 | 07-08-2023 |   130 |             |            | 
+ company1 | 07-09-2023 |   120 |             |            | 
+ company1 | 07-10-2023 |   130 |             |            | 
+ company2 | 07-01-2023 |    50 |          50 |       1400 | 07-02-2023
+ company2 | 07-02-2023 |  2000 |             |            | 
+ company2 | 07-03-2023 |  1500 |             |            | 
+ company2 | 07-04-2023 |  1400 |             |            | 
+ company2 | 07-05-2023 |  1500 |             |            | 
+ company2 | 07-06-2023 |    60 |          60 |       1200 | 07-07-2023
+ company2 | 07-07-2023 |  1100 |             |            | 
+ company2 | 07-08-2023 |  1300 |             |            | 
+ company2 | 07-09-2023 |  1200 |             |            | 
+ company2 | 07-10-2023 |  1300 |             |            | 
+(20 rows)
+
+-- basic test using PREV. UP appears twice
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w,
+ nth_value(tdate, 2) OVER w AS nth_second
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP+ DOWN+ UP+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value | nth_second 
+----------+------------+-------+-------------+------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        150 | 07-02-2023
+ company1 | 07-02-2023 |   200 |             |            | 
+ company1 | 07-03-2023 |   150 |             |            | 
+ company1 | 07-04-2023 |   140 |             |            | 
+ company1 | 07-05-2023 |   150 |             |            | 
+ company1 | 07-06-2023 |    90 |          90 |        130 | 07-07-2023
+ company1 | 07-07-2023 |   110 |             |            | 
+ company1 | 07-08-2023 |   130 |             |            | 
+ company1 | 07-09-2023 |   120 |             |            | 
+ company1 | 07-10-2023 |   130 |             |            | 
+ company2 | 07-01-2023 |    50 |          50 |       1500 | 07-02-2023
+ company2 | 07-02-2023 |  2000 |             |            | 
+ company2 | 07-03-2023 |  1500 |             |            | 
+ company2 | 07-04-2023 |  1400 |             |            | 
+ company2 | 07-05-2023 |  1500 |             |            | 
+ company2 | 07-06-2023 |    60 |          60 |       1300 | 07-07-2023
+ company2 | 07-07-2023 |  1100 |             |            | 
+ company2 | 07-08-2023 |  1300 |             |            | 
+ company2 | 07-09-2023 |  1200 |             |            | 
+ company2 | 07-10-2023 |  1300 |             |            | 
+(20 rows)
+
+-- basic test using PREV. Use '*'
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w,
+ nth_value(tdate, 2) OVER w AS nth_second
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP* DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value | nth_second 
+----------+------------+-------+-------------+------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        140 | 07-02-2023
+ company1 | 07-02-2023 |   200 |             |            | 
+ company1 | 07-03-2023 |   150 |             |            | 
+ company1 | 07-04-2023 |   140 |             |            | 
+ company1 | 07-05-2023 |   150 |         150 |         90 | 07-06-2023
+ company1 | 07-06-2023 |    90 |             |            | 
+ company1 | 07-07-2023 |   110 |         110 |        120 | 07-08-2023
+ company1 | 07-08-2023 |   130 |             |            | 
+ company1 | 07-09-2023 |   120 |             |            | 
+ company1 | 07-10-2023 |   130 |             |            | 
+ company2 | 07-01-2023 |    50 |          50 |       1400 | 07-02-2023
+ company2 | 07-02-2023 |  2000 |             |            | 
+ company2 | 07-03-2023 |  1500 |             |            | 
+ company2 | 07-04-2023 |  1400 |             |            | 
+ company2 | 07-05-2023 |  1500 |        1500 |         60 | 07-06-2023
+ company2 | 07-06-2023 |    60 |             |            | 
+ company2 | 07-07-2023 |  1100 |        1100 |       1200 | 07-08-2023
+ company2 | 07-08-2023 |  1300 |             |            | 
+ company2 | 07-09-2023 |  1200 |             |            | 
+ company2 | 07-10-2023 |  1300 |             |            | 
+(20 rows)
+
+-- basic test with none greedy pattern
+SELECT company, tdate, price, count(*) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (A A A)
+ DEFINE
+  A AS price >= 140 AND price <= 150
+);
+ company  |   tdate    | price | count 
+----------+------------+-------+-------
+ company1 | 07-01-2023 |   100 |     0
+ company1 | 07-02-2023 |   200 |     0
+ company1 | 07-03-2023 |   150 |     3
+ company1 | 07-04-2023 |   140 |     0
+ company1 | 07-05-2023 |   150 |     0
+ company1 | 07-06-2023 |    90 |     0
+ company1 | 07-07-2023 |   110 |     0
+ company1 | 07-08-2023 |   130 |     0
+ company1 | 07-09-2023 |   120 |     0
+ company1 | 07-10-2023 |   130 |     0
+ company2 | 07-01-2023 |    50 |     0
+ company2 | 07-02-2023 |  2000 |     0
+ company2 | 07-03-2023 |  1500 |     0
+ company2 | 07-04-2023 |  1400 |     0
+ company2 | 07-05-2023 |  1500 |     0
+ company2 | 07-06-2023 |    60 |     0
+ company2 | 07-07-2023 |  1100 |     0
+ company2 | 07-08-2023 |  1300 |     0
+ company2 | 07-09-2023 |  1200 |     0
+ company2 | 07-10-2023 |  1300 |     0
+(20 rows)
+
+-- last_value() should remain consistent
+SELECT company, tdate, price, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | last_value 
+----------+------------+-------+------------
+ company1 | 07-01-2023 |   100 |        140
+ company1 | 07-02-2023 |   200 |           
+ company1 | 07-03-2023 |   150 |           
+ company1 | 07-04-2023 |   140 |           
+ company1 | 07-05-2023 |   150 |           
+ company1 | 07-06-2023 |    90 |        120
+ company1 | 07-07-2023 |   110 |           
+ company1 | 07-08-2023 |   130 |           
+ company1 | 07-09-2023 |   120 |           
+ company1 | 07-10-2023 |   130 |           
+ company2 | 07-01-2023 |    50 |       1400
+ company2 | 07-02-2023 |  2000 |           
+ company2 | 07-03-2023 |  1500 |           
+ company2 | 07-04-2023 |  1400 |           
+ company2 | 07-05-2023 |  1500 |           
+ company2 | 07-06-2023 |    60 |       1200
+ company2 | 07-07-2023 |  1100 |           
+ company2 | 07-08-2023 |  1300 |           
+ company2 | 07-09-2023 |  1200 |           
+ company2 | 07-10-2023 |  1300 |           
+(20 rows)
+
+-- omit "START" in DEFINE but it is ok because "START AS TRUE" is
+-- implicitly defined. per spec.
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w,
+ nth_value(tdate, 2) OVER w AS nth_second
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value | nth_second 
+----------+------------+-------+-------------+------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        140 | 07-02-2023
+ company1 | 07-02-2023 |   200 |             |            | 
+ company1 | 07-03-2023 |   150 |             |            | 
+ company1 | 07-04-2023 |   140 |             |            | 
+ company1 | 07-05-2023 |   150 |             |            | 
+ company1 | 07-06-2023 |    90 |          90 |        120 | 07-07-2023
+ company1 | 07-07-2023 |   110 |             |            | 
+ company1 | 07-08-2023 |   130 |             |            | 
+ company1 | 07-09-2023 |   120 |             |            | 
+ company1 | 07-10-2023 |   130 |             |            | 
+ company2 | 07-01-2023 |    50 |          50 |       1400 | 07-02-2023
+ company2 | 07-02-2023 |  2000 |             |            | 
+ company2 | 07-03-2023 |  1500 |             |            | 
+ company2 | 07-04-2023 |  1400 |             |            | 
+ company2 | 07-05-2023 |  1500 |             |            | 
+ company2 | 07-06-2023 |    60 |          60 |       1200 | 07-07-2023
+ company2 | 07-07-2023 |  1100 |             |            | 
+ company2 | 07-08-2023 |  1300 |             |            | 
+ company2 | 07-09-2023 |  1200 |             |            | 
+ company2 | 07-10-2023 |  1300 |             |            | 
+(20 rows)
+
+-- the first row start with less than or equal to 100
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (LOWPRICE UP+ DOWN+)
+ DEFINE
+  LOWPRICE AS price <= 100,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value 
+----------+------------+-------+-------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        140
+ company1 | 07-02-2023 |   200 |             |           
+ company1 | 07-03-2023 |   150 |             |           
+ company1 | 07-04-2023 |   140 |             |           
+ company1 | 07-05-2023 |   150 |             |           
+ company1 | 07-06-2023 |    90 |          90 |        120
+ company1 | 07-07-2023 |   110 |             |           
+ company1 | 07-08-2023 |   130 |             |           
+ company1 | 07-09-2023 |   120 |             |           
+ company1 | 07-10-2023 |   130 |             |           
+ company2 | 07-01-2023 |    50 |          50 |       1400
+ company2 | 07-02-2023 |  2000 |             |           
+ company2 | 07-03-2023 |  1500 |             |           
+ company2 | 07-04-2023 |  1400 |             |           
+ company2 | 07-05-2023 |  1500 |             |           
+ company2 | 07-06-2023 |    60 |          60 |       1200
+ company2 | 07-07-2023 |  1100 |             |           
+ company2 | 07-08-2023 |  1300 |             |           
+ company2 | 07-09-2023 |  1200 |             |           
+ company2 | 07-10-2023 |  1300 |             |           
+(20 rows)
+
+-- second row raises 120%
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (LOWPRICE UP+ DOWN+)
+ DEFINE
+  LOWPRICE AS price <= 100,
+  UP AS price > PREV(price) * 1.2,
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value 
+----------+------------+-------+-------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        140
+ company1 | 07-02-2023 |   200 |             |           
+ company1 | 07-03-2023 |   150 |             |           
+ company1 | 07-04-2023 |   140 |             |           
+ company1 | 07-05-2023 |   150 |             |           
+ company1 | 07-06-2023 |    90 |             |           
+ company1 | 07-07-2023 |   110 |             |           
+ company1 | 07-08-2023 |   130 |             |           
+ company1 | 07-09-2023 |   120 |             |           
+ company1 | 07-10-2023 |   130 |             |           
+ company2 | 07-01-2023 |    50 |          50 |       1400
+ company2 | 07-02-2023 |  2000 |             |           
+ company2 | 07-03-2023 |  1500 |             |           
+ company2 | 07-04-2023 |  1400 |             |           
+ company2 | 07-05-2023 |  1500 |             |           
+ company2 | 07-06-2023 |    60 |             |           
+ company2 | 07-07-2023 |  1100 |             |           
+ company2 | 07-08-2023 |  1300 |             |           
+ company2 | 07-09-2023 |  1200 |             |           
+ company2 | 07-10-2023 |  1300 |             |           
+(20 rows)
+
+-- using NEXT
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UPDOWN)
+ DEFINE
+  START AS TRUE,
+  UPDOWN AS price > PREV(price) AND price > NEXT(price)
+);
+ company  |   tdate    | price | first_value | last_value 
+----------+------------+-------+-------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        200
+ company1 | 07-02-2023 |   200 |             |           
+ company1 | 07-03-2023 |   150 |             |           
+ company1 | 07-04-2023 |   140 |         140 |        150
+ company1 | 07-05-2023 |   150 |             |           
+ company1 | 07-06-2023 |    90 |             |           
+ company1 | 07-07-2023 |   110 |         110 |        130
+ company1 | 07-08-2023 |   130 |             |           
+ company1 | 07-09-2023 |   120 |             |           
+ company1 | 07-10-2023 |   130 |             |           
+ company2 | 07-01-2023 |    50 |          50 |       2000
+ company2 | 07-02-2023 |  2000 |             |           
+ company2 | 07-03-2023 |  1500 |             |           
+ company2 | 07-04-2023 |  1400 |        1400 |       1500
+ company2 | 07-05-2023 |  1500 |             |           
+ company2 | 07-06-2023 |    60 |             |           
+ company2 | 07-07-2023 |  1100 |        1100 |       1300
+ company2 | 07-08-2023 |  1300 |             |           
+ company2 | 07-09-2023 |  1200 |             |           
+ company2 | 07-10-2023 |  1300 |             |           
+(20 rows)
+
+-- using AFTER MATCH SKIP TO NEXT ROW
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ AFTER MATCH SKIP TO NEXT ROW
+ INITIAL
+ PATTERN (START UPDOWN)
+ DEFINE
+  START AS TRUE,
+  UPDOWN AS price > PREV(price) AND price > NEXT(price)
+);
+ company  |   tdate    | price | first_value | last_value 
+----------+------------+-------+-------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        200
+ company1 | 07-02-2023 |   200 |             |           
+ company1 | 07-03-2023 |   150 |             |           
+ company1 | 07-04-2023 |   140 |         140 |        150
+ company1 | 07-05-2023 |   150 |             |           
+ company1 | 07-06-2023 |    90 |             |           
+ company1 | 07-07-2023 |   110 |         110 |        130
+ company1 | 07-08-2023 |   130 |             |           
+ company1 | 07-09-2023 |   120 |             |           
+ company1 | 07-10-2023 |   130 |             |           
+ company2 | 07-01-2023 |    50 |          50 |       2000
+ company2 | 07-02-2023 |  2000 |             |           
+ company2 | 07-03-2023 |  1500 |             |           
+ company2 | 07-04-2023 |  1400 |        1400 |       1500
+ company2 | 07-05-2023 |  1500 |             |           
+ company2 | 07-06-2023 |    60 |             |           
+ company2 | 07-07-2023 |  1100 |        1100 |       1300
+ company2 | 07-08-2023 |  1300 |             |           
+ company2 | 07-09-2023 |  1200 |             |           
+ company2 | 07-10-2023 |  1300 |             |           
+(20 rows)
+
+-- match everything
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ AFTER MATCH SKIP PAST LAST ROW
+ INITIAL
+ PATTERN (A+)
+ DEFINE
+  A AS TRUE
+);
+ company  |   tdate    | price | first_value | last_value 
+----------+------------+-------+-------------+------------
+ company1 | 07-01-2023 |   100 |         100 |        130
+ company1 | 07-02-2023 |   200 |             |           
+ company1 | 07-03-2023 |   150 |             |           
+ company1 | 07-04-2023 |   140 |             |           
+ company1 | 07-05-2023 |   150 |             |           
+ company1 | 07-06-2023 |    90 |             |           
+ company1 | 07-07-2023 |   110 |             |           
+ company1 | 07-08-2023 |   130 |             |           
+ company1 | 07-09-2023 |   120 |             |           
+ company1 | 07-10-2023 |   130 |             |           
+ company2 | 07-01-2023 |    50 |          50 |       1300
+ company2 | 07-02-2023 |  2000 |             |           
+ company2 | 07-03-2023 |  1500 |             |           
+ company2 | 07-04-2023 |  1400 |             |           
+ company2 | 07-05-2023 |  1500 |             |           
+ company2 | 07-06-2023 |    60 |             |           
+ company2 | 07-07-2023 |  1100 |             |           
+ company2 | 07-08-2023 |  1300 |             |           
+ company2 | 07-09-2023 |  1200 |             |           
+ company2 | 07-10-2023 |  1300 |             |           
+(20 rows)
+
+-- backtracking with reclassification of rows
+-- using AFTER MATCH SKIP PAST LAST ROW
+SELECT company, tdate, price, first_value(tdate) OVER w, last_value(tdate) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ AFTER MATCH SKIP PAST LAST ROW
+ INITIAL
+ PATTERN (A+ B+)
+ DEFINE
+  A AS price > 100,
+  B AS price > 100
+);
+ company  |   tdate    | price | first_value | last_value 
+----------+------------+-------+-------------+------------
+ company1 | 07-01-2023 |   100 |             | 
+ company1 | 07-02-2023 |   200 | 07-02-2023  | 07-05-2023
+ company1 | 07-03-2023 |   150 |             | 
+ company1 | 07-04-2023 |   140 |             | 
+ company1 | 07-05-2023 |   150 |             | 
+ company1 | 07-06-2023 |    90 |             | 
+ company1 | 07-07-2023 |   110 | 07-07-2023  | 07-10-2023
+ company1 | 07-08-2023 |   130 |             | 
+ company1 | 07-09-2023 |   120 |             | 
+ company1 | 07-10-2023 |   130 |             | 
+ company2 | 07-01-2023 |    50 |             | 
+ company2 | 07-02-2023 |  2000 | 07-02-2023  | 07-05-2023
+ company2 | 07-03-2023 |  1500 |             | 
+ company2 | 07-04-2023 |  1400 |             | 
+ company2 | 07-05-2023 |  1500 |             | 
+ company2 | 07-06-2023 |    60 |             | 
+ company2 | 07-07-2023 |  1100 | 07-07-2023  | 07-10-2023
+ company2 | 07-08-2023 |  1300 |             | 
+ company2 | 07-09-2023 |  1200 |             | 
+ company2 | 07-10-2023 |  1300 |             | 
+(20 rows)
+
+-- backtracking with reclassification of rows
+-- using AFTER MATCH SKIP TO NEXT ROW
+SELECT company, tdate, price, first_value(tdate) OVER w, last_value(tdate) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ AFTER MATCH SKIP TO NEXT ROW
+ INITIAL
+ PATTERN (A+ B+)
+ DEFINE
+  A AS price > 100,
+  B AS price > 100
+);
+ company  |   tdate    | price | first_value | last_value 
+----------+------------+-------+-------------+------------
+ company1 | 07-01-2023 |   100 |             | 
+ company1 | 07-02-2023 |   200 | 07-02-2023  | 07-05-2023
+ company1 | 07-03-2023 |   150 | 07-03-2023  | 07-05-2023
+ company1 | 07-04-2023 |   140 | 07-04-2023  | 07-05-2023
+ company1 | 07-05-2023 |   150 |             | 
+ company1 | 07-06-2023 |    90 |             | 
+ company1 | 07-07-2023 |   110 | 07-07-2023  | 07-10-2023
+ company1 | 07-08-2023 |   130 | 07-08-2023  | 07-10-2023
+ company1 | 07-09-2023 |   120 | 07-09-2023  | 07-10-2023
+ company1 | 07-10-2023 |   130 |             | 
+ company2 | 07-01-2023 |    50 |             | 
+ company2 | 07-02-2023 |  2000 | 07-02-2023  | 07-05-2023
+ company2 | 07-03-2023 |  1500 | 07-03-2023  | 07-05-2023
+ company2 | 07-04-2023 |  1400 | 07-04-2023  | 07-05-2023
+ company2 | 07-05-2023 |  1500 |             | 
+ company2 | 07-06-2023 |    60 |             | 
+ company2 | 07-07-2023 |  1100 | 07-07-2023  | 07-10-2023
+ company2 | 07-08-2023 |  1300 | 07-08-2023  | 07-10-2023
+ company2 | 07-09-2023 |  1200 | 07-09-2023  | 07-10-2023
+ company2 | 07-10-2023 |  1300 |             | 
+(20 rows)
+
+-- ROWS BETWEEN CURRENT ROW AND offset FOLLOWING
+SELECT company, tdate, price, first_value(tdate) OVER w, last_value(tdate) OVER w,
+ count(*) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING
+ AFTER MATCH SKIP PAST LAST ROW
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value | count 
+----------+------------+-------+-------------+------------+-------
+ company1 | 07-01-2023 |   100 | 07-01-2023  | 07-03-2023 |     3
+ company1 | 07-02-2023 |   200 |             |            |     0
+ company1 | 07-03-2023 |   150 |             |            |     0
+ company1 | 07-04-2023 |   140 | 07-04-2023  | 07-06-2023 |     3
+ company1 | 07-05-2023 |   150 |             |            |     0
+ company1 | 07-06-2023 |    90 |             |            |     0
+ company1 | 07-07-2023 |   110 | 07-07-2023  | 07-09-2023 |     3
+ company1 | 07-08-2023 |   130 |             |            |     0
+ company1 | 07-09-2023 |   120 |             |            |     0
+ company1 | 07-10-2023 |   130 |             |            |     0
+ company2 | 07-01-2023 |    50 | 07-01-2023  | 07-03-2023 |     3
+ company2 | 07-02-2023 |  2000 |             |            |     0
+ company2 | 07-03-2023 |  1500 |             |            |     0
+ company2 | 07-04-2023 |  1400 | 07-04-2023  | 07-06-2023 |     3
+ company2 | 07-05-2023 |  1500 |             |            |     0
+ company2 | 07-06-2023 |    60 |             |            |     0
+ company2 | 07-07-2023 |  1100 | 07-07-2023  | 07-09-2023 |     3
+ company2 | 07-08-2023 |  1300 |             |            |     0
+ company2 | 07-09-2023 |  1200 |             |            |     0
+ company2 | 07-10-2023 |  1300 |             |            |     0
+(20 rows)
+
+--
+-- Aggregates
+--
+-- using AFTER MATCH SKIP PAST LAST ROW
+SELECT company, tdate, price,
+ first_value(price) OVER w,
+ last_value(price) OVER w,
+ max(price) OVER w,
+ min(price) OVER w,
+ sum(price) OVER w,
+ avg(price) OVER w,
+ count(price) OVER w
+FROM stock
+WINDOW w AS (
+PARTITION BY company
+ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+AFTER MATCH SKIP PAST LAST ROW
+INITIAL
+PATTERN (START UP+ DOWN+)
+DEFINE
+START AS TRUE,
+UP AS price > PREV(price),
+DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value | max  | min | sum  |          avg          | count 
+----------+------------+-------+-------------+------------+------+-----+------+-----------------------+-------
+ company1 | 07-01-2023 |   100 |         100 |        140 |  200 | 100 |  590 |  147.5000000000000000 |     4
+ company1 | 07-02-2023 |   200 |             |            |      |     |      |                       |     0
+ company1 | 07-03-2023 |   150 |             |            |      |     |      |                       |     0
+ company1 | 07-04-2023 |   140 |             |            |      |     |      |                       |     0
+ company1 | 07-05-2023 |   150 |             |            |      |     |      |                       |     0
+ company1 | 07-06-2023 |    90 |          90 |        120 |  130 |  90 |  450 |  112.5000000000000000 |     4
+ company1 | 07-07-2023 |   110 |             |            |      |     |      |                       |     0
+ company1 | 07-08-2023 |   130 |             |            |      |     |      |                       |     0
+ company1 | 07-09-2023 |   120 |             |            |      |     |      |                       |     0
+ company1 | 07-10-2023 |   130 |             |            |      |     |      |                       |     0
+ company2 | 07-01-2023 |    50 |          50 |       1400 | 2000 |  50 | 4950 | 1237.5000000000000000 |     4
+ company2 | 07-02-2023 |  2000 |             |            |      |     |      |                       |     0
+ company2 | 07-03-2023 |  1500 |             |            |      |     |      |                       |     0
+ company2 | 07-04-2023 |  1400 |             |            |      |     |      |                       |     0
+ company2 | 07-05-2023 |  1500 |             |            |      |     |      |                       |     0
+ company2 | 07-06-2023 |    60 |          60 |       1200 | 1300 |  60 | 3660 |  915.0000000000000000 |     4
+ company2 | 07-07-2023 |  1100 |             |            |      |     |      |                       |     0
+ company2 | 07-08-2023 |  1300 |             |            |      |     |      |                       |     0
+ company2 | 07-09-2023 |  1200 |             |            |      |     |      |                       |     0
+ company2 | 07-10-2023 |  1300 |             |            |      |     |      |                       |     0
+(20 rows)
+
+-- using AFTER MATCH SKIP TO NEXT ROW
+SELECT company, tdate, price,
+ first_value(price) OVER w,
+ last_value(price) OVER w,
+ max(price) OVER w,
+ min(price) OVER w,
+ sum(price) OVER w,
+ avg(price) OVER w,
+ count(price) OVER w
+FROM stock
+WINDOW w AS (
+PARTITION BY company
+ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+AFTER MATCH SKIP TO NEXT ROW
+INITIAL
+PATTERN (START UP+ DOWN+)
+DEFINE
+START AS TRUE,
+UP AS price > PREV(price),
+DOWN AS price < PREV(price)
+);
+ company  |   tdate    | price | first_value | last_value | max  | min  | sum  |          avg          | count 
+----------+------------+-------+-------------+------------+------+------+------+-----------------------+-------
+ company1 | 07-01-2023 |   100 |         100 |        140 |  200 |  100 |  590 |  147.5000000000000000 |     4
+ company1 | 07-02-2023 |   200 |             |            |      |      |      |                       |     0
+ company1 | 07-03-2023 |   150 |             |            |      |      |      |                       |     0
+ company1 | 07-04-2023 |   140 |         140 |         90 |  150 |   90 |  380 |  126.6666666666666667 |     3
+ company1 | 07-05-2023 |   150 |             |            |      |      |      |                       |     0
+ company1 | 07-06-2023 |    90 |          90 |        120 |  130 |   90 |  450 |  112.5000000000000000 |     4
+ company1 | 07-07-2023 |   110 |         110 |        120 |  130 |  110 |  360 |  120.0000000000000000 |     3
+ company1 | 07-08-2023 |   130 |             |            |      |      |      |                       |     0
+ company1 | 07-09-2023 |   120 |             |            |      |      |      |                       |     0
+ company1 | 07-10-2023 |   130 |             |            |      |      |      |                       |     0
+ company2 | 07-01-2023 |    50 |          50 |       1400 | 2000 |   50 | 4950 | 1237.5000000000000000 |     4
+ company2 | 07-02-2023 |  2000 |             |            |      |      |      |                       |     0
+ company2 | 07-03-2023 |  1500 |             |            |      |      |      |                       |     0
+ company2 | 07-04-2023 |  1400 |        1400 |         60 | 1500 |   60 | 2960 |  986.6666666666666667 |     3
+ company2 | 07-05-2023 |  1500 |             |            |      |      |      |                       |     0
+ company2 | 07-06-2023 |    60 |          60 |       1200 | 1300 |   60 | 3660 |  915.0000000000000000 |     4
+ company2 | 07-07-2023 |  1100 |        1100 |       1200 | 1300 | 1100 | 3600 | 1200.0000000000000000 |     3
+ company2 | 07-08-2023 |  1300 |             |            |      |      |      |                       |     0
+ company2 | 07-09-2023 |  1200 |             |            |      |      |      |                       |     0
+ company2 | 07-10-2023 |  1300 |             |            |      |      |      |                       |     0
+(20 rows)
+
+-- JOIN case
+CREATE TEMP TABLE t1 (i int, v1 int);
+CREATE TEMP TABLE t2 (j int, v2 int);
+INSERT INTO t1 VALUES(1,10);
+INSERT INTO t1 VALUES(1,11);
+INSERT INTO t1 VALUES(1,12);
+INSERT INTO t2 VALUES(2,10);
+INSERT INTO t2 VALUES(2,11);
+INSERT INTO t2 VALUES(2,12);
+SELECT * FROM t1, t2 WHERE t1.v1 <= 11 AND t2.v2 <= 11;
+ i | v1 | j | v2 
+---+----+---+----
+ 1 | 10 | 2 | 10
+ 1 | 10 | 2 | 11
+ 1 | 11 | 2 | 10
+ 1 | 11 | 2 | 11
+(4 rows)
+
+SELECT *, count(*) OVER w FROM t1, t2
+WINDOW w AS (
+ PARTITION BY t1.i
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (A)
+ DEFINE
+ A AS v1 <= 11 AND v2 <= 11
+);
+ i | v1 | j | v2 | count 
+---+----+---+----+-------
+ 1 | 10 | 2 | 10 |     1
+ 1 | 10 | 2 | 11 |     1
+ 1 | 10 | 2 | 12 |     0
+ 1 | 11 | 2 | 10 |     1
+ 1 | 11 | 2 | 11 |     1
+ 1 | 11 | 2 | 12 |     0
+ 1 | 12 | 2 | 10 |     0
+ 1 | 12 | 2 | 11 |     0
+ 1 | 12 | 2 | 12 |     0
+(9 rows)
+
+-- WITH case
+WITH wstock AS (
+  SELECT * FROM stock WHERE tdate < '2023-07-08'
+)
+SELECT tdate, price,
+first_value(tdate) OVER w,
+count(*) OVER w
+ FROM wstock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+   tdate    | price | first_value | count 
+------------+-------+-------------+-------
+ 07-01-2023 |   100 | 07-01-2023  |     4
+ 07-02-2023 |   200 |             |     0
+ 07-03-2023 |   150 |             |     0
+ 07-04-2023 |   140 |             |     0
+ 07-05-2023 |   150 |             |     0
+ 07-06-2023 |    90 |             |     0
+ 07-07-2023 |   110 |             |     0
+ 07-01-2023 |    50 | 07-01-2023  |     4
+ 07-02-2023 |  2000 |             |     0
+ 07-03-2023 |  1500 |             |     0
+ 07-04-2023 |  1400 |             |     0
+ 07-05-2023 |  1500 |             |     0
+ 07-06-2023 |    60 |             |     0
+ 07-07-2023 |  1100 |             |     0
+(14 rows)
+
+--
+-- Error cases
+--
+-- row pattern definition variable name must not appear more than once
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price),
+  UP AS price > PREV(price)
+);
+ERROR:  row pattern definition variable name "up" appears more than once in DEFINE clause
+LINE 11:   UP AS price > PREV(price),
+           ^
+-- subqueries in DEFINE clause are not supported
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START LOWPRICE)
+ DEFINE
+  START AS TRUE,
+  LOWPRICE AS price < (SELECT 100)
+);
+ERROR:  cannot use subquery in DEFINE expression
+LINE 11:   LOWPRICE AS price < (SELECT 100)
+                               ^
+-- aggregates in DEFINE clause are not supported
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START LOWPRICE)
+ DEFINE
+  START AS TRUE,
+  LOWPRICE AS price < count(*)
+);
+ERROR:  aggregate functions are not allowed in DEFINE
+LINE 11:   LOWPRICE AS price < count(*)
+                               ^
+-- FRAME must start at current row when row patttern recognition is used
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+ INITIAL
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ERROR:  FRAME must start at current row when row patttern recognition is used
+-- SEEK is not supported
+SELECT company, tdate, price, first_value(price) OVER w, last_value(price) OVER w
+ FROM stock
+ WINDOW w AS (
+ PARTITION BY company
+ ORDER BY tdate
+ ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+ AFTER MATCH SKIP TO NEXT ROW
+ SEEK
+ PATTERN (START UP+ DOWN+)
+ DEFINE
+  START AS TRUE,
+  UP AS price > PREV(price),
+  DOWN AS price < PREV(price)
+);
+ERROR:  SEEK is not supported
+LINE 8:  SEEK
+         ^
+HINT:  Use INITIAL.

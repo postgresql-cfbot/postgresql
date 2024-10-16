@@ -430,7 +430,7 @@ gss_read(PGconn *conn, void *recv_buffer, size_t length, ssize_t *ret)
 	*ret = pqsecure_raw_read(conn, recv_buffer, length);
 	if (*ret < 0)
 	{
-		if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
+		if (SOCK_ERRNO == EAGAIN || SOCK_ERRNO == EWOULDBLOCK || SOCK_ERRNO == EINTR)
 			return PGRES_POLLING_READING;
 		else
 			return PGRES_POLLING_FAILED;

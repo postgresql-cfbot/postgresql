@@ -104,6 +104,13 @@ typedef struct ReorderBufferChange
 			HeapTuple	oldtuple;
 			/* valid for INSERT || UPDATE */
 			HeapTuple	newtuple;
+
+			/*
+			 * CLUSTER CONCURRENTLY needs the old TID, even if the old tuple
+			 * itself is not WAL-logged (i.e. when the identity key does not
+			 * change).
+			 */
+			ItemPointerData	old_tid;
 		}			tp;
 
 		/*

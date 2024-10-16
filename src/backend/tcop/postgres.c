@@ -21,6 +21,7 @@
 
 #include <fcntl.h>
 #include <limits.h>
+#include <malloc.h>
 #include <signal.h>
 #include <unistd.h>
 #include <sys/resource.h>
@@ -2820,6 +2821,16 @@ finish_xact_command(void)
 		/* Print mem stats after each commit for leak tracking */
 		MemoryContextStats(TopMemoryContext);
 #endif
+
+		{
+			char	   *old_brk = sbrk(0);
+			char	   *new_brk;
+
+			malloc_trim(0);
+			new_brk = sbrk(0);
+			elog(LOG, "malloc_trim saved %zu kB",
+				 (old_brk - new_brk + 1023) / 1024);
+		}
 
 		xact_started = false;
 	}

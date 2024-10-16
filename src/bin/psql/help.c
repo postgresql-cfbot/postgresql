@@ -313,7 +313,7 @@ slashUsage(unsigned short int pager)
 	else
 		HELP0("  \\c[onnect] {[DBNAME|- USER|- HOST|- PORT|-] | conninfo}\n"
 			  "                         connect to new database (currently no connection)\n");
-	HELP0("  \\conninfo              display information about current connection\n");
+	HELP0("  \\conninfo[+]           display information about current connection\n");
 	HELP0("  \\encoding [ENCODING]   show or set client encoding\n");
 	HELP0("  \\parse STMT_NAME       create a prepared statement\n");
 	HELP0("  \\password [USERNAME]   securely change the password for a user\n");

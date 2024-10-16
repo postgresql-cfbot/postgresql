@@ -6547,7 +6547,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 	printQueryOpt myopt = pset.popt;
 	static const bool translate_columns[] = {false, false, false, false,
 		false, false, false, false, false, false, false, false, false, false,
-	false};
+	false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6627,12 +6627,21 @@ describeSubscriptions(const char *pattern, bool verbose)
 			appendPQExpBuffer(&buf,
 							  ", subskiplsn AS \"%s\"\n",
 							  gettext_noop("Skip LSN"));
+
+		/* Add conflict resolvers information from pg_subscription_conflict */
+		if (pset.sversion >= 180000)
+			appendPQExpBuffer(&buf,
+							  ", (SELECT string_agg(conftype || ' = ' || confres, ', ' \n"
+							  "  ORDER BY conftype) \n"
+							  " FROM pg_catalog.pg_subscription_conflict c \n"
+							  "   WHERE c.confsubid = s.oid) AS \"%s\"\n",
+							  gettext_noop("Conflict Resolvers"));
 	}
 
 	/* Only display subscriptions in current database. */
 	appendPQExpBufferStr(&buf,
-						 "FROM pg_catalog.pg_subscription\n"
-						 "WHERE subdbid = (SELECT oid\n"
+						 "FROM pg_catalog.pg_subscription s\n"
+						 "WHERE s.subdbid = (SELECT oid\n"
 						 "                 FROM pg_catalog.pg_database\n"
 						 "                 WHERE datname = pg_catalog.current_database())");
 

@@ -36,6 +36,7 @@ typedef struct xl_replorigin_drop
 extern PGDLLIMPORT RepOriginId replorigin_session_origin;
 extern PGDLLIMPORT XLogRecPtr replorigin_session_origin_lsn;
 extern PGDLLIMPORT TimestampTz replorigin_session_origin_timestamp;
+extern PGDLLIMPORT uint64 replorigin_session_origin_sysid;
 
 /* API for querying & manipulating replication origins */
 extern RepOriginId replorigin_by_name(const char *roname, bool missing_ok);

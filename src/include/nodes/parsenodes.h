@@ -4215,6 +4215,7 @@ typedef struct CreateSubscriptionStmt
 	char	   *conninfo;		/* Connection string to publisher */
 	List	   *publication;	/* One or more publication to subscribe to */
 	List	   *options;		/* List of DefElem nodes */
+	List	   *resolvers;		/* List of conflict resolvers */
 } CreateSubscriptionStmt;
 
 typedef enum AlterSubscriptionType
@@ -4227,6 +4228,9 @@ typedef enum AlterSubscriptionType
 	ALTER_SUBSCRIPTION_REFRESH,
 	ALTER_SUBSCRIPTION_ENABLED,
 	ALTER_SUBSCRIPTION_SKIP,
+	ALTER_SUBSCRIPTION_CONFLICT_RESOLVERS,
+	ALTER_SUBSCRIPTION_CONFLICT_RESOLVER_RESET,
+	ALTER_SUBSCRIPTION_CONFLICT_RESOLVER_RESET_ALL,
 } AlterSubscriptionType;
 
 typedef struct AlterSubscriptionStmt
@@ -4237,6 +4241,9 @@ typedef struct AlterSubscriptionStmt
 	char	   *conninfo;		/* Connection string to publisher */
 	List	   *publication;	/* One or more publication to subscribe to */
 	List	   *options;		/* List of DefElem nodes */
+	List	   *resolvers;		/* List of conflict type names and resolver
+								 * names */
+	char	   *conflict_type_name; /* The conflict type name to be reset */
 } AlterSubscriptionStmt;
 
 typedef struct DropSubscriptionStmt

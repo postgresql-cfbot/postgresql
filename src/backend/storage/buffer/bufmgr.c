@@ -58,6 +58,7 @@
 #include "storage/smgr.h"
 #include "storage/standby.h"
 #include "utils/memdebug.h"
+#include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/rel.h"
 #include "utils/resowner.h"
@@ -142,6 +143,23 @@ int			bgwriter_lru_maxpages = 100;
 double		bgwriter_lru_multiplier = 2.0;
 bool		track_io_timing = false;
 
+
+/*
+ * We keep a list of all relations whose buffer persistence has been switched
+ * in the current transaction. This allows us to properly revert the
+ * persistence if the transaction is aborted.
+ */
+typedef struct BufMgrCleanup
+{
+	RelFileLocator rlocator;	/* relation that may need to be deleted */
+	bool		bufpersistence; /* buffer persistence to set */
+	int			nestLevel;		/* xact nesting level of request */
+	TransactionId xid;			/* used during recovery */
+	struct BufMgrCleanup *next;	/* linked-list link */
+} BufMgrCleanup;
+
+static BufMgrCleanup * cleanups = NULL; /* head of linked list */
+
 /*
  * How many buffers PrefetchBuffer callers should try to stay ahead of their
  * ReadBuffer calls by.  Zero means "never prefetch".  This value is only used
@@ -149,6 +167,16 @@ bool		track_io_timing = false;
  * effective_io_concurrency parameter set.
  */
 int			effective_io_concurrency = DEFAULT_EFFECTIVE_IO_CONCURRENCY;
+
+/*
+ * Helper struct for handling RelFileNOde and ForkNumber together in
+ * DropRelationsAllBuffers.
+ */
+typedef struct RelFileForks
+{
+	RelFileLocator rloc;	 /* key member for qsort */
+	ForkBitmap	   forks;	 /* fork numbers in bitmap */
+} RelFileForks;
 
 /*
  * Like effective_io_concurrency, but used by maintenance code paths that might
@@ -222,6 +250,8 @@ static void ResOwnerReleaseBufferIO(Datum res);
 static char *ResOwnerPrintBufferIO(Datum res);
 static void ResOwnerReleaseBufferPin(Datum res);
 static char *ResOwnerPrintBufferPin(Datum res);
+
+static void set_relation_buffers_persistence(SMgrRelation srel, bool permanent);
 
 const ResourceOwnerDesc buffer_io_resowner_desc =
 {
@@ -3549,6 +3579,153 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 }
 
 /*
+ * bufmgrDoCleanup() -- Take care of buffer persistence chages at end of xact
+ *
+ * This function is called at the end of both transactions and subtransactions,
+ * aiming to immediately clean up failed transactions.
+ */
+static void
+bufmgrDoCleanup(bool isCommit)
+{
+	int	nestLevel = GetCurrentTransactionNestLevel();
+	BufMgrCleanup *cu;
+	BufMgrCleanup *next;
+
+	for (cu = cleanups ; cu && cu->nestLevel <= nestLevel ; cu = next)
+	{
+		next = cu->next;
+		cleanups = next;
+
+		if (!isCommit)
+		{
+			SMgrRelation srel = smgropen(cu->rlocator, INVALID_PROC_NUMBER);
+			set_relation_buffers_persistence(srel, cu->bufpersistence);
+		}
+		pfree(cu);
+	}
+
+#ifdef USE_ASSERT_CHECKING
+	/* All remaining entriespertain to upper levels. */
+	for (cu = cleanups ; cu ; cu = cu->next)
+		Assert(cu->nestLevel < nestLevel);
+#endif
+}
+
+/*
+ * AtEOXact_Buffers_Redo() -- End-of-transaction cleanup of buffer persistence
+ *      chages during rcovery.
+ *
+ * Unlike normal operation, the cleanup entries are keyed by xid rather than by
+ * nestLevel. See SetRelationBuffersPersistenceRedo() for details on the
+ * registration of those entries.
+ */
+void
+AtEOXact_Buffers_Redo(bool isCommit, TransactionId xid,
+					  int nchildren, TransactionId *children)
+{
+	BufMgrCleanup *cu;
+	BufMgrCleanup *prev;
+	BufMgrCleanup *next;
+
+	prev = NULL;
+	for (cu = cleanups ; cu ; cu = next)
+	{
+		next = cu->next;
+
+		if (cu->xid != xid)
+		{
+			int i;
+
+			for (i = 0 ; i < nchildren && cu->xid != children[i] ; i++);
+
+			if (i == nchildren)
+			{
+				/* did not match, go to next */
+				prev = cu;
+				continue;
+			}
+		}
+
+		if (!isCommit)
+		{
+			/*
+			 * Record this revert to WAL without re-registering a BufMgrCleanup
+			 * entry.
+			 */
+			SMgrRelation srel = smgropen(cu->rlocator, INVALID_PROC_NUMBER);
+			set_relation_buffers_persistence(srel, cu->bufpersistence);
+		}
+		if (prev)
+			prev->next = next;
+		else
+			cleanups = next;
+		pfree(cu);
+	}
+}
+
+/*
+ * BufmgrDoCleanupRedo() -- End-of-recovery cleanup of buffer persistence
+ *        chages.
+ *
+ * Revert buffer persistence changes made in transactions that are not
+ * committed at the end of recovery.
+ */
+void
+BufmgrDoCleanupRedo(void)
+{
+	BufMgrCleanup *cu;
+	BufMgrCleanup *next;
+
+	for (cu = cleanups ; cu ; cu = next)
+	{
+		SMgrRelation srel = smgropen(cu->rlocator, INVALID_PROC_NUMBER);
+		set_relation_buffers_persistence(srel, cu->bufpersistence);
+
+		next = cu->next;
+		pfree(cu);
+	}
+
+	cleanups = NULL;
+}
+
+/*
+ * PreSubCommit_Buffers() -- Take care of buffer persistence changes at subxact
+ * end
+ */
+void
+PreSubCommit_Buffers(bool isCommit)
+{
+	int	nestLevel = GetCurrentTransactionNestLevel();
+
+	if (!isCommit)
+	{
+		bufmgrDoCleanup(isCommit);
+		return;
+	}
+
+	/*
+	 * Reassign all cleanup items at the current nestlevel to the parent
+	 * transaction.
+	 */
+
+	for (BufMgrCleanup *cu = cleanups ;
+		 cu && cu->nestLevel >= nestLevel ;
+		 cu = cu->next)
+	{
+		/* no lower-level entry is expected */
+		Assert(cu->nestLevel == nestLevel);
+
+		cu->nestLevel = nestLevel - 1;
+	}
+}
+
+void
+PreCommit_Buffers(bool isCommit)
+{
+	bufmgrDoCleanup(isCommit);
+}
+
+/*
  *		AtEOXact_Buffers - clean up at end of transaction.
  *
  *		As of PostgreSQL 8.0, buffer pins should get released by the
@@ -4142,30 +4319,212 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	}
 }
 
+/*
+ * set_relation_buffers_persistence()
+ *
+ *	The core function to change the persistence of all buffer pages of a
+ *	relation then writes all dirty pages to disk (or kernel disk buffers) when
+ *	switching to PERMANENT, ensuring the kernel has an up-to-date view of the
+ *	relation.
+ *
+ *	The caller must be holding AccessExclusiveLock on the target relation to
+ *	ensure no other backend is busy loading more blocks.
+ *
+ *	XXX currently it sequentially searches the buffer pool; consider
+ *	implementing more efficient search methods.  This routine isn't used in
+ *	performance-critical code paths, so it's not worth additional overhead to
+ *	make it go faster; see also DropRelationBuffers.
+ */
+static void
+set_relation_buffers_persistence(SMgrRelation srel, bool permanent)
+{
+	int			i;
+	RelFileLocator rlocator = srel->smgr_rlocator.locator;
+
+	Assert(!RelFileLocatorBackendIsTemp(srel->smgr_rlocator));
+
+	ResourceOwnerEnlarge(CurrentResourceOwner);
+
+	for (i = 0; i < NBuffers; i++)
+	{
+		BufferDesc *bufHdr = GetBufferDescriptor(i);
+		uint32		buf_state;
+
+		/* try unlocked check to avoid locking irrelevant buffers */
+		if (!RelFileLocatorEquals(BufTagGetRelFileLocator(&bufHdr->tag),
+								  rlocator))
+			continue;
+
+		ReservePrivateRefCountEntry();
+
+		buf_state = LockBufHdr(bufHdr);
+
+		if (!RelFileLocatorEquals(BufTagGetRelFileLocator(&bufHdr->tag),
+								  rlocator))
+		{
+			UnlockBufHdr(bufHdr, buf_state);
+			continue;
+		}
+
+		if (permanent)
+		{
+			/* The init fork is being dropped, drop buffers for it. */
+			if (BufTagGetForkNum(&bufHdr->tag) == INIT_FORKNUM)
+			{
+				InvalidateBuffer(bufHdr);
+				continue;
+			}
+
+			/* Switch the buffer state to BM_PERMANENT before flushing it. */
+			Assert((buf_state & BM_PERMANENT) == 0);
+			buf_state |= BM_PERMANENT;
+			pg_atomic_write_u32(&bufHdr->state, buf_state);
+
+			/*
+			 * We haven't written WALs for this buffer. Flush this buffer to
+			 * establish the epoch for subsequent WAL records.
+			 */
+			if ((buf_state & (BM_VALID | BM_DIRTY)) == (BM_VALID | BM_DIRTY))
+			{
+				PinBuffer_Locked(bufHdr);
+				LWLockAcquire(BufferDescriptorGetContentLock(bufHdr),
+							  LW_SHARED);
+				FlushBuffer(bufHdr, srel, IOOBJECT_RELATION, IOCONTEXT_NORMAL);
+				LWLockRelease(BufferDescriptorGetContentLock(bufHdr));
+				UnpinBuffer(bufHdr);
+			}
+			else
+				UnlockBufHdr(bufHdr, buf_state);
+		}
+		else
+		{
+			/* There shouldn't be an init fork for this relation */
+			Assert(BufTagGetForkNum(&bufHdr->tag) != INIT_FORKNUM);
+			Assert(buf_state & BM_PERMANENT);
+
+			/* Just switch the buffer state to non-permanent. */
+			buf_state &= ~BM_PERMANENT;
+			UnlockBufHdr(bufHdr, buf_state);
+		}
+	}
+}
+
+/* ---------------------------------------------------------------------
+ *	SetRelationBuffersPersistence
+ *
+ *		This function changes the persistence of all buffer pages of a
+ *		relation. See set_relation_buffers_persistence() for functionality
+ *		details.
+ *
+ *		This function's behavior is transactional, meaning that the changes it
+ *		makes will be reverted if this or any higher-level transaction is
+ *		aborted.
+ *
+ *		The caller must be holding AccessExclusiveLock on the target relation
+ *		to ensure no other backend is busy loading more blocks.
+ *		--------------------------------------------------------------------
+ */
+void
+SetRelationBuffersPersistence(SMgrRelation srel, bool permanent)
+{
+	BufMgrCleanup *cu;
+	RelFileLocator rlocator = srel->smgr_rlocator.locator;
+
+	/*
+	 * Double-flipping relation persistence within the same transaction
+	 * significantly increases complexixty relative to its benefits. Therefore,
+	 * error out if persistence has already flipped for this relation in the
+	 * current transaction.
+	 */
+	for (cu = cleanups ; cu ; cu = cu->next)
+	{
+		if (RelFileLocatorEquals(rlocator, cu->rlocator))
+			ereport(ERROR,
+					errmsg("persistence of this relation has been already changed in the current transaction"));
+	}
+
+	set_relation_buffers_persistence(srel, permanent);
+
+	/* Schedule reverting this change at abort */
+	cu = (BufMgrCleanup *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(BufMgrCleanup));
+	cu->rlocator = rlocator;
+	cu->bufpersistence = !permanent;
+	cu->nestLevel = GetCurrentTransactionNestLevel();
+	cu->next = cleanups;
+	cleanups = cu;
+}
+
+/* ---------------------------------------------------------------------
+ *	SetRelationBuffersPersistenceRedo
+ *
+ *		This function changes the persistence of all buffer pages of a relation
+ *		during recovery. The cleanup entry is keyed by xid, not by nestLevel.
+ *		--------------------------------------------------------------------
+ */
+void
+SetRelationBuffersPersistenceRedo(SMgrRelation srel, bool permanent,
+								  TransactionId xid)
+{
+	BufMgrCleanup *cu;
+
+	set_relation_buffers_persistence(srel, permanent);
+
+	/* Schedule reverting this change at abort */
+	cu = (BufMgrCleanup *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(BufMgrCleanup));
+	cu->rlocator = srel->smgr_rlocator.locator;
+	cu->bufpersistence = !permanent;
+	cu->xid = xid;
+	cu->next = cleanups;
+	cleanups = cu;
+}
+
+/*
+ *	CheckIfPersistenceChanged
+ *
+ *		Returns true if any relation's persistence change has occurred in the
+ *		current transaction.
+ *		--------------------------------------------------------------------
+ */
+bool
+CheckIfPersistenceChanged(void)
+{
+	return cleanups != NULL;
+}
+
 /* ---------------------------------------------------------------------
  *		DropRelationsAllBuffers
  *
  *		This function removes from the buffer pool all the pages of all
  *		forks of the specified relations.  It's equivalent to calling
  *		DropRelationBuffers once per fork per relation with firstDelBlock = 0.
+ *		The additional parameter forks is used to identify forks if
+ *		provided.
  *		--------------------------------------------------------------------
  */
 void
-DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
+DropRelationsAllBuffers(SMgrRelation *smgr_reln, ForkBitmap *pforks,
+						int nlocators)
 {
 	int			i;
 	int			n = 0;
 	SMgrRelation *rels;
 	BlockNumber (*block)[MAX_FORKNUM + 1];
 	uint64		nBlocksToInvalidate = 0;
-	RelFileLocator *locators;
+	ForkBitmap  *forks = NULL;
+	RelFileForks *locators;
 	bool		cached = true;
 	bool		use_bsearch;
 
 	if (nlocators == 0)
 		return;
 
-	rels = palloc(sizeof(SMgrRelation) * nlocators);	/* non-local relations */
+	/* storages for non-local relations */
+	rels = palloc(sizeof(SMgrRelation) * nlocators);
+
+	if (pforks)
+		forks = palloc(sizeof(ForkBitmap) * nlocators);
 
 	/* If it's a local relation, it's localbuf.c's problem. */
 	for (i = 0; i < nlocators; i++)
@@ -4176,7 +4535,12 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 				DropRelationAllLocalBuffers(smgr_reln[i]->smgr_rlocator.locator);
 		}
 		else
-			rels[n++] = smgr_reln[i];
+		{
+			rels[n] = smgr_reln[i];
+			if (forks)
+				forks[n] = pforks[i];
+			n++;
+		}
 	}
 
 	/*
@@ -4186,6 +4550,10 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	if (n == 0)
 	{
 		pfree(rels);
+
+		if (forks)
+			pfree(forks);
+
 		return;
 	}
 
@@ -4204,6 +4572,13 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	{
 		for (int j = 0; j <= MAX_FORKNUM; j++)
 		{
+			/* Consider only the specified fork, if provided. */
+			if (forks && !FORKBITMAP_ISSET(forks[i], j))
+			{
+				block[i][j] = InvalidBlockNumber;
+				continue;
+			}
+
 			/* Get the number of blocks for a relation's fork. */
 			block[i][j] = smgrnblocks_cached(rels[i], j);
 
@@ -4231,7 +4606,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 		{
 			for (int j = 0; j <= MAX_FORKNUM; j++)
 			{
-				/* ignore relation forks that doesn't exist */
+				/* ignore relation forks that doesn't exist or is ignored */
 				if (!BlockNumberIsValid(block[i][j]))
 					continue;
 
@@ -4247,9 +4622,13 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	}
 
 	pfree(block);
-	locators = palloc(sizeof(RelFileLocator) * n);	/* non-local relations */
+	locators = palloc(sizeof(RelFileForks) * n);	/* non-local relations */
+
 	for (i = 0; i < n; i++)
-		locators[i] = rels[i]->smgr_rlocator.locator;
+	{
+		locators[i].rloc  = rels[i]->smgr_rlocator.locator;
+		locators[i].forks = (forks ? forks[i] : FORKBITMAP_ALLFORKS());
+	}
 
 	/*
 	 * For low number of relations to drop just use a simple walk through, to
@@ -4259,13 +4638,34 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	 */
 	use_bsearch = n > RELS_BSEARCH_THRESHOLD;
 
-	/* sort the list of rlocators if necessary */
-	if (use_bsearch)
-		qsort(locators, n, sizeof(RelFileLocator), rlocator_comparator);
+	/*
+	 * Sort and compress the list of RelFileForks if necessary. We believe the
+	 * caller passed unique rlocators if forks are not specified.
+	 */
+	if (use_bsearch || forks)
+	{
+		int j = 0;
+
+		qsort(locators, n, sizeof(RelFileForks), rlocator_comparator);
+
+		/*
+		 * Now the list is in rlocator increasing order, compress the list by
+		 * merging fork bitmaps so that all elements have unique rlocators.
+		 */
+		for (i = 1 ; i < n ; i++)
+		{
+			if (RelFileLocatorEquals(locators[j].rloc, locators[i].rloc))
+				locators[j].forks |= locators[i].forks;
+			else
+				locators[++j] = locators[i];
+		}
+
+		n = j + 1;
+	}
 
 	for (i = 0; i < NBuffers; i++)
 	{
-		RelFileLocator *rlocator = NULL;
+		RelFileForks *rlocator = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint32		buf_state;
 
@@ -4280,7 +4680,8 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 
 			for (j = 0; j < n; j++)
 			{
-				if (BufTagMatchesRelFileLocator(&bufHdr->tag, &locators[j]))
+				if (BufTagMatchesRelFileLocator(&bufHdr->tag,
+												&locators[j].rloc))
 				{
 					rlocator = &locators[j];
 					break;
@@ -4293,16 +4694,18 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 
 			locator = BufTagGetRelFileLocator(&bufHdr->tag);
 			rlocator = bsearch((const void *) &(locator),
-							   locators, n, sizeof(RelFileLocator),
+							   locators, n, sizeof(RelFileForks),
 							   rlocator_comparator);
 		}
 
 		/* buffer doesn't belong to any of the given relfilelocators; skip it */
-		if (rlocator == NULL)
+		if (rlocator == NULL ||
+			!FORKBITMAP_ISSET(rlocator->forks, BufTagGetForkNum(&bufHdr->tag)))
 			continue;
 
 		buf_state = LockBufHdr(bufHdr);
-		if (BufTagMatchesRelFileLocator(&bufHdr->tag, rlocator))
+		if (BufTagMatchesRelFileLocator(&bufHdr->tag, &rlocator->rloc) &&
+			FORKBITMAP_ISSET(rlocator->forks, BufTagGetForkNum(&bufHdr->tag)))
 			InvalidateBuffer(bufHdr);	/* releases spinlock */
 		else
 			UnlockBufHdr(bufHdr, buf_state);
@@ -4812,8 +5215,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	/*
 	 * Create and copy all forks of the relation.  During create database we
 	 * have a separate cleanup mechanism which deletes complete database
-	 * directory.  Therefore, each individual relation doesn't need to be
-	 * registered for cleanup.
+	 * directory. Therefore, do not issue an UNDO log for this relation.
 	 */
 	RelationCreateStorage(dst_rlocator, relpersistence, false);
 
@@ -4827,6 +5229,7 @@ CreateAndCopyRelationData(RelFileLocator src_rlocator,
 	{
 		if (smgrexists(src_rel, forkNum))
 		{
+			/* Use smgrcreate() directly as no UNDO log is required. */
 			smgrcreate(dst_rel, forkNum, false);
 
 			/*

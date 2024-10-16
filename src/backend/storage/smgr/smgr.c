@@ -454,15 +454,19 @@ smgrdosyncall(SMgrRelation *rels, int nrels)
 /*
  * smgrdounlinkall() -- Immediately unlink all forks of all given relations
  *
- * All forks of all given relations are removed from the store.  This
- * should not be used during transactional operations, since it can't be
- * undone.
+ * Forks of all given relations are removed from the store.  This should not be
+ * used during transactional operations, since it can't be undone.
+ *
+ * If forks is NULL, all forks are removed for all relations. Otherwise, only
+ * the specified fork is removed for the relation at the corresponding position
+ * in the rels array. InvalidForkNumber means removing all forks for the
+ * corresponding relation.
  *
  * If isRedo is true, it is okay for the underlying file(s) to be gone
  * already.
  */
 void
-smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
+smgrdounlinkall(SMgrRelation *rels, ForkBitmap *forks, int nrels, bool isRedo)
 {
 	int			i = 0;
 	RelFileLocatorBackend *rlocators;
@@ -475,7 +479,7 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 	 * Get rid of any remaining buffers for the relations.  bufmgr will just
 	 * drop them without bothering to write the contents.
 	 */
-	DropRelationsAllBuffers(rels, nrels);
+	DropRelationsAllBuffers(rels, forks, nrels);
 
 	/*
 	 * create an array which contains all relations to be dropped, and close
@@ -489,9 +493,13 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 
 		rlocators[i] = rlocator;
 
-		/* Close the forks at smgr level */
+		/* Close the spacified forks at smgr level. */
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_close(rels[i], forknum);
+		{
+			if (!forks || FORKBITMAP_ISSET(forks[i], forknum))
+				smgrsw[which].smgr_close(rels[i], forknum);
+			continue;
+		}
 	}
 
 	/*
@@ -518,7 +526,11 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 		int			which = rels[i]->smgr_which;
 
 		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_unlink(rlocators[i], forknum, isRedo);
+		{
+			if (!forks || FORKBITMAP_ISSET(forks[i], forknum))
+				smgrsw[which].smgr_unlink(rlocators[i], forknum, isRedo);
+			continue;
+		}
 	}
 
 	pfree(rlocators);
@@ -811,6 +823,15 @@ void
 smgrimmedsync(SMgrRelation reln, ForkNumber forknum)
 {
 	smgrsw[reln->smgr_which].smgr_immedsync(reln, forknum);
+}
+
+/*
+ * smgrunlink() -- unlink the storage file
+ */
+void
+smgrunlink(SMgrRelation reln, ForkNumber forknum, bool isRedo)
+{
+	smgrsw[reln->smgr_which].smgr_unlink(reln->smgr_rlocator, forknum, isRedo);
 }
 
 /*

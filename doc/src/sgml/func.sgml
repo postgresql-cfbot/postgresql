@@ -10961,6 +10961,28 @@ SELECT TIME WITH TIME ZONE '20:38:40-05' AT LOCAL;
     is equivalent to the SQL-conforming construct <literal><replaceable>time</replaceable>
     AT LOCAL</literal>.
    </para>
+
+   <warning>
+     <para>
+      When a time zone with fixed offset from UTC is passed to <literal>AT TIME ZONE</literal>
+      it is treated according to the POSIX rules instead of ISO ones, i.e. positive offset means
+      west of UTC. Examples:
+<screen>
+-- fixed offset, POSIX rules are applied
+SELECT TIMESTAMPTZ '2001-02-16 20:38:40+3' AT TIME ZONE '+03';
+<lineannotation>Result: </lineannotation><computeroutput>2001-02-16 14:38:40</computeroutput>
+
+-- named time zone, ISO rules are applied; Europe/Moscow = UTC+3
+SELECT TIMESTAMPTZ '2001-02-16 20:38:40+3' AT TIME ZONE 'Europe/Moscow'
+<lineannotation>Result: </lineannotation><computeroutput>2001-02-16 20:38:40</computeroutput>
+</screen>
+      If ISO rules are desired one can pass an <literal>INTERVAL</literal>, for instance:
+<screen>
+SELECT TIMESTAMPTZ '2001-02-16 20:38:40+3' AT TIME ZONE INTERVAL '+3h'
+<lineannotation>Result: </lineannotation><computeroutput>2001-02-16 20:38:40</computeroutput>
+</screen>
+     </para>
+   </warning>
   </sect2>
 
   <sect2 id="functions-datetime-current">

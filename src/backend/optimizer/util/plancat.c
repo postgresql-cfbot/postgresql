@@ -295,6 +295,19 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 			info->opcintype = (Oid *) palloc(sizeof(Oid) * nkeycolumns);
 			info->canreturn = (bool *) palloc(sizeof(bool) * ncolumns);
 
+			/*
+			 * Skip disabled indexes altogether, as they should not be considered
+			 * for query planning. This builds the data structure for the planner's
+			 * use and we make it part of IndexOptInfo since the index is already open.
+			 * We also close the relation before continuing to the next index.
+			 */
+			info->enabled = index->indisenabled;
+			if (!info->enabled)
+			{
+				index_close(indexRelation, NoLock);
+				continue;
+			}
+
 			for (i = 0; i < ncolumns; i++)
 			{
 				info->indexkeys[i] = index->indkey.values[i];

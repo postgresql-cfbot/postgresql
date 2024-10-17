@@ -333,7 +333,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <ival>	add_drop opt_asc_desc opt_nulls_order
 
 %type <node>	alter_table_cmd alter_type_cmd opt_collate_clause
-	   replica_identity partition_cmd index_partition_cmd
+	   replica_identity partition_cmd index_partition_cmd index_alter_cmd
 %type <list>	alter_table_cmds alter_type_cmds
 %type <list>    alter_identity_column_option_list
 %type <defelt>  alter_identity_column_option
@@ -496,6 +496,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <boolean> opt_unique opt_verbose opt_full
 %type <boolean> opt_freeze opt_analyze opt_default
 %type <defelt>	opt_binary copy_delimiter
+%type <boolean>  opt_index_enabled
 
 %type <boolean> copy_from opt_program
 
@@ -2168,6 +2169,24 @@ AlterTableStmt:
 					n->nowait = $13;
 					$$ = (Node *) n;
 				}
+		| ALTER INDEX qualified_name index_alter_cmd
+				{
+					AlterTableStmt *n = makeNode(AlterTableStmt);
+					n->relation = $3;
+					n->cmds = list_make1($4);
+					n->objtype = OBJECT_INDEX;
+					n->missing_ok = false;
+					$$ = (Node *) n;
+				}
+		| ALTER INDEX IF_P EXISTS qualified_name index_alter_cmd
+				{
+					AlterTableStmt *n = makeNode(AlterTableStmt);
+					n->relation = $5;
+					n->cmds = list_make1($6);
+					n->objtype = OBJECT_INDEX;
+					n->missing_ok = true;
+					$$ = (Node *) n;
+				}
 		|	ALTER INDEX qualified_name alter_table_cmds
 				{
 					AlterTableStmt *n = makeNode(AlterTableStmt);
@@ -2393,6 +2412,21 @@ index_partition_cmd:
 				}
 		;
 
+index_alter_cmd:
+		/* ALTER INDEX <name> ENABLE|DISABLE */
+		ENABLE_P
+			{
+				AlterTableCmd *n = makeNode(AlterTableCmd);
+				n->subtype = AT_EnableIndex;
+				$$ = (Node *) n;
+			}
+		| DISABLE_P
+			{
+				AlterTableCmd *n = makeNode(AlterTableCmd);
+				n->subtype = AT_DisableIndex;
+				$$ = (Node *) n;
+			}
+		;
 alter_table_cmd:
 			/* ALTER TABLE <name> ADD <coldef> */
 			ADD_P columnDef
@@ -8126,7 +8160,7 @@ defacl_privilege_target:
 
 IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause opt_index_enabled
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8141,6 +8175,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->options = $14;
 					n->tableSpace = $15;
 					n->whereClause = $16;
+					n->isenabled = $17;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8158,7 +8193,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 				}
 			| CREATE opt_unique INDEX opt_concurrently IF_P NOT EXISTS name
 			ON relation_expr access_method_clause '(' index_params ')'
-			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause
+			opt_include opt_unique_null_treatment opt_reloptions OptTableSpace where_clause opt_index_enabled
 				{
 					IndexStmt *n = makeNode(IndexStmt);
 
@@ -8173,6 +8208,7 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 					n->options = $17;
 					n->tableSpace = $18;
 					n->whereClause = $19;
+					n->isenabled = $20;
 					n->excludeOpNames = NIL;
 					n->idxcomment = NULL;
 					n->indexOid = InvalidOid;
@@ -8193,6 +8229,12 @@ IndexStmt:	CREATE opt_unique INDEX opt_concurrently opt_single_name
 opt_unique:
 			UNIQUE									{ $$ = true; }
 			| /*EMPTY*/								{ $$ = false; }
+		;
+
+opt_index_enabled:
+			ENABLE_P                      { $$ = true; }
+			| DISABLE_P                   { $$ = false; }
+			| /*EMPTY*/                 	{ $$ = true; }
 		;
 
 access_method_clause:

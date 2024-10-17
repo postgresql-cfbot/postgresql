@@ -1192,6 +1192,10 @@ DefineIndex(Oid tableId,
 		flags |= INDEX_CREATE_PARTITIONED;
 	if (stmt->primary)
 		flags |= INDEX_CREATE_IS_PRIMARY;
+   if (stmt->isenabled)
+		flags |= INDEX_CREATE_ENABLED;
+   else
+		flags &= ~INDEX_CREATE_ENABLED;
 
 	/*
 	 * If the table is partitioned, and recursion was declined but partitions

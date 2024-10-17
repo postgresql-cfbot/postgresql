@@ -213,11 +213,6 @@ test_slru_page_precedes_logically(int64 page1, int64 page2)
 static void
 test_slru_shmem_startup(void)
 {
-	/*
-	 * Short segments names are well tested elsewhere so in this test we are
-	 * focusing on long names.
-	 */
-	const bool	long_segment_names = true;
 	const char	slru_dir_name[] = "pg_test_slru";
 	int			test_tranche_id;
 	int			test_buffer_tranche_id;
@@ -241,8 +236,7 @@ test_slru_shmem_startup(void)
 	TestSlruCtl->PagePrecedes = test_slru_page_precedes_logically;
 	SimpleLruInit(TestSlruCtl, "TestSLRU",
 				  NUM_TEST_BUFFERS, 0, slru_dir_name,
-				  test_buffer_tranche_id, test_tranche_id, SYNC_HANDLER_NONE,
-				  long_segment_names);
+				  test_buffer_tranche_id, test_tranche_id, SYNC_HANDLER_NONE);
 }
 
 void

@@ -9944,6 +9944,9 @@ get_rule_expr(Node *node, deparse_context *context,
 					case IS_XMLSERIALIZE:
 						appendStringInfoString(buf, "XMLSERIALIZE(");
 						break;
+					case IS_XMLCAST:
+						appendStringInfoString(buf, "XMLCAST(");
+						break;
 					case IS_DOCUMENT:
 						break;
 				}
@@ -9990,6 +9993,7 @@ get_rule_expr(Node *node, deparse_context *context,
 						appendStringInfoString(buf, ", ");
 					switch (xexpr->op)
 					{
+						case IS_XMLCAST:
 						case IS_XMLCONCAT:
 						case IS_XMLELEMENT:
 						case IS_XMLFOREST:

@@ -1726,6 +1726,9 @@ exprLocation(const Node *expr)
 			/* just use typename's location */
 			loc = exprLocation((Node *) ((const FunctionParameter *) expr)->argType);
 			break;
+		case T_XmlCast:
+			loc = ((const XmlCast *) expr)->location;
+			break;
 		case T_XmlSerialize:
 			/* XMLSERIALIZE keyword should always be the first thing */
 			loc = ((const XmlSerialize *) expr)->location;
@@ -4432,6 +4435,16 @@ raw_expression_tree_walker_impl(Node *node,
 				if (WALK(tc->arg))
 					return true;
 				if (WALK(tc->typeName))
+					return true;
+			}
+			break;
+		case T_XmlCast:
+			{
+				XmlCast   *xc = (XmlCast *) node;
+
+				if (WALK(xc->expr))
+					return true;
+				if (WALK(xc->targetType))
 					return true;
 			}
 			break;

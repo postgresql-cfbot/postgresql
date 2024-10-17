@@ -306,7 +306,7 @@ HandleFunctionRequest(StringInfo msgBuf)
 	/*
 	 * Emit duration logging if appropriate.
 	 */
-	switch (check_log_duration(msec_str, was_logged))
+	switch (check_log_duration(msec_str, was_logged, NIL))
 	{
 		case 1:
 			ereport(LOG,

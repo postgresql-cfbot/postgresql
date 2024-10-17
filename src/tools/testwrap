@@ -59,4 +59,10 @@ if returncode == 0:
 else:
     print('# test failed')
     open(os.path.join(testdir, 'test.fail'), 'x')
+    faileddir = os.getenv('PG_FAILED_TESTDIR')
+    if faileddir:
+        parentdir = os.path.dirname(testdir)
+        newdest = os.path.join(faileddir, os.path.basename(parentdir), os.path.basename(testdir))
+        shutil.copytree(testdir, newdest)
+
 sys.exit(returncode)

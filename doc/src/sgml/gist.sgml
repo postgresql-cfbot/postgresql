@@ -266,7 +266,7 @@ CREATE INDEX ON my_table USING GIST (my_inet_column inet_ops);
 
  <para>
    There are five methods that an index operator class for
-   <acronym>GiST</acronym> must provide, and seven that are optional.
+   <acronym>GiST</acronym> must provide, and nine that are optional.
    Correctness of the index is ensured
    by proper implementation of the <function>same</function>, <function>consistent</function>
    and <function>union</function> methods, while efficiency (size and speed) of the
@@ -294,6 +294,12 @@ CREATE INDEX ON my_table USING GIST (my_inet_column inet_ops);
    <filename>src/include/access/stratnum.h</filename>) into strategy numbers
    used by the operator class.  This lets the core code look up operators for
    temporal constraint indexes.
+   The optional thirteenth method <function>intersect</function> is used by
+   <literal>FOR PORTION OF</literal> to compute the new bounds of the updated/
+   deleted record.
+   The optional fourteenth method <function>without_portion</function> is used by
+   <literal>FOR PORTION OF</literal> to compute the leftover records outside the
+   targeted bounds.
  </para>
 
  <variablelist>
@@ -1232,6 +1238,154 @@ my_stratnum(PG_FUNCTION_ARGS)
        extension defines a second translation function,
        <literal>gist_stratnum_btree</literal>, for operator classes that use
        the <literal>BT*StrategyNumber</literal> constants.
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><function>intersect</function></term>
+     <listitem>
+      <para>
+       Given two values of this opclass, it returns their intersection.
+      </para>
+      <para>
+       This is used for temporal update commands to compute the
+       new bounds of the changed row.
+      </para>
+
+      <para>
+       The <acronym>SQL</acronym> declaration of the function must look like
+       this (using <literal>my_intersect</literal> as an example):
+
+<programlisting>
+CREATE OR REPLACE FUNCTION my_range_intersect(anyrange, anyrange)
+RETURNS anyrange
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+</programlisting>
+      </para>
+
+       <para>
+        The matching code in the C module could then follow this example:
+
+<programlisting>
+Datum
+my_range_intersect(PG_FUNCTION_ARGS)
+{
+    RangeType  *r1 = PG_GETARG_RANGE_P(0);
+    RangeType  *r2 = PG_GETARG_RANGE_P(1);
+    TypeCacheEntry *typcache;
+
+    /* Different types should be prevented by ANYRANGE matching rules */
+    if (RangeTypeGetOid(r1) != RangeTypeGetOid(r2))
+        elog(ERROR, "range types do not match");
+
+    typcache = range_get_typcache(fcinfo, RangeTypeGetOid(r1));
+
+    PG_RETURN_RANGE_P(range_intersect_internal(typcache, r1, r2));
+}
+</programlisting>
+      </para>
+     </listitem>
+    </varlistentry>
+    <varlistentry>
+     <term><function>without_portion</function></term>
+     <listitem>
+      <para>
+       Given two values of this opclass, it subtracts the second for the first
+       and returns an array of the results.
+      </para>
+      <para>
+       This is used for temporal update/delete commands to compute the
+       bounds of the untouched duration.
+      </para>
+
+      <para>
+       The <acronym>SQL</acronym> declaration of the function must look like
+       this (using <literal>my_range_without_portion</literal> as an example):
+
+<programlisting>
+CREATE OR REPLACE FUNCTION my_range_without_portion(anyrange, anyrange)
+RETURNS anyarray
+AS 'MODULE_PATHNAME'
+LANGUAGE C STRICT;
+</programlisting>
+      </para>
+
+       <para>
+        The matching code in the C module could then follow this example:
+
+<programlisting>
+Datum
+my_range_without_portion(PG_FUNCTION_ARGS)
+{
+    typedef struct {
+        RangeType  *rs[2];
+        int         n;
+    } range_without_portion_fctx;
+
+    FuncCallContext *funcctx;
+    range_without_portion_fctx *fctx;
+    MemoryContext oldcontext;
+
+    /* stuff done only on the first call of the function */
+    if (SRF_IS_FIRSTCALL())
+    {
+        RangeType       *r1;
+        RangeType       *r2;
+        Oid              rngtypid;
+        TypeCacheEntry  *typcache;
+
+        /* create a function context for cross-call persistence */
+        funcctx = SRF_FIRSTCALL_INIT();
+
+        /*
+         * switch to memory context appropriate for multiple function calls
+         */
+        oldcontext = MemoryContextSwitchTo(funcctx-&gt;multi_call_memory_ctx);
+
+        r1 = PG_GETARG_RANGE_P(0);
+        r2 = PG_GETARG_RANGE_P(1);
+
+        /* Different types should be prevented by ANYRANGE matching rules */
+        if (RangeTypeGetOid(r1) != RangeTypeGetOid(r2))
+            elog(ERROR, "range types do not match");
+
+        /* allocate memory for user context */
+        fctx = (range_without_portion_fctx *) palloc(sizeof(range_without_portion_fctx));
+
+        /*
+         * Initialize state.
+         * We can't store the range typcache in fn_extra because the caller
+         * uses that for the SRF state.
+         */
+        rngtypid = RangeTypeGetOid(r1);
+        typcache = lookup_type_cache(rngtypid, TYPECACHE_RANGE_INFO);
+        if (typcache-&gt;rngelemtype == NULL)
+            elog(ERROR, "type %u is not a range type", rngtypid);
+        range_without_portion_internal(typcache, r1, r2, fctx-&gt;rs, &amp;fctx-&gt;n);
+
+        funcctx-&gt;user_fctx = fctx;
+        MemoryContextSwitchTo(oldcontext);
+    }
+
+    /* stuff done on every call of the function */
+    funcctx = SRF_PERCALL_SETUP();
+    fctx = funcctx-&gt;user_fctx;
+
+    if (funcctx-&gt;call_cntr &lt; fctx-&gt;n)
+    {
+        /*
+         * We must keep these on separate lines
+         * because SRF_RETURN_NEXT does call_cntr++:
+         */
+        RangeType *ret = fctx-&gt;rs[funcctx-&gt;call_cntr];
+        SRF_RETURN_NEXT(funcctx, RangeTypePGetDatum(ret));
+    }
+    else
+        /* do when there is no more left */
+        SRF_RETURN_DONE(funcctx);
+}
+</programlisting>
       </para>
      </listitem>
     </varlistentry>

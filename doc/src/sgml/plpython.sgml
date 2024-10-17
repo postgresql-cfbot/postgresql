@@ -1393,5 +1393,15 @@ plpy.execute("UPDATE tbl SET %s = %s WHERE key = %s" % (
    the <command>python</command> man page are only effective in a
    command-line interpreter and not an embedded Python interpreter.)
   </para>
+
+  <tip>
+   <para>
+    When installing <application>PL/Python</application>,
+    package managers usually pick up the system-wide interpreter.
+    In Python it is generally recommended to use virtual environments.
+    In that case you can set <envar>PYTHONPATH</envar> to something like
+    <literal>PYTHONPATH=/path/to/venv/lib/python3.XY</literal>.
+   </para>
+  </tip>
  </sect1>
 </chapter>

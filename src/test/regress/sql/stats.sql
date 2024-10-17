@@ -411,6 +411,34 @@ SELECT (n_tup_ins + n_tup_upd) > 0 AS has_data FROM pg_stat_all_tables
 -- Test that various stats views are being properly populated
 -----
 
+-- Test the functions querying the global LSNTimeStream stored in WAL stats.
+
+-- An LSN range covering a time 100 years in the past should be from 0 to a
+-- non-zero LSN (either the oldest LSN in the stream or the current insert
+-- LSN).
+SELECT lower = pg_lsn(0),
+       upper > pg_lsn(0)
+  FROM pg_stat_lsn_bounds_for_time(now() - make_interval(years=> 100));
+
+-- An LSN range covering a time 100 years in the future should be from roughly
+-- the current time to FFFFFFFF/FFFFFFFF (UINT64_MAX).
+SELECT lower > pg_lsn(0),
+       upper = pg_lsn('FFFFFFFF/FFFFFFFF')
+    FROM pg_stat_lsn_bounds_for_time(now() + make_interval(years=> 100));
+
+-- A TimestampTz range covering LSN 0 should be from -infinity to a positive
+-- time (either the oldest time in the stream or the current time).
+SELECT lower = timestamptz('-infinity'),
+       upper::time > 'allballs'::time
+    FROM pg_stat_time_bounds_for_lsn(pg_lsn(0));
+
+-- A TimestampTz range covering an LSN 1 GB in the future should be from
+-- roughly the current time to infinity.
+SELECT lower::time > 'allballs'::time,
+       upper = timestamptz('infinity')
+    FROM pg_stat_time_bounds_for_lsn(
+         pg_current_wal_insert_lsn() + 1000000000);
+
 -- Test that sessions is incremented when a new session is started in pg_stat_database
 SELECT sessions AS db_stat_sessions FROM pg_stat_database WHERE datname = (SELECT current_database()) \gset
 \c

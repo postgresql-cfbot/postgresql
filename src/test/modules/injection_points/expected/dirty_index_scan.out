@@ -1,0 +1,39 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s1_s1 s3_s1 s2_s1 s3_s2
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step s1_s1: INSERT INTO test.tbl VALUES(42, 1) on conflict(i) do update set n = EXCLUDED.n + 1; <waiting ...>
+step s3_s1: 
+	SELECT injection_points_wakeup('check_exclusion_or_unique_constraint_before_index_scan');
+	SELECT injection_points_detach('check_exclusion_or_unique_constraint_before_index_scan');
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+step s2_s1: UPDATE test.tbl SET n = n + 1 WHERE i = 42;
+step s3_s2: 
+	SELECT injection_points_wakeup('index_getnext_slot_before_fetch');
+	SELECT injection_points_detach('index_getnext_slot_before_fetch');
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+injection_points_detach
+-----------------------
+                       
+(1 row)
+
+step s1_s1: <... completed>

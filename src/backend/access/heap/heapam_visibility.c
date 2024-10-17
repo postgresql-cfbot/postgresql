@@ -719,6 +719,12 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
 		return TM_Deleted;		/* deleted by other */
 }
 
+inline static void UpdateDirtyMaxXmax(Snapshot snapshot, TransactionId xmax)
+{
+	if (snapshot->xip != NULL)
+		snapshot->xip[0] = TransactionIdNewer(xmax, snapshot->xip[0]);
+}
+
 /*
  * HeapTupleSatisfiesDirty
  *		True iff heap tuple is valid including effects of open transactions.
@@ -737,7 +743,9 @@ HeapTupleSatisfiesUpdate(HeapTuple htup, CommandId curcid,
  * Similarly for snapshot->xmax and the tuple's xmax.  If the tuple was
  * inserted speculatively, meaning that the inserter might still back down
  * on the insertion without aborting the whole transaction, the associated
- * token is also returned in snapshot->speculativeToken.
+ * token is also returned in snapshot->speculativeToken. If xip is != NULL
+ * xip[0] may be set to xid of deleter if it newer than previously store
+ * value.
  */
 static bool
 HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
@@ -750,6 +758,10 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 
 	snapshot->xmin = snapshot->xmax = InvalidTransactionId;
 	snapshot->speculativeToken = 0;
+	/*
+	 * We intentionally keep snapshot->xip values unchanged as they should
+	 * be reset by logic out of the single heap fetch.
+	 */
 
 	if (!HeapTupleHeaderXminCommitted(tuple))
 	{
@@ -870,6 +882,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 	{
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 			return true;
+		UpdateDirtyMaxXmax(snapshot, HeapTupleHeaderGetRawXmax(tuple));
 		return false;			/* updated by other */
 	}
 
@@ -893,7 +906,10 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 			return true;
 		}
 		if (TransactionIdDidCommit(xmax))
+		{
+			UpdateDirtyMaxXmax(snapshot, xmax);
 			return false;
+		}
 		/* it must have aborted or crashed */
 		return true;
 	}
@@ -902,6 +918,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 	{
 		if (HEAP_XMAX_IS_LOCKED_ONLY(tuple->t_infomask))
 			return true;
+		UpdateDirtyMaxXmax(snapshot, HeapTupleHeaderGetRawXmax(tuple));
 		return false;
 	}
 
@@ -931,6 +948,7 @@ HeapTupleSatisfiesDirty(HeapTuple htup, Snapshot snapshot,
 
 	SetHintBits(tuple, buffer, HEAP_XMAX_COMMITTED,
 				HeapTupleHeaderGetRawXmax(tuple));
+	UpdateDirtyMaxXmax(snapshot, HeapTupleHeaderGetRawXmax(tuple));
 	return false;				/* updated by other */
 }
 

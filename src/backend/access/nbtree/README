@@ -489,6 +489,16 @@ on the leaf page at all when the page's LSN has changed.  (That won't work
 with an unlogged index, so for now we don't ever apply the "don't hold
 onto pin" optimization there.)
 
+Despite the locking protocol in place, it is still possible to receive an
+incorrect result during non-MVCC scans. This issue can occur if a concurrent
+transaction deletes a tuple and inserts a new tuple with a new TID in the
+same page. If the scan has already visited the page and cached its content
+in the buffer cache, it might skip the old tuple due to deletion and miss
+the new tuple because of the cache. This is a known limitation of the
+SnapshotDirty and SnapshotAny non-MVCC scans. However, for SnapshotDirty,
+it is possible to work around this limitation by using the returned max(xmax)
+to compare it with the latest committed transaction before the scan started.
+
 Fastpath For Index Insertion
 ----------------------------
 

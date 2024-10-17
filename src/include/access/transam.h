@@ -288,6 +288,7 @@ extern void VarsupShmemInit(void);
 extern FullTransactionId GetNewTransactionId(bool isSubXact);
 extern void AdvanceNextFullTransactionIdPastXid(TransactionId xid);
 extern FullTransactionId ReadNextFullTransactionId(void);
+extern FullTransactionId ReadLastCompletedFullTransactionId(void);
 extern void SetTransactionIdLimit(TransactionId oldest_datfrozenxid,
 								  Oid oldest_datoid);
 extern void AdvanceOldestClogXid(TransactionId oldest_datfrozenxid);
@@ -342,6 +343,21 @@ TransactionIdOlder(TransactionId a, TransactionId b)
 	if (TransactionIdPrecedes(a, b))
 		return a;
 	return b;
+}
+
+/* return the newer of the two IDs */
+static inline TransactionId
+TransactionIdNewer(TransactionId a, TransactionId b)
+{
+	if (!TransactionIdIsValid(a))
+		return b;
+
+	if (!TransactionIdIsValid(b))
+		return a;
+
+	if (TransactionIdPrecedes(a, b))
+		return b;
+	return a;
 }
 
 /* return the older of the two IDs, assuming they're both normal */

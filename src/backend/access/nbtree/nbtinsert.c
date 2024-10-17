@@ -427,7 +427,7 @@ _bt_check_unique(Relation rel, BTInsertState insertstate, Relation heapRel,
 	/* Assume unique until we find a duplicate */
 	*is_unique = true;
 
-	InitDirtySnapshot(SnapshotDirty);
+	InitDirtySnapshot(SnapshotDirty, NULL);
 
 	page = BufferGetPage(insertstate->buf);
 	opaque = BTPageGetOpaque(page);

@@ -1207,6 +1207,8 @@ struct IndexOptInfo
 	/* AM's cost estimator */
 	/* Rather than include amapi.h here, we declare amcostestimate like this */
 	void		(*amcostestimate) () pg_node_attr(read_write_ignore);
+	/* true if this index is enabled */
+	bool		enabled;
 };
 
 /*

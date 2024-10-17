@@ -1559,6 +1559,10 @@ pg_get_indexdef_worker(Oid indexrelid, int colno,
 			else
 				appendStringInfo(&buf, " WHERE %s", str);
 		}
+
+		/* Add DISABLE clause if the index is disabled */
+		if (!idxrec->indisenabled)
+				appendStringInfoString(&buf, " DISABLE");
 	}
 
 	/* Clean up */

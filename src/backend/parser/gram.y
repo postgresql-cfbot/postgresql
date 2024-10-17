@@ -3390,6 +3390,8 @@ CopyStmt:	COPY opt_binary qualified_name opt_column_list
 					n->is_program = $6;
 					n->filename = $7;
 					n->options = $9;
+					n->location = @3;
+					n->stmt_len = @4 - @3;
 
 					if (n->is_program && n->filename == NULL)
 						ereport(ERROR,
@@ -11958,6 +11960,7 @@ ExplainStmt:
 					ExplainStmt *n = makeNode(ExplainStmt);
 
 					n->query = $2;
+					n->location = @2;
 					n->options = NIL;
 					$$ = (Node *) n;
 				}
@@ -11966,6 +11969,7 @@ ExplainStmt:
 					ExplainStmt *n = makeNode(ExplainStmt);
 
 					n->query = $4;
+					n->location = @4;
 					n->options = list_make1(makeDefElem("analyze", NULL, @2));
 					if ($3)
 						n->options = lappend(n->options,
@@ -11977,6 +11981,7 @@ ExplainStmt:
 					ExplainStmt *n = makeNode(ExplainStmt);
 
 					n->query = $3;
+					n->location = @3;
 					n->options = list_make1(makeDefElem("verbose", NULL, @2));
 					$$ = (Node *) n;
 				}
@@ -11985,6 +11990,7 @@ ExplainStmt:
 					ExplainStmt *n = makeNode(ExplainStmt);
 
 					n->query = $5;
+					n->location = @5;
 					n->options = $3;
 					$$ = (Node *) n;
 				}

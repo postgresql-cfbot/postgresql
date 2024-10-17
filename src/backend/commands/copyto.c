@@ -355,7 +355,9 @@ BeginCopyTo(ParseState *pstate,
 			bool is_program,
 			copy_data_dest_cb data_dest_cb,
 			List *attnamelist,
-			List *options)
+			List *options,
+			int	location,
+			int	stmt_len)
 {
 	CopyToState cstate;
 	bool		pipe = (filename == NULL && data_dest_cb == NULL);
@@ -484,6 +486,9 @@ BeginCopyTo(ParseState *pstate,
 		}
 
 		query = linitial_node(Query, rewritten);
+
+		query->stmt_location = location;
+		query->stmt_len = stmt_len;
 
 		/* The grammar allows SELECT INTO, but we don't support that */
 		if (query->utilityStmt != NULL &&

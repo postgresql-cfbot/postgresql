@@ -312,7 +312,7 @@ DoCopy(ParseState *pstate, const CopyStmt *stmt,
 
 		cstate = BeginCopyTo(pstate, rel, query, relid,
 							 stmt->filename, stmt->is_program,
-							 NULL, stmt->attlist, stmt->options);
+							 NULL, stmt->attlist, stmt->options, stmt->location, stmt->stmt_len);
 		*processed = DoCopyTo(cstate);	/* copy from database to file */
 		EndCopyTo(cstate);
 	}

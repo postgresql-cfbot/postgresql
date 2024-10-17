@@ -43,6 +43,7 @@ CXXFLAGS=${CXXFLAGS:- -fsyntax-only -Wall}
 # Pull some info from configure's results.
 MGLOB="$builddir/src/Makefile.global"
 CPPFLAGS=`sed -n 's/^CPPFLAGS[ 	]*=[ 	]*//p' "$MGLOB"`
+LLVM_CPPFLAGS=`sed -n 's/^LLVM_CPPFLAGS[ 	]*=[ 	]*//p' "$MGLOB"`
 CFLAGS=`sed -n 's/^CFLAGS[ 	]*=[ 	]*//p' "$MGLOB"`
 CC=`sed -n 's/^CC[ 	]*=[ 	]*//p' "$MGLOB"`
 CXX=`sed -n 's/^CXX[ 	]*=[ 	]*//p' "$MGLOB"`
@@ -168,6 +169,11 @@ do
 	# This produces a "no previous prototype" warning.
 	! $cplusplus && test "$f" = src/include/storage/checksum_impl.h && continue
 
+	# SectionMemoryManager.h is C++ code which includes <type_traits> through
+	# llvm/ADT/SmallVector.h so it won't compile with a C compiler neither with
+	# a C++ compiler under extern "C" linkage
+	test "$f" = src/include/jit/SectionMemoryManager.h && continue
+
 	# ppport.h is not under our control, so we can't make it standalone.
 	test "$f" = src/pl/plperl/ppport.h && continue
 
@@ -237,6 +243,8 @@ do
 		EXTRAINCLUDES="$python_includespec" ;;
 	    src/interfaces/ecpg/*)
 		EXTRAINCLUDES="-I $builddir/src/interfaces/ecpg/include -I $srcdir/src/interfaces/ecpg/include" ;;
+	    src/include/jit/*)
+		EXTRAINCLUDES="$LLVM_CPPFLAGS" ;;
 	    src/backend/parser/*)
 		EXTRAINCLUDES="-I $builddir/src/backend/parser/" ;;
 	    src/backend/utils/adt/*)

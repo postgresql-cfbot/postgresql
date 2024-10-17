@@ -113,6 +113,8 @@ parse_analyze_fixedparams(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_stmt_len = parseTree->stmt_len;
+	pstate->p_stmt_location = parseTree->stmt_location;
 
 	if (numParams > 0)
 		setup_parse_fixed_parameters(pstate, paramTypes, numParams);
@@ -153,6 +155,8 @@ parse_analyze_varparams(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_stmt_len = parseTree->stmt_len;
+	pstate->p_stmt_location = parseTree->stmt_location;
 
 	setup_parse_variable_parameters(pstate, paramTypes, numParams);
 
@@ -195,6 +199,8 @@ parse_analyze_withcb(RawStmt *parseTree, const char *sourceText,
 	Assert(sourceText != NULL); /* required as of 8.4 */
 
 	pstate->p_sourcetext = sourceText;
+	pstate->p_stmt_len = parseTree->stmt_len;
+	pstate->p_stmt_location = parseTree->stmt_location;
 	pstate->p_queryEnv = queryEnv;
 	(*parserSetup) (pstate, parserSetupArg);
 
@@ -2968,6 +2974,7 @@ static Query *
 transformExplainStmt(ParseState *pstate, ExplainStmt *stmt)
 {
 	Query	   *result;
+	Query	   *explained_query;
 	bool		generic_plan = false;
 	Oid		   *paramTypes = NULL;
 	int			numParams = 0;
@@ -2995,6 +3002,15 @@ transformExplainStmt(ParseState *pstate, ExplainStmt *stmt)
 
 	/* transform contained query, allowing SELECT INTO */
 	stmt->query = (Node *) transformOptionalSelectInto(pstate, stmt->query);
+
+	explained_query = (Query *) stmt->query;
+	explained_query->stmt_location = stmt->location;
+
+	/*
+	 * the being explained query stmt_len is top level query stmt_len minus the
+	 * being EXPLAIN nested query's beginning position.
+	*/
+	explained_query->stmt_len = pstate->p_stmt_location + pstate->p_stmt_len - stmt->location;
 
 	/* make sure all is well with parameter types */
 	if (generic_plan)

@@ -2596,6 +2596,8 @@ typedef struct CopyStmt
 	char	   *filename;		/* filename, or NULL for STDIN/STDOUT */
 	List	   *options;		/* List of DefElem nodes */
 	Node	   *whereClause;	/* WHERE condition (or NULL) */
+	ParseLoc	location;		/* the nest query location. COPY TO only */
+	int			stmt_len;		/* the nest query length. COPY TO only */
 } CopyStmt;
 
 /* ----------------------
@@ -3887,6 +3889,7 @@ typedef struct ExplainStmt
 	NodeTag		type;
 	Node	   *query;			/* the query (see comments above) */
 	List	   *options;		/* list of DefElem nodes */
+	ParseLoc	location;		/* location of the statement being explained */
 } ExplainStmt;
 
 /* ----------------------

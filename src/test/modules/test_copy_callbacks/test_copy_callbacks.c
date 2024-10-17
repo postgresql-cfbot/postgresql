@@ -38,7 +38,7 @@ test_copy_to_callback(PG_FUNCTION_ARGS)
 	int64		processed;
 
 	cstate = BeginCopyTo(NULL, rel, NULL, RelationGetRelid(rel), NULL, false,
-						 to_cb, NIL, NIL);
+						 to_cb, NIL, NIL, 0, 0);
 	processed = DoCopyTo(cstate);
 	EndCopyTo(cstate);
 

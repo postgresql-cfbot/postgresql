@@ -121,7 +121,8 @@ extern DestReceiver *CreateCopyDestReceiver(void);
  */
 extern CopyToState BeginCopyTo(ParseState *pstate, Relation rel, RawStmt *raw_query,
 							   Oid queryRelId, const char *filename, bool is_program,
-							   copy_data_dest_cb data_dest_cb, List *attnamelist, List *options);
+							   copy_data_dest_cb data_dest_cb, List *attnamelist, List *options,
+							   int location, int stmt_len);
 extern void EndCopyTo(CopyToState cstate);
 extern uint64 DoCopyTo(CopyToState cstate);
 extern List *CopyGetAttnums(TupleDesc tupDesc, Relation rel,

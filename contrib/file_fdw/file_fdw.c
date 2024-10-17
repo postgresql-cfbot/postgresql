@@ -279,7 +279,7 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 			 * otherwise there'd still be a security hole.
 			 */
 			if (strcmp(def->defname, "filename") == 0 &&
-				!has_privs_of_role(GetUserId(), ROLE_PG_READ_SERVER_FILES))
+				!has_cluster_privs_of_role(GetUserId(), ROLE_PG_READ_SERVER_FILES))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("permission denied to set the \"%s\" option of a file_fdw foreign table",
@@ -288,7 +288,7 @@ file_fdw_validator(PG_FUNCTION_ARGS)
 								   "pg_read_server_files")));
 
 			if (strcmp(def->defname, "program") == 0 &&
-				!has_privs_of_role(GetUserId(), ROLE_PG_EXECUTE_SERVER_PROGRAM))
+				!has_cluster_privs_of_role(GetUserId(), ROLE_PG_EXECUTE_SERVER_PROGRAM))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("permission denied to set the \"%s\" option of a file_fdw foreign table",

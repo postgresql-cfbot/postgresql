@@ -1588,6 +1588,7 @@ generateClonedIndexStmt(RangeVar *heapRel, Relation source_idx,
 	index->concurrent = false;
 	index->if_not_exists = false;
 	index->reset_default_tblspc = false;
+	index->isenabled = idxrec->indisenabled;
 
 	/*
 	 * We don't try to preserve the name of the source index; instead, just
@@ -2214,6 +2215,8 @@ transformIndexConstraint(Constraint *constraint, CreateStmtContext *cxt)
 	index->concurrent = false;
 	index->if_not_exists = false;
 	index->reset_default_tblspc = constraint->reset_default_tblspc;
+	/* Ensure indexes for constraints are created as enabled by default */
+	index->isenabled = true;
 
 	/*
 	 * If it's ALTER TABLE ADD CONSTRAINT USING INDEX, look up the index and

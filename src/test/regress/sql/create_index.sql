@@ -1297,6 +1297,187 @@ END;
 -- concurrently
 REINDEX SCHEMA CONCURRENTLY schema_to_reindex;
 
+-- Test enable/disable functionality for indexes
+
+-- Setup
+CREATE TABLE index_test(
+    id INT PRIMARY KEY,
+    data TEXT,
+    num INT,
+    vector INT[],
+    range INT4RANGE
+);
+
+INSERT INTO index_test
+SELECT
+    g,
+    'data ' || g,
+    g % 100,
+    ARRAY[g, g+1, g+2],
+    int4range(g, g+10)
+FROM generate_series(1, 1000) g;
+
+-- Function for testing
+CREATE FUNCTION get_data_length(text) RETURNS INT AS $$
+    SELECT length($1);
+$$ LANGUAGE SQL IMMUTABLE;
+
+-- Helper function to show index status
+CREATE OR REPLACE FUNCTION show_index_status(index_name text)
+RETURNS TABLE (
+    indexrelid regclass,
+    indisvalid boolean,
+    indisready boolean,
+    indislive boolean,
+    indisenabled boolean
+) AS $$
+BEGIN
+    RETURN QUERY EXECUTE format('
+        SELECT indexrelid::regclass, indisvalid, indisready, indislive, indisenabled
+        FROM pg_index
+        WHERE indexrelid = %L::regclass', index_name);
+END;
+$$ LANGUAGE plpgsql;
+
+-- Create and test each index type
+-- 1. Basic single-column index
+CREATE INDEX idx_single ON index_test(data);
+SELECT show_index_status('idx_single');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE data = 'data 500';
+ALTER INDEX idx_single DISABLE;
+SELECT show_index_status('idx_single');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE data = 'data 500';
+ALTER INDEX idx_single ENABLE;
+SELECT show_index_status('idx_single');
+
+-- 2. Multi-column index
+CREATE INDEX idx_multi ON index_test(num, data);
+SELECT show_index_status('idx_multi');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE num = 50 AND data > 'data 500';
+ALTER INDEX idx_multi DISABLE;
+SELECT show_index_status('idx_multi');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE num = 50 AND data > 'data 500';
+ALTER INDEX idx_multi ENABLE;
+SELECT show_index_status('idx_multi');
+
+-- 3. Partial index
+CREATE INDEX idx_partial ON index_test(num) WHERE num < 50;
+SELECT show_index_status('idx_partial');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE num = 25;
+ALTER INDEX idx_partial DISABLE;
+SELECT show_index_status('idx_partial');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE num = 25;
+ALTER INDEX idx_partial ENABLE;
+SELECT show_index_status('idx_partial');
+
+-- 4. Expression index
+CREATE INDEX idx_expression ON index_test((lower(data)));
+SELECT show_index_status('idx_expression');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE lower(data) = 'data 500';
+ALTER INDEX idx_expression DISABLE;
+SELECT show_index_status('idx_expression');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE lower(data) = 'data 500';
+ALTER INDEX idx_expression ENABLE;
+SELECT show_index_status('idx_expression');
+
+-- 5. GIN index
+CREATE INDEX idx_gin ON index_test USING gin(vector);
+SELECT show_index_status('idx_gin');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE vector @> ARRAY[500];
+ALTER INDEX idx_gin DISABLE;
+SELECT show_index_status('idx_gin');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE vector @> ARRAY[500];
+ALTER INDEX idx_gin ENABLE;
+SELECT show_index_status('idx_gin');
+
+-- 6. GiST index
+CREATE INDEX idx_gist ON index_test USING gist(range);
+SELECT show_index_status('idx_gist');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE range && int4range(100, 110);
+ALTER INDEX idx_gist DISABLE;
+SELECT show_index_status('idx_gist');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE range && int4range(100, 110);
+ALTER INDEX idx_gist ENABLE;
+SELECT show_index_status('idx_gist');
+
+-- 7. Covering index
+CREATE INDEX idx_covering ON index_test(num) INCLUDE (data);
+SELECT show_index_status('idx_covering');
+EXPLAIN (COSTS OFF) SELECT num, data FROM index_test WHERE num = 50;
+ALTER INDEX idx_covering DISABLE;
+SELECT show_index_status('idx_covering');
+EXPLAIN (COSTS OFF) SELECT num, data FROM index_test WHERE num = 50;
+ALTER INDEX idx_covering ENABLE;
+SELECT show_index_status('idx_covering');
+
+-- 8. Unique index
+CREATE UNIQUE INDEX idx_unique ON index_test(id, data);
+SELECT show_index_status('idx_unique');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE id = 500 AND data = 'data 500';
+ALTER INDEX idx_unique DISABLE;
+SELECT show_index_status('idx_unique');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE id = 500 AND data = 'data 500';
+ALTER INDEX idx_unique ENABLE;
+SELECT show_index_status('idx_unique');
+
+-- 9. Function-based index
+CREATE INDEX idx_func ON index_test(get_data_length(data));
+SELECT show_index_status('idx_func');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE get_data_length(data) = 10;
+ALTER INDEX idx_func DISABLE;
+SELECT show_index_status('idx_func');
+EXPLAIN (COSTS OFF) SELECT * FROM index_test WHERE get_data_length(data) = 10;
+ALTER INDEX idx_func ENABLE;
+SELECT show_index_status('idx_func');
+
+-- 10. Join index
+CREATE TABLE join_test (id INT PRIMARY KEY, ref_id INT);
+INSERT INTO join_test SELECT g, g % 100 FROM generate_series(1, 1000) g;
+CREATE INDEX idx_join ON join_test(ref_id);
+SELECT show_index_status('idx_join');
+
+EXPLAIN (COSTS OFF)
+SELECT jt.id, it.data
+FROM join_test jt
+JOIN index_test it ON jt.ref_id = it.num
+WHERE jt.id BETWEEN 100 AND 200;
+
+-- Disable all indexes to force seq scan
+ALTER INDEX idx_join DISABLE;
+ALTER INDEX join_test_pkey DISABLE;
+SELECT show_index_status('idx_join');
+SELECT show_index_status('join_test_pkey');
+
+EXPLAIN (COSTS OFF)
+SELECT jt.id, it.data
+FROM join_test jt
+JOIN index_test it ON jt.ref_id = it.num
+WHERE jt.id BETWEEN 100 AND 200;
+
+ALTER INDEX idx_join ENABLE;
+ALTER INDEX join_test_pkey ENABLE;
+SELECT show_index_status('idx_join');
+SELECT show_index_status('join_test_pkey');
+
+-- Test REINDEX CONCURRENTLY
+REINDEX INDEX CONCURRENTLY idx_join;
+SELECT show_index_status('idx_join');
+
+ALTER INDEX idx_join DISABLE;
+SELECT show_index_status('idx_join');
+REINDEX INDEX CONCURRENTLY idx_join;
+SELECT show_index_status('idx_join');
+
+SELECT pg_get_indexdef('idx_join'::regclass);
+ALTER INDEX idx_join ENABLE;
+SELECT pg_get_indexdef('idx_join'::regclass);
+
+-- Clean up
+DROP TABLE index_test;
+DROP TABLE join_test;
+DROP FUNCTION get_data_length;
+DROP FUNCTION show_index_status;
+
 -- Failure for unauthorized user
 CREATE ROLE regress_reindexuser NOLOGIN;
 SET SESSION ROLE regress_reindexuser;

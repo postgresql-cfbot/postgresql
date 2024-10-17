@@ -31,6 +31,8 @@ ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> ALTE
     SET STATISTICS <replaceable class="parameter">integer</replaceable>
 ALTER INDEX ALL IN TABLESPACE <replaceable class="parameter">name</replaceable> [ OWNED BY <replaceable class="parameter">role_name</replaceable> [, ... ] ]
     SET TABLESPACE <replaceable class="parameter">new_tablespace</replaceable> [ NOWAIT ]
+ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> ENABLE
+ALTER INDEX [ IF EXISTS ] <replaceable class="parameter">name</replaceable> DISABLE
 </synopsis>
  </refsynopsisdiv>
 
@@ -155,6 +157,33 @@ ALTER INDEX ALL IN TABLESPACE <replaceable class="parameter">name</replaceable> 
       For more information on the use of statistics by the
       <productname>PostgreSQL</productname> query planner, refer to
       <xref linkend="planner-stats"/>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>ENABLE</literal></term>
+    <listitem>
+     <para>
+      Enable the specified index. The index will be used by the query planner
+      for query optimization. This is the default state for newly created indexes.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>DISABLE</literal></term>
+    <listitem>
+     <para>
+      Disable the specified index. A disabled index is not used by the query planner
+      for query optimization, but it is still maintained when the underlying table
+      data changes. This can be useful for testing query performance with and without
+      specific indexes, temporarily reducing the overhead of index maintenance
+      during bulk data loading operations, or verifying an index is not being used
+      before dropping it. If performance degrades after disabling an index, it can be
+      easily re-enabled. Before disabling, it's recommended to check
+      <structname>pg_stat_user_indexes</structname>.<structfield>idx_scan</structfield>
+      to identify potentially unused indexes.
      </para>
     </listitem>
    </varlistentry>
@@ -300,6 +329,20 @@ REINDEX INDEX distributors;
 CREATE INDEX coord_idx ON measured (x, y, (z + t));
 ALTER INDEX coord_idx ALTER COLUMN 3 SET STATISTICS 1000;
 </programlisting></para>
+
+  <para>
+   To enable an index:
+<programlisting>
+ALTER INDEX idx_name ENABLE;
+</programlisting>
+  </para>
+
+  <para>
+   To disable an index:
+<programlisting>
+ALTER INDEX idx_name DISABLE;
+</programlisting>
+  </para>
 
  </refsect1>
 

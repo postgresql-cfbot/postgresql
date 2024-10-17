@@ -46,6 +46,7 @@
 #include "commands/matview.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
+#include "executor/execPartition.h"
 #include "executor/nodeSubplan.h"
 #include "foreign/fdwapi.h"
 #include "mb/pg_wchar.h"
@@ -53,11 +54,13 @@
 #include "nodes/queryjumble.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/lmgr.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
 #include "utils/backend_status.h"
 #include "utils/lsyscache.h"
 #include "utils/partcache.h"
+#include "utils/plancache.h"
 #include "utils/rls.h"
 #include "utils/snapmgr.h"
 
@@ -90,6 +93,7 @@ static bool ExecCheckPermissionsModified(Oid relOid, Oid userid,
 										 AclMode requiredPerms);
 static void ExecCheckXactReadOnly(PlannedStmt *plannedstmt);
 static void EvalPlanQualStart(EPQState *epqstate, Plan *planTree);
+static inline bool ExecShouldLockRelations(EState *estate);
 
 /* end of local decls */
 
@@ -133,6 +137,60 @@ ExecutorStart(QueryDesc *queryDesc, int eflags)
 		(*ExecutorStart_hook) (queryDesc, eflags);
 	else
 		standard_ExecutorStart(queryDesc, eflags);
+}
+
+/*
+ * A variant of ExecutorStart() that handles cleanup and replanning if the
+ * input CachedPlan becomes invalid due to locks being taken during
+ * ExecutorStartInternal().  If that happens, a new CachedPlan is created
+ * only for the at the index 'query_index' in plansource->query_list, which
+ * is released separately from the original CachedPlan.
+ */
+void
+ExecutorStartExt(QueryDesc *queryDesc, int eflags,
+				 CachedPlanSource *plansource,
+				 int query_index)
+{
+	if (queryDesc->cplan == NULL)
+	{
+		ExecutorStart(queryDesc, eflags);
+		return;
+	}
+
+	while (1)
+	{
+		ExecutorStart(queryDesc, eflags);
+		if (!CachedPlanValid(queryDesc->cplan))
+		{
+			CachedPlan *cplan;
+
+			/*
+			 * The plan got invalidated, so try with a new updated plan.
+			 *
+			 * But first undo what ExecutorStart() would've done.  Mark
+			 * execution as aborted to ensure that AFTER trigger state is
+			 * properly reset.
+			 */
+			queryDesc->estate->es_aborted = true;
+			ExecutorEnd(queryDesc);
+
+			cplan = GetSingleCachedPlan(plansource, query_index,
+										queryDesc->queryEnv);
+
+			/*
+			 * Install the new transient cplan into the QueryDesc replacing
+			 * the old one so that executor initialization code can see it.
+			 * Mark it as in use by us and ask FreeQueryDesc() to release it.
+			 */
+			cplan->refcount = 1;
+			queryDesc->cplan = cplan;
+			queryDesc->cplan_release = true;
+			queryDesc->plannedstmt = linitial_node(PlannedStmt,
+												   queryDesc->cplan->stmt_list);
+		}
+		else
+			break;	/* ExecutorStart() succeeded! */
+	}
 }
 
 void
@@ -318,6 +376,7 @@ standard_ExecutorRun(QueryDesc *queryDesc,
 	estate = queryDesc->estate;
 
 	Assert(estate != NULL);
+	Assert(!estate->es_aborted);
 	Assert(!(estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY));
 
 	/* caller must ensure the query's snapshot is active */
@@ -424,8 +483,11 @@ standard_ExecutorFinish(QueryDesc *queryDesc)
 	Assert(estate != NULL);
 	Assert(!(estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY));
 
-	/* This should be run once and only once per Executor instance */
-	Assert(!estate->es_finished);
+	/*
+	 * This should be run once and only once per Executor instance and never
+	 * if the execution was aborted.
+	 */
+	Assert(!estate->es_finished && !estate->es_aborted);
 
 	/* Switch into per-query memory context */
 	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
@@ -484,11 +546,10 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	Assert(estate != NULL);
 
 	/*
-	 * Check that ExecutorFinish was called, unless in EXPLAIN-only mode. This
-	 * Assert is needed because ExecutorFinish is new as of 9.1, and callers
-	 * might forget to call it.
+	 * Check that ExecutorFinish was called, unless in EXPLAIN-only mode or if
+	 * execution was aborted.
 	 */
-	Assert(estate->es_finished ||
+	Assert(estate->es_finished || estate->es_aborted ||
 		   (estate->es_top_eflags & EXEC_FLAG_EXPLAIN_ONLY));
 
 	/*
@@ -501,6 +562,14 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 	/* do away with our snapshots */
 	UnregisterSnapshot(estate->es_snapshot);
 	UnregisterSnapshot(estate->es_crosscheck_snapshot);
+
+	/*
+	 * Reset AFTER trigger module if the query execution was aborted.
+	 */
+	if (estate->es_aborted &&
+		!(estate->es_top_eflags &
+		  (EXEC_FLAG_SKIP_TRIGGERS | EXEC_FLAG_EXPLAIN_ONLY)))
+		AfterTriggerAbortQuery();
 
 	/*
 	 * Must switch out of context before destroying it
@@ -599,6 +668,21 @@ ExecCheckPermissions(List *rangeTable, List *rteperminfos,
 			Assert(rte->rtekind == RTE_RELATION ||
 				   (rte->rtekind == RTE_SUBQUERY &&
 					rte->relkind == RELKIND_VIEW));
+
+			/*
+			 * Ensure that we have at least an AccessShareLock on relations
+			 * whose permissions need to be checked.
+			 *
+			 * Skip this check in a parallel worker because locks won't be
+			 * taken until ExecInitNode() performs plan initialization.
+			 *
+			 * XXX: ExecCheckPermissions() in a parallel worker may be
+			 * redundant with the checks done in the leader process, so this
+			 * should be reviewed to ensure it’s necessary.
+			 */
+			Assert(IsParallelWorker() ||
+				   CheckRelationOidLockedByMe(rte->relid, AccessShareLock,
+											  true));
 
 			(void) getRTEPermissionInfo(rteperminfos, rte);
 			/* Many-to-one mapping not allowed */
@@ -819,6 +903,88 @@ ExecCheckXactReadOnly(PlannedStmt *plannedstmt)
 		PreventCommandIfParallelMode(CreateCommandName((Node *) plannedstmt));
 }
 
+/*
+ * ExecDoInitialPruning
+ *		Perform runtime "initial" pruning, if necessary, to determine the set
+ *		of child subnodes that need to be initialized during ExecInitNode()
+ *		for plan nodes that support partition pruning.
+ *
+ * For each PartitionPruneInfo in estate->es_part_prune_infos, this function
+ * creates a PartitionPruneState (even if no initial pruning is done) and adds
+ * it to es_part_prune_states. For PartitionPruneInfo entries that include
+ * initial pruning steps, the result of those steps is saved as a bitmapset
+ * of indexes representing child subnodes that are "valid" and should be
+ * initialized for execution.
+ */
+static void
+ExecDoInitialPruning(EState *estate)
+{
+	ListCell *lc;
+
+	foreach(lc, estate->es_part_prune_infos)
+	{
+		PartitionPruneInfo *pruneinfo = lfirst_node(PartitionPruneInfo, lc);
+		PartitionPruneState *prunestate;
+		Bitmapset *validsubplans = NULL;
+
+		/*
+		 * Create the working data structure for pruning, and save it for use
+		 * later in ExecInitPartitionPruning(), which will be called by the
+		 * parent plan node's ExecInit* function.
+		 */
+		prunestate = ExecCreatePartitionPruneState(estate, pruneinfo);
+		estate->es_part_prune_states = lappend(estate->es_part_prune_states,
+											   prunestate);
+
+		/*
+		 * Perform an initial partition pruning pass, if necessary, and save
+		 * the bitmapset of valid subplans for use in
+		 * ExecInitPartitionPruning().  If no initial pruning is performed, we
+		 * still store a NULL to ensure that es_part_prune_results is the same
+		 * length as es_part_prune_infos.  This ensures that
+		 * ExecInitPartitionPruning() can use the same index to locate the
+		 * result.
+		 */
+		if (prunestate->do_initial_prune)
+		{
+			Bitmapset *validsubplan_rtis = NULL;
+
+			validsubplans = ExecFindMatchingSubPlans(prunestate, true,
+													 &validsubplan_rtis);
+			if (ExecShouldLockRelations(estate))
+			{
+				int		rtindex = -1;
+
+				rtindex = -1;
+				while ((rtindex = bms_next_member(validsubplan_rtis,
+												  rtindex)) >= 0)
+				{
+					RangeTblEntry *rte = exec_rt_fetch(rtindex, estate);
+
+					Assert(rte->rtekind == RTE_RELATION &&
+						   rte->rellockmode != NoLock);
+					LockRelationOid(rte->relid, rte->rellockmode);
+				}
+			}
+			estate->es_unprunable_relids = bms_add_members(estate->es_unprunable_relids,
+														   validsubplan_rtis);
+		}
+
+		estate->es_part_prune_results = lappend(estate->es_part_prune_results,
+												validsubplans);
+	}
+}
+
+/*
+ * Locks might be needed only if running a cached plan that might contain
+ * unlocked relations, such as reused generic plans.
+ */
+static inline bool
+ExecShouldLockRelations(EState *estate)
+{
+	return estate->es_cachedplan == NULL ? false :
+		CachedPlanRequiresLocking(estate->es_cachedplan);
+}
 
 /* ----------------------------------------------------------------
  *		InitPlan
@@ -832,6 +998,7 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 {
 	CmdType		operation = queryDesc->operation;
 	PlannedStmt *plannedstmt = queryDesc->plannedstmt;
+	CachedPlan *cachedplan = queryDesc->cplan;
 	Plan	   *plan = plannedstmt->planTree;
 	List	   *rangeTable = plannedstmt->rtable;
 	EState	   *estate = queryDesc->estate;
@@ -851,6 +1018,19 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 	ExecInitRangeTable(estate, rangeTable, plannedstmt->permInfos);
 
 	estate->es_plannedstmt = plannedstmt;
+	estate->es_cachedplan = cachedplan;
+	estate->es_unprunable_relids = bms_copy(plannedstmt->unprunableRelids);
+
+	/*
+	 * Perform runtime "initial" pruning to determine the plan nodes that will
+	 * not be executed.  This will also add the RT indexes of surviving leaf
+	 * partitions to es_unprunable_relids.
+	 */
+	estate->es_part_prune_infos = plannedstmt->partPruneInfos;
+	ExecDoInitialPruning(estate);
+
+	if (!ExecPlanStillValid(estate))
+		return;
 
 	/*
 	 * Next, build the ExecRowMark array from the PlanRowMark(s), if any.
@@ -866,8 +1046,13 @@ InitPlan(QueryDesc *queryDesc, int eflags)
 			Relation	relation;
 			ExecRowMark *erm;
 
-			/* ignore "parent" rowmarks; they are irrelevant at runtime */
-			if (rc->isParent)
+			/*
+			 * Ignore "parent" rowmarks, because they are irrelevant at
+			 * runtime.  Also ignore the rowmarks belonging to child tables
+			 * that have been pruned in ExecDoInitialPruning().
+			 */
+			if (rc->isParent ||
+				!bms_is_member(rc->rti, estate->es_unprunable_relids))
 				continue;
 
 			/* get relation's OID (will produce InvalidOid if subquery) */
@@ -2839,6 +3024,9 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 	 * the snapshot, rangetable, and external Param info.  They need their own
 	 * copies of local state, including a tuple table, es_param_exec_vals,
 	 * result-rel info, etc.
+	 *
+	 * es_cachedplan is not copied because EPQ plan execution does not acquire
+	 * any new locks that could invalidate the CachedPlan.
 	 */
 	rcestate->es_direction = ForwardScanDirection;
 	rcestate->es_snapshot = parentestate->es_snapshot;
@@ -2909,6 +3097,13 @@ EvalPlanQualStart(EPQState *epqstate, Plan *planTree)
 				parentestate->es_param_exec_vals[i].isnull;
 		}
 	}
+
+	/*
+	 * Copy es_unprunable_relids so that RowMarks of pruned relations are
+	 * ignored in ExecInitLockRows() and ExecInitModifyTable() when
+	 * initializing the plan trees below.
+	 */
+	rcestate->es_unprunable_relids = parentestate->es_unprunable_relids;
 
 	/*
 	 * Initialize private state information for each SubPlan.  We must do this

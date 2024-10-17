@@ -25,6 +25,7 @@
 #include "commands/copyfrom_internal.h"
 #include "commands/defrem.h"
 #include "commands/explain.h"
+#include "commands/progress.h"
 #include "commands/vacuum.h"
 #include "foreign/fdwapi.h"
 #include "foreign/foreign.h"
@@ -35,6 +36,7 @@
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "utils/acl.h"
+#include "utils/backend_progress.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
 #include "utils/sampling.h"
@@ -773,6 +775,10 @@ retry:
 			 */
 			cstate->escontext->error_occurred = false;
 
+			/* Report that this tuple was skipped due to ON_ERROR = ignore */
+			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
+										 cstate->num_errors);
+
 			/* Switch back to original memory context */
 			MemoryContextSwitchTo(oldcontext);
 
@@ -800,6 +806,9 @@ retry:
 
 	/* Remove error callback. */
 	error_context_stack = errcallback.previous;
+
+	/* Update the processed tuple count for COPY progress reporting */
+	pgstat_progress_incr_param(PROGRESS_COPY_TUPLES_PROCESSED, 1);
 
 	return slot;
 }
@@ -1253,6 +1262,10 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 			 */
 			cstate->escontext->error_occurred = false;
 
+			/* Report that this tuple was skipped due to ON_ERROR = ignore */
+			pgstat_progress_update_param(PROGRESS_COPY_TUPLES_SKIPPED,
+										 cstate->num_errors);
+
 			/* Repeat NextCopyFrom() until no soft error occurs */
 			continue;
 		}
@@ -1294,6 +1307,9 @@ file_acquire_sample_rows(Relation onerel, int elevel,
 		}
 
 		*totalrows += 1;
+
+		/* Update the processed tuple count for COPY progress reporting */
+		pgstat_progress_update_param(PROGRESS_COPY_TUPLES_PROCESSED, *totalrows);
 	}
 
 	/* Remove error callback. */

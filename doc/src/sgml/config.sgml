@@ -4367,15 +4367,16 @@ restore_command = 'copy "C:\\server\\archivedir\\%f" "%p"'  # Windows
     <title>Replication</title>
 
     <para>
-     These settings control the behavior of the built-in
-     <firstterm>streaming replication</firstterm> feature (see
-     <xref linkend="streaming-replication"/>), and the built-in
-     <firstterm>logical replication</firstterm> feature (see
+     These settings control the behavior of
+     <firstterm>streaming replication</firstterm>,
+     both <firstterm>physical replication</firstterm>
+     (see <xref linkend="streaming-replication"/>) and
+     <firstterm>logical replication</firstterm> (see
      <xref linkend="logical-replication"/>).
     </para>
 
     <para>
-     For <emphasis>streaming replication</emphasis>, servers will be either a
+     For <emphasis>physical replication</emphasis>, servers will be either a
      primary or a standby server.  Primaries can send data, while standbys
      are always receivers of replicated data.  When cascading replication
      (see <xref linkend="cascading-replication"/>) is used, standby servers
@@ -4768,7 +4769,7 @@ ANY <replaceable class="parameter">num_sync</replaceable> ( <replaceable class="
       These settings control the behavior of a
       <link linkend="standby-server-operation">standby server</link>
       that is
-      to receive replication data.  Their values on the primary server
+      to receive physical replication data.  Their values on the primary server
       are irrelevant.
      </para>
 

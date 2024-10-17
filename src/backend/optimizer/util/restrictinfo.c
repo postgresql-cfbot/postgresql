@@ -14,12 +14,13 @@
  */
 #include "postgres.h"
 
+#include "common/hashfn.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "optimizer/appendinfo.h"
 #include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/restrictinfo.h"
-
 
 static RestrictInfo *make_restrictinfo_internal(PlannerInfo *root,
 												Expr *clause,
@@ -684,4 +685,258 @@ join_clause_is_movable_into(RestrictInfo *rinfo,
 		return false;
 
 	return true;
+}
+
+/* ----------------------------------------------------------------------------
+ * RestrictInfo hash table interface.
+ *
+ * For storing and retrieving child RestrictInfos. Though the interface is used
+ * for child RestrictInfos, it can be used for parent RestrictInfos as well.
+ * Hence the names of functions and structures do not mention child in it unless
+ * necessary.
+ *
+ * RestrictInfo::rinfo_serial is unique for a set of RestrictInfos, all of
+ * which, are versions of same condition.  RestrictInfo::required_relids
+ * identifies the relations to which the RestrictInfo is applicable.  Together
+ * they are used as a key into the hash table since they uniquely identify a
+ * RestictInfo.
+ * ----------------------------------------------------------------------------
+ */
+
+/*
+ * Hash key for RestrictInfo hash table.
+ */
+typedef struct
+{
+	int			rinfo_serial;	/* Same as RestrictInfo::rinfo_serial */
+	Relids		required_relids;	/* Same as RestrictInfo::required_relids */
+} rinfo_tab_key;
+
+/* Hash table entry for RestrictInfo hash table. */
+typedef struct rinfo_tab_entry
+{
+	uint32		status;
+	rinfo_tab_key key;
+	RestrictInfo *rinfo;
+} rinfo_tab_entry;
+
+/*
+ * rinfo_tab_key_hash
+ *		Computes hash of RestrictInfo hash table key.
+ */
+static uint32
+rinfo_tab_key_hash(const rinfo_tab_key *rtabkey)
+{
+	uint32		result;
+
+	/* Combine hashes of all components of the key. */
+	result = hash_bytes_uint32(rtabkey->rinfo_serial);
+	result = hash_combine(result, bms_hash_value(rtabkey->required_relids));
+
+	return result;
+}
+
+/*
+ * rinfo_tab_key_match
+ *		Match function for RestrictInfo hash table.
+ */
+static int
+rinfo_tab_key_match(const rinfo_tab_key *rtabkey1, const rinfo_tab_key *rtabkey2)
+{
+	int			result;
+
+	result = rtabkey1->rinfo_serial - rtabkey2->rinfo_serial;
+	if (result)
+		return result;
+
+	return !bms_equal(rtabkey1->required_relids, rtabkey2->required_relids);
+}
+
+/*
+ * Define parameters for restrictinfo hash table code generation.
+ */
+#define SH_PREFIX rinfohash
+#define SH_ELEMENT_TYPE rinfo_tab_entry
+#define SH_KEY_TYPE rinfo_tab_key
+#define SH_KEY key
+#define SH_HASH_KEY(tb, key) rinfo_tab_key_hash(&key)
+#define SH_EQUAL(tb, a, b) rinfo_tab_key_match(&a, &b) == 0
+#define SH_SCOPE static inline
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+/*
+ * get_child_rinfo_hash
+ *		Returns the RestrictInfo hash table from PlannerInfo, creating it if
+ *		necessary.
+ */
+static rinfohash_hash *
+get_child_rinfo_hash(PlannerInfo *root)
+{
+	if (!root->child_rinfo_hash)
+		root->child_rinfo_hash = rinfohash_create(root->planner_cxt, 1000, NULL);
+
+	return root->child_rinfo_hash;
+}
+
+/*
+ * add_restrictinfo
+ *		Add the given RestrictInfo to the RestrictInfo hash table.
+ */
+void
+add_restrictinfo(PlannerInfo *root, RestrictInfo *rinfo)
+{
+	rinfohash_hash *rinfo_tab = get_child_rinfo_hash(root);
+	rinfo_tab_key key;
+	rinfo_tab_entry *rinfo_entry;
+	bool		found;
+
+	key.rinfo_serial = rinfo->rinfo_serial;
+	key.required_relids = rinfo->required_relids;
+	rinfo_entry = rinfohash_insert(rinfo_tab, key, &found);
+
+	/*
+	 * If the given RestrictInfo is already present in the hash table,
+	 * multiple instances of the same RestrictInfo may have been created. This
+	 * function is a good place to flag that. While multiple instances of same
+	 * RestrictInfo being created is not a correctness issue, they consume
+	 * memory unnecessarily.
+	 */
+	Assert(!found);
+	rinfo_entry->rinfo = rinfo;
+}
+
+/*
+ * find_restrictinfo
+ *		Return the RestrictInfo with given rinfo_serial and
+ *		required_relids from RestrictInfo hash table.
+ *
+ * The function returns NULL if it does not find the required RestrictInfo in
+ * the hash table.
+ */
+RestrictInfo *
+find_restrictinfo(PlannerInfo *root, int rinfo_serial, Relids required_relids)
+{
+	rinfohash_hash *rinfo_tab = get_child_rinfo_hash(root);
+	rinfo_tab_entry *rinfo_entry;
+	rinfo_tab_key key;
+
+	key.rinfo_serial = rinfo_serial;
+	key.required_relids = required_relids;
+	rinfo_entry = rinfohash_lookup(rinfo_tab, key);
+
+	return (rinfo_entry ? rinfo_entry->rinfo : NULL);
+}
+
+/*
+ * get_child_restrictinfos
+ * 		Returns list of child RestrictInfos obtained by translating the given
+ *		parent RestrictInfos according to the given AppendRelInfos.
+ *
+ * RestrictInfos applicable to a child relation are obtained by translating the
+ * corresponding RestrictInfos applicable to the parent relation. The same
+ * parent RestictInfo appears in restrictlist or joininfo list of many parent
+ * join relations and thus may get translated multiple times producing multiple
+ * instances of the same child RestrictInfo. In order to avoid that we store the
+ * translated child RestrictInfos in a hash table and reused.
+ *
+ * If a required translated RestrictInfo is available in the RestrictInfo hash
+ * table, the function includes the available child RestrictInfo to the result
+ * list.  Otherwise, it translates the corresponding parent RestrictInfo and
+ * adds it to the RestrictInfo hash table and the result list.
+ */
+List *
+get_child_restrictinfos(PlannerInfo *root, List *parent_restrictinfos,
+						int nappinfos, AppendRelInfo **appinfos)
+{
+	List	   *child_clauselist = NIL;
+
+	foreach_node(RestrictInfo, parent_rinfo, parent_restrictinfos)
+	{
+		Relids		child_req_relids;
+		RestrictInfo *child_rinfo = NULL;
+
+		child_req_relids = adjust_child_relids(parent_rinfo->required_relids,
+											   nappinfos, appinfos);
+
+		if (bms_equal(child_req_relids, parent_rinfo->required_relids))
+		{
+			/*
+			 * If no relid was translated, child's RestrictInfo is same as
+			 * that of parent.
+			 */
+			child_rinfo = parent_rinfo;
+		}
+		else
+		{
+			child_rinfo = find_restrictinfo(root, parent_rinfo->rinfo_serial, child_req_relids);
+
+			/*
+			 * This function may be called thousands of times when there are
+			 * thousands of partitions involved. We won't require the
+			 * translated child relids further. Hence free those to avoid
+			 * accumulating huge amounts of memory.
+			 */
+			bms_free(child_req_relids);
+		}
+
+		if (!child_rinfo)
+		{
+			child_rinfo = castNode(RestrictInfo,
+								   adjust_appendrel_attrs(root, (Node *) parent_rinfo,
+														  nappinfos, appinfos));
+			add_restrictinfo(root, child_rinfo);
+		}
+
+		child_clauselist = lappend(child_clauselist, child_rinfo);
+	}
+
+	return child_clauselist;
+}
+
+/*
+ * get_child_restrictinfos_multilevel
+ *		Similar to get_child_restrictinfos() but for translations through multiple
+ *		levels of partitioning hierarchy.
+ *
+ * This function is similar to adjust_appendrel_attrs_multilevel() except that
+ * this function makes use of RestrictInfo hash table.
+ */
+List *
+get_child_restrictinfos_multilevel(PlannerInfo *root, List *parent_clauselist,
+								   RelOptInfo *child_rel, RelOptInfo *top_parent)
+{
+	AppendRelInfo **appinfos;
+	int			nappinfos;
+	List	   *tmp_clauselist = parent_clauselist;
+	List	   *child_clauselist;
+
+	/* Recursively traverse up the partition hierarchy. */
+	if (child_rel->parent != top_parent)
+	{
+		if (child_rel->parent)
+		{
+			tmp_clauselist = get_child_restrictinfos_multilevel(root,
+																parent_clauselist,
+																child_rel->parent,
+																top_parent);
+		}
+		else
+			elog(ERROR, "child_rel is not a child of top_parent");
+	}
+
+	appinfos = find_appinfos_by_relids(root, child_rel->relids, &nappinfos);
+	child_clauselist = get_child_restrictinfos(root, tmp_clauselist,
+											   nappinfos, appinfos);
+
+	/*
+	 * This function will be called thousands of times, if there are thousands
+	 * of partitions involved. Free temporary objects created in this function
+	 * to avoid accumulating huge memory.
+	 */
+	pfree(appinfos);
+	if (tmp_clauselist != parent_clauselist)
+		list_free(tmp_clauselist);
+
+	return child_clauselist;
 }

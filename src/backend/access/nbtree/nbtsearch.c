@@ -1555,7 +1555,7 @@ _bt_next(IndexScanDesc scan, ScanDirection dir)
  *
  * In the case of a parallel scan, caller must have called _bt_parallel_seize
  * prior to calling this function; this function will invoke
- * _bt_parallel_release before returning.
+ * _bt_parallel_opt_release_early before returning.
  *
  * Returns true if any matching items found on the page, false if none.
  */
@@ -1590,7 +1590,7 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 		else
 			pstate.prev_scan_page = BufferGetBlockNumber(so->currPos.buf);
 
-		_bt_parallel_release(scan, pstate.prev_scan_page);
+		_bt_parallel_opt_release_early(scan, pstate.prev_scan_page);
 	}
 
 	indnatts = IndexRelationGetNumberOfAttributes(scan->indexRelation);
@@ -1968,6 +1968,13 @@ _bt_readpage(IndexScanDesc scan, ScanDirection dir, OffsetNumber offnum,
 		so->currPos.itemIndex = MaxTIDsPerBTreePage - 1;
 	}
 
+	/*
+	 * If !continuescan, releasing will be or has been done by either
+	 * [_btp]_done or [_btp]_skipscan_schedule.
+	 */
+	if (scan->parallel_scan && pstate.continuescan)
+		_bt_parallel_opt_release_late(scan, pstate.prev_scan_page);
+
 	return (so->currPos.firstItem <= so->currPos.lastItem);
 }
 
@@ -2243,7 +2250,7 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			else if (scan->parallel_scan != NULL)
 			{
 				/* allow next page be processed by parallel worker */
-				_bt_parallel_release(scan, opaque->btpo_next);
+				_bt_parallel_opt_release_early(scan, opaque->btpo_next);
 			}
 
 			/* nope, keep going */
@@ -2343,7 +2350,7 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno, ScanDirection dir)
 			else if (scan->parallel_scan != NULL)
 			{
 				/* allow next page be processed by parallel worker */
-				_bt_parallel_release(scan, BufferGetBlockNumber(so->currPos.buf));
+				_bt_parallel_opt_release_early(scan, BufferGetBlockNumber(so->currPos.buf));
 			}
 
 			/*

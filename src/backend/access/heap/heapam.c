@@ -378,6 +378,7 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	ItemPointerSetInvalid(&scan->rs_ctup.t_self);
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
+	scan->rs_cindex = 0;
 
 	/*
 	 * Initialize to ForwardScanDirection because it is most common and

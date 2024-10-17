@@ -2269,7 +2269,8 @@ heapam_scan_bitmap_next_tuple(TableScanDesc scan,
 	/*
 	 * Out of range?  If so, nothing more to look at on this page
 	 */
-	if (hscan->rs_cindex < 0 || hscan->rs_cindex >= hscan->rs_ntuples)
+	Assert(hscan->rs_cindex >= 0);
+	if (hscan->rs_cindex >= hscan->rs_ntuples)
 		return false;
 
 	targoffset = hscan->rs_vistuples[hscan->rs_cindex];

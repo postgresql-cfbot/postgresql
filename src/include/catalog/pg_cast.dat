@@ -512,7 +512,7 @@
 { castsource => 'jsonb', casttarget => 'json', castfunc => '0',
   castcontext => 'a', castmethod => 'i' },
 
-# jsonb to numeric and bool types
+# jsonb to various scalar types
 { castsource => 'jsonb', casttarget => 'bool', castfunc => 'bool(jsonb)',
   castcontext => 'e', castmethod => 'f' },
 { castsource => 'jsonb', casttarget => 'numeric', castfunc => 'numeric(jsonb)',
@@ -527,6 +527,9 @@
   castcontext => 'e', castmethod => 'f' },
 { castsource => 'jsonb', casttarget => 'float8', castfunc => 'float8(jsonb)',
   castcontext => 'e', castmethod => 'f' },
+# this cast replaces an implicit COERCEVIAIO cast, so must be assignment-level:
+{ castsource => 'jsonb', casttarget => 'text', castfunc => 'text(jsonb)',
+  castcontext => 'a', castmethod => 'f' },
 
 # range to multirange
 { castsource => 'int4range', casttarget => 'int4multirange',

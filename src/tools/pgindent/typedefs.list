@@ -975,6 +975,7 @@ GISTInsertStack
 GISTInsertState
 GISTIntArrayBigOptions
 GISTIntArrayOptions
+GISTLeader
 GISTNodeBuffer
 GISTNodeBufferPage
 GISTPageOpaque
@@ -985,6 +986,7 @@ GISTScanOpaque
 GISTScanOpaqueData
 GISTSearchHeapItem
 GISTSearchItem
+GISTShared
 GISTTYPE
 GIST_SPLITVEC
 GMReaderTupleBuffer

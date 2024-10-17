@@ -112,6 +112,7 @@ SELECT nextval('serialTest2_f6_seq');
 CREATE SEQUENCE sequence_test;
 CREATE SEQUENCE IF NOT EXISTS sequence_test;
 
+SELECT last_value, log_cnt, is_called  FROM  pg_sequence_state('sequence_test');
 SELECT nextval('sequence_test'::text);
 SELECT nextval('sequence_test'::regclass);
 SELECT currval('sequence_test'::text);
@@ -124,6 +125,7 @@ SELECT setval('sequence_test'::regclass, 32);
 SELECT nextval('sequence_test'::text);
 SELECT setval('sequence_test'::regclass, 99, false);
 SELECT nextval('sequence_test'::text);
+SELECT last_value, log_cnt, is_called  FROM  pg_sequence_state('sequence_test');
 DISCARD SEQUENCES;
 SELECT currval('sequence_test'::regclass);
 

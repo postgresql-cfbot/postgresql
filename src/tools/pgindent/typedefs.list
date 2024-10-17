@@ -2254,6 +2254,8 @@ PsqlScanStateData
 PsqlSettings
 Publication
 PublicationActions
+PublicationAllObjSpec
+PublicationAllObjType
 PublicationDesc
 PublicationInfo
 PublicationObjSpec
@@ -2793,7 +2795,7 @@ SyncRepStandbyData
 SyncRequestHandler
 SyncRequestType
 SyncStandbySlotsConfigData
-SyncingTablesState
+SyncingRelationsState
 SysFKRelationship
 SysScanDesc
 SyscacheCallbackFunction

@@ -2063,8 +2063,7 @@ ExecTypeFromTLInternal(List *targetList, bool skipjunk)
 						   cur_resno,
 						   tle->resname,
 						   exprType((Node *) tle->expr),
-						   exprTypmod((Node *) tle->expr),
-						   0);
+						   exprTypmod((Node *) tle->expr));
 		TupleDescInitEntryCollation(typeInfo,
 									cur_resno,
 									exprCollation((Node *) tle->expr));
@@ -2097,8 +2096,7 @@ ExecTypeFromExprList(List *exprList)
 						   cur_resno,
 						   NULL,
 						   exprType(e),
-						   exprTypmod(e),
-						   0);
+						   exprTypmod(e));
 		TupleDescInitEntryCollation(typeInfo,
 									cur_resno,
 									exprCollation(e));

@@ -1873,8 +1873,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 							   chooseScalarFunctionAlias(funcexpr, funcname,
 														 alias, nfuncs),
 							   funcrettype,
-							   exprTypmod(funcexpr),
-							   0);
+							   exprTypmod(funcexpr));
 			TupleDescInitEntryCollation(tupdesc,
 										(AttrNumber) 1,
 										exprCollation(funcexpr));
@@ -1919,8 +1918,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 								   (AttrNumber) i,
 								   attrname,
 								   attrtype,
-								   attrtypmod,
-								   0);
+								   attrtypmod);
 				TupleDescInitEntryCollation(tupdesc,
 											(AttrNumber) i,
 											attrcollation);
@@ -1999,8 +1997,7 @@ addRangeTableEntryForFunction(ParseState *pstate,
 							   (AttrNumber) ++natts,
 							   "ordinality",
 							   INT8OID,
-							   -1,
-							   0);
+							   -1);
 			/* no need to set collation */
 		}
 

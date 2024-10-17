@@ -19,6 +19,7 @@
 #include "catalog/pg_type.h"
 #include "lib/stringinfo.h"
 #include "nodes/makefuncs.h"
+#include "nodes/print.h"
 #include "parser/parse_type.h"
 #include "parser/parser.h"
 #include "utils/array.h"

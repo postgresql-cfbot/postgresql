@@ -1193,7 +1193,7 @@ libpqrcv_processTuples(PGresult *pgres, WalRcvExecResult *walres,
 	walres->tupledesc = CreateTemplateTupleDesc(nRetTypes);
 	for (coln = 0; coln < nRetTypes; coln++)
 		TupleDescInitEntry(walres->tupledesc, (AttrNumber) coln + 1,
-						   PQfname(pgres, coln), retTypes[coln], -1, 0);
+						   PQfname(pgres, coln), retTypes[coln], -1);
 	attinmeta = TupleDescGetAttInMetadata(walres->tupledesc);
 
 	/* No point in doing more here if there were no tuples returned. */

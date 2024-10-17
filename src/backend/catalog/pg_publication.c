@@ -1130,13 +1130,13 @@ pg_get_publication_tables(PG_FUNCTION_ARGS)
 		/* Construct a tuple descriptor for the result rows. */
 		tupdesc = CreateTemplateTupleDesc(NUM_PUBLICATION_TABLES_ELEM);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "pubid",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "relid",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "attrs",
-						   INT2VECTOROID, -1, 0);
+						   INT2VECTOROID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "qual",
-						   PG_NODE_TREEOID, -1, 0);
+						   PG_NODE_TREEOID, -1);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 		funcctx->user_fctx = (void *) table_infos;

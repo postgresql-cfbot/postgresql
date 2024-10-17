@@ -465,11 +465,11 @@ pg_visibility_tupdesc(bool include_blkno, bool include_pd)
 		++maxattr;
 	tupdesc = CreateTemplateTupleDesc(maxattr);
 	if (include_blkno)
-		TupleDescInitEntry(tupdesc, ++a, "blkno", INT8OID, -1, 0);
-	TupleDescInitEntry(tupdesc, ++a, "all_visible", BOOLOID, -1, 0);
-	TupleDescInitEntry(tupdesc, ++a, "all_frozen", BOOLOID, -1, 0);
+		TupleDescInitEntry(tupdesc, ++a, "blkno", INT8OID, -1);
+	TupleDescInitEntry(tupdesc, ++a, "all_visible", BOOLOID, -1);
+	TupleDescInitEntry(tupdesc, ++a, "all_frozen", BOOLOID, -1);
 	if (include_pd)
-		TupleDescInitEntry(tupdesc, ++a, "pd_all_visible", BOOLOID, -1, 0);
+		TupleDescInitEntry(tupdesc, ++a, "pd_all_visible", BOOLOID, -1);
 	Assert(a == maxattr);
 
 	return BlessTupleDesc(tupdesc);

@@ -180,6 +180,9 @@ static bool cost_qual_eval_walker(Node *node, cost_qual_eval_context *context);
 static void get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
 									  ParamPathInfo *param_info,
 									  QualCost *qpqual_cost);
+static void set_joinpath_size(PlannerInfo *root, Path *path,
+							  Path *outer_path, Path *inner_path,
+							  SpecialJoinInfo *sjinfo, List *restrict_clauses);
 static bool has_indexed_join_quals(NestPath *path);
 static double approx_tuple_count(PlannerInfo *root, JoinPath *path,
 								 List *quals);
@@ -3370,19 +3373,8 @@ final_cost_nestloop(PlannerInfo *root, NestPath *path,
 	if (inner_path_rows <= 0)
 		inner_path_rows = 1;
 	/* Mark the path with the correct row estimate */
-	if (path->jpath.path.param_info)
-		path->jpath.path.rows = path->jpath.path.param_info->ppi_rows;
-	else
-		path->jpath.path.rows = path->jpath.path.parent->rows;
-
-	/* For partial paths, scale row estimate. */
-	if (path->jpath.path.parallel_workers > 0)
-	{
-		double		parallel_divisor = get_parallel_divisor(&path->jpath.path);
-
-		path->jpath.path.rows =
-			clamp_row_est(path->jpath.path.rows / parallel_divisor);
-	}
+	set_joinpath_size(root, &path->jpath.path, outer_path, inner_path,
+					  extra->sjinfo, path->jpath.joinrestrictinfo);
 
 	/* cost of inner-relation source data (we already dealt with outer rel) */
 
@@ -3867,19 +3859,8 @@ final_cost_mergejoin(PlannerInfo *root, MergePath *path,
 		inner_path_rows = 1;
 
 	/* Mark the path with the correct row estimate */
-	if (path->jpath.path.param_info)
-		path->jpath.path.rows = path->jpath.path.param_info->ppi_rows;
-	else
-		path->jpath.path.rows = path->jpath.path.parent->rows;
-
-	/* For partial paths, scale row estimate. */
-	if (path->jpath.path.parallel_workers > 0)
-	{
-		double		parallel_divisor = get_parallel_divisor(&path->jpath.path);
-
-		path->jpath.path.rows =
-			clamp_row_est(path->jpath.path.rows / parallel_divisor);
-	}
+	set_joinpath_size(root, &path->jpath.path, outer_path, inner_path,
+					  extra->sjinfo, path->jpath.joinrestrictinfo);
 
 	/*
 	 * Compute cost of the mergequals and qpquals (other restriction clauses)
@@ -4299,19 +4280,8 @@ final_cost_hashjoin(PlannerInfo *root, HashPath *path,
 	path->jpath.path.disabled_nodes = workspace->disabled_nodes;
 
 	/* Mark the path with the correct row estimate */
-	if (path->jpath.path.param_info)
-		path->jpath.path.rows = path->jpath.path.param_info->ppi_rows;
-	else
-		path->jpath.path.rows = path->jpath.path.parent->rows;
-
-	/* For partial paths, scale row estimate. */
-	if (path->jpath.path.parallel_workers > 0)
-	{
-		double		parallel_divisor = get_parallel_divisor(&path->jpath.path);
-
-		path->jpath.path.rows =
-			clamp_row_est(path->jpath.path.rows / parallel_divisor);
-	}
+	set_joinpath_size(root, &path->jpath.path, outer_path, inner_path,
+					  extra->sjinfo, path->jpath.joinrestrictinfo);
 
 	/* mark the path with estimated # of batches */
 	path->num_batches = numbatches;
@@ -5060,6 +5030,60 @@ get_restriction_qual_cost(PlannerInfo *root, RelOptInfo *baserel,
 	}
 	else
 		*qpqual_cost = baserel->baserestrictcost;
+}
+
+/*
+ * set_joinpath_size
+ *	  Set the correct row estimate for the given join path.
+ *
+ * 'path' is the join path under consideration.
+ * 'outer_path', 'inner_path' are Paths that produce the relations being
+ *		joined.
+ * 'sjinfo' is any SpecialJoinInfo relevant to this join.
+ * 'restrict_clauses' lists the join clauses that need to be applied at the
+ *		join node.
+ *
+ * Note that for a grouped join relation, its paths could have very different
+ * rowcount estimates, so we need to calculate the rowcount estimate using the
+ * the pair of input paths provided.
+ */
+static void
+set_joinpath_size(PlannerInfo *root, Path *path,
+				  Path *outer_path, Path *inner_path,
+				  SpecialJoinInfo *sjinfo, List *restrict_clauses)
+{
+	if (IS_GROUPED_REL(path->parent))
+	{
+		/*
+		 * Estimate the number of rows of this grouped join path as the sizes
+		 * of the input paths times the selectivity of the clauses that have
+		 * ended up at this join node.
+		 */
+		path->rows = calc_joinrel_size_estimate(root,
+												path->parent,
+												outer_path->parent,
+												inner_path->parent,
+												outer_path->rows,
+												inner_path->rows,
+												sjinfo,
+												restrict_clauses);
+	}
+	else if (path->param_info)
+		path->rows = path->param_info->ppi_rows;
+	else
+		path->rows = path->parent->rows;
+
+	/*
+	 * For partial paths, scale row estimate.  We can skip this for grouped
+	 * join paths.
+	 */
+	if (path->parallel_workers > 0 && !IS_GROUPED_REL(path->parent))
+	{
+		double		parallel_divisor = get_parallel_divisor(path);
+
+		path->rows =
+			clamp_row_est(path->rows / parallel_divisor);
+	}
 }
 
 

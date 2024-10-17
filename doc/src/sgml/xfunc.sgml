@@ -2385,6 +2385,38 @@ PG_FUNCTION_INFO_V1(funcname);
     </para>
 
     <para>
+    To call another version-1 function, you can use
+    <function>DirectFunctionCall<replaceable>n</replaceable>(func, arg1,...,argn)</function>.
+    This is particularly useful when you want to call functions defined in the standard internal library,
+    by using an interface similar to their SQL signature.
+    </para>
+
+    <para>
+    Different flavors of similar macros can be found in <filename>fmgr.h</filename>.
+    The main point though is that they expect a C function name to call as their first argument
+    (or its <literal>Oid</literal> in some cases),
+    and actual arguments should be supplied as <literal>Datum</literal>s.
+    They always return <literal>Datum</literal>.
+    Note that neither arguments nor result are allowed to be NULL.
+    </para>
+
+    <para>
+    For example, to call the <function>starts_with(text, text) </function> from C,
+    you can search through the catalog and find out that its C implementation is based on the
+    <function>Datum text_starts_with(PG_FUNCTION_ARGS)</function> function.
+    </para>
+
+    <para>
+    In <filename>fmgr.h</filename> there are also available macros the facilitate conversions
+    between C types and <literal>Datum</literal>.
+    For example to turn <literal>text*</literal> into <literal>Datum</literal>,
+    you can use <function>DatumGetTextPP(X)</function>.
+    If your extension defines additional types,
+    it is usually convenient to define similar macros for these types too.
+    You can use <function>PointerGetDatum(x)</function> to turn pointers of standard types into <literal>Datum</literal>
+    </para>
+
+    <para>
      Here are some examples using the version-1 calling convention:
     </para>
 
@@ -2482,6 +2514,25 @@ concat_text(PG_FUNCTION_ARGS)
     memcpy(VARDATA(new_text) + arg1_size, VARDATA_ANY(arg2), arg2_size);
     PG_RETURN_TEXT_P(new_text);
 }
+
+/* A wrapper around starts_with(text, text) */
+
+PG_FUNCTION_INFO_V1(t_starts_with);
+
+Datum
+t_starts_with(PG_FUNCTION_ARGS)
+{
+    text *t1 = PG_GETARG_TEXT_PP(0);
+    text *t2 = PG_GETARG_TEXT_PP(1);
+    bool  result;
+
+    result = DatumGetBool(
+                  DirectFunctionCall2(text_starts_with,
+                                      PointerGetDatum(t1),
+                                      PointerGetDatum(t2));
+
+    PG_RETURN_BOOL(result);
+}
 ]]>
 </programlisting>
 
@@ -2512,6 +2563,10 @@ CREATE FUNCTION copytext(text) RETURNS text
 
 CREATE FUNCTION concat_text(text, text) RETURNS text
      AS '<replaceable>DIRECTORY</replaceable>/funcs', 'concat_text'
+     LANGUAGE C STRICT;
+
+CREATE FUNCTION t_starts_with(text, text) RETURNS boolean
+     AS '<replaceable>DIRECTORY</replaceable>/funcs', 't_starts_with'
      LANGUAGE C STRICT;
 </programlisting>
 

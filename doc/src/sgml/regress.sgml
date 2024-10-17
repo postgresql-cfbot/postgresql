@@ -336,6 +336,19 @@ make check-world PG_TEST_EXTRA='kerberos ldap ssl load_balance libpq_encryption'
       </para>
      </listitem>
     </varlistentry>
+
+    <varlistentry>
+     <term><literal>regress_dump_formats</literal></term>
+     <listitem>
+      <para>
+       When enabled,
+       <filename>src/bin/pg_upgrade/t/002_pg_upgrade.pl</filename> tests dump
+       and restore of regression database using all dump formats. Otherwise
+       tests only <literal>plain</literal> format. Not enabled by default
+       because it is resource intensive.
+      </para>
+     </listitem>
+    </varlistentry>
    </variablelist>
 
    Tests for features that are not supported by the current build

@@ -46,6 +46,7 @@
 #include "catalog/pg_ts_dict.h"
 #include "catalog/pg_type.h"
 #include "catalog/pg_user_mapping.h"
+#include "catalog/pg_variable.h"
 #include "commands/alter.h"
 #include "commands/dbcommands.h"
 #include "commands/defrem.h"
@@ -1714,6 +1715,7 @@ shdepReassignOwned_Owner(Form_pg_shdepend sdepForm, Oid newrole)
 		case DatabaseRelationId:
 		case TSConfigRelationId:
 		case TSDictionaryRelationId:
+		case VariableRelationId:
 			AlterObjectOwner_internal(sdepForm->classid,
 									  sdepForm->objid,
 									  newrole);

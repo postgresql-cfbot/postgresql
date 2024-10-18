@@ -970,6 +970,13 @@ static const SchemaQuery Query_for_trigger_of_table = {
 	.refnamespace = "c1.relnamespace",
 };
 
+static const SchemaQuery Query_for_list_of_variables = {
+	.min_server_version = 180000,
+	.catname = "pg_catalog.pg_variable v",
+	.viscondition = "pg_catalog.pg_variable_is_visible(v.oid)",
+	.namespace = "v.varnamespace",
+	.result = "v.varname",
+};
 
 /*
  * Queries to get lists of names of various kinds of things, possibly
@@ -1207,8 +1214,8 @@ static const char *const sql_commands[] = {
 	"ABORT", "ALTER", "ANALYZE", "BEGIN", "CALL", "CHECKPOINT", "CLOSE", "CLUSTER",
 	"COMMENT", "COMMIT", "COPY", "CREATE", "DEALLOCATE", "DECLARE",
 	"DELETE FROM", "DISCARD", "DO", "DROP", "END", "EXECUTE", "EXPLAIN",
-	"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LISTEN", "LOAD", "LOCK",
-	"MERGE INTO", "MOVE", "NOTIFY", "PREPARE",
+	"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LET",
+	"LISTEN", "LOAD", "LOCK", "MERGE INTO", "MOVE", "NOTIFY", "PREPARE",
 	"REASSIGN", "REFRESH MATERIALIZED VIEW", "REINDEX", "RELEASE",
 	"RESET", "REVOKE", "ROLLBACK",
 	"SAVEPOINT", "SECURITY LABEL", "SELECT", "SET", "SHOW", "START",
@@ -1266,6 +1273,8 @@ static const pgsql_thing_t words_after_create[] = {
 	{"FOREIGN TABLE", NULL, NULL, NULL},
 	{"FUNCTION", NULL, NULL, Query_for_list_of_functions},
 	{"GROUP", Query_for_list_of_roles},
+	{"IMMUTABLE VARIABLE", NULL, NULL, NULL, NULL, THING_NO_DROP | THING_NO_ALTER}, /* for CREATE IMMUTABLE
+																					 * VARIABLE ... */
 	{"INDEX", NULL, NULL, &Query_for_list_of_indexes},
 	{"LANGUAGE", Query_for_list_of_languages},
 	{"LARGE OBJECT", NULL, NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
@@ -1296,6 +1305,8 @@ static const pgsql_thing_t words_after_create[] = {
 																			 * TABLE ... */
 	{"TEXT SEARCH", NULL, NULL, NULL},
 	{"TRANSFORM", NULL, NULL, NULL, NULL, THING_NO_ALTER},
+	{"TRANSACTIONAL", NULL, NULL, NULL, NULL, THING_NO_DROP | THING_NO_ALTER}, /* for CREATE TRANSACTIONAL
+																				* VARIABLE ... */
 	{"TRIGGER", "SELECT tgname FROM pg_catalog.pg_trigger WHERE tgname LIKE '%s' AND NOT tgisinternal"},
 	{"TYPE", NULL, NULL, &Query_for_list_of_datatypes},
 	{"UNIQUE", NULL, NULL, NULL, NULL, THING_NO_DROP | THING_NO_ALTER}, /* for CREATE UNIQUE
@@ -1304,6 +1315,7 @@ static const pgsql_thing_t words_after_create[] = {
 																			 * TABLE ... */
 	{"USER", Query_for_list_of_roles, NULL, NULL, Keywords_for_user_thing},
 	{"USER MAPPING FOR", NULL, NULL, NULL},
+	{"VARIABLE", NULL, NULL, &Query_for_list_of_variables},
 	{"VIEW", NULL, NULL, &Query_for_list_of_views},
 	{NULL}						/* end of list */
 };
@@ -1865,7 +1877,7 @@ psql_completion(const char *text, int start, int end)
 		"\\dF", "\\dFd", "\\dFp", "\\dFt", "\\dg", "\\di", "\\dl", "\\dL",
 		"\\dm", "\\dn", "\\do", "\\dO", "\\dp", "\\dP", "\\dPi", "\\dPt",
 		"\\drds", "\\drg", "\\dRs", "\\dRp", "\\ds",
-		"\\dt", "\\dT", "\\dv", "\\du", "\\dx", "\\dX", "\\dy",
+		"\\dt", "\\dT", "\\dv", "\\du", "\\dx", "\\dX", "\\dy", "\\dV",
 		"\\echo", "\\edit", "\\ef", "\\elif", "\\else", "\\encoding",
 		"\\endif", "\\errverbose", "\\ev",
 		"\\f",
@@ -2556,6 +2568,9 @@ match_previous_words(int pattern_id,
 										  "ALL");
 	else if (Matches("ALTER", "SYSTEM", "SET", MatchAny))
 		COMPLETE_WITH("TO");
+	/* ALTER VARIABLE <name> */
+	else if (Matches("ALTER", "VARIABLE", MatchAny))
+		COMPLETE_WITH("OWNER TO", "RENAME TO", "SET SCHEMA");
 	/* ALTER VIEW <name> */
 	else if (Matches("ALTER", "VIEW", MatchAny))
 		COMPLETE_WITH("ALTER COLUMN", "OWNER TO", "RENAME", "RESET", "SET");
@@ -3121,7 +3136,7 @@ match_previous_words(int pattern_id,
 					  "ROUTINE", "RULE", "SCHEMA", "SEQUENCE", "SERVER",
 					  "STATISTICS", "SUBSCRIPTION", "TABLE",
 					  "TABLESPACE", "TEXT SEARCH", "TRANSFORM FOR",
-					  "TRIGGER", "TYPE", "VIEW");
+					  "TRIGGER", "TYPE", "VARIABLE", "VIEW");
 	else if (Matches("COMMENT", "ON", "ACCESS", "METHOD"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_access_methods);
 	else if (Matches("COMMENT", "ON", "CONSTRAINT"))
@@ -3582,7 +3597,8 @@ match_previous_words(int pattern_id,
 /* CREATE TABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete "CREATE TEMP/TEMPORARY" with the possible temp objects */
 	else if (TailMatches("CREATE", "TEMP|TEMPORARY"))
-		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW");
+		COMPLETE_WITH("IMMUTABLE VARIABLE", "SEQUENCE", "TABLE", "VARIABLE",
+					  "VIEW");
 	/* Complete "CREATE UNLOGGED" with TABLE or SEQUENCE */
 	else if (TailMatches("CREATE", "UNLOGGED"))
 		COMPLETE_WITH("TABLE", "SEQUENCE");
@@ -3931,6 +3947,18 @@ match_previous_words(int pattern_id,
 		else if (TailMatches("=", MatchAnyExcept("*)")))
 			COMPLETE_WITH(",", ")");
 	}
+/* CREATE VARIABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
+	/* Complete CREATE VARIABLE <name> with AS */
+	else if (Matches("CREATE", "TRANSACTION|TRANSACTIONAL"))
+		COMPLETE_WITH("IMMUTABLE", "VARIABLE");
+	else if (TailMatches("CREATE", "VARIABLE", MatchAny) ||
+			 TailMatches("TEMP|TEMPORARY", "VARIABLE", MatchAny) ||
+			 TailMatches("TRANSACTION|TRANSACTIONAL", "VARIABLE", MatchAny) ||
+			 TailMatches("IMMUTABLE", "VARIABLE", MatchAny))
+		COMPLETE_WITH("AS");
+	else if (TailMatches("VARIABLE", MatchAny, "AS"))
+		/* Complete CREATE VARIABLE <name> with AS types */
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes);
 
 /* CREATE VIEW --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete CREATE [ OR REPLACE ] VIEW <name> with AS or WITH */
@@ -4065,7 +4093,7 @@ match_previous_words(int pattern_id,
 
 /* DISCARD */
 	else if (Matches("DISCARD"))
-		COMPLETE_WITH("ALL", "PLANS", "SEQUENCES", "TEMP");
+		COMPLETE_WITH("ALL", "PLANS", "SEQUENCES", "TEMP", "VARIABLES");
 
 /* DO */
 	else if (Matches("DO"))
@@ -4191,6 +4219,12 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH_QUERY(Query_for_list_of_languages);
 	}
 	else if (Matches("DROP", "TRANSFORM", "FOR", MatchAny, "LANGUAGE", MatchAny))
+		COMPLETE_WITH("CASCADE", "RESTRICT");
+
+	/* DROP VARIABLE */
+	else if (Matches("DROP", "VARIABLE"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables);
+	else if (Matches("DROP", "VARIABLE", MatchAny))
 		COMPLETE_WITH("CASCADE", "RESTRICT");
 
 /* EXECUTE */
@@ -4394,7 +4428,7 @@ match_previous_words(int pattern_id,
 		 * objects supported.
 		 */
 		if (HeadMatches("ALTER", "DEFAULT", "PRIVILEGES"))
-			COMPLETE_WITH("TABLES", "SEQUENCES", "FUNCTIONS", "PROCEDURES", "ROUTINES", "TYPES", "SCHEMAS");
+			COMPLETE_WITH("TABLES", "SEQUENCES", "FUNCTIONS", "PROCEDURES", "ROUTINES", "TYPES", "SCHEMAS", "VARIABLES");
 		else
 			COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_grantables,
 											"ALL FUNCTIONS IN SCHEMA",
@@ -4416,7 +4450,8 @@ match_previous_words(int pattern_id,
 											"SEQUENCE",
 											"TABLE",
 											"TABLESPACE",
-											"TYPE");
+											"TYPE",
+											"VARIABLE");
 	}
 	else if (TailMatches("GRANT|REVOKE", MatchAny, "ON", "ALL") ||
 			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", MatchAny, "ON", "ALL"))
@@ -4424,7 +4459,8 @@ match_previous_words(int pattern_id,
 					  "PROCEDURES IN SCHEMA",
 					  "ROUTINES IN SCHEMA",
 					  "SEQUENCES IN SCHEMA",
-					  "TABLES IN SCHEMA");
+					  "TABLES IN SCHEMA",
+					  "VARIABLES IN SCHEMA");
 	else if (TailMatches("GRANT|REVOKE", MatchAny, "ON", "FOREIGN") ||
 			 TailMatches("REVOKE", "GRANT", "OPTION", "FOR", MatchAny, "ON", "FOREIGN"))
 		COMPLETE_WITH("DATA WRAPPER", "SERVER");
@@ -4460,6 +4496,8 @@ match_previous_words(int pattern_id,
 			COMPLETE_WITH_QUERY(Query_for_list_of_tablespaces);
 		else if (TailMatches("TYPE"))
 			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes);
+		else if (TailMatches("VARIABLE"))
+			COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables);
 		else if (TailMatches("GRANT", MatchAny, MatchAny, MatchAny))
 			COMPLETE_WITH("TO");
 		else
@@ -4560,6 +4598,10 @@ match_previous_words(int pattern_id,
 	else if (TailMatches("FROM", "SERVER", MatchAny, "INTO", MatchAny))
 		COMPLETE_WITH("OPTIONS (");
 
+/* IMMUTABLE -- can be expend to IMMUTABLE VARIABLE */
+	else if (TailMatches("CREATE", "IMMUTABLE"))
+		COMPLETE_WITH("VARIABLE");
+
 /* INSERT --- can be inside EXPLAIN, RULE, etc */
 	/* Complete NOT MATCHED THEN INSERT */
 	else if (TailMatches("NOT", "MATCHED", "THEN", "INSERT"))
@@ -4600,6 +4642,14 @@ match_previous_words(int pattern_id,
 	/* Insert an open parenthesis after "VALUES" */
 	else if (TailMatches("VALUES") && !TailMatches("DEFAULT", "VALUES"))
 		COMPLETE_WITH("(");
+
+/* LET, EXPLAIN LET, PREPARE LET */
+	/* If prev. word is LET suggest a list of variables */
+	else if (TailMatches("LET"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables);
+	/* Complete LET <variable> with "=" */
+	else if (TailMatches("LET", MatchAny))
+		COMPLETE_WITH("=");
 
 /* LOCK */
 	/* Complete LOCK [TABLE] [ONLY] with a list of tables */
@@ -4762,7 +4812,7 @@ match_previous_words(int pattern_id,
 
 /* PREPARE xx AS */
 	else if (Matches("PREPARE", MatchAny, "AS"))
-		COMPLETE_WITH("SELECT", "UPDATE", "INSERT INTO", "DELETE FROM");
+		COMPLETE_WITH("SELECT", "UPDATE", "INSERT INTO", "DELETE FROM", "LET");
 
 /*
  * PREPARE TRANSACTION is missing on purpose. It's intended for transaction
@@ -5228,6 +5278,8 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH_QUERY(Query_for_list_of_roles);
 	else if (TailMatchesCS("\\dv*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_views);
+	else if (TailMatchesCS("\\dV*"))
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_variables);
 	else if (TailMatchesCS("\\dx*"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_extensions);
 	else if (TailMatchesCS("\\dX*"))

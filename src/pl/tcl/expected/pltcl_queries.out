@@ -450,12 +450,12 @@ CONTEXT:  while executing
 "__PLTcl_proc_tcl_eval_text spi_prepare\ a\ \"b\ \{\""
 in PL/Tcl function tcl_eval(text)
 select tcl_error_handling_test($tcl$spi_prepare "select moo" []$tcl$);
-       tcl_error_handling_test        
---------------------------------------
- SQLSTATE: 42703                     +
- condition: undefined_column         +
- cursor_position: 8                  +
- message: column "moo" does not exist+
+             tcl_error_handling_test              
+--------------------------------------------------
+ SQLSTATE: 42703                                 +
+ condition: undefined_column                     +
+ cursor_position: 8                              +
+ message: column or variable "moo" does not exist+
  statement: select moo
 (1 row)
 

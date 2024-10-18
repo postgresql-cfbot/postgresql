@@ -299,3 +299,30 @@ ALTER EXTENSION test_ext_req_schema1 SET SCHEMA test_s_dep2;  -- now ok
 SELECT test_s_dep2.dep_req1();
 SELECT test_s_dep.dep_req2();
 DROP EXTENSION test_ext_req_schema1 CASCADE;
+
+--
+-- Test owned schema extensions
+--
+
+CREATE SCHEMA test_ext_owned_schema;
+-- Fails for an already existing schema to be provided
+CREATE EXTENSION test_ext_owned_schema SCHEMA test_ext_owned_schema;
+-- Fails because a different schema is set in control file
+CREATE EXTENSION test_ext_owned_schema SCHEMA test_schema;
+DROP SCHEMA test_ext_owned_schema;
+CREATE EXTENSION test_ext_owned_schema;
+\dx+ test_ext_owned_schema;
+DROP EXTENSION test_ext_owned_schema;
+
+CREATE SCHEMA already_existing;
+-- Fails for an already existing schema to be provided
+CREATE EXTENSION test_ext_owned_schema_relocatable SCHEMA already_existing;
+-- Fails because no schema is set in control file
+CREATE EXTENSION test_ext_owned_schema_relocatable;
+CREATE EXTENSION test_ext_owned_schema_relocatable SCHEMA test_schema;
+\dx+ test_ext_owned_schema_relocatable
+-- Fails because schema already exists
+ALTER EXTENSION test_ext_owned_schema_relocatable SET SCHEMA already_existing;
+ALTER EXTENSION test_ext_owned_schema_relocatable SET SCHEMA some_other_name;
+\dx+ test_ext_owned_schema_relocatable
+DROP EXTENSION test_ext_owned_schema_relocatable;

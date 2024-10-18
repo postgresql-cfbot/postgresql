@@ -5776,7 +5776,6 @@ LockBufHdr(BufferDesc *desc)
 			break;
 		perform_spin_delay(&delayStatus);
 	}
-	finish_spin_delay(&delayStatus);
 	return old_buf_state | BM_LOCKED;
 }
 
@@ -5802,8 +5801,6 @@ WaitBufHdrUnlocked(BufferDesc *buf)
 		perform_spin_delay(&delayStatus);
 		buf_state = pg_atomic_read_u32(&buf->state);
 	}
-
-	finish_spin_delay(&delayStatus);
 
 	return buf_state;
 }

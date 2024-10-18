@@ -96,6 +96,22 @@ typedef struct
 	pg_locale_t locale;
 } VarStringSortSupport;
 
+typedef struct /* AALEKSEEV TODO FIXME correct comments, remove redundant fields */
+{
+	char	   *buf1;			/* 1st string, or abbreviation original string
+								 * buf */
+	char	   *buf2;			/* 2nd string, or abbreviation strxfrm() buf */
+	int			buflen1;		/* Allocated length of buf1 */
+	int			buflen2;		/* Allocated length of buf2 */
+	int			last_len1;		/* Length of last buf1 string/strxfrm() input */
+	int			last_len2;		/* Length of last buf2 string/strxfrm() blob */
+	int			last_returned;	/* Last comparison result (cache) */
+	// bool		cache_blob;		/* Does buf2 contain strxfrm() blob, etc? */ --- AALEKSEEV always true
+	hyperLogLogState abbr_card; /* Abbreviated key cardinality state */
+	hyperLogLogState full_card; /* Full key cardinality state */
+	double		prop_card;		/* Required cardinality proportion */
+} ByteaSortSupport;
+
 /*
  * Output data for split_text(): we output either to an array or a table.
  * tupstore and tupdesc must be set up in advance to output to a table.
@@ -116,6 +132,10 @@ typedef struct
 #define DatumGetVarStringP(X)		((VarString *) PG_DETOAST_DATUM(X))
 #define DatumGetVarStringPP(X)		((VarString *) PG_DETOAST_DATUM_PACKED(X))
 
+static Datum bytea_abbrev_convert(Datum original, SortSupport ssup);
+static bool bytea_abbrev_abort(int memtupcount, SortSupport ssup);
+static int	bytea_ssup_comparator(Datum x, Datum y, SortSupport ssup);
+
 static int	varstrfastcmp_c(Datum x, Datum y, SortSupport ssup);
 static int	bpcharfastcmp_c(Datum x, Datum y, SortSupport ssup);
 static int	namefastcmp_c(Datum x, Datum y, SortSupport ssup);
@@ -124,6 +144,7 @@ static int	namefastcmp_locale(Datum x, Datum y, SortSupport ssup);
 static int	varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup);
 static Datum varstr_abbrev_convert(Datum original, SortSupport ssup);
 static bool varstr_abbrev_abort(int memtupcount, SortSupport ssup);
+
 static int32 text_length(Datum str);
 static text *text_catenate(text *t1, text *t2);
 static text *text_substring(Datum str,
@@ -1847,10 +1868,8 @@ bttextsortsupport(PG_FUNCTION_ARGS)
  * Includes locale support, and support for BpChar semantics (i.e. removing
  * trailing spaces before comparison).
  *
- * Relies on the assumption that text, VarChar, BpChar, and bytea all have the
- * same representation.  Callers that always use the C collation (e.g.
- * non-collatable type callers like bytea) may have NUL bytes in their strings;
- * this will not work with any other collation, though.
+ * Relies on the assumption that text, VarChar and BpChar all have the
+ * same representation.
  */
 void
 varstr_sortsupport(SortSupport ssup, Oid typid, Oid collid)
@@ -2214,7 +2233,7 @@ varstrfastcmp_locale(char *a1p, int len1, char *a2p, int len2, SortSupport ssup)
  * representation.  Our encoding strategy is simple -- pack the first 8 bytes
  * of a strxfrm() blob into a Datum (on little-endian machines, the 8 bytes are
  * stored in reverse order), and treat it as an unsigned integer.  When the "C"
- * locale is used, or in case of bytea, just memcpy() from original instead.
+ * locale is used just memcpy() from original instead.
  */
 static Datum
 varstr_abbrev_convert(Datum original, SortSupport ssup)
@@ -2242,21 +2261,7 @@ varstr_abbrev_convert(Datum original, SortSupport ssup)
 	/*
 	 * If we're using the C collation, use memcpy(), rather than strxfrm(), to
 	 * abbreviate keys.  The full comparator for the C locale is always
-	 * memcmp().  It would be incorrect to allow bytea callers (callers that
-	 * always force the C collation -- bytea isn't a collatable type, but this
-	 * approach is convenient) to use strxfrm().  This is because bytea
-	 * strings may contain NUL bytes.  Besides, this should be faster, too.
-	 *
-	 * More generally, it's okay that bytea callers can have NUL bytes in
-	 * strings because abbreviated cmp need not make a distinction between
-	 * terminating NUL bytes, and NUL bytes representing actual NULs in the
-	 * authoritative representation.  Hopefully a comparison at or past one
-	 * abbreviated key's terminating NUL byte will resolve the comparison
-	 * without consulting the authoritative representation; specifically, some
-	 * later non-NUL byte in the longer string can resolve the comparison
-	 * against a subsequent terminating NUL in the shorter string.  There will
-	 * usually be what is effectively a "length-wise" resolution there and
-	 * then.
+	 * memcmp().
 	 *
 	 * If that doesn't work out -- if all bytes in the longer string
 	 * positioned at or past the offset of the smaller string's (first)
@@ -2520,6 +2525,235 @@ varstr_abbrev_abort(int memtupcount, SortSupport ssup)
 		elog(LOG, "varstr_abbrev: aborted abbreviation at %d "
 			 "(abbrev_distinct: %f, key_distinct: %f, prop_card: %f)",
 			 memtupcount, abbrev_distinct, key_distinct, sss->prop_card);
+
+	return true;
+}
+
+/*
+ * sortsupport comparison func for bytea
+ */
+static int
+bytea_ssup_comparator(Datum x, Datum y, SortSupport ssup)
+{
+	bytea  *arg1 = DatumGetByteaPP(x);
+	bytea  *arg2 = DatumGetByteaPP(y);
+	int			len1,
+				len2,
+				result;
+
+	len1 = VARSIZE_ANY_EXHDR(arg1);
+	len2 = VARSIZE_ANY_EXHDR(arg2);
+
+	result = memcmp(VARDATA_ANY(arg1), VARDATA_ANY(arg2), Min(len1, len2));
+	if ((result == 0) && (len1 != len2))
+		result = (len1 < len2) ? -1 : 1;
+
+	/* We can't afford to leak memory here. */
+	/* XXX we should probably add ByteaGetDatum() for type safety - a.alekseev */
+	if (PointerGetDatum(arg1) != x)
+		pfree(arg1);
+	if (PointerGetDatum(arg2) != y)
+		pfree(arg2);
+
+	return result;
+}
+
+/*
+ * Conversion routine for sortsupport.  Converts original to abbreviated key
+ * representation.  Our encoding strategy is simple -- pack the first 8 bytes
+ * of a strxfrm() blob into a Datum (on little-endian machines, the 8 bytes are
+ * stored in reverse order), and treat it as an unsigned integer.  When the "C"
+ * locale is used just memcpy() from original instead.
+ */
+// AALEKSEEV TODO FIXME refactor
+static Datum
+bytea_abbrev_convert(Datum original, SortSupport ssup)
+{
+	const size_t max_prefix_bytes = sizeof(Datum);
+	ByteaSortSupport *bss = (ByteaSortSupport *) ssup->ssup_extra;
+	VarString  *authoritative = DatumGetVarStringPP(original);
+	char	   *authoritative_data = VARDATA_ANY(authoritative);
+
+	/* working state */
+	Datum		res;
+	char	   *pres;
+	int			len;
+	uint32		hash;
+
+	pres = (char *) &res;
+	/* memset(), so any non-overwritten bytes are NUL */
+	memset(pres, 0, max_prefix_bytes);
+	len = VARSIZE_ANY_EXHDR(authoritative);
+
+	memcpy(pres, authoritative_data, Min(len, max_prefix_bytes));
+
+	/*
+	 * Maintain approximate cardinality of both abbreviated keys and original,
+	 * authoritative keys using HyperLogLog.  Used as cheap insurance against
+	 * the worst case, where we do many string transformations for no saving
+	 * in full strcoll()-based comparisons.  These statistics are used by
+	 * varstr_abbrev_abort().
+	 *
+	 * First, Hash key proper, or a significant fraction of it.  Mix in length
+	 * in order to compensate for cases where differences are past
+	 * PG_CACHE_LINE_SIZE bytes, so as to limit the overhead of hashing.
+	 */
+	hash = DatumGetUInt32(hash_any((unsigned char *) authoritative_data,
+								   Min(len, PG_CACHE_LINE_SIZE)));
+
+	if (len > PG_CACHE_LINE_SIZE)
+		hash ^= DatumGetUInt32(hash_uint32((uint32) len));
+
+	addHyperLogLog(&bss->full_card, hash);
+
+	/* Hash abbreviated key */
+#if SIZEOF_DATUM == 8
+	{
+		uint32		lohalf,
+					hihalf;
+
+		lohalf = (uint32) res;
+		hihalf = (uint32) (res >> 32);
+		hash = DatumGetUInt32(hash_uint32(lohalf ^ hihalf));
+	}
+#else							/* SIZEOF_DATUM != 8 */
+	hash = DatumGetUInt32(hash_uint32((uint32) res));
+#endif
+
+	addHyperLogLog(&bss->abbr_card, hash);
+
+	/* Cache result, perhaps saving an expensive strxfrm() call next time */
+	/// bss->cache_blob = true; --- AALEKSEEV always true
+
+	/*
+	 * Byteswap on little-endian machines.
+	 *
+	 * This is needed so that ssup_datum_unsigned_cmp() (an unsigned integer
+	 * 3-way comparator) works correctly on all platforms.  If we didn't do
+	 * this, the comparator would have to call memcmp() with a pair of
+	 * pointers to the first byte of each abbreviated key, which is slower.
+	 */
+	res = DatumBigEndianToNative(res);
+
+	/* Don't leak memory here */
+	if (PointerGetDatum(authoritative) != original)
+		pfree(authoritative);
+
+	return res;
+}
+
+/*
+ * Callback for estimating effectiveness of abbreviated key optimization, using
+ * heuristic rules.  Returns value indicating if the abbreviation optimization
+ * should be aborted, based on its projected effectiveness.
+ */
+// AALEKSEEV TODO FIXME refactor
+static bool
+bytea_abbrev_abort(int memtupcount, SortSupport ssup)
+{
+	ByteaSortSupport *bss = (ByteaSortSupport *) ssup->ssup_extra;
+	double		abbrev_distinct,
+				key_distinct;
+
+	Assert(ssup->abbreviate);
+
+	/* Have a little patience */
+	if (memtupcount < 100)
+		return false;
+
+	abbrev_distinct = estimateHyperLogLog(&bss->abbr_card);
+	key_distinct = estimateHyperLogLog(&bss->full_card);
+
+	/*
+	 * Clamp cardinality estimates to at least one distinct value.  While
+	 * NULLs are generally disregarded, if only NULL values were seen so far,
+	 * that might misrepresent costs if we failed to clamp.
+	 */
+	if (abbrev_distinct <= 1.0)
+		abbrev_distinct = 1.0;
+
+	if (key_distinct <= 1.0)
+		key_distinct = 1.0;
+
+	/*
+	 * In the worst case all abbreviated keys are identical, while at the same
+	 * time there are differences within full key strings not captured in
+	 * abbreviations.
+	 */
+	if (trace_sort)
+	{
+		double		norm_abbrev_card = abbrev_distinct / (double) memtupcount;
+
+		elog(LOG, "varstr_abbrev: abbrev_distinct after %d: %f "
+			 "(key_distinct: %f, norm_abbrev_card: %f, prop_card: %f)",
+			 memtupcount, abbrev_distinct, key_distinct, norm_abbrev_card,
+			 bss->prop_card);
+	}
+
+	/*
+	 * If the number of distinct abbreviated keys approximately matches the
+	 * number of distinct authoritative original keys, that's reason enough to
+	 * proceed.  We can win even with a very low cardinality set if most
+	 * tie-breakers only memcmp().  This is by far the most important
+	 * consideration.
+	 *
+	 * While comparisons that are resolved at the abbreviated key level are
+	 * considerably cheaper than tie-breakers resolved with memcmp(), both of
+	 * those two outcomes are so much cheaper than a full strcoll() once
+	 * sorting is underway that it doesn't seem worth it to weigh abbreviated
+	 * cardinality against the overall size of the set in order to more
+	 * accurately model costs.  Assume that an abbreviated comparison, and an
+	 * abbreviated comparison with a cheap memcmp()-based authoritative
+	 * resolution are equivalent.
+	 */
+	if (abbrev_distinct > key_distinct * bss->prop_card)
+	{
+		/*
+		 * When we have exceeded 10,000 tuples, decay required cardinality
+		 * aggressively for next call.
+		 *
+		 * This is useful because the number of comparisons required on
+		 * average increases at a linearithmic rate, and at roughly 10,000
+		 * tuples that factor will start to dominate over the linear costs of
+		 * string transformation (this is a conservative estimate).  The decay
+		 * rate is chosen to be a little less aggressive than halving -- which
+		 * (since we're called at points at which memtupcount has doubled)
+		 * would never see the cost model actually abort past the first call
+		 * following a decay.  This decay rate is mostly a precaution against
+		 * a sudden, violent swing in how well abbreviated cardinality tracks
+		 * full key cardinality.  The decay also serves to prevent a marginal
+		 * case from being aborted too late, when too much has already been
+		 * invested in string transformation.
+		 *
+		 * It's possible for sets of several million distinct strings with
+		 * mere tens of thousands of distinct abbreviated keys to still
+		 * benefit very significantly.  This will generally occur provided
+		 * each abbreviated key is a proxy for a roughly uniform number of the
+		 * set's full keys. If it isn't so, we hope to catch that early and
+		 * abort.  If it isn't caught early, by the time the problem is
+		 * apparent it's probably not worth aborting.
+		 */
+		if (memtupcount > 10000)
+			bss->prop_card *= 0.65;
+
+		return false;
+	}
+
+	/*
+	 * Abort abbreviation strategy.
+	 *
+	 * The worst case, where all abbreviated keys are identical while all
+	 * original strings differ will typically only see a regression of about
+	 * 10% in execution time for small to medium sized lists of strings.
+	 * Whereas on modern CPUs where cache stalls are the dominant cost, we can
+	 * often expect very large improvements, particularly with sets of strings
+	 * of moderately high to high abbreviated cardinality.  There is little to
+	 * lose but much to gain, which our strategy reflects.
+	 */
+	if (trace_sort)
+		elog(LOG, "varstr_abbrev: aborted abbreviation at %d "
+			 "(abbrev_distinct: %f, key_distinct: %f, prop_card: %f)",
+			 memtupcount, abbrev_distinct, key_distinct, bss->prop_card);
 
 	return true;
 }
@@ -3977,8 +4211,33 @@ bytea_sortsupport(PG_FUNCTION_ARGS)
 
 	oldcontext = MemoryContextSwitchTo(ssup->ssup_cxt);
 
-	/* Use generic string SortSupport, forcing "C" collation */
-	varstr_sortsupport(ssup, BYTEAOID, C_COLLATION_OID);
+	ssup->comparator = bytea_ssup_comparator;
+
+	if (ssup->abbreviate)
+	{
+		ByteaSortSupport *bss;
+
+		bss = palloc(sizeof(ByteaSortSupport));
+		bss->buf1 = palloc(TEXTBUFLEN);
+		bss->buflen1 = TEXTBUFLEN;
+		bss->buf2 = palloc(TEXTBUFLEN);
+		bss->buflen2 = TEXTBUFLEN;
+		/* Start with invalid values */
+		bss->last_len1 = -1;
+		bss->last_len2 = -1;
+		/* Initialize */
+		bss->last_returned = 0;
+
+		bss->prop_card = 0.20;
+		initHyperLogLog(&bss->abbr_card, 10);
+		initHyperLogLog(&bss->full_card, 10);
+
+		ssup->ssup_extra = bss;
+		ssup->abbrev_full_comparator = ssup->comparator;
+		ssup->comparator = ssup_datum_unsigned_cmp;
+		ssup->abbrev_converter = bytea_abbrev_convert;
+		ssup->abbrev_abort = bytea_abbrev_abort;
+	}
 
 	MemoryContextSwitchTo(oldcontext);
 

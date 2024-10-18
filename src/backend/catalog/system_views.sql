@@ -1379,3 +1379,126 @@ CREATE VIEW pg_stat_subscription_stats AS
 
 CREATE VIEW pg_wait_events AS
     SELECT * FROM pg_get_wait_events();
+--
+-- Show extended cumulative statistics on a vacuum operation over all tables and
+-- databases of the instance.
+-- Use Invalid Oid "0" as an input relation id to get stat on each table in a
+-- database.
+--
+
+CREATE VIEW pg_stat_vacuum_tables AS
+SELECT
+  rel.oid as relid,
+  ns.nspname AS "schema",
+  rel.relname AS relname,
+
+  stats.total_blks_read,
+  stats.total_blks_hit,
+  stats.total_blks_dirtied,
+  stats.total_blks_written,
+
+  stats.rel_blks_read,
+  stats.rel_blks_hit,
+
+  stats.pages_scanned,
+  stats.pages_removed,
+  stats.pages_frozen,
+  stats.pages_all_visible,
+  stats.tuples_deleted,
+  stats.tuples_frozen,
+  stats.dead_tuples,
+
+  stats.index_vacuum_count,
+  stats.rev_all_frozen_pages,
+  stats.rev_all_visible_pages,
+
+  stats.wal_records,
+  stats.wal_fpi,
+  stats.wal_bytes,
+
+  stats.blk_read_time,
+  stats.blk_write_time,
+
+  stats.delay_time,
+  stats.system_time,
+  stats.user_time,
+  stats.total_time,
+  stats.interrupts
+FROM
+  pg_database db,
+  pg_class rel,
+  pg_namespace ns,
+  pg_stat_vacuum_tables(rel.oid) stats
+WHERE
+  db.datname = current_database() AND
+  rel.oid = stats.relid AND
+  ns.oid = rel.relnamespace AND
+  rel.relkind = 'r';
+
+CREATE VIEW pg_stat_vacuum_indexes AS
+SELECT
+  rel.oid as relid,
+  ns.nspname AS "schema",
+  rel.relname AS relname,
+
+  stats.total_blks_read,
+  stats.total_blks_hit,
+  stats.total_blks_dirtied,
+  stats.total_blks_written,
+
+  stats.rel_blks_read,
+  stats.rel_blks_hit,
+
+  stats.pages_deleted,
+  stats.tuples_deleted,
+
+  stats.wal_records,
+  stats.wal_fpi,
+  stats.wal_bytes,
+
+  stats.blk_read_time,
+  stats.blk_write_time,
+
+  stats.delay_time,
+  stats.system_time,
+  stats.user_time,
+  stats.total_time,
+  stats.interrupts
+FROM
+  pg_database db,
+  pg_class rel,
+  pg_namespace ns,
+  pg_stat_vacuum_indexes(rel.oid) stats
+WHERE
+  db.datname = current_database() AND
+  rel.oid = stats.relid AND
+  ns.oid = rel.relnamespace AND
+  rel.relkind = 'i';
+
+CREATE VIEW pg_stat_vacuum_database AS
+SELECT
+  db.oid as dboid,
+  db.datname AS dbname,
+
+  stats.db_blks_read,
+  stats.db_blks_hit,
+  stats.total_blks_dirtied,
+  stats.total_blks_written,
+
+  stats.wal_records,
+  stats.wal_fpi,
+  stats.wal_bytes,
+
+  stats.blk_read_time,
+  stats.blk_write_time,
+
+  stats.delay_time,
+  stats.system_time,
+  stats.user_time,
+  stats.total_time,
+
+  stats.interrupts
+FROM
+  pg_database db LEFT JOIN pg_stat_vacuum_database(db.oid) stats
+ON
+  db.oid = stats.dboid;

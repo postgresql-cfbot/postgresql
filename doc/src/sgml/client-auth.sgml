@@ -2336,7 +2336,103 @@ host ... radius radiusservers="server1,server2" radiussecrets="""secret one"",""
    </indexterm>
 
    <para>
-    TODO
+    OAuth 2.0 is an industry-standard framework, defined in
+    <ulink url="https://datatracker.ietf.org/doc/html/rfc6749">RFC 6749</ulink>,
+    to enable third-party applications to obtain limited access to a protected
+    resource.
+
+    OAuth support has to be enabled when <productname>PostgreSQL</productname>
+    is built, see <xref linkend="installation"/> for more information.
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       Resource owner: The user or system who owns protected resources and can
+       grant access to them.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Client: The system which accesses to the protected resources using access
+       tokens.  Applications using libpq are the clients in connecting to a
+       <productname>PostgreSQL</productname> cluster.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       Authentication server: The system which recieves requests from, and
+       issues access tokens to, the client upon successful authentication by
+       the resource owner.
+      </para>
+     </listitem>
+
+     <listitem>
+      <para>
+       Resource server: The system which owns the protected resources and can
+       grant access to them. The <productname>PostgreSQL</productname> cluster
+       being connected to is the resource server.
+      </para>
+     </listitem>
+
+    </itemizedlist>
+   </para>
+
+   <para>
+    <productname>PostgreSQL</productname> supports bearer tokens, defined in
+    <ulink url="https://datatracker.ietf.org/doc/html/rfc6750">RFC 6750</ulink>
+    which are a type of access token used with OAuth 2.0 where the token is an
+    opaque string.  The format of the access token is implementation specific
+    and is chosen by each authentication server.
+   </para>
+
+   <para>
+    The following configuration options are supported for OAuth:
+    <variablelist>
+     <varlistentry>
+      <term><literal>issuer</literal></term>
+      <listitem>
+       <para>
+        The <acronym>URL</acronym> of the OAuth issuing party, which the client
+        must contact to receive a bearer token.  This parameter is required.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>scope</literal></term>
+      <listitem>
+       <para>
+        The OAuth scope required for the server to authenticate and/or authorize
+        the user. The value of the scope is dependent on the OAuth validation
+        module used (see <xref linkend="oauth-validators" /> for more information
+        on validators).  This parameter is required.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>map</literal></term>
+      <listitem>
+       <para>
+        Allows for mapping between OAuth identity provider and database user
+        names.  See <xref linkend="auth-username-maps"/> for details.  If a
+        map is not specified the user name returned from the OAuth validator
+        must match the role being requested.  This parameter is optional.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>trust_validator_authz</literal></term>
+      <listitem>
+       <para>
+        When set to <literal>1</literal> standard user mapping is skipped. If
+        the OAuth token is validated the user can connect under its desired
+        role.
+       </para>
+      </listitem>
+     </varlistentry>
+    </variablelist>
    </para>
   </sect1>
 

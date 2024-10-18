@@ -2341,7 +2341,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>oauth_client_id</literal></term>
       <listitem>
        <para>
-        TODO
+        The client identifier as issued by the authorization server.
        </para>
       </listitem>
      </varlistentry>
@@ -2350,7 +2350,7 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>oauth_client_secret</literal></term>
       <listitem>
        <para>
-        TODO
+        The client password.
        </para>
       </listitem>
      </varlistentry>
@@ -2368,7 +2368,8 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
       <term><literal>oauth_scope</literal></term>
       <listitem>
        <para>
-        TODO
+        The scope of the access request sent to the authorization server.
+        This parameter is optional.
        </para>
       </listitem>
      </varlistentry>
@@ -10017,6 +10018,11 @@ void PQinitSSL(int do_ssl);
 void PQsetAuthDataHook(PQauthDataHook_type hook);
 </synopsis>
       </para>
+
+      <para>
+       If <replaceable>hook</replaceable> is set to a null pointer instead of
+       a function pointer, the default hook will be installed.
+      </para>
      </listitem>
     </varlistentry>
 
@@ -10025,7 +10031,7 @@ void PQsetAuthDataHook(PQauthDataHook_type hook);
 
      <listitem>
       <para>
-       TODO
+       Retrieves the current value of <literal>PGauthDataHook</literal>.
 <synopsis>
 PQauthDataHook_type PQgetAuthDataHook(void);
 </synopsis>

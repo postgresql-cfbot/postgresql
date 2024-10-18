@@ -89,8 +89,11 @@ client_initial_response(PGconn *conn, const char *token)
 
 	if (!PQExpBufferDataBroken(buf))
 		response = strdup(buf.data);
-
 	termPQExpBuffer(&buf);
+
+	if (!response)
+		libpq_append_conn_error(conn, "out of memory");
+
 	return response;
 }
 

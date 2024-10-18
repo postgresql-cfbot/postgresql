@@ -38,6 +38,7 @@ typedef enum EolType
 	EOL_NL,
 	EOL_CR,
 	EOL_CRNL,
+	EOL_CUSTOM,
 } EolType;
 
 /*

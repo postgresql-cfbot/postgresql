@@ -155,9 +155,7 @@ typedef struct ExportedSnapshot
 static List *exportedSnapshots = NIL;
 
 /* Prototypes for local functions */
-static Snapshot CopySnapshot(Snapshot snapshot);
 static void UnregisterSnapshotNoOwner(Snapshot snapshot);
-static void FreeSnapshot(Snapshot snapshot);
 static void SnapshotResetXmin(void);
 
 /* ResourceOwner callbacks to track snapshot references */
@@ -570,7 +568,7 @@ SetTransactionSnapshot(Snapshot sourcesnap, VirtualTransactionId *sourcevxid,
  * The copy is palloc'd in TopTransactionContext and has initial refcounts set
  * to 0.  The returned snapshot has the copied flag set.
  */
-static Snapshot
+Snapshot
 CopySnapshot(Snapshot snapshot)
 {
 	Snapshot	newsnap;
@@ -626,7 +624,7 @@ CopySnapshot(Snapshot snapshot)
  * FreeSnapshot
  *		Free the memory associated with a snapshot.
  */
-static void
+void
 FreeSnapshot(Snapshot snapshot)
 {
 	Assert(snapshot->regd_count == 0);

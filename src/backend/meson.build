@@ -194,5 +194,6 @@ pg_test_mod_args = pg_mod_args + {
 subdir('jit/llvm')
 subdir('replication/libpqwalreceiver')
 subdir('replication/pgoutput')
+subdir('replication/pgoutput_cluster')
 subdir('snowball')
 subdir('utils/mb/conversion_procs')

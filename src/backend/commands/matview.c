@@ -318,7 +318,7 @@ RefreshMatViewByOid(Oid matviewOid, bool is_create, bool skipData,
 	 */
 	OIDNewHeap = make_new_heap(matviewOid, tableSpace,
 							   matviewRel->rd_rel->relam,
-							   relpersistence, ExclusiveLock);
+							   relpersistence, ExclusiveLock, NULL);
 	LockRelationOid(OIDNewHeap, AccessExclusiveLock);
 
 	/* Generate the data, if wanted. */
@@ -905,7 +905,7 @@ refresh_by_match_merge(Oid matviewOid, Oid tempOid, Oid relowner,
 static void
 refresh_by_heap_swap(Oid matviewOid, Oid OIDNewHeap, char relpersistence)
 {
-	finish_heap_swap(matviewOid, OIDNewHeap, false, false, true, true,
+	finish_heap_swap(matviewOid, OIDNewHeap, false, false, true, true, true,
 					 RecentXmin, ReadNextMultiXactId(), relpersistence);
 }
 

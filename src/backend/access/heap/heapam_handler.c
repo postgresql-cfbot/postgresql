@@ -33,6 +33,7 @@
 #include "catalog/index.h"
 #include "catalog/storage.h"
 #include "catalog/storage_xlog.h"
+#include "commands/cluster.h"
 #include "commands/progress.h"
 #include "executor/executor.h"
 #include "miscadmin.h"
@@ -53,6 +54,9 @@ static void reform_and_rewrite_tuple(HeapTuple tuple,
 static bool SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 								   HeapTuple tuple,
 								   OffsetNumber tupoffset);
+static HeapTuple accept_tuple_for_concurrent_copy(HeapTuple tuple,
+												  Snapshot snapshot,
+												  Buffer buffer);
 
 static BlockNumber heapam_scan_get_blocks_done(HeapScanDesc hscan);
 
@@ -248,7 +252,8 @@ heapam_tuple_insert(Relation relation, TupleTableSlot *slot, CommandId cid,
 	tuple->t_tableOid = slot->tts_tableOid;
 
 	/* Perform the insertion, and copy the resulting ItemPointer */
-	heap_insert(relation, tuple, cid, options, bistate);
+	heap_insert(relation, tuple, GetCurrentTransactionId(), cid, options,
+				bistate);
 	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
 
 	if (shouldFree)
@@ -271,7 +276,8 @@ heapam_tuple_insert_speculative(Relation relation, TupleTableSlot *slot,
 	options |= HEAP_INSERT_SPECULATIVE;
 
 	/* Perform the insertion, and copy the resulting ItemPointer */
-	heap_insert(relation, tuple, cid, options, bistate);
+	heap_insert(relation, tuple, GetCurrentTransactionId(), cid, options,
+				bistate);
 	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
 
 	if (shouldFree)
@@ -305,7 +311,8 @@ heapam_tuple_delete(Relation relation, ItemPointer tid, CommandId cid,
 	 * the storage itself is cleaning the dead tuples by itself, it is the
 	 * time to call the index tuple deletion also.
 	 */
-	return heap_delete(relation, tid, cid, crosscheck, wait, tmfd, changingPart);
+	return heap_delete(relation, tid, GetCurrentTransactionId(), cid,
+					   crosscheck, wait, tmfd, changingPart, true);
 }
 
 
@@ -323,8 +330,9 @@ heapam_tuple_update(Relation relation, ItemPointer otid, TupleTableSlot *slot,
 	slot->tts_tableOid = RelationGetRelid(relation);
 	tuple->t_tableOid = slot->tts_tableOid;
 
-	result = heap_update(relation, otid, tuple, cid, crosscheck, wait,
-						 tmfd, lockmode, update_indexes);
+	result = heap_update(relation, otid, tuple, GetCurrentTransactionId(),
+						 cid, crosscheck, wait,
+						 tmfd, lockmode, update_indexes, true);
 	ItemPointerCopy(&tuple->t_self, &slot->tts_tid);
 
 	/*
@@ -681,6 +689,8 @@ static void
 heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 								 Relation OldIndex, bool use_sort,
 								 TransactionId OldestXmin,
+								 Snapshot snapshot,
+								 LogicalDecodingContext *decoding_ctx,
 								 TransactionId *xid_cutoff,
 								 MultiXactId *multi_cutoff,
 								 double *num_tuples,
@@ -701,6 +711,8 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	bool	   *isnull;
 	BufferHeapTupleTableSlot *hslot;
 	BlockNumber prev_cblock = InvalidBlockNumber;
+	bool	concurrent = snapshot != NULL;
+	XLogRecPtr	end_of_wal_prev = GetFlushRecPtr(NULL);
 
 	/* Remember if it's a system catalog */
 	is_system_catalog = IsSystemRelation(OldHeap);
@@ -718,7 +730,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 	/* Initialize the rewrite operation */
 	rwstate = begin_heap_rewrite(OldHeap, NewHeap, OldestXmin, *xid_cutoff,
-								 *multi_cutoff);
+								 *multi_cutoff, true);
 
 
 	/* Set up sorting if wanted */
@@ -779,8 +791,10 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 	for (;;)
 	{
 		HeapTuple	tuple;
+		bool		tuple_copied = false;
 		Buffer		buf;
 		bool		isdead;
+		HTSV_Result	vis;
 
 		CHECK_FOR_INTERRUPTS();
 
@@ -835,7 +849,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 
-		switch (HeapTupleSatisfiesVacuum(tuple, OldestXmin, buf))
+		switch ((vis = HeapTupleSatisfiesVacuum(tuple, OldestXmin, buf)))
 		{
 			case HEAPTUPLE_DEAD:
 				/* Definitely dead */
@@ -851,14 +865,15 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 			case HEAPTUPLE_INSERT_IN_PROGRESS:
 
 				/*
-				 * Since we hold exclusive lock on the relation, normally the
-				 * only way to see this is if it was inserted earlier in our
-				 * own transaction.  However, it can happen in system
+				 * As long as we hold exclusive lock on the relation, normally
+				 * the only way to see this is if it was inserted earlier in
+				 * our own transaction.  However, it can happen in system
 				 * catalogs, since we tend to release write lock before commit
-				 * there.  Give a warning if neither case applies; but in any
-				 * case we had better copy it.
+				 * there. Also, there's no exclusive lock during concurrent
+				 * processing. Give a warning if neither case applies; but in
+				 * any case we had better copy it.
 				 */
-				if (!is_system_catalog &&
+				if (!is_system_catalog && !concurrent &&
 					!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetXmin(tuple->t_data)))
 					elog(WARNING, "concurrent insert in progress within table \"%s\"",
 						 RelationGetRelationName(OldHeap));
@@ -870,7 +885,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 				/*
 				 * Similar situation to INSERT_IN_PROGRESS case.
 				 */
-				if (!is_system_catalog &&
+				if (!is_system_catalog && !concurrent &&
 					!TransactionIdIsCurrentTransactionId(HeapTupleHeaderGetUpdateXid(tuple->t_data)))
 					elog(WARNING, "concurrent delete in progress within table \"%s\"",
 						 RelationGetRelationName(OldHeap));
@@ -884,8 +899,6 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 				break;
 		}
 
-		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
-
 		if (isdead)
 		{
 			*tups_vacuumed += 1;
@@ -896,8 +909,46 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 				*tups_vacuumed += 1;
 				*tups_recently_dead -= 1;
 			}
+
+			LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 			continue;
 		}
+
+		if (concurrent)
+		{
+			/*
+			 * Ignore concurrent changes now, they'll be processed later via
+			 * logical decoding.
+			 *
+			 * INSERT_IN_PROGRESS is rejected right away because our snapshot
+			 * should represent a point in time which should precede (or be
+			 * equal to) the state of transactions as it was when the
+			 * "SatisfiesVacuum" test was performed. Thus
+			 * accept_tuple_for_concurrent_copy() should not consider the
+			 * tuple inserted.
+			 */
+			if (vis == HEAPTUPLE_INSERT_IN_PROGRESS)
+				tuple = NULL;
+			else
+				tuple = accept_tuple_for_concurrent_copy(tuple, snapshot,
+														 buf);
+			/* Tuple not suitable for the new heap? */
+			if (tuple == NULL)
+			{
+				LockBuffer(buf, BUFFER_LOCK_UNLOCK);
+				continue;
+			}
+
+			/* Remember that we have to free the tuple eventually. */
+			tuple_copied = true;
+		}
+
+		/*
+		 * In the concurrent case, we have a copy of the tuple, so we don't
+		 * worry whether the source tuple will be deleted / updated after we
+		 * release the lock.
+		 */
+		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
 
 		*num_tuples += 1;
 		if (tuplesort != NULL)
@@ -915,7 +966,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 		{
 			const int	ct_index[] = {
 				PROGRESS_CLUSTER_HEAP_TUPLES_SCANNED,
-				PROGRESS_CLUSTER_HEAP_TUPLES_WRITTEN
+				PROGRESS_CLUSTER_HEAP_TUPLES_INSERTED
 			};
 			int64		ct_val[2];
 
@@ -929,6 +980,34 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 			ct_val[0] = *num_tuples;
 			ct_val[1] = *num_tuples;
 			pgstat_progress_update_multi_param(2, ct_index, ct_val);
+		}
+		if (tuple_copied)
+			heap_freetuple(tuple);
+
+		/*
+		 * Process the WAL produced by the load, as well as by other
+		 * transactions, so that the replication slot can advance and WAL does
+		 * not pile up. Use wal_segment_size as a threshold so that we do not
+		 * introduce the decoding overhead too often.
+		 *
+		 * Of course, we must not apply the changes until the initial load has
+		 * completed.
+		 *
+		 * Note that our insertions into the new table should not be decoded
+		 * as we (intentionally) do not write the logical decoding specific
+		 * information to WAL.
+		 */
+		if (concurrent)
+		{
+			XLogRecPtr	end_of_wal;
+
+			end_of_wal = GetFlushRecPtr(NULL);
+			if ((end_of_wal - end_of_wal_prev) > wal_segment_size)
+			{
+				cluster_decode_concurrent_changes(decoding_ctx, end_of_wal,
+												  NULL);
+				end_of_wal_prev = end_of_wal;
+			}
 		}
 	}
 
@@ -973,7 +1052,7 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 									 values, isnull,
 									 rwstate);
 			/* Report n_tuples */
-			pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_WRITTEN,
+			pgstat_progress_update_param(PROGRESS_CLUSTER_HEAP_TUPLES_INSERTED,
 										 n_tuples);
 		}
 
@@ -2576,6 +2655,53 @@ SampleHeapTupleVisible(TableScanDesc scan, Buffer buffer,
 		return HeapTupleSatisfiesVisibility(tuple, scan->rs_snapshot,
 											buffer);
 	}
+}
+
+/*
+ * Return copy of 'tuple' if it has been inserted according to 'snapshot', or
+ * NULL if the insertion took place in the future. If the tuple is already
+ * marked as deleted or updated by a transaction that 'snapshot' still
+ * considers running, clear the deletion / update XID in the header of the
+ * copied tuple. This way the returned tuple is suitable for insertion into
+ * the new heap.
+ */
+static HeapTuple
+accept_tuple_for_concurrent_copy(HeapTuple tuple, Snapshot snapshot,
+								 Buffer buffer)
+{
+	HeapTuple	result;
+
+	Assert(snapshot->snapshot_type == SNAPSHOT_MVCC);
+
+	/*
+	 * First, check if the tuple insertion is visible by our snapshot.
+	 */
+	if (!HeapTupleMVCCInserted(tuple, snapshot, buffer))
+		return NULL;
+
+	result = heap_copytuple(tuple);
+
+	/*
+	 * If the tuple was deleted / updated but our snapshot still sees it, we
+	 * need to keep it. In that case, clear the information that indicates the
+	 * deletion / update. Otherwise the tuple chain would stay incomplete (as
+	 * we will reject the new tuple above), and the delete / update would fail
+	 * if executed later during logical decoding.
+	 */
+	if (TransactionIdIsNormal(HeapTupleHeaderGetRawXmax(result->t_data)) &&
+		HeapTupleMVCCNotDeleted(result, snapshot, buffer))
+	{
+		/* TODO More work needed here?*/
+		result->t_data->t_infomask |= HEAP_XMAX_INVALID;
+		HeapTupleHeaderSetXmax(result->t_data, 0);
+	}
+
+	/*
+	 * Accept the tuple even if our snapshot considers it deleted - older
+	 * snapshots can still see the tuple, while the decoded transactions
+	 * should not try to update / delete it again.
+	 */
+	return result;
 }
 
 

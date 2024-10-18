@@ -209,6 +209,7 @@ PQcancelPoll(PGcancelConn *cancelConn)
 	PGconn	   *conn = &cancelConn->conn;
 	int			n;
 
+fprintf(stderr, "!!!PQcancelPoll|%d| conn->status: %d\n", getpid(), conn->status);
 	/*
 	 * We leave most of the connection establishment to PQconnectPoll, since
 	 * it's very similar to normal connection establishment. But once we get

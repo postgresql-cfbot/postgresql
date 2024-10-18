@@ -389,7 +389,8 @@ static void apply_handle_update_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
 										 TupleTableSlot *remoteslot,
 										 LogicalRepTupleData *newtup,
-										 Oid localindexoid);
+										 Oid localindexoid, bool found,
+										 TupleTableSlot *localslot);
 static void apply_handle_delete_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
 										 TupleTableSlot *remoteslot,
@@ -2518,8 +2519,9 @@ apply_handle_insert_internal(ApplyExecutionData *edata,
 
 		/* Do the update */
 		TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_UPDATE);
-		ExecSimpleRelationUpdate(relinfo, estate, &epqstate, conflictslot,
-								 remoteslot);
+		apply_handle_update_internal(edata, relinfo, remoteslot, newtup,
+									 rel_entry->localindexoid, true,
+									 conflictslot);
 
 		EvalPlanQualEnd(&epqstate);
 		ExecDropSingleTupleTableSlot(conflictslot);
@@ -2671,7 +2673,8 @@ apply_handle_update(StringInfo s)
 								   remoteslot, &newtup, CMD_UPDATE);
 	else
 		apply_handle_update_internal(edata, edata->targetRelInfo,
-									 remoteslot, &newtup, rel->localindexoid);
+									 remoteslot, &newtup, rel->localindexoid,
+									 false, NULL);
 
 	finish_edata(edata);
 
@@ -2696,14 +2699,13 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 							 ResultRelInfo *relinfo,
 							 TupleTableSlot *remoteslot,
 							 LogicalRepTupleData *newtup,
-							 Oid localindexoid)
+							 Oid localindexoid, bool found,
+							 TupleTableSlot *localslot)
 {
 	EState	   *estate = edata->estate;
 	LogicalRepRelMapEntry *relmapentry = edata->targetRel;
 	Relation	localrel = relinfo->ri_RelationDesc;
 	EPQState	epqstate;
-	TupleTableSlot *localslot;
-	bool		found;
 	MemoryContext oldctx;
 	bool		apply_remote = true;
 	ConflictResolver resolver;
@@ -2711,10 +2713,11 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
 	ExecOpenIndices(relinfo, true);
 
-	found = FindReplTupleInLocalRel(edata, localrel,
-									&relmapentry->remoterel,
-									localindexoid,
-									remoteslot, &localslot);
+	if (!found)
+		found = FindReplTupleInLocalRel(edata, localrel,
+										&relmapentry->remoterel,
+										localindexoid,
+										remoteslot, &localslot);
 
 	/*
 	 * Tuple found.
@@ -2756,6 +2759,8 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		 */
 		if (apply_remote)
 		{
+			TupleTableSlot *conflictslot = NULL;
+
 			/* Process and store remote tuple in the slot */
 			oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
 			slot_modify_data(remoteslot, localslot, relmapentry, newtup);
@@ -2768,7 +2773,52 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 			/* Do the actual update. */
 			TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_UPDATE);
 			ExecSimpleRelationUpdate(relinfo, estate, &epqstate, localslot,
-									 remoteslot);
+									 remoteslot, &conflictslot,
+									 MySubscription->oid);
+
+			/*
+			 * If an update_exists conflict is detected, delete the found
+			 * tuple and apply the remote update to the conflicting tuple.
+			 *
+			 * If the local table contains multiple unique constraint columns
+			 * and the conflict resolution strategy favors applying the remote
+			 * changes, then a remote INSERT or UPDATE could trigger multiple
+			 * update_exists conflicts. Each conflict will be detected and
+			 * resolved in sequence (recursively), possibly resulting in the
+			 * deletion of multiple local rows.
+			 *
+			 * Consider the scenario: A table where all columns have unique
+			 * indexes, and the first column is the replica identity. The
+			 * publisher has (1, 1, 1) while the subscriber has three rows:
+			 * (1, 1, 1), (2, 2, 2), and (3, 3, 3). The publisher updates (1,
+			 * 1, 1) to (1, 2, 3).
+			 *
+			 * TThe current logic works as follows: We find the row (1, 1, 1)
+			 * and try to update it to (1, 2, 3), but find a conflict with the
+			 * tuple (2, 2, 2). We delete (1, 1, 1), and then try to update
+			 * (2, 2, 2) to (1, 2, 3), but encounter another conflict with (3,
+			 * 3, 3). We then delete (2, 2, 2) and try to update (3, 3, 3) to
+			 * (1, 2, 3).
+			 */
+			if (conflictslot)
+			{
+				/* Process and store remote tuple in the slot */
+				oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+				slot_modify_data(remoteslot, conflictslot, relmapentry, newtup);
+				MemoryContextSwitchTo(oldctx);
+
+				/* Delete the found row */
+				ExecSimpleRelationDelete(relinfo, estate, &epqstate, localslot);
+
+				/* Update the conflicting tuple with remote update */
+				apply_handle_update_internal(edata, relinfo,
+											 remoteslot, newtup,
+											 relmapentry->localindexoid,
+											 true, conflictslot);
+
+				ExecDropSingleTupleTableSlot(conflictslot);
+			}
+
 		}
 	}
 	else
@@ -3269,6 +3319,8 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 						 * conflict is detected for the found tuple and the
 						 * resolver is in favour of applying the update.
 						 */
+						TupleTableSlot *conflictslot = NULL;
+
 						ExecOpenIndices(partrelinfo, true);
 						InitConflictIndexes(partrelinfo);
 
@@ -3276,7 +3328,33 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 						TargetPrivilegesCheck(partrelinfo->ri_RelationDesc,
 											  ACL_UPDATE);
 						ExecSimpleRelationUpdate(partrelinfo, estate, &epqstate,
-												 localslot, remoteslot_part);
+												 localslot, remoteslot_part,
+												 &conflictslot, MySubscription->oid);
+
+						/*
+						 * If an update_exists conflict is detected, delete
+						 * the found tuple and apply the remote update to the
+						 * conflicting tuple.
+						 */
+						if (conflictslot)
+						{
+							/* Process and store remote tuple in the slot */
+							oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+							slot_modify_data(remoteslot_part, conflictslot, part_entry, newtup);
+							MemoryContextSwitchTo(oldctx);
+
+							/* Delete the found row */
+							ExecSimpleRelationDelete(partrelinfo, estate, &epqstate, localslot);
+
+							/* Update the conflicting tuple with remote update */
+							apply_handle_update_internal(edata, partrelinfo,
+														 remoteslot_part, newtup,
+														 part_entry->localindexoid,
+														 true, conflictslot);
+
+							ExecDropSingleTupleTableSlot(conflictslot);
+						}
+
 						ExecCloseIndices(partrelinfo);
 					}
 					else if (apply_remote)

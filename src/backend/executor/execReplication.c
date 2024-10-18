@@ -486,7 +486,8 @@ retry:
 static bool
 FindConflictTuple(ResultRelInfo *resultRelInfo, EState *estate,
 				  Oid conflictindex, TupleTableSlot *slot,
-				  TupleTableSlot **conflictslot)
+				  TupleTableSlot **conflictslot, ItemPointer tupleid,
+				  LockTupleMode lockmode)
 {
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	ItemPointerData conflictTid;
@@ -497,7 +498,7 @@ FindConflictTuple(ResultRelInfo *resultRelInfo, EState *estate,
 
 retry:
 	if (ExecCheckIndexConstraints(resultRelInfo, slot, estate,
-								  &conflictTid, &slot->tts_tid,
+								  &conflictTid, tupleid,
 								  list_make1_oid(conflictindex)))
 	{
 		if (*conflictslot)
@@ -514,7 +515,7 @@ retry:
 	res = table_tuple_lock(rel, &conflictTid, GetLatestSnapshot(),
 						   *conflictslot,
 						   GetCurrentCommandId(false),
-						   LockTupleShare,
+						   lockmode,
 						   LockWaitBlock,
 						   0 /* don't follow updates */ ,
 						   &tmfd);
@@ -543,7 +544,8 @@ CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
 
 		if (list_member_oid(recheckIndexes, uniqueidx) &&
 			FindConflictTuple(resultRelInfo, estate, uniqueidx, remoteslot,
-							  &conflictslot))
+							  &conflictslot, &remoteslot->tts_tid,
+							  LockTupleShare))
 		{
 			RepOriginId origin;
 			TimestampTz committs;
@@ -564,23 +566,38 @@ CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
  * tuple information in conflictslot.
  */
 static bool
-has_conflicting_tuple(Oid subid, ConflictType type,
+has_conflicting_tuple(Oid subid, ConflictType type, ItemPointer tupleid,
 					  ResultRelInfo *resultRelInfo, EState *estate,
 					  TupleTableSlot *slot, TupleTableSlot **conflictslot)
 {
 	ConflictResolver resolver;
+	LockTupleMode lockmode;
 	bool		apply_remote = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	List	   *conflictindexes = resultRelInfo->ri_onConflictArbiterIndexes;
 
-	/* ASSERT if called for any conflict type other than insert_exists */
-	Assert(type == CT_INSERT_EXISTS);
+	/*
+	 * ASSERT if called for any conflict type other than insert_exists or
+	 * update_exists
+	 */
+	Assert(type == CT_INSERT_EXISTS || type == CT_UPDATE_EXISTS);
 
 	/*
 	 * Get the configured resolver and determine if remote changes should be
 	 * applied.
 	 */
 	resolver = GetConflictResolver(subid, type, rel, NULL, &apply_remote);
+
+	/*
+	 * Determine the lock mode for the conflicting tuple, if any. Take an
+	 * exclusive lock if the resolution favors modifying the conflicting
+	 * tuple; otherwise, take a shared lock.
+	 */
+
+	if (apply_remote)
+		lockmode = LockTupleExclusive;
+	else
+		lockmode = LockTupleShare;
 
 	/*
 	 * Proceed to find conflict if the resolver is set to a non-default value;
@@ -594,7 +611,7 @@ has_conflicting_tuple(Oid subid, ConflictType type,
 	{
 		/* Return to caller for resolutions if any conflict is found */
 		if (FindConflictTuple(resultRelInfo, estate, uniqueidx, slot,
-							  &(*conflictslot)))
+							  &(*conflictslot), tupleid, lockmode))
 		{
 			RepOriginId origin;
 			TimestampTz committs;
@@ -651,6 +668,7 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 		List	   *recheckIndexes = NIL;
 		List	   *conflictindexes;
 		bool		conflict = false;
+		ItemPointerData invalidItemPtr;
 
 		/* Compute stored generated columns */
 		if (rel->rd_att->constr &&
@@ -673,8 +691,9 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 		 * inserted tuple if a conflict is detected after insertion with a
 		 * non-default resolution set.
 		 */
-		if (has_conflicting_tuple(subid, CT_INSERT_EXISTS, resultRelInfo,
-								  estate, slot, &(*conflictslot)))
+		if (has_conflicting_tuple(subid, CT_INSERT_EXISTS, &invalidItemPtr,
+								  resultRelInfo, estate, slot,
+								  &(*conflictslot)))
 			return;
 
 		/* OK, store the tuple and create index entries for it */
@@ -732,7 +751,8 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 void
 ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 						 EState *estate, EPQState *epqstate,
-						 TupleTableSlot *searchslot, TupleTableSlot *slot)
+						 TupleTableSlot *searchslot, TupleTableSlot *slot,
+						 TupleTableSlot **conflictslot, Oid subid)
 {
 	bool		skip_tuple = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
@@ -774,6 +794,20 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 			ExecConstraints(resultRelInfo, slot, estate);
 		if (rel->rd_rel->relispartition)
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
+
+		/*
+		 * Check for conflict and return to caller for resolution, if found.
+		 *
+		 * XXX In case there are no conflicts, a non-default 'update_exists'
+		 * resolver adds overhead by performing an extra scan here. However,
+		 * this approach avoids the extra work needed to rollback/delete the
+		 * updated tuple if a conflict is detected after update with a
+		 * non-default resolution set.
+		 */
+		if (has_conflicting_tuple(subid, CT_UPDATE_EXISTS, tid,
+								  resultRelInfo, estate, slot,
+								  &(*conflictslot)))
+			return;
 
 		simple_table_tuple_update(rel, tid, slot, estate->es_snapshot,
 								  &update_indexes);

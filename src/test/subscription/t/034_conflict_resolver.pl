@@ -156,6 +156,106 @@ $node_subscriber->wait_for_log(
 # Truncate table on subscriber to get rid of the error
 $node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
 
+# Truncate the table on the publisher
+$node_publisher->safe_psql('postgres', "TRUNCATE conf_tab;");
+
+# Drop the subscriber to remove error
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION tap_sub;");
+
+# Create the subscription
+$node_subscriber->safe_psql(
+	'postgres',
+	"CREATE SUBSCRIPTION tap_sub
+	 CONNECTION '$publisher_connstr application_name=$appname'
+	 PUBLICATION tap_pub");
+
+# Wait for initial table sync to finish
+$node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
+
+
+############################################
+# Test 'apply_remote' for 'update_exists'
+############################################
+# Change CONFLICT RESOLVER of update_exists to apply_remote
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (update_exists = 'apply_remote');"
+);
+
+# Insert data in the subscriber
+$node_subscriber->safe_psql(
+	'postgres',
+	"INSERT INTO conf_tab(a, data) VALUES (1,'fromsub');
+	 INSERT INTO conf_tab(a, data) VALUES (2,'fromsub');
+	 INSERT INTO conf_tab(a, data) VALUES (3,'fromsub');");
+
+# Insert data in the publisher
+$node_publisher->safe_psql(
+	'postgres',
+	"INSERT INTO conf_tab(a, data) VALUES (4,'frompub');
+	 INSERT INTO conf_tab(a, data) VALUES (5,'frompub');
+	 INSERT INTO conf_tab(a, data) VALUES (6,'frompub');");
+
+$log_offset = -s $node_subscriber->logfile;
+
+# Update on publisher which already exists on subscriber
+$node_publisher->safe_psql('postgres', "UPDATE conf_tab SET a=1 WHERE a=4;");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=update_exists, resolution=apply_remote/,
+	$log_offset);
+
+# Confirm that remote update is applied.
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data FROM conf_tab WHERE (a=1);");
+
+is($result, 'frompub', "remote data is kept");
+
+########################################
+# Test 'keep_local' for 'update_exists'
+########################################
+
+# Change CONFLICT RESOLVER of update_exists to keep_local
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (update_exists = 'keep_local');"
+);
+
+$log_offset = -s $node_subscriber->logfile;
+
+# Update on publisher which already exists on subscriber
+$node_publisher->safe_psql('postgres', "UPDATE conf_tab SET a=2 WHERE a=5;");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=update_exists, resolution=keep_local/,
+	$log_offset);
+
+# Confirm that remote insert is ignored and the local row is kept
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data FROM conf_tab WHERE (a=2);");
+
+is($result, 'fromsub', "data from local is kept");
+
+###################################
+# Test 'error' for 'update_exists'
+###################################
+
+# Change CONFLICT RESOLVER of update_exists to error
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (update_exists = 'error');"
+);
+
+# Update on publisher which already exists on subscriber
+$node_publisher->safe_psql('postgres', "UPDATE conf_tab SET a=3 WHERE a=6;");
+
+$log_offset = -s $node_subscriber->logfile;
+
+# Confirm that this causes an error on the subscriber
+$node_subscriber->wait_for_log(
+	qr/ERROR:  conflict detected on relation \"public.conf_tab\": conflict=update_exists, resolution=error/,
+	$log_offset);
+
+# Truncate table on subscriber to get rid of the error
+$node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
+
 ###################################
 # Test 'skip' for 'delete_missing'
 ###################################
@@ -872,6 +972,107 @@ $node_publisher->safe_psql('postgres',
 
 $node_subscriber->wait_for_log(
 	qr/ERROR:  conflict detected on relation \"public.conf_tab_part_2\": conflict=update_missing, resolution=error/,
+	$log_offset);
+
+# Drop the subscriber to remove error
+$node_subscriber->safe_psql('postgres', "DROP SUBSCRIPTION sub_part;");
+
+# Truncate the table on the publisher
+$node_publisher->safe_psql('postgres', "TRUNCATE conf_tab_part;");
+
+# Truncate the table on the subscriber
+$node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab_part;");
+
+$node_subscriber->safe_psql(
+	'postgres',
+	"CREATE SUBSCRIPTION sub_part
+	CONNECTION '$publisher_connstr application_name=$appname'
+	PUBLICATION pub_part;");
+
+# Wait for initial table sync to finish
+$node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
+
+############################################
+# Test 'apply_remote' for 'update_exists'
+############################################
+# Change CONFLICT RESOLVER of update_exists to apply_remote
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_part CONFLICT RESOLVER (update_exists = 'apply_remote');"
+);
+
+# Insert data in the subscriber
+$node_subscriber->safe_psql(
+	'postgres',
+	"INSERT INTO conf_tab_part VALUES (1,1,'fromsub');
+	 INSERT INTO conf_tab_part VALUES (2,1,'fromsub');
+	 INSERT INTO conf_tab_part VALUES (3,1,'fromsub');");
+
+# Insert data in the publisher
+$node_publisher->safe_psql(
+	'postgres',
+	"INSERT INTO conf_tab_part VALUES (4,1,'frompub');
+	 INSERT INTO conf_tab_part VALUES (5,1,'frompub');
+	 INSERT INTO conf_tab_part VALUES (6,1,'frompub');");
+
+$log_offset = -s $node_subscriber->logfile;
+
+# Update on publisher which already exists on subscriber
+$node_publisher->safe_psql('postgres',
+	"UPDATE conf_tab_part SET a=1 WHERE a=4;");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab_part_1\": conflict=update_exists, resolution=apply_remote/,
+	$log_offset);
+
+# Confirm that remote update is applied.
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data FROM conf_tab_part WHERE (a=1);");
+
+is($result, 'frompub', "update from remote on partition is kept");
+
+########################################
+# Test 'keep_local' for 'update_exists'
+########################################
+
+# Change CONFLICT RESOLVER of update_exists to keep_local
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_part CONFLICT RESOLVER (update_exists = 'keep_local');"
+);
+
+$log_offset = -s $node_subscriber->logfile;
+
+# Update on publisher which already exists on subscriber
+$node_publisher->safe_psql('postgres',
+	"UPDATE conf_tab_part SET a=2 WHERE a=5;");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab_part_1\": conflict=update_exists, resolution=keep_local/,
+	$log_offset);
+
+# Confirm that remote insert is ignored and the local row is kept
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data FROM conf_tab_part WHERE (a=2);");
+
+is($result, 'fromsub', "update from remote on partition is skipped");
+
+###################################
+# Test 'error' for 'update_exists'
+###################################
+
+# Change CONFLICT RESOLVER of update_exists to error
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION sub_part CONFLICT RESOLVER (update_exists = 'error');"
+);
+
+# Update on publisher which already exists on subscriber
+$node_publisher->safe_psql('postgres',
+	"UPDATE conf_tab_part SET a=3 WHERE a=6;");
+
+$log_offset = -s $node_subscriber->logfile;
+
+# Confirm that this causes an error on the subscriber
+$node_subscriber->wait_for_log(
+	qr/ERROR:  conflict detected on relation \"public.conf_tab_part_1\": conflict=update_exists, resolution=error/,
 	$log_offset);
 
 done_testing();

@@ -457,6 +457,7 @@ extern PGDLLIMPORT int IdleInTransactionSessionTimeout;
 extern PGDLLIMPORT int TransactionTimeout;
 extern PGDLLIMPORT int IdleSessionTimeout;
 extern PGDLLIMPORT bool log_lock_waits;
+extern PGDLLIMPORT bool log_lock_nowaits;
 
 #ifdef EXEC_BACKEND
 extern PGDLLIMPORT slock_t *ProcStructLock;
@@ -496,5 +497,6 @@ extern PGPROC *AuxiliaryPidGetProc(int pid);
 
 extern void BecomeLockGroupLeader(void);
 extern bool BecomeLockGroupMember(PGPROC *leader, int pid);
+extern void CollectLockHoldersAndWaiters(PROCLOCK *waitProcLock, LOCK *lock, StringInfo lock_holders_sbuf, StringInfo lock_waiters_sbuf, int *lockHoldersNum);
 
 #endif							/* _PROC_H_ */

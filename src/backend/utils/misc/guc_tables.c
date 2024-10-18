@@ -1562,6 +1562,15 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"log_lock_nowaits", PGC_SUSET, LOGGING_WHAT,
+			gettext_noop("Logs lock info when nowait fails."),
+			NULL
+		},
+		&log_lock_nowaits,
+		false,
+		NULL, NULL, NULL
+	},
+	{
 		{"log_recovery_conflict_waits", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs standby recovery conflict waits."),
 			NULL

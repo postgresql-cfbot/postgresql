@@ -24,6 +24,7 @@
 #include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/subtrans.h"
+#include "access/simpleundolog.h"
 #include "access/transam.h"
 #include "access/twophase.h"
 #include "access/xact.h"
@@ -84,6 +85,12 @@ bool		DefaultXactDeferrable = false;
 bool		XactDeferrable;
 
 int			synchronous_commit = SYNCHRONOUS_COMMIT_ON;
+
+/*
+ * Indicate whether relation persistence flipping was performed in the current
+ * transacion.
+ */
+bool	XactPersistenceChanged;
 
 /*
  * CheckXidAlive is a xid value pointing to a possibly ongoing (sub)
@@ -1318,6 +1325,7 @@ RecordTransactionCommit(void)
 	TransactionId latestXid = InvalidTransactionId;
 	int			nrels;
 	RelFileLocator *rels;
+	ForkBitmap	   *forks = NULL;
 	int			nchildren;
 	TransactionId *children;
 	int			ndroppedstats = 0;
@@ -1338,7 +1346,7 @@ RecordTransactionCommit(void)
 		LogLogicalInvalidations();
 
 	/* Get data needed for commit record */
-	nrels = smgrGetPendingDeletes(true, &rels);
+	nrels = smgrGetPendingDeletes(true, &rels, &forks);
 	nchildren = xactGetCommittedChildren(&children);
 	ndroppedstats = pgstat_get_transactional_drops(true, &droppedstats);
 	if (XLogStandbyInfoActive())
@@ -1429,7 +1437,7 @@ RecordTransactionCommit(void)
 		 * Insert the commit XLOG record.
 		 */
 		XactLogCommitRecord(GetCurrentTransactionStopTimestamp(),
-							nchildren, children, nrels, rels,
+							nchildren, children, nrels, rels, forks,
 							ndroppedstats, droppedstats,
 							nmsgs, invalMessages,
 							RelcacheInitFileInval,
@@ -1746,6 +1754,7 @@ RecordTransactionAbort(bool isSubXact)
 	TransactionId latestXid;
 	int			nrels;
 	RelFileLocator *rels;
+	ForkBitmap	   *forks = NULL;
 	int			ndroppedstats = 0;
 	xl_xact_stats_item *droppedstats = NULL;
 	int			nchildren;
@@ -1790,7 +1799,7 @@ RecordTransactionAbort(bool isSubXact)
 				  replorigin_session_origin != DoNotReplicateId);
 
 	/* Fetch the data we need for the abort record */
-	nrels = smgrGetPendingDeletes(false, &rels);
+	nrels = smgrGetPendingDeletes(false, &rels, &forks);
 	nchildren = xactGetCommittedChildren(&children);
 	ndroppedstats = pgstat_get_transactional_drops(false, &droppedstats);
 
@@ -1807,7 +1816,7 @@ RecordTransactionAbort(bool isSubXact)
 
 	XactLogAbortRecord(xact_time,
 					   nchildren, children,
-					   nrels, rels,
+					   nrels, rels, forks,
 					   ndroppedstats, droppedstats,
 					   MyXactFlags, InvalidTransactionId,
 					   NULL);
@@ -2118,6 +2127,7 @@ StartTransaction(void)
 		s->startedInRecovery = false;
 		XactReadOnly = DefaultXactReadOnly;
 	}
+	XactPersistenceChanged = false;
 	XactDeferrable = DefaultXactDeferrable;
 	XactIsoLevel = DefaultXactIsoLevel;
 	forceSyncCommit = false;
@@ -2269,6 +2279,9 @@ CommitTransaction(void)
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);
 
+	/* Clean up buffer persistence changes */
+	PreCommit_Buffers(true);
+
 	/*
 	 * If this xact has started any unfinished parallel operation, clean up
 	 * its workers, warning about leaked resources.  (But we don't actually
@@ -2418,6 +2431,14 @@ CommitTransaction(void)
 
 	AtEOXact_MultiXact();
 
+	/*
+	 * Drop storage files. This has to happen after buffer pins are dropped,
+	 * required by DropRelationBuffers(). This is mainly for a requirement by
+	 * abort-time cleanup, but place this at the same place for commit for
+	 * consistency.
+	 */
+	AtEOXact_SimpleUndoLog(true);
+
 	ResourceOwnerRelease(TopTransactionResourceOwner,
 						 RESOURCE_RELEASE_LOCKS,
 						 true, true);
@@ -2514,6 +2535,12 @@ PrepareTransaction(void)
 		elog(WARNING, "PrepareTransaction while in %s state",
 			 TransStateAsString(s->state));
 	Assert(s->parent == NULL);
+
+
+	/* Check if any relation persistence flips have been performed. */
+	if (CheckIfPersistenceChanged())
+		ereport(ERROR,
+				errmsg("cannot prepare transaction if persistence change has been made to any relation"));
 
 	/*
 	 * Do pre-commit processing that involves calling user-defined code, such
@@ -2656,6 +2683,7 @@ PrepareTransaction(void)
 	AtPrepare_PgStat();
 	AtPrepare_MultiXact();
 	AtPrepare_RelationMap();
+	AtPrepare_SimpleUndoLog();
 
 	/*
 	 * Here is where we really truly prepare.
@@ -2850,6 +2878,9 @@ AbortTransaction(void)
 	 */
 	sigprocmask(SIG_SETMASK, &UnBlockSig, NULL);
 
+	/* Clean up buffer persistence changes */
+	PreCommit_Buffers(false);
+
 	/*
 	 * check the current transaction state
 	 */
@@ -2953,6 +2984,13 @@ AbortTransaction(void)
 		AtEOXact_RelationCache(false);
 		AtEOXact_Inval(false);
 		AtEOXact_MultiXact();
+
+		/*
+		 * Drop storage files. This has to happen after buffer pins are
+		 * dropped, required by DropRelationBuffers().
+		 */
+		AtEOXact_SimpleUndoLog(false);
+
 		ResourceOwnerRelease(TopTransactionResourceOwner,
 							 RESOURCE_RELEASE_LOCKS,
 							 false, true);
@@ -5109,6 +5147,9 @@ CommitSubTransaction(void)
 	CallSubXactCallbacks(SUBXACT_EVENT_PRE_COMMIT_SUB, s->subTransactionId,
 						 s->parent->subTransactionId);
 
+	/* Clean up buffer persistence changes. */
+	PreSubCommit_Buffers(true);
+
 	/*
 	 * If this subxact has started any unfinished parallel operation, clean up
 	 * its workers and exit parallel mode.  Warn about leaked resources.
@@ -5155,6 +5196,7 @@ CommitSubTransaction(void)
 							  s->parent->subTransactionId);
 	AtEOSubXact_Inval(true);
 	AtSubCommit_smgr();
+	AtEOSubXact_SimpleUndoLog(true);
 
 	/*
 	 * The only lock we actually release here is the subtransaction XID lock.
@@ -5255,6 +5297,9 @@ AbortSubTransaction(void)
 	 */
 	reschedule_timeouts();
 
+	/* Clean up buffer persistence changes */
+	PreSubCommit_Buffers(false);
+
 	/*
 	 * Re-enable signals, in case we got here by longjmp'ing out of a signal
 	 * handler.  We do this fairly early in the sequence so that the timeout
@@ -5336,6 +5381,7 @@ AbortSubTransaction(void)
 							 RESOURCE_RELEASE_AFTER_LOCKS,
 							 false, false);
 		AtSubAbort_smgr();
+		AtEOSubXact_SimpleUndoLog(false);
 
 		AtEOXact_GUC(false, s->gucNestLevel);
 		AtEOSubXact_SPI(false, s->subTransactionId);
@@ -5800,7 +5846,7 @@ xactGetCommittedChildren(TransactionId **ptr)
 XLogRecPtr
 XactLogCommitRecord(TimestampTz commit_time,
 					int nsubxacts, TransactionId *subxacts,
-					int nrels, RelFileLocator *rels,
+					int nrels, RelFileLocator *rels, ForkBitmap *forks,
 					int ndroppedstats, xl_xact_stats_item *droppedstats,
 					int nmsgs, SharedInvalidationMessage *msgs,
 					bool relcacheInval,
@@ -5868,6 +5914,9 @@ XactLogCommitRecord(TimestampTz commit_time,
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILELOCATORS;
 		xl_relfilelocators.nrels = nrels;
 		info |= XLR_SPECIAL_REL_UPDATE;
+
+		if (forks)
+			xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILEFORKS;
 	}
 
 	if (ndroppedstats > 0)
@@ -5930,6 +5979,10 @@ XactLogCommitRecord(TimestampTz commit_time,
 						 MinSizeOfXactRelfileLocators);
 		XLogRegisterData((char *) rels,
 						 nrels * sizeof(RelFileLocator));
+
+		if (xl_xinfo.xinfo & XACT_XINFO_HAS_RELFILEFORKS)
+			XLogRegisterData((char *) forks,
+							 nrels * sizeof(ForkBitmap));
 	}
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_DROPPED_STATS)
@@ -5972,7 +6025,7 @@ XactLogCommitRecord(TimestampTz commit_time,
 XLogRecPtr
 XactLogAbortRecord(TimestampTz abort_time,
 				   int nsubxacts, TransactionId *subxacts,
-				   int nrels, RelFileLocator *rels,
+				   int nrels, RelFileLocator *rels, ForkBitmap *forks,
 				   int ndroppedstats, xl_xact_stats_item *droppedstats,
 				   int xactflags, TransactionId twophase_xid,
 				   const char *twophase_gid)
@@ -6017,6 +6070,9 @@ XactLogAbortRecord(TimestampTz abort_time,
 		xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILELOCATORS;
 		xl_relfilelocators.nrels = nrels;
 		info |= XLR_SPECIAL_REL_UPDATE;
+
+		if (forks)
+			xl_xinfo.xinfo |= XACT_XINFO_HAS_RELFILEFORKS;
 	}
 
 	if (ndroppedstats > 0)
@@ -6083,6 +6139,10 @@ XactLogAbortRecord(TimestampTz abort_time,
 						 MinSizeOfXactRelfileLocators);
 		XLogRegisterData((char *) rels,
 						 nrels * sizeof(RelFileLocator));
+
+		if (xl_xinfo.xinfo & XACT_XINFO_HAS_RELFILEFORKS)
+			XLogRegisterData((char *) forks,
+							 nrels * sizeof(ForkBitmap));
 	}
 
 	if (xl_xinfo.xinfo & XACT_XINFO_HAS_DROPPED_STATS)
@@ -6223,9 +6283,13 @@ xact_redo_commit(xl_xact_parsed_commit *parsed,
 		XLogFlush(lsn);
 
 		/* Make sure files supposed to be dropped are dropped */
-		DropRelationFiles(parsed->xlocators, parsed->nrels, true);
+		DropRelationFiles(parsed->xlocators, parsed->xforks, parsed->nrels,
+						  true);
 	}
 
+	SimpleUndoLog_UndoByXid(true, xid, parsed->nsubxacts, parsed->subxacts);
+	AtEOXact_Buffers_Redo(true, xid, parsed->nsubxacts, parsed->subxacts);
+	
 	if (parsed->nstats > 0)
 	{
 		/* see equivalent call for relations above */
@@ -6334,8 +6398,12 @@ xact_redo_abort(xl_xact_parsed_abort *parsed, TransactionId xid,
 		 */
 		XLogFlush(lsn);
 
-		DropRelationFiles(parsed->xlocators, parsed->nrels, true);
+		DropRelationFiles(parsed->xlocators, parsed->xforks, parsed->nrels,
+						  true);
 	}
+
+	SimpleUndoLog_UndoByXid(false, xid, parsed->nsubxacts, parsed->subxacts);
+	AtEOXact_Buffers_Redo(false, xid, parsed->nsubxacts, parsed->subxacts);
 
 	if (parsed->nstats > 0)
 	{

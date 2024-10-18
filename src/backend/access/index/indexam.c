@@ -470,7 +470,8 @@ index_parallelscan_estimate(Relation indexRelation, int nkeys, int norderbys,
 	 */
 	if (indexRelation->rd_indam->amestimateparallelscan != NULL)
 		nbytes = add_size(nbytes,
-						  indexRelation->rd_indam->amestimateparallelscan(nkeys,
+						  indexRelation->rd_indam->amestimateparallelscan(indexRelation,
+																		  nkeys,
 																		  norderbys));
 
 	return nbytes;

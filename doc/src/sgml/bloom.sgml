@@ -170,9 +170,10 @@ CREATE INDEX
    Heap Blocks: exact=28
    -&gt;  Bitmap Index Scan on bloomidx  (cost=0.00..1792.00 rows=2 width=0) (actual time=0.356..0.356 rows=29 loops=1)
          Index Cond: ((i2 = 898732) AND (i5 = 123451))
+         Index Searches: 1
  Planning Time: 0.099 ms
  Execution Time: 0.408 ms
-(8 rows)
+(9 rows)
 </programlisting>
   </para>
 
@@ -202,11 +203,12 @@ CREATE INDEX
    -&gt;  BitmapAnd  (cost=24.34..24.34 rows=2 width=0) (actual time=0.027..0.027 rows=0 loops=1)
          -&gt;  Bitmap Index Scan on btreeidx5  (cost=0.00..12.04 rows=500 width=0) (actual time=0.026..0.026 rows=0 loops=1)
                Index Cond: (i5 = 123451)
+               Index Searches: 1
          -&gt;  Bitmap Index Scan on btreeidx2  (cost=0.00..12.04 rows=500 width=0) (never executed)
                Index Cond: (i2 = 898732)
  Planning Time: 0.491 ms
  Execution Time: 0.055 ms
-(9 rows)
+(10 rows)
 </programlisting>
    Although this query runs much faster than with either of the single
    indexes, we pay a penalty in index size.  Each of the single-column

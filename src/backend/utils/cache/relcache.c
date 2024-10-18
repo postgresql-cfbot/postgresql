@@ -5826,13 +5826,15 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 		/*
 		 * Check if all columns are part of the REPLICA IDENTITY index or not.
 		 *
-		 * If the publication is FOR ALL TABLES then it means the table has no
-		 * column list and we can skip the validation.
+		 * If the publication is FOR ALL TABLES and publication includes
+		 * generated columns then it means that all the table will replicate
+		 * all columns and we can skip the validation.
 		 */
-		if (!pubform->puballtables &&
+		if (!(pubform->puballtables && pubform->pubgencols) &&
 			(pubform->pubupdate || pubform->pubdelete) &&
 			pub_collist_contains_invalid_column(pubid, relation, ancestors,
-												pubform->pubviaroot))
+												pubform->pubviaroot,
+												pubform->pubgencols))
 		{
 			if (pubform->pubupdate)
 				pubdesc->cols_valid_for_update = false;

@@ -128,7 +128,7 @@ StatsShmemSize(void)
 {
 	Size		sz;
 
-	sz = MAXALIGN(sizeof(PgStat_ShmemControl));
+	sz = MAXALIGN(sizeof(PgStat_ShmemControl) + mul_size(sizeof(PgStat_Backend_IO), NumProcStatSlots));
 	sz = add_size(sz, pgstat_dsa_init_size());
 
 	/* Add shared memory for all the custom fixed-numbered statistics */
@@ -172,7 +172,7 @@ StatsShmemInit(void)
 		Assert(!found);
 
 		/* the allocation of pgStatLocal.shmem itself */
-		p += MAXALIGN(sizeof(PgStat_ShmemControl));
+		p += MAXALIGN(sizeof(PgStat_ShmemControl) + mul_size(sizeof(PgStat_Backend_IO), NumProcStatSlots));
 
 		/*
 		 * Create a small dsa allocation in plain shared memory. This is

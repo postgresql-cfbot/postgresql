@@ -1,13 +1,13 @@
 <!-- doc/src/sgml/oauth-validators.sgml -->
 
 <chapter id="oauth-validators">
- <title>Implementing OAuth Validator Modules</title>
+ <title>OAuth Validator Modules</title>
  <indexterm zone="oauth-validators">
   <primary>OAuth Validators</primary>
  </indexterm>
  <para>
   <productname>PostgreSQL</productname> provides infrastructure for creating
-  custom modules to perform server-side validation of OAuth tokens.
+  custom modules to perform server-side validation of OAuth bearer tokens.
  </para>
  <para>
   OAuth validation modules must at least consist of an initialization function
@@ -74,9 +74,41 @@ typedef void (*ValidatorStartupCB) (ValidatorModuleState *state);
   <sect2 id="oauth-validator-callback-validate">
    <title>Validate Callback</title>
    <para>
+    The <function>validate_cb</function> callback is executed during the OAuth
+    exchange when a user attempts to authenticate using OAuth. The token is
+    parsed to ensure being well-formed syntactically, but no semantical check
+    has been performed. Any state set in previous calls will be available in
+    <structfield>state->privata_data</structfield>.
+
 <programlisting>
 typedef ValidatorModuleResult *(*ValidatorValidateCB) (ValidatorModuleState *state, const char *token, const char *role);
 </programlisting>
+
+    <replaceable>token</replaceable> will contain the bearer token to validate,
+    <replaceable>role</replaceable> will contain the role the user request to
+    log in as. The callback must return a <literal>ValidatorModuleResult</literal>
+    struct which is defined as below:
+
+<programlisting>
+typedef struct ValidatorModuleResult
+{
+    bool        authorized;
+    char       *authn_id;
+} ValidatorModuleResult;
+</programlisting>
+
+    If <structfield>authorized</structfield> is set to <literal>true</literal>
+    the bearer token is defined to be valid.
+    To authenticate the user, the authenticated user name shall be returned in
+    the <structfield>authn_id</structfield> field. When authenticating against
+    a HBA rule with <literal>trust_validator_authz</literal> turned on the
+    <structfield>authn_id</structfield> user name must exactly match the role
+    expected to login as.
+   </para>
+   <para>
+    The caller assumes ownership of the returned memory allocation, the
+    validator module should not in any way access the memory after it has been
+    returned.
    </para>
   </sect2>
 

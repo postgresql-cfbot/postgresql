@@ -116,12 +116,14 @@ ConversionCreate(const char *conname, Oid connamespace,
 	referenced.classId = ProcedureRelationId;
 	referenced.objectId = conproc;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(ProcedureRelationId, conproc);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	/* create dependency on namespace */
 	referenced.classId = NamespaceRelationId;
 	referenced.objectId = connamespace;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(NamespaceRelationId, connamespace);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	/* create dependency on owner */

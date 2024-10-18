@@ -748,12 +748,14 @@ AggregateCreate(const char *aggName,
 	/* Depends on transition function */
 	ObjectAddressSet(referenced, ProcedureRelationId, transfn);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(ProcedureRelationId, transfn);
 
 	/* Depends on final function, if any */
 	if (OidIsValid(finalfn))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, finalfn);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, finalfn);
 	}
 
 	/* Depends on combine function, if any */
@@ -761,6 +763,7 @@ AggregateCreate(const char *aggName,
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, combinefn);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, combinefn);
 	}
 
 	/* Depends on serialization function, if any */
@@ -768,6 +771,7 @@ AggregateCreate(const char *aggName,
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, serialfn);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, serialfn);
 	}
 
 	/* Depends on deserialization function, if any */
@@ -775,6 +779,7 @@ AggregateCreate(const char *aggName,
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, deserialfn);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, deserialfn);
 	}
 
 	/* Depends on forward transition function, if any */
@@ -782,6 +787,7 @@ AggregateCreate(const char *aggName,
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, mtransfn);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, mtransfn);
 	}
 
 	/* Depends on inverse transition function, if any */
@@ -789,6 +795,7 @@ AggregateCreate(const char *aggName,
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, minvtransfn);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, minvtransfn);
 	}
 
 	/* Depends on final function, if any */
@@ -796,6 +803,7 @@ AggregateCreate(const char *aggName,
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, mfinalfn);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, mfinalfn);
 	}
 
 	/* Depends on sort operator, if any */
@@ -803,6 +811,7 @@ AggregateCreate(const char *aggName,
 	{
 		ObjectAddressSet(referenced, OperatorRelationId, sortop);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(OperatorRelationId, sortop);
 	}
 
 	record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);

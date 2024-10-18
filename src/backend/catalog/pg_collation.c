@@ -218,6 +218,7 @@ CollationCreate(const char *collname, Oid collnamespace,
 	referenced.classId = NamespaceRelationId;
 	referenced.objectId = collnamespace;
 	referenced.objectSubId = 0;
+	LockNotPinnedObject(NamespaceRelationId, collnamespace);
 	recordDependencyOn(&myself, &referenced, DEPENDENCY_NORMAL);
 
 	/* create dependency on owner */

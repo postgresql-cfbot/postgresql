@@ -382,7 +382,9 @@ static void send_feedback(XLogRecPtr recvpos, bool force, bool requestReply);
 static void apply_handle_commit_internal(LogicalRepCommitData *commit_data);
 static void apply_handle_insert_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
-										 TupleTableSlot *remoteslot);
+										 TupleTableSlot *remoteslot,
+										 LogicalRepTupleData *newtup,
+										 LogicalRepRelMapEntry *rel_entry);
 static void apply_handle_update_internal(ApplyExecutionData *edata,
 										 ResultRelInfo *relinfo,
 										 TupleTableSlot *remoteslot,
@@ -2451,10 +2453,10 @@ apply_handle_insert(StringInfo s)
 	/* For a partitioned table, insert the tuple into a partition. */
 	if (rel->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
 		apply_handle_tuple_routing(edata,
-								   remoteslot, NULL, CMD_INSERT);
+								   remoteslot, &newtup, CMD_INSERT);
 	else
 		apply_handle_insert_internal(edata, edata->targetRelInfo,
-									 remoteslot);
+									 remoteslot, &newtup, rel);
 
 	finish_edata(edata);
 
@@ -2477,9 +2479,13 @@ apply_handle_insert(StringInfo s)
 static void
 apply_handle_insert_internal(ApplyExecutionData *edata,
 							 ResultRelInfo *relinfo,
-							 TupleTableSlot *remoteslot)
+							 TupleTableSlot *remoteslot,
+							 LogicalRepTupleData *newtup,
+							 LogicalRepRelMapEntry *rel_entry)
 {
 	EState	   *estate = edata->estate;
+	MemoryContext oldctx;
+	TupleTableSlot *conflictslot = NULL;
 
 	/* We must open indexes here. */
 	ExecOpenIndices(relinfo, true);
@@ -2487,7 +2493,37 @@ apply_handle_insert_internal(ApplyExecutionData *edata,
 
 	/* Do the insert. */
 	TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_INSERT);
-	ExecSimpleRelationInsert(relinfo, estate, remoteslot);
+
+	ExecSimpleRelationInsert(relinfo, estate, remoteslot, &conflictslot,
+							 MySubscription->oid);
+
+	/*
+	 * If a conflict is detected, update the conflicting tuple by converting
+	 * the remote INSERT to an UPDATE. Note that conflictslot will have the
+	 * conflicting tuple only if the resolver is in favor of applying the
+	 * changes, otherwise it will be NULL.
+	 */
+	if (conflictslot)
+	{
+		EPQState	epqstate;
+
+		EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
+
+		/* Process and store remote tuple in the slot */
+		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+		slot_modify_data(remoteslot, conflictslot, rel_entry, newtup);
+		MemoryContextSwitchTo(oldctx);
+
+		EvalPlanQualSetSlot(&epqstate, remoteslot);
+
+		/* Do the update */
+		TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_UPDATE);
+		ExecSimpleRelationUpdate(relinfo, estate, &epqstate, conflictslot,
+								 remoteslot);
+
+		EvalPlanQualEnd(&epqstate);
+		ExecDropSingleTupleTableSlot(conflictslot);
+	}
 
 	/* Cleanup. */
 	ExecCloseIndices(relinfo);
@@ -2669,6 +2705,8 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 	TupleTableSlot *localslot;
 	bool		found;
 	MemoryContext oldctx;
+	bool		apply_remote = true;
+	ConflictResolver resolver;
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
 	ExecOpenIndices(relinfo, true);
@@ -2690,36 +2728,48 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		TimestampTz localts;
 
 		/*
-		 * Report the conflict if the tuple was modified by a different
-		 * origin.
+		 * Report the conflict and configured resolver if the tuple was
+		 * modified by a different origin.
 		 */
 		if (GetTupleTransactionInfo(localslot, &localxmin, &localorigin, &localts) &&
 			localorigin != replorigin_session_origin)
 		{
 			TupleTableSlot *newslot;
 
+			resolver = GetConflictResolver(MySubscription->oid,
+										   CT_UPDATE_ORIGIN_DIFFERS,
+										   localrel, NULL,
+										   &apply_remote);
+
 			/* Store the new tuple for conflict reporting */
 			newslot = table_slot_create(localrel, &estate->es_tupleTable);
 			slot_store_data(newslot, relmapentry, newtup);
 
-			ReportApplyConflict(estate, relinfo, LOG, CT_UPDATE_ORIGIN_DIFFERS,
-								remoteslot, localslot, newslot,
-								InvalidOid, localxmin, localorigin, localts);
+			ReportApplyConflict(estate, relinfo, CT_UPDATE_ORIGIN_DIFFERS, resolver,
+								remoteslot, localslot, newslot, InvalidOid,
+								localxmin, localorigin, localts, apply_remote);
 		}
 
-		/* Process and store remote tuple in the slot */
-		oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-		slot_modify_data(remoteslot, localslot, relmapentry, newtup);
-		MemoryContextSwitchTo(oldctx);
+		/*
+		 * Apply the change if the configured resolver is in favor of that;
+		 * otherwise, ignore the remote update.
+		 */
+		if (apply_remote)
+		{
+			/* Process and store remote tuple in the slot */
+			oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+			slot_modify_data(remoteslot, localslot, relmapentry, newtup);
+			MemoryContextSwitchTo(oldctx);
 
-		EvalPlanQualSetSlot(&epqstate, remoteslot);
+			EvalPlanQualSetSlot(&epqstate, remoteslot);
 
-		InitConflictIndexes(relinfo);
+			InitConflictIndexes(relinfo);
 
-		/* Do the actual update. */
-		TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_UPDATE);
-		ExecSimpleRelationUpdate(relinfo, estate, &epqstate, localslot,
-								 remoteslot);
+			/* Do the actual update. */
+			TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_UPDATE);
+			ExecSimpleRelationUpdate(relinfo, estate, &epqstate, localslot,
+									 remoteslot);
+		}
 	}
 	else
 	{
@@ -2729,13 +2779,29 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		slot_store_data(newslot, relmapentry, newtup);
 
 		/*
-		 * The tuple to be updated could not be found.  Do nothing except for
-		 * emitting a log message.
+		 * The tuple to be updated could not be found. Report the conflict. If
+		 * the configured resolver is in favor of applying the change, convert
+		 * UPDATE to INSERT and apply the change.
 		 */
-		ReportApplyConflict(estate, relinfo, LOG, CT_UPDATE_MISSING,
-							remoteslot, NULL, newslot,
-							InvalidOid, InvalidTransactionId,
-							InvalidRepOriginId, 0);
+		resolver = GetConflictResolver(MySubscription->oid, CT_UPDATE_MISSING,
+									   localrel, newtup, &apply_remote);
+
+		ReportApplyConflict(estate, relinfo, CT_UPDATE_MISSING, resolver,
+							remoteslot, NULL, newslot, InvalidOid,
+							InvalidTransactionId, InvalidRepOriginId,
+							0, apply_remote);
+
+		if (apply_remote)
+		{
+			/* Process and store remote tuple in the slot */
+			oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+			slot_store_data(remoteslot, relmapentry, newtup);
+			slot_fill_defaults(relmapentry, estate, remoteslot);
+			MemoryContextSwitchTo(oldctx);
+
+			apply_handle_insert_internal(edata, relinfo, remoteslot, newtup,
+										 relmapentry);
+		}
 	}
 
 	/* Cleanup. */
@@ -2848,6 +2914,8 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 	EPQState	epqstate;
 	TupleTableSlot *localslot;
 	bool		found;
+	bool		apply_remote = true;
+	ConflictResolver resolver;
 
 	EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
 	ExecOpenIndices(relinfo, false);
@@ -2863,31 +2931,50 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		TimestampTz localts;
 
 		/*
-		 * Report the conflict if the tuple was modified by a different
-		 * origin.
+		 * Report the conflict and configured resolver if the tuple was
+		 * modified by a different origin.
 		 */
 		if (GetTupleTransactionInfo(localslot, &localxmin, &localorigin, &localts) &&
 			localorigin != replorigin_session_origin)
-			ReportApplyConflict(estate, relinfo, LOG, CT_DELETE_ORIGIN_DIFFERS,
-								remoteslot, localslot, NULL,
-								InvalidOid, localxmin, localorigin, localts);
+		{
+			resolver = GetConflictResolver(MySubscription->oid,
+										   CT_DELETE_ORIGIN_DIFFERS,
+										   localrel, NULL, &apply_remote);
 
-		EvalPlanQualSetSlot(&epqstate, localslot);
+			ReportApplyConflict(estate, relinfo, CT_DELETE_ORIGIN_DIFFERS,
+								resolver, remoteslot, localslot, NULL,
+								InvalidOid, localxmin, localorigin, localts,
+								apply_remote);
+		}
 
-		/* Do the actual delete. */
-		TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_DELETE);
-		ExecSimpleRelationDelete(relinfo, estate, &epqstate, localslot);
+		/*
+		 * Apply the change if configured resolver is in favor of that;
+		 * otherwise, ignore the remote delete.
+		 */
+		if (apply_remote)
+		{
+			EvalPlanQualSetSlot(&epqstate, localslot);
+
+			/* Do the actual delete. */
+			TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_DELETE);
+			ExecSimpleRelationDelete(relinfo, estate, &epqstate, localslot);
+		}
 	}
 	else
 	{
 		/*
-		 * The tuple to be deleted could not be found.  Do nothing except for
-		 * emitting a log message.
+		 * The tuple to be deleted could not be found. Based on resolver
+		 * configured, either skip and log a message or emit an error.
 		 */
-		ReportApplyConflict(estate, relinfo, LOG, CT_DELETE_MISSING,
-							remoteslot, NULL, NULL,
-							InvalidOid, InvalidTransactionId,
-							InvalidRepOriginId, 0);
+		resolver = GetConflictResolver(MySubscription->oid, CT_DELETE_MISSING,
+									   localrel, NULL, &apply_remote);
+
+		/* Resolver is set to skip, thus report the conflict and skip */
+		if (!apply_remote)
+			ReportApplyConflict(estate, relinfo, CT_DELETE_MISSING,
+								resolver, remoteslot, NULL, NULL,
+								InvalidOid, InvalidTransactionId,
+								InvalidRepOriginId, 0, apply_remote);
 	}
 
 	/* Cleanup. */
@@ -3021,19 +3108,21 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 	}
 	MemoryContextSwitchTo(oldctx);
 
-	/* Check if we can do the update or delete on the leaf partition. */
-	if (operation == CMD_UPDATE || operation == CMD_DELETE)
+	if (operation == CMD_INSERT || operation == CMD_UPDATE ||
+		operation == CMD_DELETE)
 	{
-		part_entry = logicalrep_partition_open(relmapentry, partrel,
-											   attrmap);
-		check_relation_updatable(part_entry);
+		part_entry = logicalrep_partition_open(relmapentry, partrel, attrmap);
+
+		/* Check if we can do the update or delete on the leaf partition */
+		if (operation != CMD_INSERT)
+			check_relation_updatable(part_entry);
 	}
 
 	switch (operation)
 	{
 		case CMD_INSERT:
 			apply_handle_insert_internal(edata, partrelinfo,
-										 remoteslot_part);
+										 remoteslot_part, newtup, part_entry);
 			break;
 
 		case CMD_DELETE:
@@ -3059,6 +3148,9 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 				RepOriginId localorigin;
 				TransactionId localxmin;
 				TimestampTz localts;
+				LogicalRepRelMapEntry *part_entry_new = NULL;
+				ConflictResolver resolver;
+				bool		apply_remote = true;
 
 				/* Get the matching local tuple from the partition. */
 				found = FindReplTupleInLocalRel(edata, partrel,
@@ -3071,47 +3163,87 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 
 					/* Store the new tuple for conflict reporting */
 					slot_store_data(newslot, part_entry, newtup);
+					resolver = GetConflictResolver(MySubscription->oid,
+												   CT_UPDATE_MISSING,
+												   partrel, newtup,
+												   &apply_remote);
 
 					/*
-					 * The tuple to be updated could not be found.  Do nothing
-					 * except for emitting a log message.
+					 * The tuple to be updated could not be found. Report the
+					 * conflict and resolver. And take action based on the
+					 * configured resolver.
 					 */
 					ReportApplyConflict(estate, partrelinfo,
-										LOG, CT_UPDATE_MISSING,
+										CT_UPDATE_MISSING, resolver,
 										remoteslot_part, NULL, newslot,
 										InvalidOid, InvalidTransactionId,
-										InvalidRepOriginId, 0);
+										InvalidRepOriginId, 0, apply_remote);
 
-					return;
+					/*
+					 * Resolver is in favour of applying the remote changes.
+					 * Prepare the slot for the INSERT.
+					 */
+					if (apply_remote)
+					{
+						oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+						slot_store_data(remoteslot_part, part_entry, newtup);
+						slot_fill_defaults(part_entry, estate, remoteslot_part);
+						MemoryContextSwitchTo(oldctx);
+					}
 				}
-
-				/*
-				 * Report the conflict if the tuple was modified by a
-				 * different origin.
-				 */
-				if (GetTupleTransactionInfo(localslot, &localxmin, &localorigin, &localts) &&
-					localorigin != replorigin_session_origin)
+				else
 				{
-					TupleTableSlot *newslot;
+					/*
+					 * The tuple to be updated is found. Report and resolve
+					 * the conflict if the tuple was modified by a different
+					 * origin.
+					 */
+					if (GetTupleTransactionInfo(localslot, &localxmin, &localorigin, &localts) &&
+						localorigin != replorigin_session_origin)
+					{
+						TupleTableSlot *newslot;
 
-					/* Store the new tuple for conflict reporting */
-					newslot = table_slot_create(partrel, &estate->es_tupleTable);
-					slot_store_data(newslot, part_entry, newtup);
+						/* Store the new tuple for conflict reporting */
+						newslot = table_slot_create(partrel, &estate->es_tupleTable);
+						slot_store_data(newslot, part_entry, newtup);
 
-					ReportApplyConflict(estate, partrelinfo, LOG, CT_UPDATE_ORIGIN_DIFFERS,
-										remoteslot_part, localslot, newslot,
-										InvalidOid, localxmin, localorigin,
-										localts);
+						resolver = GetConflictResolver(MySubscription->oid,
+													   CT_UPDATE_ORIGIN_DIFFERS,
+													   partrel, NULL,
+													   &apply_remote);
+
+						ReportApplyConflict(estate, partrelinfo, CT_UPDATE_ORIGIN_DIFFERS,
+											resolver, remoteslot_part, localslot,
+											newslot, InvalidOid, localxmin,
+											localorigin, localts, apply_remote);
+					}
+					if (apply_remote)
+					{
+						/*
+						 * We can reach here in two cases:
+						 *
+						 * 1. If we found a tuple and no conflict is detected
+						 *
+						 * 2. If we found a tuple and conflict is detected,
+						 * and the resolver is in favor of applying the change
+						 *
+						 * Putting the result in remoteslot_part.
+						 */
+						oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
+						slot_modify_data(remoteslot_part, localslot, part_entry,
+										 newtup);
+						MemoryContextSwitchTo(oldctx);
+					}
+					else
+
+						/*
+						 * apply_remote can be toggled if resolver for
+						 * update_origin_differs is set to skip. Ignore remote
+						 * update.
+						 */
+						return;
+
 				}
-
-				/*
-				 * Apply the update to the local tuple, putting the result in
-				 * remoteslot_part.
-				 */
-				oldctx = MemoryContextSwitchTo(GetPerTupleMemoryContext(estate));
-				slot_modify_data(remoteslot_part, localslot, part_entry,
-								 newtup);
-				MemoryContextSwitchTo(oldctx);
 
 				EvalPlanQualInit(&epqstate, estate, NULL, NIL, -1, NIL);
 
@@ -3123,23 +3255,52 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 					ExecPartitionCheck(partrelinfo, remoteslot_part, estate,
 									   false))
 				{
-					/*
-					 * Yes, so simply UPDATE the partition.  We don't call
-					 * apply_handle_update_internal() here, which would
-					 * normally do the following work, to avoid repeating some
-					 * work already done above to find the local tuple in the
-					 * partition.
-					 */
-					ExecOpenIndices(partrelinfo, true);
-					InitConflictIndexes(partrelinfo);
+					if (found && apply_remote)
+					{
+						/*
+						 * Yes, so simply UPDATE the partition.  We don't call
+						 * apply_handle_update_internal() here, which would
+						 * normally do the following work, to avoid repeating
+						 * some work already done above to find the local
+						 * tuple in the partition.
+						 *
+						 * Do the update in cases - 1. found a tuple and no
+						 * conflict is detected  2. update_origin_differs
+						 * conflict is detected for the found tuple and the
+						 * resolver is in favour of applying the update.
+						 */
+						ExecOpenIndices(partrelinfo, true);
+						InitConflictIndexes(partrelinfo);
 
-					EvalPlanQualSetSlot(&epqstate, remoteslot_part);
-					TargetPrivilegesCheck(partrelinfo->ri_RelationDesc,
-										  ACL_UPDATE);
-					ExecSimpleRelationUpdate(partrelinfo, estate, &epqstate,
-											 localslot, remoteslot_part);
+						EvalPlanQualSetSlot(&epqstate, remoteslot_part);
+						TargetPrivilegesCheck(partrelinfo->ri_RelationDesc,
+											  ACL_UPDATE);
+						ExecSimpleRelationUpdate(partrelinfo, estate, &epqstate,
+												 localslot, remoteslot_part);
+						ExecCloseIndices(partrelinfo);
+					}
+					else if (apply_remote)
+					{
+						/*
+						 * Tuple is not found but update_missing resolver is
+						 * in favour of applying the change as INSERT.
+						 */
+						apply_handle_insert_internal(edata, partrelinfo,
+													 remoteslot_part, newtup,
+													 part_entry);
+					}
 				}
-				else
+
+				/*
+				 * Updated tuple doesn't satisfy the current partition's
+				 * constraint.
+				 *
+				 * Proceed by always applying the update (as 'apply_remote' is
+				 * by default true). The 'apply_remote' can be OFF as well if
+				 * the resolver for update_missing conflict conveys to skip
+				 * the update.
+				 */
+				else if (apply_remote)
 				{
 					/* Move the tuple into the new partition. */
 
@@ -3180,12 +3341,20 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 											 get_namespace_name(RelationGetNamespace(partrel_new)),
 											 RelationGetRelationName(partrel_new));
 
-					ExecOpenIndices(partrelinfo, false);
-
-					/* DELETE old tuple found in the old partition. */
-					EvalPlanQualSetSlot(&epqstate, localslot);
-					TargetPrivilegesCheck(partrelinfo->ri_RelationDesc, ACL_DELETE);
-					ExecSimpleRelationDelete(partrelinfo, estate, &epqstate, localslot);
+					/*
+					 * If tuple is found, delete it from old partition. We can
+					 * reach this flow even for the case when the 'found' flag
+					 * is false for 'update_missing' conflict and resolver is
+					 * in favor of inserting the tuple.
+					 */
+					if (found)
+					{
+						ExecOpenIndices(partrelinfo, false);
+						EvalPlanQualSetSlot(&epqstate, localslot);
+						TargetPrivilegesCheck(partrelinfo->ri_RelationDesc, ACL_DELETE);
+						ExecSimpleRelationDelete(partrelinfo, estate, &epqstate, localslot);
+						ExecCloseIndices(partrelinfo);
+					}
 
 					/* INSERT new tuple into the new partition. */
 
@@ -3201,22 +3370,27 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 					map = ExecGetRootToChildMap(partrelinfo_new, estate);
 					if (map != NULL)
 					{
+						attrmap = map->attrMap;
 						remoteslot_part = execute_attr_map_slot(map->attrMap,
 																remoteslot,
 																remoteslot_part);
 					}
 					else
 					{
+						attrmap = NULL;
 						remoteslot_part = ExecCopySlot(remoteslot_part,
 													   remoteslot);
 						slot_getallattrs(remoteslot);
 					}
 					MemoryContextSwitchTo(oldctx);
+					part_entry_new = logicalrep_partition_open(part_entry,
+															   partrel_new,
+															   attrmap);
 					apply_handle_insert_internal(edata, partrelinfo_new,
-												 remoteslot_part);
+												 remoteslot_part, newtup,
+												 part_entry_new);
 				}
 
-				ExecCloseIndices(partrelinfo);
 				EvalPlanQualEnd(&epqstate);
 			}
 			break;

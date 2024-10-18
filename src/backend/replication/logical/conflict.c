@@ -24,9 +24,9 @@
 #include "parser/scansup.h"
 #include "pgstat.h"
 #include "replication/conflict.h"
+#include "replication/worker_internal.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
-#include "replication/worker_internal.h"
 #include "storage/lmgr.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -117,12 +117,14 @@ static int	errcode_apply_conflict(ConflictType type);
 static int	errdetail_apply_conflict(EState *estate,
 									 ResultRelInfo *relinfo,
 									 ConflictType type,
+									 ConflictResolver resolver,
 									 TupleTableSlot *searchslot,
 									 TupleTableSlot *localslot,
 									 TupleTableSlot *remoteslot,
 									 Oid indexoid, TransactionId localxmin,
 									 RepOriginId localorigin,
-									 TimestampTz localts);
+									 TimestampTz localts,
+									 bool apply_remote);
 static char *build_tuple_value_details(EState *estate, ResultRelInfo *relinfo,
 									   ConflictType type,
 									   TupleTableSlot *searchslot,
@@ -165,8 +167,8 @@ GetTupleTransactionInfo(TupleTableSlot *localslot, TransactionId *xmin,
 }
 
 /*
- * This function is used to report a conflict while applying replication
- * changes.
+ * This function is used to report a conflict and resolution applied while
+ * applying replication changes.
  *
  * 'searchslot' should contain the tuple used to search the local tuple to be
  * updated or deleted.
@@ -185,13 +187,22 @@ GetTupleTransactionInfo(TupleTableSlot *localslot, TransactionId *xmin,
  * that we can fetch and display the conflicting key value.
  */
 void
-ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
-					ConflictType type, TupleTableSlot *searchslot,
-					TupleTableSlot *localslot, TupleTableSlot *remoteslot,
-					Oid indexoid, TransactionId localxmin,
-					RepOriginId localorigin, TimestampTz localts)
+ReportApplyConflict(EState *estate, ResultRelInfo *relinfo,
+					ConflictType type, ConflictResolver resolver,
+					TupleTableSlot *searchslot, TupleTableSlot *localslot,
+					TupleTableSlot *remoteslot, Oid indexoid,
+					TransactionId localxmin, RepOriginId localorigin,
+					TimestampTz localts, bool apply_remote)
+
 {
 	Relation	localrel = relinfo->ri_RelationDesc;
+	int			elevel;
+
+	if (resolver == CR_ERROR ||
+		(resolver == CR_APPLY_OR_ERROR && !apply_remote))
+		elevel = ERROR;
+	else
+		elevel = LOG;
 
 	Assert(!OidIsValid(indexoid) ||
 		   CheckRelationOidLockedByMe(indexoid, RowExclusiveLock, true));
@@ -200,13 +211,14 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 
 	ereport(elevel,
 			errcode_apply_conflict(type),
-			errmsg("conflict detected on relation \"%s.%s\": conflict=%s",
+			errmsg("conflict detected on relation \"%s.%s\": conflict=%s, resolution=%s.",
 				   get_namespace_name(RelationGetNamespace(localrel)),
 				   RelationGetRelationName(localrel),
-				   ConflictInfoMap[type].conflict_name),
-			errdetail_apply_conflict(estate, relinfo, type, searchslot,
+				   ConflictInfoMap[type].conflict_name,
+				   ConflictResolverNames[resolver]),
+			errdetail_apply_conflict(estate, relinfo, type, resolver, searchslot,
 									 localslot, remoteslot, indexoid,
-									 localxmin, localorigin, localts));
+									 localxmin, localorigin, localts, apply_remote));
 }
 
 /*
@@ -274,16 +286,24 @@ errcode_apply_conflict(ConflictType type)
  */
 static int
 errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
-						 ConflictType type, TupleTableSlot *searchslot,
-						 TupleTableSlot *localslot, TupleTableSlot *remoteslot,
-						 Oid indexoid, TransactionId localxmin,
-						 RepOriginId localorigin, TimestampTz localts)
+						 ConflictType type, ConflictResolver resolver,
+						 TupleTableSlot *searchslot, TupleTableSlot *localslot,
+						 TupleTableSlot *remoteslot, Oid indexoid,
+						 TransactionId localxmin, RepOriginId localorigin,
+						 TimestampTz localts, bool apply_remote)
 {
 	StringInfoData err_detail;
 	char	   *val_desc;
 	char	   *origin_name;
+	char	   *applymsg;
+	char	   *updmsg;
 
 	initStringInfo(&err_detail);
+
+	if (apply_remote)
+		applymsg = "applying the remote changes.";
+	else
+		applymsg = "ignoring the remote changes.";
 
 	/* First, construct a detailed message describing the type of conflict */
 	switch (type)
@@ -295,13 +315,14 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
 			if (localts)
 			{
 				if (localorigin == InvalidRepOriginId)
-					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified locally in transaction %u at %s."),
-									 get_rel_name(indexoid),
-									 localxmin, timestamptz_to_str(localts));
+					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified locally in transaction %u at %s, %s"),
+									 get_rel_name(indexoid), localxmin,
+									 timestamptz_to_str(localts), applymsg);
 				else if (replorigin_by_oid(localorigin, true, &origin_name))
-					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified by origin \"%s\" in transaction %u at %s."),
+					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified by origin \"%s\" in transaction %u at %s, %s"),
 									 get_rel_name(indexoid), origin_name,
-									 localxmin, timestamptz_to_str(localts));
+									 localxmin, timestamptz_to_str(localts),
+									 applymsg);
 
 				/*
 				 * The origin that modified this row has been removed. This
@@ -311,47 +332,65 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
 				 * manually dropped by the user.
 				 */
 				else
-					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified by a non-existent origin in transaction %u at %s."),
-									 get_rel_name(indexoid),
-									 localxmin, timestamptz_to_str(localts));
+					appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified by a non-existent origin in transaction %u at %s, %s"),
+									 get_rel_name(indexoid), localxmin,
+									 timestamptz_to_str(localts), applymsg);
 			}
 			else
-				appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified in transaction %u."),
-								 get_rel_name(indexoid), localxmin);
+				appendStringInfo(&err_detail, _("Key already exists in unique index \"%s\", modified in transaction %u, %s"),
+								 get_rel_name(indexoid), localxmin, applymsg);
 
 			break;
 
 		case CT_UPDATE_ORIGIN_DIFFERS:
 			if (localorigin == InvalidRepOriginId)
-				appendStringInfo(&err_detail, _("Updating the row that was modified locally in transaction %u at %s."),
-								 localxmin, timestamptz_to_str(localts));
+				appendStringInfo(&err_detail, _("Updating the row that was modified locally in transaction %u at %s, %s"),
+								 localxmin, timestamptz_to_str(localts),
+								 applymsg);
 			else if (replorigin_by_oid(localorigin, true, &origin_name))
-				appendStringInfo(&err_detail, _("Updating the row that was modified by a different origin \"%s\" in transaction %u at %s."),
-								 origin_name, localxmin, timestamptz_to_str(localts));
+				appendStringInfo(&err_detail, _("Updating the row that was modified by a different origin \"%s\" in transaction %u at %s, %s"),
+								 origin_name, localxmin,
+								 timestamptz_to_str(localts), applymsg);
 
 			/* The origin that modified this row has been removed. */
 			else
-				appendStringInfo(&err_detail, _("Updating the row that was modified by a non-existent origin in transaction %u at %s."),
-								 localxmin, timestamptz_to_str(localts));
+				appendStringInfo(&err_detail, _("Updating the row that was modified by a non-existent origin in transaction %u at %s, %s"),
+								 localxmin, timestamptz_to_str(localts),
+								 applymsg);
 
 			break;
 
 		case CT_UPDATE_MISSING:
-			appendStringInfo(&err_detail, _("Could not find the row to be updated."));
+			updmsg = "Could not find the row to be updated";
+			if (resolver == CR_APPLY_OR_SKIP && !apply_remote)
+				appendStringInfo(&err_detail, _("%s, and the UPDATE cannot be converted to an INSERT, thus skipping the remote changes."),
+								 updmsg);
+			else if (resolver == CR_APPLY_OR_ERROR && !apply_remote)
+				appendStringInfo(&err_detail, _("%s, and the UPDATE cannot be converted to an INSERT, thus raising the error."),
+								 updmsg);
+			else if (apply_remote)
+				appendStringInfo(&err_detail, _("%s, thus converting the UPDATE to INSERT and %s"),
+								 updmsg, applymsg);
+			else
+				appendStringInfo(&err_detail, _("%s, %s"),
+								 updmsg, applymsg);
 			break;
 
 		case CT_DELETE_ORIGIN_DIFFERS:
 			if (localorigin == InvalidRepOriginId)
-				appendStringInfo(&err_detail, _("Deleting the row that was modified locally in transaction %u at %s."),
-								 localxmin, timestamptz_to_str(localts));
+				appendStringInfo(&err_detail, _("Deleting the row that was modified locally in transaction %u at %s, %s"),
+								 localxmin, timestamptz_to_str(localts),
+								 applymsg);
 			else if (replorigin_by_oid(localorigin, true, &origin_name))
-				appendStringInfo(&err_detail, _("Deleting the row that was modified by a different origin \"%s\" in transaction %u at %s."),
-								 origin_name, localxmin, timestamptz_to_str(localts));
+				appendStringInfo(&err_detail, _("Deleting the row that was modified by a different origin \"%s\" in transaction %u at %s, %s"),
+								 origin_name, localxmin,
+								 timestamptz_to_str(localts), applymsg);
 
 			/* The origin that modified this row has been removed. */
 			else
-				appendStringInfo(&err_detail, _("Deleting the row that was modified by a non-existent origin in transaction %u at %s."),
-								 localxmin, timestamptz_to_str(localts));
+				appendStringInfo(&err_detail, _("Deleting the row that was modified by a non-existent origin in transaction %u at %s, %s"),
+								 localxmin, timestamptz_to_str(localts),
+								 applymsg);
 
 			break;
 
@@ -658,6 +697,73 @@ ValidateConflictTypeAndResolver(const char *conflict_type,
 }
 
 /*
+ * Get the conflict resolver configured at subscription level for
+ * for the given conflict type.
+ */
+static ConflictResolver
+get_conflict_resolver_internal(ConflictType type, Oid subid)
+{
+
+	ConflictResolver resolver;
+	HeapTuple	tuple;
+	Datum		datum;
+	char	   *conflict_res;
+
+	/*
+	 * XXX: Currently, we fetch the conflict resolver from cache for each
+	 * conflict detection. If needed, we can keep the info in global variable
+	 * and fetch from cache only once after cache invalidation.
+	 */
+	tuple = SearchSysCache2(SUBSCRIPTIONCONFLMAP,
+							ObjectIdGetDatum(subid),
+							CStringGetTextDatum(ConflictInfoMap[type].conflict_name));
+
+	if (!HeapTupleIsValid(tuple))
+		elog(ERROR, "cache lookup failed for conflict type %u", type);
+
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONCONFLMAP,
+								   tuple, Anum_pg_subscription_conflict_confres);
+
+	conflict_res = TextDatumGetCString(datum);
+
+	for (resolver = 0; resolver < CONFLICT_NUM_RESOLVERS; resolver++)
+	{
+		if (pg_strcasecmp(ConflictResolverNames[resolver], conflict_res) == 0)
+			break;
+	}
+
+	ReleaseSysCache(tuple);
+	return resolver;
+}
+
+/*
+ * Check if a full tuple can be created from the new tuple.
+ * Return true if yes, false otherwise.
+ */
+static bool
+can_create_full_tuple(Relation localrel,
+					  LogicalRepTupleData *newtup)
+{
+	int			i;
+	int			local_att = RelationGetNumberOfAttributes(localrel);
+
+	if (newtup->ncols != local_att)
+		return false;
+
+	/*
+	 * A full tuple cannot be created if any column contains a toast value.
+	 * Columns with toast values are marked as LOGICALREP_COLUMN_UNCHANGED.
+	 */
+	for (i = 0; i < newtup->ncols; i++)
+	{
+		if (newtup->colstatus[i] == LOGICALREP_COLUMN_UNCHANGED)
+			return false;
+	}
+
+	return true;
+}
+
+/*
  * Common 'CONFLICT RESOLVER' parsing function for CREATE and ALTER
  * SUBSCRIPTION commands.
  *
@@ -921,4 +1027,48 @@ RemoveSubConflictResolvers(Oid subid)
 
 	table_endscan(scan);
 	table_close(rel, RowExclusiveLock);
+}
+
+/*
+ * Find the resolver for the given conflict type and subscription.
+ *
+ * Set 'apply_remote' to true if remote tuple should be applied,
+ * false otherwise.
+ */
+ConflictResolver
+GetConflictResolver(Oid subid, ConflictType type, Relation localrel,
+					LogicalRepTupleData *newtup, bool *apply_remote)
+{
+	ConflictResolver resolver;
+
+	resolver = get_conflict_resolver_internal(type, subid);
+
+	switch (resolver)
+	{
+		case CR_APPLY_REMOTE:
+			*apply_remote = true;
+			break;
+		case CR_APPLY_OR_SKIP:
+			if (can_create_full_tuple(localrel, newtup))
+				*apply_remote = true;
+			else
+				*apply_remote = false;
+			break;
+		case CR_APPLY_OR_ERROR:
+			if (can_create_full_tuple(localrel, newtup))
+				*apply_remote = true;
+			else
+				*apply_remote = false;
+			break;
+		case CR_KEEP_LOCAL:
+		case CR_SKIP:
+		case CR_ERROR:
+			*apply_remote = false;
+			break;
+		default:
+			elog(ERROR, "Conflict %s is detected! Unrecogonized conflict resolution method",
+				 ConflictInfoMap[type].conflict_name);
+	}
+
+	return resolver;
 }

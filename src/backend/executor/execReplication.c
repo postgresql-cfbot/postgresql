@@ -550,11 +550,73 @@ CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
 			TransactionId xmin;
 
 			GetTupleTransactionInfo(conflictslot, &xmin, &origin, &committs);
-			ReportApplyConflict(estate, resultRelInfo, ERROR, type,
+			ReportApplyConflict(estate, resultRelInfo, type, CR_ERROR,
 								searchslot, conflictslot, remoteslot,
-								uniqueidx, xmin, origin, committs);
+								uniqueidx, xmin, origin, committs, false);
 		}
 	}
+}
+
+/*
+ * Check the unique indexes for conflicts. Return true on finding the
+ * first conflict itself.
+ * If the configured resolver is in favour of apply, give the conflicted
+ * tuple information in conflictslot.
+ */
+static bool
+has_conflicting_tuple(Oid subid, ConflictType type,
+					  ResultRelInfo *resultRelInfo, EState *estate,
+					  TupleTableSlot *slot, TupleTableSlot **conflictslot)
+{
+	ConflictResolver resolver;
+	bool		apply_remote = false;
+	Relation	rel = resultRelInfo->ri_RelationDesc;
+	List	   *conflictindexes = resultRelInfo->ri_onConflictArbiterIndexes;
+
+	/* ASSERT if called for any conflict type other than insert_exists */
+	Assert(type == CT_INSERT_EXISTS);
+
+	/*
+	 * Get the configured resolver and determine if remote changes should be
+	 * applied.
+	 */
+	resolver = GetConflictResolver(subid, type, rel, NULL, &apply_remote);
+
+	/*
+	 * Proceed to find conflict if the resolver is set to a non-default value;
+	 * if the resolver is 'ERROR' (default), the caller will handle it.
+	 */
+	if (resolver == CR_ERROR)
+		return false;
+
+	/* Check all the unique indexes for a conflict */
+	foreach_oid(uniqueidx, conflictindexes)
+	{
+		/* Return to caller for resolutions if any conflict is found */
+		if (FindConflictTuple(resultRelInfo, estate, uniqueidx, slot,
+							  &(*conflictslot)))
+		{
+			RepOriginId origin;
+			TimestampTz committs;
+			TransactionId xmin;
+
+			GetTupleTransactionInfo(*conflictslot, &xmin, &origin, &committs);
+			ReportApplyConflict(estate, resultRelInfo, type, resolver,
+								NULL, *conflictslot, slot, uniqueidx,
+								xmin, origin, committs, apply_remote);
+
+			/* Nothing to apply, free the resources */
+			if (!apply_remote)
+			{
+				ExecDropSingleTupleTableSlot(*conflictslot);
+				*conflictslot = NULL;
+			}
+
+			return true;
+		}
+	}
+
+	return false;
 }
 
 /*
@@ -565,7 +627,8 @@ CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
  */
 void
 ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
-						 EState *estate, TupleTableSlot *slot)
+						 EState *estate, TupleTableSlot *slot,
+						 TupleTableSlot **conflictslot, Oid subid)
 {
 	bool		skip_tuple = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
@@ -601,6 +664,19 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 		if (rel->rd_rel->relispartition)
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
+		/*
+		 * Check for conflict and return to caller for resolution, if found.
+		 *
+		 * XXX In case there are no conflicts, a non-default 'insert_exists'
+		 * resolver adds overhead by performing an extra scan here. However,
+		 * this approach avoids the extra work needed to rollback/delete the
+		 * inserted tuple if a conflict is detected after insertion with a
+		 * non-default resolution set.
+		 */
+		if (has_conflicting_tuple(subid, CT_INSERT_EXISTS, resultRelInfo,
+								  estate, slot, &(*conflictslot)))
+			return;
+
 		/* OK, store the tuple and create index entries for it */
 		simple_table_tuple_insert(resultRelInfo->ri_RelationDesc, slot);
 
@@ -615,13 +691,14 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 
 		/*
 		 * Checks the conflict indexes to fetch the conflicting local tuple
-		 * and reports the conflict. We perform this check here, instead of
-		 * performing an additional index scan before the actual insertion and
-		 * reporting the conflict if any conflicting tuples are found. This is
-		 * to avoid the overhead of executing the extra scan for each INSERT
-		 * operation, even when no conflict arises, which could introduce
-		 * significant overhead to replication, particularly in cases where
-		 * conflicts are rare.
+		 * and reports the conflict. We perform this check here again to -
+		 *
+		 * a) optimize the default case where the resolution for
+		 * 'insert_exists' is set to 'ERROR' by skipping the scan when there
+		 * is no conflict.
+		 *
+		 * b) catch and report any conflict that might have been missed during
+		 * the pre-insertion scan in has_conflicting_tuple().
 		 *
 		 * XXX OTOH, this could lead to clean-up effort for dead tuples added
 		 * in heap and index in case of conflicts. But as conflicts shouldn't

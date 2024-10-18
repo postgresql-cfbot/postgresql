@@ -1060,11 +1060,37 @@ INSERT INTO tbls1 VALUES ($1, $2) \parse stmt1
       </varlistentry>
 
       <varlistentry id="app-psql-meta-command-conninfo">
-        <term><literal>\conninfo</literal></term>
+        <term><literal>\conninfo[+]</literal></term>
         <listitem>
-        <para>
-        Outputs information about the current database connection.
-        </para>
+          <para>
+            Outputs information about the current database connection.
+            When <literal>+</literal> is appended, all details
+            about the connection are displayed in table format.
+            The table output is dynamic and changes based on the
+            connection state. If the connection is not using SSL,
+            SSL-related information (SSL Protocol, Cipher, Compression,
+            and ALPN) will not be displayed.
+            <simplelist>
+              <member><literal>Authenticated User:</literal> The name of the user returned by
+                <function>PQuser()</function>.</member>
+              <member><literal>Session User:</literal> The session user's name.</member>
+              <member><literal>Protocol Version:</literal> The version of the PostgreSQL protocol used for
+                this connection.</member>
+              <member><literal>SSL Connection:</literal> True if the current connection to the server
+                uses SSL, and false otherwise.</member>
+              <member><literal>SSL Protocol:</literal> The SSL/TLS protocol version used for this connection.</member>
+              <member><literal>SSL Cipher:</literal> The SSL/TLS cipher suite used for this connection.</member>
+              <member><literal>Compression:</literal> On if compression is in use on this connection, or Off if
+                compression is not in use on this connection.</member>
+              <member><literal>ALPN:</literal> The Application-Layer Protocol Negotiation (ALPN) protocol
+                used for this connection.</member>
+              <member><literal>GSSAPI Authenticated:</literal> True if GSSAPI is in use, or false if
+                GSSAPI is not in use on this connection.</member>
+              <member><literal>Client Encoding:</literal> The encoding used by the client for this connection.</member>
+              <member><literal>Server Encoding:</literal> The encoding used by the server for this connection.</member>
+              <member><literal>Backend PID:</literal> The process ID of the backend for the connection.</member>
+            </simplelist>
+          </para>
         </listitem>
       </varlistentry>
 

@@ -76,6 +76,7 @@
 #include "storage/large_object.h"
 #include "storage/pg_shmem.h"
 #include "storage/predicate.h"
+#include "storage/proc.h"
 #include "storage/standby.h"
 #include "tcop/backend_startup.h"
 #include "tcop/tcopprot.h"
@@ -189,6 +190,17 @@ static const struct config_enum_entry log_error_verbosity_options[] = {
 };
 
 StaticAssertDecl(lengthof(log_error_verbosity_options) == (PGERROR_VERBOSE + 2),
+				 "array length mismatch");
+
+static const struct config_enum_entry log_lock_waits_options[] = {
+	{"off", LOGLOCK_OFF, false},
+	{"on", LOGLOCK_ON, false},
+	{"fail", LOGLOCK_FAIL, false},
+	{"all", LOGLOCK_ALL, false},
+	{NULL, 0, false}
+};
+
+StaticAssertDecl(lengthof(log_lock_waits_options) == (LOGLOCK_ALL + 2),
 				 "array length mismatch");
 
 static const struct config_enum_entry log_statement_options[] = {
@@ -1552,15 +1564,6 @@ struct config_bool ConfigureNamesBool[] =
 	},
 #endif
 
-	{
-		{"log_lock_waits", PGC_SUSET, LOGGING_WHAT,
-			gettext_noop("Logs long lock waits."),
-			NULL
-		},
-		&log_lock_waits,
-		false,
-		NULL, NULL, NULL
-	},
 	{
 		{"log_recovery_conflict_waits", PGC_SIGHUP, LOGGING_WHAT,
 			gettext_noop("Logs standby recovery conflict waits."),
@@ -4927,6 +4930,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&log_min_error_statement,
 		ERROR, server_message_level_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"log_lock_waits", PGC_SUSET, LOGGING_WHAT,
+			gettext_noop("Logs long lock waits."),
+			NULL
+		},
+		&log_lock_waits,
+		LOGLOCK_OFF, log_lock_waits_options,
 		NULL, NULL, NULL
 	},
 

@@ -61,7 +61,7 @@ int			LockTimeout = 0;
 int			IdleInTransactionSessionTimeout = 0;
 int			TransactionTimeout = 0;
 int			IdleSessionTimeout = 0;
-bool		log_lock_waits = false;
+int			log_lock_waits = LOGLOCK_OFF;
 
 /* Pointer to this process's PGPROC struct, if any */
 PGPROC	   *MyProc = NULL;
@@ -1119,6 +1119,11 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 	bool		logged_recovery_conflict = false;
 	ProcWaitStatus myWaitStatus;
 	PGPROC	   *leader = MyProc->lockGroupLeader;
+	StringInfoData buf,
+			lock_waiters_sbuf,
+			lock_holders_sbuf;
+	const char *modename;
+	int			lockHoldersNum = 0;
 
 	/*
 	 * If group locking is in use, locks held by members of my locking group
@@ -1218,10 +1223,33 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 
 	/*
 	 * At this point we know that we'd really need to sleep. If we've been
-	 * commanded not to do that, bail out.
+	 * commanded not to do that, bail out. Output lock information only 
+	 * if log_lock_waits is fail or all.
 	 */
 	if (dontWait)
+	{
+		if (log_lock_waits == LOGLOCK_FAIL || log_lock_waits == LOGLOCK_ALL)
+		{
+			initStringInfo(&buf);
+			initStringInfo(&lock_waiters_sbuf);
+			initStringInfo(&lock_holders_sbuf);
+
+			DescribeLockTag(&buf, &locallock->tag.lock);
+			modename = GetLockmodeName(locallock->tag.lock.locktag_lockmethodid,
+										lockmode);
+
+			/* Collect lock holders and waiters */
+			CollectLockHoldersAndWaiters(proclock, lock, &lock_holders_sbuf, &lock_waiters_sbuf, &lockHoldersNum);
+
+			ereport(LOG,
+							(errmsg("process %d could not obtain %s on %s",
+									MyProcPid, modename, buf.data),
+							(errdetail_log_plural("Process holding the lock: %s. Wait: %s.",
+												"Processes holding the lock: %s. Wait: %s.",
+												lockHoldersNum, lock_holders_sbuf.data, lock_waiters_sbuf.data))));
+		}
 		return PROC_WAIT_STATUS_ERROR;
+	}
 
 	/*
 	 * Insert self into queue, at the position determined above.
@@ -1496,22 +1524,14 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 
 		/*
 		 * If awoken after the deadlock check interrupt has run, and
-		 * log_lock_waits is on, then report about the wait.
+		 * log_lock_waits is on or all, then report about the wait.
 		 */
-		if (log_lock_waits && deadlock_state != DS_NOT_YET_CHECKED)
+		if ((log_lock_waits == LOGLOCK_ON || log_lock_waits == LOGLOCK_ALL) &&
+			deadlock_state != DS_NOT_YET_CHECKED)
 		{
-			StringInfoData buf,
-						lock_waiters_sbuf,
-						lock_holders_sbuf;
-			const char *modename;
 			long		secs;
 			int			usecs;
 			long		msecs;
-			dlist_iter	proc_iter;
-			PROCLOCK   *curproclock;
-			bool		first_holder = true,
-						first_waiter = true;
-			int			lockHoldersNum = 0;
 
 			initStringInfo(&buf);
 			initStringInfo(&lock_waiters_sbuf);
@@ -1526,53 +1546,10 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 			msecs = secs * 1000 + usecs / 1000;
 			usecs = usecs % 1000;
 
-			/*
-			 * we loop over the lock's procLocks to gather a list of all
-			 * holders and waiters. Thus we will be able to provide more
-			 * detailed information for lock debugging purposes.
-			 *
-			 * lock->procLocks contains all processes which hold or wait for
-			 * this lock.
-			 */
-
 			LWLockAcquire(partitionLock, LW_SHARED);
 
-			dlist_foreach(proc_iter, &lock->procLocks)
-			{
-				curproclock =
-					dlist_container(PROCLOCK, lockLink, proc_iter.cur);
-
-				/*
-				 * we are a waiter if myProc->waitProcLock == curproclock; we
-				 * are a holder if it is NULL or something different
-				 */
-				if (curproclock->tag.myProc->waitProcLock == curproclock)
-				{
-					if (first_waiter)
-					{
-						appendStringInfo(&lock_waiters_sbuf, "%d",
-										 curproclock->tag.myProc->pid);
-						first_waiter = false;
-					}
-					else
-						appendStringInfo(&lock_waiters_sbuf, ", %d",
-										 curproclock->tag.myProc->pid);
-				}
-				else
-				{
-					if (first_holder)
-					{
-						appendStringInfo(&lock_holders_sbuf, "%d",
-										 curproclock->tag.myProc->pid);
-						first_holder = false;
-					}
-					else
-						appendStringInfo(&lock_holders_sbuf, ", %d",
-										 curproclock->tag.myProc->pid);
-
-					lockHoldersNum++;
-				}
-			}
+			/* Collect lock holders and waiters */
+			CollectLockHoldersAndWaiters(NULL, lock, &lock_holders_sbuf, &lock_waiters_sbuf, &lockHoldersNum);
 
 			LWLockRelease(partitionLock);
 
@@ -1994,4 +1971,59 @@ BecomeLockGroupMember(PGPROC *leader, int pid)
 	LWLockRelease(leader_lwlock);
 
 	return ok;
+}
+
+/*
+ * we loop over the lock's procLocks to gather a list of all
+ * holders and waiters. Thus we will be able to provide more
+ * detailed information for lock debugging purposes.
+ *
+ * lock->procLocks contains all processes which hold or wait for
+ * this lock.
+ */
+void
+CollectLockHoldersAndWaiters(PROCLOCK *waitProcLock, LOCK *lock, StringInfo lock_holders_sbuf, StringInfo lock_waiters_sbuf, int *lockHoldersNum)
+{
+	bool first_holder = true;
+	bool first_waiter = true;
+	dlist_iter proc_iter;
+	PROCLOCK *curproclock;
+
+	dlist_foreach(proc_iter, &lock->procLocks)
+	{
+		curproclock =
+			dlist_container(PROCLOCK, lockLink, proc_iter.cur);
+
+		/*
+			* we are a waiter if myProc->waitProcLock == curproclock; we
+			* are a holder if it is NULL or something different
+			*/
+		if ((waitProcLock == NULL && curproclock->tag.myProc->waitProcLock == curproclock) ||
+			(waitProcLock != NULL && waitProcLock == curproclock))
+		{
+			if (first_waiter)
+			{
+				appendStringInfo(lock_waiters_sbuf, "%d",
+									curproclock->tag.myProc->pid);
+				first_waiter = false;
+			}
+			else
+				appendStringInfo(lock_waiters_sbuf, ", %d",
+									curproclock->tag.myProc->pid);
+		}
+		else
+		{
+			if (first_holder)
+			{
+				appendStringInfo(lock_holders_sbuf, "%d",
+									curproclock->tag.myProc->pid);
+				first_holder = false;
+			}
+			else
+				appendStringInfo(lock_holders_sbuf, ", %d",
+									curproclock->tag.myProc->pid);
+
+			(*lockHoldersNum)++;
+		}
+	}
 }

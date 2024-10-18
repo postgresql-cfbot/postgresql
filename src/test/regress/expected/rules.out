@@ -2029,7 +2029,8 @@ pg_stat_progress_create_index| SELECT s.pid,
     s.param12 AS tuples_total,
     s.param13 AS tuples_done,
     s.param14 AS partitions_total,
-    s.param15 AS partitions_done
+    s.param15 AS partitions_done,
+    s.param18 AS partition_relid
    FROM (pg_stat_get_progress_info('CREATE INDEX'::text) s(pid, datid, relid, param1, param2, param3, param4, param5, param6, param7, param8, param9, param10, param11, param12, param13, param14, param15, param16, param17, param18, param19, param20)
      LEFT JOIN pg_database d ON ((s.datid = d.oid)));
 pg_stat_progress_vacuum| SELECT s.pid,

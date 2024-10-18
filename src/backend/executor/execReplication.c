@@ -586,7 +586,7 @@ has_conflicting_tuple(Oid subid, ConflictType type, ItemPointer tupleid,
 	 * Get the configured resolver and determine if remote changes should be
 	 * applied.
 	 */
-	resolver = GetConflictResolver(subid, type, rel, NULL, &apply_remote);
+	resolver = GetConflictResolver(subid, type, rel, NULL, NULL, NULL);
 
 	/*
 	 * Determine the lock mode for the conflicting tuple, if any. Take an
@@ -594,7 +594,7 @@ has_conflicting_tuple(Oid subid, ConflictType type, ItemPointer tupleid,
 	 * tuple; otherwise, take a shared lock.
 	 */
 
-	if (apply_remote)
+	if (resolver == CR_LAST_UPDATE_WINS || apply_remote)
 		lockmode = LockTupleExclusive;
 	else
 		lockmode = LockTupleShare;
@@ -618,6 +618,14 @@ has_conflicting_tuple(Oid subid, ConflictType type, ItemPointer tupleid,
 			TransactionId xmin;
 
 			GetTupleTransactionInfo(*conflictslot, &xmin, &origin, &committs);
+
+			/*
+			 * Get the configured resolver and determine if remote changes
+			 * should be applied.
+			 */
+			resolver = GetConflictResolver(subid, type, rel, *conflictslot,
+										   NULL, &apply_remote);
+
 			ReportApplyConflict(estate, resultRelInfo, type, resolver,
 								NULL, *conflictslot, slot, uniqueidx,
 								xmin, origin, committs, apply_remote);

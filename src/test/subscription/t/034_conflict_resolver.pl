@@ -156,6 +156,34 @@ $node_subscriber->wait_for_log(
 # Truncate table on subscriber to get rid of the error
 $node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
 
+#############################################
+# Test 'last_update_wins' for 'insert_exists'
+#############################################
+
+# Change CONFLICT RESOLVER of insert_exists to last_update_wins
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (insert_exists = 'last_update_wins');"
+);
+
+# Create local data on the subscriber
+$node_subscriber->safe_psql('postgres',
+	"INSERT INTO conf_tab(a, data) VALUES (4,'fromsub')");
+
+# Create conflicting data on the publisher
+$log_offset = -s $node_subscriber->logfile;
+$node_publisher->safe_psql('postgres',
+	"INSERT INTO conf_tab(a, data) VALUES (4,'frompub')");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=insert_exists, resolution=last_update_wins/,
+	$log_offset);
+
+# Confirm that remote insert is converted to an update and the remote data is updated.
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data FROM conf_tab WHERE (a=4);");
+
+is($result, 'frompub', "remote data wins");
+
 # Truncate the table on the publisher
 $node_publisher->safe_psql('postgres', "TRUNCATE conf_tab;");
 
@@ -256,6 +284,36 @@ $node_subscriber->wait_for_log(
 # Truncate table on subscriber to get rid of the error
 $node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
 
+############################################
+# Test 'last_update_wins' for 'update_exists'
+############################################
+
+# Change CONFLICT RESOLVER of update_exists to last_update_wins
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (update_exists = 'last_update_wins');"
+);
+
+# Create local data on the subscriber
+$node_subscriber->safe_psql(
+	'postgres',
+	"INSERT INTO conf_tab(a, data) VALUES (3,'fromsub');
+	 INSERT INTO conf_tab(a, data) VALUES (5,'fromsub')");
+
+# Create conflicting data on the publisher
+$log_offset = -s $node_subscriber->logfile;
+$node_publisher->safe_psql('postgres', "UPDATE conf_tab SET a=5 WHERE a=3;");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=update_exists, resolution=last_update_wins/,
+	$log_offset);
+
+# Confirm that remote insert is converted to an update and the remote data is updated.
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data FROM conf_tab WHERE (a=5);");
+
+is($result, 'frompub', "remote data wins");
+
+
 ###################################
 # Test 'skip' for 'delete_missing'
 ###################################
@@ -309,16 +367,48 @@ $node_subscriber->safe_psql(
 $node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
 
 
-#################################################
-# Test 'apply_remote' for 'delete_origin_differs'
-#################################################
+#####################################################
+# Test 'last_update_wins' for 'delete_origin_differs'
+#####################################################
 
+# Change CONFLICT RESOLVER of delete_origin_differs to last_update_wins
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (delete_origin_differs = 'last_update_wins');"
+);
 # Insert data in the publisher
 $node_publisher->safe_psql(
 	'postgres',
 	"INSERT INTO conf_tab(a, data) VALUES (1,'frompub');
 	 INSERT INTO conf_tab(a, data) VALUES (2,'frompub');
-	 INSERT INTO conf_tab(a, data) VALUES (3,'frompub');");
+	 INSERT INTO conf_tab(a, data) VALUES (3,'frompub');
+	 INSERT INTO conf_tab(a, data) VALUES (4,'frompub');");
+
+# Modify data on the subscriber
+$node_subscriber->safe_psql('postgres',
+	"UPDATE conf_tab SET data = 'fromsub' WHERE (a=4);");
+
+# Create a conflicting delete on the publisher
+$log_offset = -s $node_subscriber->logfile;
+$node_publisher->safe_psql('postgres', "DELETE FROM conf_tab WHERE (a=4);");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=delete_origin_differs, resolution=last_update_wins/,
+	$log_offset);
+
+# Confirm that the remote delete the local updated row
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data from conf_tab WHERE (a=4);");
+
+is($result, '', "delete from remote wins");
+
+#################################################
+# Test 'apply_remote' for 'delete_origin_differs'
+#################################################
+
+# Change CONFLICT RESOLVER of delete_origin_differs to apply_remote
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (delete_origin_differs = 'apply_remote');"
+);
 
 # Modify data on the subscriber
 $node_subscriber->safe_psql('postgres',
@@ -405,10 +495,14 @@ $node_subscriber->safe_psql(
 # Wait for initial table sync to finish
 $node_subscriber->wait_for_subscription_sync($node_publisher, $appname);
 
-#################################################
-# Test 'apply_remote' for 'update_origin_differs'
-#################################################
 
+#####################################################
+# Test 'last_update_wins' for 'update_origin_differs'
+#####################################################
+# Change CONFLICT RESOLVER of update_origin_differs to last_update_wins
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (update_origin_differs = 'last_update_wins');"
+);
 # Insert data in the publisher
 $node_publisher->safe_psql(
 	'postgres',
@@ -426,7 +520,7 @@ $node_publisher->safe_psql('postgres',
 	"UPDATE conf_tab SET data = 'frompubnew' WHERE (a=1);");
 
 $node_subscriber->wait_for_log(
-	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=update_origin_differs, resolution=apply_remote/,
+	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=update_origin_differs, resolution=last_update_wins/,
 	$log_offset);
 
 # Confirm that the remote update overrides the local update
@@ -434,6 +528,34 @@ $result = $node_subscriber->safe_psql('postgres',
 	"SELECT data from conf_tab WHERE (a=1);");
 
 is($result, 'frompubnew', "update from remote is kept");
+
+#################################################
+# Test 'apply_remote' for 'update_origin_differs'
+#################################################
+
+# Change CONFLICT RESOLVER of update_origin_differs to apply_remote
+$node_subscriber->safe_psql('postgres',
+	"ALTER SUBSCRIPTION tap_sub CONFLICT RESOLVER (update_origin_differs = 'apply_remote');"
+);
+
+# Modify data on the subscriber
+$node_subscriber->safe_psql('postgres',
+	"UPDATE conf_tab SET data = 'fromsub2' WHERE (a=1);");
+
+# Create a conflicting update on the publisher
+$log_offset = -s $node_subscriber->logfile;
+$node_publisher->safe_psql('postgres',
+	"UPDATE conf_tab SET data = 'frompubnew2' WHERE (a=1);");
+
+$node_subscriber->wait_for_log(
+	qr/LOG:  conflict detected on relation \"public.conf_tab\": conflict=update_origin_differs, resolution=apply_remote/,
+	$log_offset);
+
+# Confirm that the remote update overrides the local update
+$result = $node_subscriber->safe_psql('postgres',
+	"SELECT data from conf_tab WHERE (a=1);");
+
+is($result, 'frompubnew2', "update from remote is kept");
 
 ###############################################
 # Test 'keep_local' for 'update_origin_differs'

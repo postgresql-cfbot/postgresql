@@ -161,6 +161,7 @@
 #include "libpq/pqmq.h"
 #include "pgstat.h"
 #include "postmaster/interrupt.h"
+#include "replication/conflict.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
 #include "replication/origin.h"
@@ -310,6 +311,18 @@ pa_can_start(void)
 	 * time. So, we don't start the new parallel apply worker in this case.
 	 */
 	if (!AllTablesyncsReady())
+		return false;
+
+	/*
+	 * Do not start a new parallel worker if 'last_update_wins' is configured
+	 * for any conflict type, as we need the commit timestamp in the
+	 * beginning.
+	 *
+	 * XXX: To lift this restriction, we could write the changes to a file
+	 * when a conflict is detected, and then at the commit time, let the
+	 * remaining changes be applied by the apply worker.
+	 */
+	if (CheckIfSubHasTimeStampResolver(MySubscription->oid))
 		return false;
 
 	return true;

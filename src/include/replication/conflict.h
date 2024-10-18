@@ -9,6 +9,7 @@
 #ifndef CONFLICT_H
 #define CONFLICT_H
 
+#include "catalog/pg_subscription.h"
 #include "nodes/execnodes.h"
 #include "parser/parse_node.h"
 #include "replication/logicalrelation.h"
@@ -66,6 +67,9 @@ typedef enum ConflictResolver
 	/* Keep the local change */
 	CR_KEEP_LOCAL,
 
+	/* Apply the change with latest timestamp */
+	CR_LAST_UPDATE_WINS,
+
 	/* Apply the remote change; skip if it cannot be applied */
 	CR_APPLY_OR_SKIP,
 
@@ -105,7 +109,8 @@ extern void SetSubConflictResolvers(Oid subId, List *resolvers);
 extern void RemoveSubConflictResolvers(Oid confid);
 extern List *ParseAndGetSubConflictResolvers(ParseState *pstate,
 											 List *stmtresolvers,
-											 bool add_defaults);
+											 bool add_defaults,
+											 bool sub_twophase);
 extern void UpdateSubConflictResolvers(List *conflict_resolvers, Oid subid);
 extern ConflictType ValidateConflictType(const char *conflict_type);
 extern ConflictType ValidateConflictTypeAndResolver(const char *conflict_type,
@@ -114,6 +119,8 @@ extern List *GetDefaultConflictResolvers(void);
 extern void ResetSubConflictResolver(Oid subid, char *conflict_type);
 extern ConflictResolver GetConflictResolver(Oid subid, ConflictType type,
 											Relation localrel,
+											TupleTableSlot *localslot,
 											LogicalRepTupleData *newtup,
 											bool *apply_remote);
+extern bool CheckIfSubHasTimeStampResolver(Oid subid);
 #endif

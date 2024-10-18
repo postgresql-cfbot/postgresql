@@ -34,6 +34,7 @@
 static const char *const ConflictResolverNames[] = {
 	[CR_APPLY_REMOTE] = "apply_remote",
 	[CR_KEEP_LOCAL] = "keep_local",
+	[CR_LAST_UPDATE_WINS] = "last_update_wins",
 	[CR_APPLY_OR_SKIP] = "apply_or_skip",
 	[CR_APPLY_OR_ERROR] = "apply_or_error",
 	[CR_SKIP] = "skip",
@@ -76,19 +77,22 @@ static ConflictInfo ConflictInfoMap[] = {
 		.conflict_type = CT_INSERT_EXISTS,
 		.conflict_name = "insert_exists",
 		.default_resolver = CR_ERROR,
-		.allowed_resolvers = {[CR_ERROR]=true, [CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true},
+		.allowed_resolvers = {[CR_ERROR]=true, [CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true,
+							  [CR_LAST_UPDATE_WINS]=true},
 	},
 	[CT_UPDATE_EXISTS] = {
 		.conflict_type = CT_UPDATE_EXISTS,
 		.conflict_name = "update_exists",
 		.default_resolver = CR_ERROR,
-		.allowed_resolvers = {[CR_ERROR]=true, [CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true},
+		.allowed_resolvers = {[CR_ERROR]=true, [CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true,
+							  [CR_LAST_UPDATE_WINS]=true},
 	},
 	[CT_UPDATE_ORIGIN_DIFFERS] = {
 		.conflict_type = CT_UPDATE_ORIGIN_DIFFERS,
 		.conflict_name = "update_origin_differs",
 		.default_resolver = CR_APPLY_REMOTE,
-		.allowed_resolvers = {[CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true, [CR_ERROR]=true},
+		.allowed_resolvers = {[CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true, [CR_ERROR]=true,
+							  [CR_LAST_UPDATE_WINS]=true},
 	},
 	[CT_UPDATE_MISSING] = {
 		.conflict_type = CT_UPDATE_MISSING,
@@ -106,7 +110,8 @@ static ConflictInfo ConflictInfoMap[] = {
 		.conflict_type = CT_DELETE_ORIGIN_DIFFERS,
 		.conflict_name = "delete_origin_differs",
 		.default_resolver = CR_APPLY_REMOTE,
-		.allowed_resolvers = {[CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true, [CR_ERROR]=true},
+		.allowed_resolvers = {[CR_APPLY_REMOTE]=true, [CR_KEEP_LOCAL]=true, [CR_ERROR]=true,
+							  [CR_LAST_UPDATE_WINS]=true},
 	},
 };
 
@@ -411,6 +416,11 @@ errdetail_apply_conflict(EState *estate, ResultRelInfo *relinfo,
 	if (val_desc)
 		appendStringInfo(&err_detail, "\n%s", val_desc);
 
+	/* append remote tuple timestamp details if resolver is last_update_wins */
+	if (resolver == CR_LAST_UPDATE_WINS)
+		appendStringInfo(&err_detail, _(" The remote tuple is from orign-id=%u, modified at %s."),
+						 replorigin_session_origin,
+						 timestamptz_to_str(replorigin_session_origin_timestamp));
 	return errdetail_internal("%s", err_detail.data);
 }
 
@@ -693,6 +703,14 @@ ValidateConflictTypeAndResolver(const char *conflict_type,
 					   conflict_resolver,
 					   conflict_type));
 
+	if ((resolver == CR_LAST_UPDATE_WINS) && !track_commit_timestamp)
+		ereport(ERROR,
+				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("resolver %s requires \"%s\" to be enabled",
+					   conflict_resolver, "track_commit_timestamp"),
+				errhint("Make sure the configuration parameter \"%s\" is set.",
+						"track_commit_timestamp"));
+
 	return type;
 }
 
@@ -737,6 +755,42 @@ get_conflict_resolver_internal(ConflictType type, Oid subid)
 }
 
 /*
+ * Compare the timestamps of given local tuple and the remote tuple to
+ * resolve the conflict.
+ *
+ * Returns true if remote tuple has the latest timestamp, false otherwise.
+ */
+static bool
+resolve_by_timestamp(TupleTableSlot *localslot)
+{
+	TransactionId local_xmin;
+	TimestampTz local_ts;
+	RepOriginId local_origin;
+	int			ts_cmp;
+	uint64		local_system_identifier;
+
+	/* Get origin and timestamp info of the local tuple */
+	GetTupleTransactionInfo(localslot, &local_xmin, &local_origin, &local_ts);
+
+	/* Compare the timestamps of remote & local tuple to decide the winner */
+	ts_cmp = timestamptz_cmp_internal(replorigin_session_origin_timestamp,
+									  local_ts);
+
+	if (ts_cmp == 0)
+	{
+		elog(LOG, "Timestamps of remote and local tuple are equal, comparing remote and local system identifiers");
+
+		/* Get current system's identifier */
+		local_system_identifier = GetSystemIdentifier();
+
+		return local_system_identifier <= replorigin_session_origin_sysid;
+	}
+	else
+		return (ts_cmp > 0);
+
+}
+
+/*
  * Check if a full tuple can be created from the new tuple.
  * Return true if yes, false otherwise.
  */
@@ -775,7 +829,8 @@ can_create_full_tuple(Relation localrel,
  */
 List *
 ParseAndGetSubConflictResolvers(ParseState *pstate,
-								List *stmtresolvers, bool add_defaults)
+								List *stmtresolvers, bool add_defaults,
+							   	bool sub_twophase)
 {
 	List		   *res = NIL;
 	bool			already_seen[CONFLICT_NUM_TYPES] = {0};
@@ -799,6 +854,23 @@ ParseAndGetSubConflictResolvers(ParseState *pstate,
 			errorConflictingDefElem(defel, pstate);
 
 		already_seen[type] = true;
+
+		/*
+		 * Time based conflict resolution for two phase transactions can
+		 * result in data divergence, so disallow last_update_wins resolver
+		 * when two_phase is enabled.
+		 *
+		 * XXX: An alternative solution idea is that if a conflict is detected
+		 * and the resolution strategy is last_update_wins, then start writing
+		 * all the changes to a file similar to what we do for streaming mode.
+		 * Once commit_prepared arrives, we will read and apply the changes.
+		 */
+		if ((pg_strcasecmp(resolver, "last_update_wins") == 0) &&
+			 sub_twophase)
+			 ereport(ERROR,
+					 (errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					  errmsg("cannot set %s resolver when \"%s\" is enabled; these options are mutually exclusive",
+						  	 "last_update_wins", "two_phase")));
 
 		conftyperesolver = palloc(sizeof(ConflictTypeResolver));
 		conftyperesolver->conflict_type_name = defel->defname;
@@ -1037,14 +1109,30 @@ RemoveSubConflictResolvers(Oid subid)
  */
 ConflictResolver
 GetConflictResolver(Oid subid, ConflictType type, Relation localrel,
-					LogicalRepTupleData *newtup, bool *apply_remote)
+					TupleTableSlot *conflictslot, LogicalRepTupleData *newtup,
+					bool *apply_remote)
 {
 	ConflictResolver resolver;
 
 	resolver = get_conflict_resolver_internal(type, subid);
 
+	/* If caller has given apply_remote as NULL, simply return the resolver */
+	if (!apply_remote)
+		return resolver;
+
 	switch (resolver)
 	{
+		case CR_LAST_UPDATE_WINS:
+			if (!track_commit_timestamp)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("resolver %s requires \"%s\" to be enabled",
+							   ConflictResolverNames[resolver], "track_commit_timestamp"),
+						errhint("Make sure the configuration parameter \"%s\" is set.",
+								"track_commit_timestamp"));
+			else
+				*apply_remote = resolve_by_timestamp(conflictslot);
+			break;
 		case CR_APPLY_REMOTE:
 			*apply_remote = true;
 			break;
@@ -1071,4 +1159,41 @@ GetConflictResolver(Oid subid, ConflictType type, Relation localrel,
 	}
 
 	return resolver;
+}
+
+/*
+ * Check if the "last_update_wins" resolver is configured
+ * for any conflict type in the given subscription.
+ * Returns true if set, false otherwise.
+ */
+bool
+CheckIfSubHasTimeStampResolver(Oid subid)
+{
+	bool		found = false;
+	bool		started_tx = false;
+	ConflictType type;
+	ConflictResolver resolver;
+
+	/* This function might be called inside or outside of transaction */
+	if (!IsTransactionState())
+	{
+		StartTransactionCommand();
+		started_tx = true;
+	}
+
+	/* Check if any conflict type has resolver set to last_update_wins */
+	for (type = 0; type < CONFLICT_NUM_TYPES; type++)
+	{
+		resolver = get_conflict_resolver_internal(type, subid);
+		if (resolver == CR_LAST_UPDATE_WINS)
+		{
+			found = true;
+			break;
+		}
+	}
+
+	if (started_tx)
+		CommitTransactionCommand();
+
+	return found;
 }

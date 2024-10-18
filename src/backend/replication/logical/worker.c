@@ -1006,6 +1006,12 @@ apply_handle_begin(StringInfo s)
 	in_remote_transaction = true;
 
 	pgstat_report_activity(STATE_RUNNING, NULL);
+
+	/*
+	 * Capture the commit timestamp of the remote transaction for time based
+	 * conflict resolution purpose.
+	 */
+	replorigin_session_origin_timestamp = begin_data.committime;
 }
 
 /*
@@ -2741,7 +2747,7 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 
 			resolver = GetConflictResolver(MySubscription->oid,
 										   CT_UPDATE_ORIGIN_DIFFERS,
-										   localrel, NULL,
+										   localrel, localslot, NULL,
 										   &apply_remote);
 
 			/* Store the new tuple for conflict reporting */
@@ -2834,7 +2840,8 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 		 * UPDATE to INSERT and apply the change.
 		 */
 		resolver = GetConflictResolver(MySubscription->oid, CT_UPDATE_MISSING,
-									   localrel, newtup, &apply_remote);
+									   localrel, localslot, newtup,
+									   &apply_remote);
 
 		ReportApplyConflict(estate, relinfo, CT_UPDATE_MISSING, resolver,
 							remoteslot, NULL, newslot, InvalidOid,
@@ -2989,7 +2996,8 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		{
 			resolver = GetConflictResolver(MySubscription->oid,
 										   CT_DELETE_ORIGIN_DIFFERS,
-										   localrel, NULL, &apply_remote);
+										   localrel, localslot, NULL,
+										   &apply_remote);
 
 			ReportApplyConflict(estate, relinfo, CT_DELETE_ORIGIN_DIFFERS,
 								resolver, remoteslot, localslot, NULL,
@@ -3017,7 +3025,8 @@ apply_handle_delete_internal(ApplyExecutionData *edata,
 		 * configured, either skip and log a message or emit an error.
 		 */
 		resolver = GetConflictResolver(MySubscription->oid, CT_DELETE_MISSING,
-									   localrel, NULL, &apply_remote);
+									   localrel, localslot, NULL,
+									   &apply_remote);
 
 		/* Resolver is set to skip, thus report the conflict and skip */
 		if (!apply_remote)
@@ -3214,8 +3223,8 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 					/* Store the new tuple for conflict reporting */
 					slot_store_data(newslot, part_entry, newtup);
 					resolver = GetConflictResolver(MySubscription->oid,
-												   CT_UPDATE_MISSING,
-												   partrel, newtup,
+												   CT_UPDATE_MISSING, partrel,
+												   localslot, newtup,
 												   &apply_remote);
 
 					/*
@@ -3259,7 +3268,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 
 						resolver = GetConflictResolver(MySubscription->oid,
 													   CT_UPDATE_ORIGIN_DIFFERS,
-													   partrel, NULL,
+													   partrel, localslot, NULL,
 													   &apply_remote);
 
 						ReportApplyConflict(estate, partrelinfo, CT_UPDATE_ORIGIN_DIFFERS,
@@ -4790,6 +4799,7 @@ run_apply_worker()
 	TimeLineID	startpointTLI;
 	char	   *err;
 	bool		must_use_password;
+	char	   *replorigin_sysid;
 
 	slotname = MySubscription->slotname;
 
@@ -4830,10 +4840,12 @@ run_apply_worker()
 						MySubscription->name, err)));
 
 	/*
-	 * We don't really use the output identify_system for anything but it does
-	 * some initializations on the upstream so let's still call it.
+	 * Call identify_system to do some initializations on the upstream and
+	 * store the output as system identifier of the replication origin node.
 	 */
-	(void) walrcv_identify_system(LogRepWorkerWalRcvConn, &startpointTLI);
+	replorigin_sysid = walrcv_identify_system(LogRepWorkerWalRcvConn,
+											  &startpointTLI);
+	replorigin_session_origin_sysid = strtoul(replorigin_sysid, NULL, 10);
 
 	set_apply_error_context_origin(originname);
 

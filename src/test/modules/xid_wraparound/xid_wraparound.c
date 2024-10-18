@@ -38,7 +38,7 @@ consume_xids(PG_FUNCTION_ARGS)
 		elog(ERROR, "invalid nxids argument: %lld", (long long) nxids);
 
 	if (nxids == 0)
-		lastxid = ReadNextFullTransactionId();
+		lastxid = FullTransactionIdFromU64(ReadNextFullTransactionId().value - 1);
 	else
 		lastxid = consume_xids_common(InvalidFullTransactionId, (uint64) nxids);
 
@@ -89,7 +89,11 @@ consume_xids_common(FullTransactionId untilxid, uint64 nxids)
 	 * the cache overflows, but beyond that, we don't keep track of the
 	 * consumed XIDs.
 	 */
-	(void) GetTopTransactionId();
+	if(!FullTransactionIdIsValid(GetTopFullTransactionIdIfAny()))
+	{
+		(void) GetTopTransactionId();
+		consumed++;
+	}
 
 	for (;;)
 	{

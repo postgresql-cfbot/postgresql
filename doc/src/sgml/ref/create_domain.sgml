@@ -197,9 +197,10 @@ CREATE DOMAIN <replaceable class="parameter">name</replaceable> [ AS ] <replacea
    Domain constraints, particularly <literal>NOT NULL</literal>, are checked when
    converting a value to the domain type.  It is possible for a column that
    is nominally of the domain type to read as null despite there being such
-   a constraint.  For example, this can happen in an outer-join query, if
-   the domain column is on the nullable side of the outer join.  A more
-   subtle example is
+   a constraint.  For example, this can happen in
+   <link linkend="nullvalues-domains">an outer-join query</link>, if
+   the domain column is on the nullable side of the outer join.
+   A more subtle example is
 <programlisting>
 INSERT INTO tab (domcol) VALUES ((SELECT domcol FROM tab WHERE false));
 </programlisting>

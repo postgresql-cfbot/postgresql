@@ -2042,6 +2042,32 @@ parse_hba_line(TokenizedAuthLine *tok_line, int elevel)
 		parsedline->clientcert = clientCertFull;
 	}
 
+	/*
+	 * Enforce proper configuration of OAuth authentication.
+	 */
+	if (parsedline->auth_method == uaOAuth)
+	{
+		MANDATORY_AUTH_ARG(parsedline->oauth_scope, "scope", "oauth");
+		MANDATORY_AUTH_ARG(parsedline->oauth_issuer, "issuer", "oauth");
+
+		/*
+		 * Supplying a usermap combined with the option to skip usermapping
+		 * is nonsensical and indicates a configuration error.
+		 */
+		if (parsedline->oauth_skip_usermap && parsedline->usermap != NULL)
+		{
+			ereport(elevel,
+					errcode(ERRCODE_CONFIG_FILE_ERROR),
+					/* translator: strings are replaced with hba options */
+					errmsg("%s cannot be used in combination with %s",
+						   "map", "trust_validator_authz"),
+					errcontext("line %d of configuration file \"%s\"",
+							   line_num, file_name));
+			*err_msg = "map cannot be used in combination with trust_validator_authz";
+			return NULL;
+		}
+	}
+
 	return parsedline;
 }
 

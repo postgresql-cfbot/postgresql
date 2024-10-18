@@ -67,7 +67,10 @@ validator_startup(ValidatorModuleState *state)
 static void
 validator_shutdown(ValidatorModuleState *state)
 {
-	/* do nothing */
+	/* Check to make sure our private state still exists. */
+	if (state->private_data != PRIVATE_COOKIE)
+		elog(ERROR, "oauth_validator: private state cookie changed to %p in shutdown",
+			 state->private_data);
 }
 
 static ValidatorModuleResult *
@@ -77,7 +80,7 @@ validate_token(ValidatorModuleState *state, const char *token, const char *role)
 
 	/* Check to make sure our private state still exists. */
 	if (state->private_data != PRIVATE_COOKIE)
-		elog(ERROR, "oauth_validator: private state cookie changed to %p",
+		elog(ERROR, "oauth_validator: private state cookie changed to %p in validate",
 			 state->private_data);
 
 	res = palloc(sizeof(ValidatorModuleResult));

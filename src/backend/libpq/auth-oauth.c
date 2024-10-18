@@ -90,10 +90,10 @@ oauth_init(Port *port, const char *selected_mech, const char *shadow_pass)
 {
 	struct oauth_ctx *ctx;
 
-	if (strcmp(selected_mech, OAUTHBEARER_NAME))
+	if (strcmp(selected_mech, OAUTHBEARER_NAME) != 0)
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("client selected an invalid SASL authentication mechanism")));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("client selected an invalid SASL authentication mechanism"));
 
 	ctx = palloc0(sizeof(*ctx));
 
@@ -142,14 +142,14 @@ oauth_exchange(void *opaq, const char *input, int inputlen,
 	 */
 	if (inputlen == 0)
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("The message is empty.")));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("The message is empty."));
 	if (inputlen != strlen(input))
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("Message length does not match input length.")));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("Message length does not match input length."));
 
 	switch (ctx->state)
 	{
@@ -165,9 +165,9 @@ oauth_exchange(void *opaq, const char *input, int inputlen,
 			 */
 			if (inputlen != 1 || *input != KVSEP)
 				ereport(ERROR,
-						(errcode(ERRCODE_PROTOCOL_VIOLATION),
-						 errmsg("malformed OAUTHBEARER message"),
-						 errdetail("Client did not send a kvsep response.")));
+						errcode(ERRCODE_PROTOCOL_VIOLATION),
+						errmsg("malformed OAUTHBEARER message"),
+						errdetail("Client did not send a kvsep response."));
 
 			/* The (failed) handshake is now complete. */
 			ctx->state = OAUTH_STATE_FINISHED;
@@ -193,9 +193,9 @@ oauth_exchange(void *opaq, const char *input, int inputlen,
 	{
 		case 'p':
 			ereport(ERROR,
-					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("malformed OAUTHBEARER message"),
-					 errdetail("The server does not support channel binding for OAuth, but the client message includes channel binding data.")));
+					errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("malformed OAUTHBEARER message"),
+					errdetail("The server does not support channel binding for OAuth, but the client message includes channel binding data."));
 			break;
 
 		case 'y':				/* fall through */
@@ -203,19 +203,19 @@ oauth_exchange(void *opaq, const char *input, int inputlen,
 			p++;
 			if (*p != ',')
 				ereport(ERROR,
-						(errcode(ERRCODE_PROTOCOL_VIOLATION),
-						 errmsg("malformed OAUTHBEARER message"),
-						 errdetail("Comma expected, but found character \"%s\".",
-								   sanitize_char(*p))));
+						errcode(ERRCODE_PROTOCOL_VIOLATION),
+						errmsg("malformed OAUTHBEARER message"),
+						errdetail("Comma expected, but found character \"%s\".",
+								  sanitize_char(*p)));
 			p++;
 			break;
 
 		default:
 			ereport(ERROR,
-					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("malformed OAUTHBEARER message"),
-					 errdetail("Unexpected channel-binding flag %s.",
-							   sanitize_char(cbind_flag))));
+					errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("malformed OAUTHBEARER message"),
+					errdetail("Unexpected channel-binding flag \"%s\".",
+							  sanitize_char(cbind_flag)));
 	}
 
 	/*
@@ -223,38 +223,38 @@ oauth_exchange(void *opaq, const char *input, int inputlen,
 	 */
 	if (*p == 'a')
 		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("client uses authorization identity, but it is not supported")));
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("client uses authorization identity, but it is not supported"));
 	if (*p != ',')
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("Unexpected attribute %s in client-first-message.",
-						   sanitize_char(*p))));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("Unexpected attribute \"%s\" in client-first-message.",
+						  sanitize_char(*p)));
 	p++;
 
 	/* All remaining fields are separated by the RFC's kvsep (\x01). */
 	if (*p != KVSEP)
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("Key-value separator expected, but found character %s.",
-						   sanitize_char(*p))));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("Key-value separator expected, but found character \"%s\".",
+						  sanitize_char(*p)));
 	p++;
 
 	auth = parse_kvpairs_for_auth(&p);
 	if (!auth)
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("Message does not contain an auth value.")));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("Message does not contain an auth value."));
 
 	/* We should be at the end of our message. */
 	if (*p)
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("Message contains additional data after the final terminator.")));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("Message contains additional data after the final terminator."));
 
 	if (!validate(ctx->port, auth))
 	{
@@ -308,16 +308,16 @@ validate_kvpair(const char *key, const char *val)
 
 	if (!key[0])
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("Message contains an empty key name.")));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("Message contains an empty key name."));
 
 	span = strspn(key, key_allowed_set);
 	if (key[span] != '\0')
 		ereport(ERROR,
-				(errcode(ERRCODE_PROTOCOL_VIOLATION),
-				 errmsg("malformed OAUTHBEARER message"),
-				 errdetail("Message contains an invalid key name.")));
+				errcode(ERRCODE_PROTOCOL_VIOLATION),
+				errmsg("malformed OAUTHBEARER message"),
+				errdetail("Message contains an invalid key name."));
 
 	/*-----
 	 * From Sec 3.1:
@@ -341,9 +341,9 @@ validate_kvpair(const char *key, const char *val)
 
 			default:
 				ereport(ERROR,
-						(errcode(ERRCODE_PROTOCOL_VIOLATION),
-						 errmsg("malformed OAUTHBEARER message"),
-						 errdetail("Message contains an invalid value.")));
+						errcode(ERRCODE_PROTOCOL_VIOLATION),
+						errmsg("malformed OAUTHBEARER message"),
+						errdetail("Message contains an invalid value."));
 		}
 	}
 }
@@ -386,9 +386,9 @@ parse_kvpairs_for_auth(char **input)
 		end = strchr(pos, KVSEP);
 		if (!end)
 			ereport(ERROR,
-					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("malformed OAUTHBEARER message"),
-					 errdetail("Message contains an unterminated key/value pair.")));
+					errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("malformed OAUTHBEARER message"),
+					errdetail("Message contains an unterminated key/value pair."));
 		*end = '\0';
 
 		if (pos == end)
@@ -404,9 +404,9 @@ parse_kvpairs_for_auth(char **input)
 		sep = strchr(pos, '=');
 		if (!sep)
 			ereport(ERROR,
-					(errcode(ERRCODE_PROTOCOL_VIOLATION),
-					 errmsg("malformed OAUTHBEARER message"),
-					 errdetail("Message contains a key without a value.")));
+					errcode(ERRCODE_PROTOCOL_VIOLATION),
+					errmsg("malformed OAUTHBEARER message"),
+					errdetail("Message contains a key without a value."));
 		*sep = '\0';
 
 		/* Both key and value are now safely terminated. */
@@ -418,9 +418,9 @@ parse_kvpairs_for_auth(char **input)
 		{
 			if (auth)
 				ereport(ERROR,
-						(errcode(ERRCODE_PROTOCOL_VIOLATION),
-						 errmsg("malformed OAUTHBEARER message"),
-						 errdetail("Message contains multiple auth values.")));
+						errcode(ERRCODE_PROTOCOL_VIOLATION),
+						errmsg("malformed OAUTHBEARER message"),
+						errdetail("Message contains multiple auth values."));
 
 			auth = value;
 		}
@@ -438,9 +438,9 @@ parse_kvpairs_for_auth(char **input)
 	}
 
 	ereport(ERROR,
-			(errcode(ERRCODE_PROTOCOL_VIOLATION),
-			 errmsg("malformed OAUTHBEARER message"),
-			 errdetail("Message did not contain a final terminator.")));
+			errcode(ERRCODE_PROTOCOL_VIOLATION),
+			errmsg("malformed OAUTHBEARER message"),
+			errdetail("Message did not contain a final terminator."));
 
 	pg_unreachable();
 	return NULL;
@@ -461,9 +461,9 @@ generate_error_response(struct oauth_ctx *ctx, char **output, int *outputlen)
 	 */
 	if (!ctx->issuer || !ctx->scope)
 		ereport(FATAL,
-				(errcode(ERRCODE_INTERNAL_ERROR),
-				 errmsg("OAuth is not properly configured for this user"),
-				 errdetail_log("The issuer and scope parameters must be set in pg_hba.conf.")));
+				errcode(ERRCODE_INTERNAL_ERROR),
+				errmsg("OAuth is not properly configured for this user"),
+				errdetail_log("The issuer and scope parameters must be set in pg_hba.conf."));
 
 	/*------
 	 * Build the .well-known URI based on our issuer.
@@ -603,6 +603,7 @@ validate(Port *port, const char *auth)
 	int			map_status;
 	ValidatorModuleResult *ret;
 	const char *token;
+	bool		status;
 
 	/* Ensure that we have a correct token to validate */
 	if (!(token = validate_token_format(auth)))
@@ -613,7 +614,10 @@ validate(Port *port, const char *auth)
 										  token, port->user_name);
 
 	if (!ret->authorized)
-		return false;
+	{
+		status = false;
+		goto cleanup;
+	}
 
 	if (ret->authn_id)
 		set_authn_id(port, ret->authn_id);
@@ -626,7 +630,8 @@ validate(Port *port, const char *auth)
 		 * validator implementation; all that matters is that the validator
 		 * says the user can log in with the target role.
 		 */
-		return true;
+		status = true;
+		goto cleanup;
 	}
 
 	/* Make sure the validator authenticated the user. */
@@ -642,9 +647,31 @@ validate(Port *port, const char *auth)
 	/* Finally, check the user map. */
 	map_status = check_usermap(port->hba->usermap, port->user_name,
 							   MyClientConnectionInfo.authn_id, false);
-	return (map_status == STATUS_OK);
+	status = (map_status == STATUS_OK);
+
+cleanup:
+	/*
+	 * Clear and free the validation result from the validator module once
+	 * we're done with it to avoid accidental re-use.
+	 */
+	if (ret->authn_id != NULL)
+	{
+		explicit_bzero(ret->authn_id, strlen(ret->authn_id));
+		pfree(ret->authn_id);
+	}
+	pfree(ret);
+
+	return status;
 }
 
+/*
+ * load_validator_library
+ *
+ * Load the configured validator library in order to perform token validation.
+ * There is no built-in fallback since validation is implementation specific. If
+ * no validator library is configured, or of it fails to load, then error out
+ * since token validation won't be possible.
+ */
 static void
 load_validator_library(void)
 {
@@ -652,20 +679,25 @@ load_validator_library(void)
 
 	if (OAuthValidatorLibrary[0] == '\0')
 		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("oauth_validator_library is not set")));
+				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("oauth_validator_library is not set"));
 
 	validator_init = (OAuthValidatorModuleInit)
 		load_external_function(OAuthValidatorLibrary,
 							   "_PG_oauth_validator_module_init", false, NULL);
 
+	/*
+	 * The validator init function is required since it will set the callbacks
+	 * for the validator library.
+	 */
 	if (validator_init == NULL)
 		ereport(ERROR,
-				(errmsg("%s module \"%s\" have to define the symbol %s",
-						"OAuth validator", OAuthValidatorLibrary, "_PG_oauth_validator_module_init")));
+				errmsg("%s modules \"%s\" have to define the symbol %s",
+					   "OAuth validator", OAuthValidatorLibrary, "_PG_oauth_validator_module_init"));
 
 	ValidatorCallbacks = (*validator_init) ();
 
+	/* Allocate memory for validator library private state data */
 	validator_module_state = (ValidatorModuleState *) palloc0(sizeof(ValidatorModuleState));
 	if (ValidatorCallbacks->startup_cb != NULL)
 		ValidatorCallbacks->startup_cb(validator_module_state);

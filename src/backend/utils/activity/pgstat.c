@@ -190,7 +190,7 @@ static void pgstat_reset_after_failure(void);
 static bool pgstat_flush_pending_entries(bool nowait);
 
 static void pgstat_prep_snapshot(void);
-static void pgstat_build_snapshot(void);
+static void pgstat_build_snapshot(PgStat_Kind statKind);
 static void pgstat_build_snapshot_fixed(PgStat_Kind kind);
 
 static inline bool pgstat_is_kind_valid(PgStat_Kind kind);
@@ -259,7 +259,6 @@ static bool force_stats_snapshot_clear = false;
 static bool pgstat_is_initialized = false;
 static bool pgstat_is_shutdown = false;
 #endif
-
 
 /*
  * The different kinds of built-in statistics.
@@ -879,7 +878,6 @@ pgstat_reset_of_kind(PgStat_Kind kind)
 		pgstat_reset_entries_of_kind(kind, ts);
 }
 
-
 /* ------------------------------------------------------------
  * Fetching of stats
  * ------------------------------------------------------------
@@ -945,7 +943,7 @@ pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, uint64 objid)
 
 	/* if we need to build a full snapshot, do so */
 	if (pgstat_fetch_consistency == PGSTAT_FETCH_CONSISTENCY_SNAPSHOT)
-		pgstat_build_snapshot();
+		pgstat_build_snapshot(PGSTAT_KIND_INVALID);
 
 	/* if caching is desired, look up in cache */
 	if (pgstat_fetch_consistency > PGSTAT_FETCH_CONSISTENCY_NONE)
@@ -1061,7 +1059,7 @@ pgstat_snapshot_fixed(PgStat_Kind kind)
 		pgstat_clear_snapshot();
 
 	if (pgstat_fetch_consistency == PGSTAT_FETCH_CONSISTENCY_SNAPSHOT)
-		pgstat_build_snapshot();
+		pgstat_build_snapshot(PGSTAT_KIND_INVALID);
 	else
 		pgstat_build_snapshot_fixed(kind);
 
@@ -1111,8 +1109,33 @@ pgstat_prep_snapshot(void)
 							   NULL);
 }
 
+
+/*
+ * Trivial external interface to build a snapshot for table statistics only.
+ */
+void
+pgstat_update_snapshot(PgStat_Kind kind)
+{
+	int save_consistency_guc = pgstat_fetch_consistency;
+	pgstat_clear_snapshot();
+
+	PG_TRY();
+	{
+		pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_SNAPSHOT;
+		if (kind == PGSTAT_KIND_RELATION)
+			pgstat_build_snapshot(PGSTAT_KIND_RELATION);
+		else if (kind == PGSTAT_KIND_DATABASE)
+			pgstat_build_snapshot(PGSTAT_KIND_DATABASE);
+	}
+	PG_FINALLY();
+	{
+		pgstat_fetch_consistency = save_consistency_guc;
+	}
+	PG_END_TRY();
+}
+
 static void
-pgstat_build_snapshot(void)
+pgstat_build_snapshot(PgStat_Kind statKind)
 {
 	dshash_seq_status hstat;
 	PgStatShared_HashEntry *p;
@@ -1155,6 +1178,10 @@ pgstat_build_snapshot(void)
 			continue;
 
 		if (p->dropped)
+			continue;
+
+		if (statKind != PGSTAT_KIND_INVALID && statKind != p->key.kind)
+			/* Load stat of specific type, if defined */
 			continue;
 
 		Assert(pg_atomic_read_u32(&p->refcount) > 0);

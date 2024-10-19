@@ -91,6 +91,7 @@
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "port/pg_bitutils.h"
 #include "storage/bufmgr.h"
 #include "storage/smgr.h"
@@ -160,6 +161,18 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags
 
 	if (map[mapByte] & mask)
 	{
+		/*
+		 * Initially, it didn't matter what type of flags (all-visible or frozen) we received,
+		 * we just performed a reverse concatenation operation. But this information is very important
+		 * for vacuum statistics. We need to find out this usingthe bit concatenation operation
+		 * with the VISIBILITYMAP_ALL_VISIBLE and VISIBILITYMAP_ALL_FROZEN masks,
+		 * and where the desired one matches, we increment the value there.
+		*/
+		if (map[mapByte] >> mapOffset & flags & VISIBILITYMAP_ALL_VISIBLE)
+			pgstat_count_vm_rev_all_visible(rel);
+		if (map[mapByte] >> mapOffset & flags & VISIBILITYMAP_ALL_FROZEN)
+			pgstat_count_vm_rev_all_frozen(rel);
+
 		map[mapByte] &= ~mask;
 
 		MarkBufferDirty(vmbuf);

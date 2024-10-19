@@ -96,7 +96,10 @@ typedef enum SnapshotType
 	 * xmax.  If the tuple was inserted speculatively, meaning that the
 	 * inserter might still back down on the insertion without aborting the
 	 * whole transaction, the associated token is also returned in
-	 * snapshot->speculativeToken.  See also InitDirtySnapshot().
+	 * snapshot->speculativeToken. If xip is non-NULL, the xid of the
+	 * deleting transaction is stored into xip[0] if it newer than existing
+	 * xip[0] value.
+	 * See also InitDirtySnapshot().
 	 * -------------------------------------------------------------------------
 	 */
 	SNAPSHOT_DIRTY,

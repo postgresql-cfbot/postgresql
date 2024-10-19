@@ -43,6 +43,7 @@ tests += {
   'isolation': {
     'specs': [
       'inplace',
+      'dirty_index_scan',
     ],
   },
   'tap': {

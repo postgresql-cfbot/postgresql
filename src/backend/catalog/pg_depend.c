@@ -20,19 +20,19 @@
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
+#include "catalog/pg_auth_members.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
 #include "catalog/pg_extension.h"
 #include "catalog/partition.h"
 #include "commands/extension.h"
 #include "miscadmin.h"
+#include "storage/lmgr.h"
+#include "storage/lock.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 #include "utils/rel.h"
-
-
-static bool isObjectPinned(const ObjectAddress *object);
 
 
 /*
@@ -100,6 +100,37 @@ recordMultipleDependencies(const ObjectAddress *depender,
 	slot_init_count = 0;
 	for (i = 0; i < nreferenced; i++, referenced++)
 	{
+#ifdef USE_ASSERT_CHECKING
+		if (!isObjectPinned(referenced))
+		{
+			if (referenced->classId != RelationRelationId)
+			{
+				LOCKTAG		tag;
+
+				SET_LOCKTAG_OBJECT(tag,
+								   MyDatabaseId,
+								   referenced->classId,
+								   referenced->objectId,
+								   0);
+				/* assert the referenced object is locked */
+				Assert(LockHeldByMe(&tag, AccessShareLock, false));
+			}
+			else
+			{
+				Assert(!IsSharedRelation(referenced->objectId));
+
+				/*
+				 * Assert the referenced object is locked if it should be
+				 * visible (see the comment related to LockNotPinnedObject()
+				 * in TypeCreate()).
+				 */
+				Assert(!ObjectByIdExist(referenced) ||
+					   CheckRelationOidLockedByMe(referenced->objectId,
+												  AccessShareLock, true));
+			}
+		}
+#endif
+
 		/*
 		 * If the referenced object is pinned by the system, there's no real
 		 * need to record dependencies on it.  This saves lots of space in
@@ -239,6 +270,7 @@ recordDependencyOnCurrentExtension(const ObjectAddress *object,
 		extension.objectId = CurrentExtensionObject;
 		extension.objectSubId = 0;
 
+		LockNotPinnedObject(ExtensionRelationId, CurrentExtensionObject);
 		recordDependencyOn(object, &extension, DEPENDENCY_EXTENSION);
 	}
 }
@@ -706,7 +738,7 @@ changeDependenciesOn(Oid refClassId, Oid oldRefObjectId,
  * The passed subId, if any, is ignored; we assume that only whole objects
  * are pinned (and that this implies pinning their components).
  */
-static bool
+bool
 isObjectPinned(const ObjectAddress *object)
 {
 	return IsPinnedObject(object->classId, object->objectId);

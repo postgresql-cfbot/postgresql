@@ -69,15 +69,21 @@ COPY x from stdin (encoding 'sql_ascii', encoding 'sql_ascii');
 COPY x from stdin (on_error ignore, on_error ignore);
 COPY x from stdin (log_verbosity default, log_verbosity verbose);
 
--- incorrect options
+-- incorrect COPY {FROM|TO} options
 COPY x from stdin (format BINARY, delimiter ',');
 COPY x from stdin (format BINARY, null 'x');
+COPY x from stdin (format TEXT, escape 'x');
+COPY x from stdin (format BINARY, escape 'x');
+COPY x from stdin (format TEXT, quote 'x');
+COPY x from stdin (format BINARY, quote 'x');
+COPY x from stdin (log_verbosity unsupported);
+
+-- incorrect COPY FROM options
 COPY x from stdin (format BINARY, on_error ignore);
 COPY x from stdin (on_error unsupported);
-COPY x from stdin (format TEXT, force_quote(a));
-COPY x from stdin (format TEXT, force_quote *);
-COPY x from stdin (format CSV, force_quote(a));
-COPY x from stdin (format CSV, force_quote *);
+COPY x from stdin with (on_error ignore, reject_limit 0);
+COPY x from stdin with (reject_limit 1);
+COPY x to stdout (format BINARY, on_error ignore);
 COPY x from stdin (format TEXT, force_not_null(a));
 COPY x from stdin (format TEXT, force_not_null *);
 COPY x to stdout (format CSV, force_not_null(a));
@@ -86,10 +92,12 @@ COPY x from stdin (format TEXT, force_null(a));
 COPY x from stdin (format TEXT, force_null *);
 COPY x to stdout (format CSV, force_null(a));
 COPY x to stdout (format CSV, force_null *);
-COPY x to stdout (format BINARY, on_error unsupported);
-COPY x from stdin (log_verbosity unsupported);
-COPY x from stdin with (reject_limit 1);
-COPY x from stdin with (on_error ignore, reject_limit 0);
+
+-- incorrect COPY TO options
+COPY x to stdout (format TEXT, force_quote(a));
+COPY x to stdout (format TEXT, force_quote *);
+COPY x from stdin (format CSV, force_quote(a));
+COPY x from stdin (format CSV, force_quote *);
 
 -- too many columns in column list: should fail
 COPY x (a, b, c, d, e, d, c) from stdin;

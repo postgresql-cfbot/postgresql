@@ -583,6 +583,38 @@ options(<replaceable>relopts</replaceable> <type>local_relopts *</type>) returns
     </para>
    </listitem>
   </varlistentry>
+  <varlistentry>
+   <term><function>skipsupport</function></term>
+   <listitem>
+    <para>
+     Optionally, a btree operator family may provide a <firstterm>skip
+      support</firstterm> function, registered under support function
+     number 6.  These functions allow the B-tree code to more efficiently
+     navigate the index structure during an index skip scan.  Operator classes
+     that implement skip support provide the core B-Tree code with a way of
+     enumerating and iterating through every possible value from the domain of
+     indexable values.   The APIs involved in this are defined in
+     <filename>src/include/utils/skipsupport.h</filename>.
+    </para>
+    <para>
+     Operator classes that do not provide a skip support function are still
+     eligible to use skip scan.  The core code can still use a fallback
+     strategy, though it might be somewhat less efficient with discrete types.
+     It usually doesn't make sense (and may not even be feasible) for operator
+     classes on continuous types to provide a skip support function.
+    </para>
+    <para>
+     It is not sensible for an operator family to register a cross-type
+     <function>skipsupport</function> function, and attempting to do so will
+     result in an error.  This is because determining the next indexable value
+     from some earlier value does not just depend on sorting/equality
+     semantics, which are more or less defined at the operator family level.
+     Skip scan works by exhaustively considering every possible value stored
+     in an index, so the domain of the particular data type stored within the
+     index must also be considered.
+    </para>
+   </listitem>
+  </varlistentry>
  </variablelist>
 
 </sect2>

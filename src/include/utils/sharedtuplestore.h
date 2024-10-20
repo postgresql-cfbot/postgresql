@@ -58,4 +58,6 @@ extern void sts_puttuple(SharedTuplestoreAccessor *accessor,
 extern MinimalTuple sts_parallel_scan_next(SharedTuplestoreAccessor *accessor,
 										   void *meta_data);
 
+extern void sts_dispose(SharedTuplestoreAccessor *accessor);
+
 #endif							/* SHAREDTUPLESTORE_H */

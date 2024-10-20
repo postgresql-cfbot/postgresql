@@ -98,6 +98,7 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->ambeginscan = hashbeginscan;
 	amroutine->amrescan = hashrescan;
 	amroutine->amgettuple = hashgettuple;
+	amroutine->amgetbatch = hashgetbatch;
 	amroutine->amgetbitmap = hashgetbitmap;
 	amroutine->amendscan = hashendscan;
 	amroutine->ammarkpos = NULL;
@@ -330,6 +331,42 @@ hashgettuple(IndexScanDesc scan, ScanDirection dir)
 
 
 /*
+ *	hashgetbatch() -- Get the next batch of tuples in the scan.
+ */
+bool
+hashgetbatch(IndexScanDesc scan, ScanDirection dir)
+{
+	HashScanOpaque so = (HashScanOpaque) scan->opaque;
+	bool		res;
+
+	/* Hash indexes are always lossy since we store only the hash code */
+	scan->xs_recheck = true;
+
+	/*
+	 * If we've already initialized this scan, we can just advance it in the
+	 * appropriate direction.  If we haven't done so yet, we call a routine to
+	 * get the first item in the scan.
+	 */
+	if (!HashScanPosIsValid(so->currPos))
+		res = _hash_first_batch(scan, dir);
+	else
+	{
+		/*
+		 * Check to see if we should kill tuples from the previous batch.
+		 */
+		_hash_kill_batch(scan);
+
+		/*
+		 * Now continue the scan.
+		 */
+		res = _hash_next_batch(scan, dir);
+	}
+
+	return res;
+}
+
+
+/*
  *	hashgetbitmap() -- get all tuples at once
  */
 int64
@@ -403,6 +440,9 @@ hashrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 
 	if (HashScanPosIsValid(so->currPos))
 	{
+		/* Transfer killed items from the batch to the regular array. */
+		_hash_kill_batch(scan);
+
 		/* Before leaving current page, deal with any killed items */
 		if (so->numKilled > 0)
 			_hash_kill_items(scan);
@@ -432,6 +472,9 @@ hashendscan(IndexScanDesc scan)
 
 	if (HashScanPosIsValid(so->currPos))
 	{
+		/* Transfer killed items from the batch to the regular array. */
+		_hash_kill_batch(scan);
+
 		/* Before leaving current page, deal with any killed items */
 		if (so->numKilled > 0)
 			_hash_kill_items(scan);

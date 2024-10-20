@@ -26,6 +26,7 @@ CLUSTER [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <r
 <phrase>where <replaceable class="parameter">option</replaceable> can be one of:</phrase>
 
     VERBOSE [ <replaceable class="parameter">boolean</replaceable> ]
+    CONCURRENTLY [ <replaceable class="parameter">boolean</replaceable> ]
 </synopsis>
  </refsynopsisdiv>
 
@@ -69,14 +70,18 @@ CLUSTER [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <r
    <replaceable class="parameter">table_name</replaceable> reclusters all the
    previously-clustered tables in the current database that the calling user
    has privileges for.  This form of <command>CLUSTER</command> cannot be
-   executed inside a transaction block.
+   executed inside a transaction block. Also, if
+   the <literal>CONCURRENTLY</literal> option is used with this form, system
+   catalogs and <acronym>TOAST</acronym> tables are not processed.
   </para>
 
   <para>
-   When a table is being clustered, an <literal>ACCESS
-   EXCLUSIVE</literal> lock is acquired on it. This prevents any other
-   database operations (both reads and writes) from operating on the
-   table until the <command>CLUSTER</command> is finished.
+   When a table is being clustered, an <literal>ACCESS EXCLUSIVE</literal>
+   lock is acquired on it. This prevents any other database operations (both
+   reads and writes) from operating on the table until
+   the <command>CLUSTER</command> is finished. If you want to keep the table
+   accessible during the clustering, consider using
+   the <literal>CONCURRENTLY</literal> option.
   </para>
  </refsect1>
 
@@ -107,6 +112,109 @@ CLUSTER [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <r
     <listitem>
      <para>
       Prints a progress report as each table is clustered.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CONCURRENTLY</literal></term>
+    <listitem>
+     <para>
+      Allow other transactions to use the table while it is being clustered.
+     </para>
+
+     <para>
+      Internally, <command>CLUSTER</command> copies the contents of the table
+      (ignoring dead tuples) into a new file, sorted by the specified index,
+      and also creates a new file for each index. Then it swaps the old and
+      new files for the table and all the indexes, and deletes the old
+      files. The <literal>ACCESS EXCLUSIVE</literal> lock is needed to make
+      sure that the old files do not change during the processing because the
+      changes would get lost due to the swap.
+     </para>
+
+     <para>
+      With the <literal>CONCURRENTLY</literal> option, the <literal>ACCESS
+      EXCLUSIVE</literal> lock is only acquired to swap the table and index
+      files. The data changes that took place during the creation of the new
+      table and index files are captured using logical decoding
+      (<xref linkend="logicaldecoding"/>) and applied before
+      the <literal>ACCESS EXCLUSIVE</literal> lock is requested. Thus the lock
+      is typically held only for the time needed to swap the files, which
+      should be pretty short. However, the time might still be noticeable if
+      too many data changes have been done to the table while
+      <command>CLUSTER</command> was waiting for the lock: those changes must
+      be processed just before the files are swapped, while the
+      <literal>ACCESS EXCLUSIVE</literal> lock is being held. If you are
+      worried about this situation, set
+      the <link linkend="guc-cluster-max-xclock-time"><varname>cluster_max_xlock_time</varname></link>
+      configuration parameter to a value that your applications can tolerate.
+     </para>
+
+     <para>
+      Note that <command>CLUSTER</command> with the
+      the <literal>CONCURRENTLY</literal> option does not try to order the
+      rows inserted into the table after the clustering started. Also
+      note <command>CLUSTER</command> might fail to complete due to DDL
+      commands executed on the table by other transactions during the
+      clustering.
+     </para>
+
+     <note>
+      <para>
+       In addition to the temporary space requirements explained below,
+       the <literal>CONCURRENTLY</literal> option can add to the usage of
+       temporary space a bit more. The reason is that other transactions can
+       perform DML operations which cannot be applied to the new file until
+       <command>CLUSTER</command> has copied all the tuples from the old
+       file. Thus the tuples inserted into the old file during the copying are
+       also stored in separately in a temporary file, so they can eventually
+       be applied to the new file.
+      </para>
+
+      <para>
+       Furthermore, the data changes performed during the copying are
+       extracted from <link linkend="wal">write-ahead log</link> (WAL), and
+       this extraction (decoding) only takes place when certain amount of WAL
+       has been written. Therefore, WAL removal can be delayed by this
+       threshold. Currently the threshold is equal to the value of
+       the <link linkend="guc-wal-segment-size"><varname>wal_segment_size</varname></link>
+       configuration parameter.
+      </para>
+     </note>
+
+     <para>
+      The <literal>CONCURRENTLY</literal> option cannot be used in the
+      following cases:
+
+      <itemizedlist>
+       <listitem>
+        <para>
+          The table is a system catalog or a <acronym>TOAST</acronym> table.
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+         <command>CLUSTER</command> is executed inside a transaction block.
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+          The <link linkend="guc-wal-level"><varname>wal_level</varname></link>
+          configuration parameter is less than <literal>logical</literal>.
+        </para>
+       </listitem>
+
+       <listitem>
+        <para>
+         The <link linkend="guc-max-replication-slots"><varname>max_replication_slots</varname></link>
+         configuration parameter does not allow for creation of an additional
+         replication slot.
+        </para>
+       </listitem>
+      </itemizedlist>
      </para>
     </listitem>
    </varlistentry>

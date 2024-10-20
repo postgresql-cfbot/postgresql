@@ -4410,6 +4410,16 @@ AlterTableInternal(Oid relid, List *cmds, bool recurse)
 
 	rel = relation_open(relid, lockmode);
 
+	/*
+	 * If lockmode allows, check if VACUUM FULL / CLUSTER CONCURRENTLY is in
+	 * progress. If lockmode is too weak, cluster_rel() should detect
+	 * incompatible DDLs executed by us.
+	 *
+	 * XXX We might skip the changes for DDLs which do not change the tuple
+	 * descriptor.
+	 */
+	check_for_concurrent_cluster(relid, lockmode);
+
 	EventTriggerAlterTableRelid(relid);
 
 	ATController(NULL, rel, cmds, recurse, lockmode, NULL);
@@ -5840,7 +5850,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 * unlogged anyway.
 			 */
 			OIDNewHeap = make_new_heap(tab->relid, NewTableSpace, NewAccessMethod,
-									   persistence, lockmode);
+									   persistence, lockmode, NULL);
 
 			/*
 			 * Copy the heap data into the new table with the desired
@@ -5860,6 +5870,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			finish_heap_swap(tab->relid, OIDNewHeap,
 							 false, false, true,
 							 !OidIsValid(tab->newTableSpace),
+							 true,
 							 RecentXmin,
 							 ReadNextMultiXactId(),
 							 persistence);

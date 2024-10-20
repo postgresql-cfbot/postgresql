@@ -39,6 +39,7 @@ VACUUM [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <re
     SKIP_DATABASE_STATS [ <replaceable class="parameter">boolean</replaceable> ]
     ONLY_DATABASE_STATS [ <replaceable class="parameter">boolean</replaceable> ]
     BUFFER_USAGE_LIMIT <replaceable class="parameter">size</replaceable>
+    CONCURRENTLY [ <replaceable class="parameter">boolean</replaceable> ]
 
 <phrase>and <replaceable class="parameter">table_and_columns</replaceable> is:</phrase>
 
@@ -61,8 +62,12 @@ VACUUM [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <re
   <para>
    Without a <replaceable class="parameter">table_and_columns</replaceable>
    list, <command>VACUUM</command> processes every table and materialized view
-   in the current database that the current user has permission to vacuum.
-   With a list, <command>VACUUM</command> processes only those table(s).
+   in the current database that the current user has permission to vacuum. If
+   the <literal>CONCURRENTLY</literal> is specified (see below), tables which
+   have not been clustered yet are silently skipped. With a
+   list, <command>VACUUM</command> processes only those table(s). If
+   the <literal>CONCURRENTLY</literal> is specified, the list may only contain
+   tables which have already been clustered.
   </para>
 
   <para>
@@ -356,6 +361,24 @@ VACUUM [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <re
       large a setting may cause too many other useful pages to be evicted from
       shared buffers.  The minimum value is <literal>128 kB</literal> and the
       maximum value is <literal>16 GB</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>CONCURRENTLY</literal></term>
+    <listitem>
+     <para>
+      Allow other transactions to use the table while it is being vacuumed. If
+      this option is specified, <command>VACUUM</command> can only process
+      tables which have already been clustered. For more information, see the
+      description of the <literal>CONCURRENTLY</literal> of the
+      <xref linkend="sql-cluster"/> command.
+     </para>
+
+     <para>
+      The <literal>CONCURRENTLY</literal> option can only be used
+      if <literal>FULL</literal> is used at the same time.
      </para>
     </listitem>
    </varlistentry>

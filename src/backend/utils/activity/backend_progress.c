@@ -33,9 +33,9 @@ pgstat_progress_start_command(ProgressCommandType cmdtype, Oid relid)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_command = cmdtype;
-	beentry->st_progress_command_target = relid;
-	MemSet(&beentry->st_progress_param, 0, sizeof(beentry->st_progress_param));
+	beentry->st_progress.command = cmdtype;
+	beentry->st_progress.command_target = relid;
+	MemSet(&beentry->st_progress.param, 0, sizeof(beentry->st_progress.param));
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -56,7 +56,7 @@ pgstat_progress_update_param(int index, int64 val)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_param[index] = val;
+	beentry->st_progress.param[index] = val;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -77,7 +77,7 @@ pgstat_progress_incr_param(int index, int64 incr)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_param[index] += incr;
+	beentry->st_progress.param[index] += incr;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -134,7 +134,7 @@ pgstat_progress_update_multi_param(int nparam, const int *index,
 	{
 		Assert(index[i] >= 0 && index[i] < PGSTAT_NUM_PROGRESS_PARAM);
 
-		beentry->st_progress_param[index[i]] = val[i];
+		beentry->st_progress.param[index[i]] = val[i];
 	}
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
@@ -155,11 +155,27 @@ pgstat_progress_end_command(void)
 	if (!beentry || !pgstat_track_activities)
 		return;
 
-	if (beentry->st_progress_command == PROGRESS_COMMAND_INVALID)
+	if (beentry->st_progress.command == PROGRESS_COMMAND_INVALID)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_command = PROGRESS_COMMAND_INVALID;
-	beentry->st_progress_command_target = InvalidOid;
+	beentry->st_progress.command = PROGRESS_COMMAND_INVALID;
+	beentry->st_progress.command_target = InvalidOid;
+	PGSTAT_END_WRITE_ACTIVITY(beentry);
+}
+
+void
+pgstat_progress_restore_state(PgBackendProgress *backup)
+{
+	volatile PgBackendStatus *beentry = MyBEEntry;
+
+	if (!beentry || !pgstat_track_activities)
+		return;
+
+	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
+	beentry->st_progress.command = backup->command;
+	beentry->st_progress.command_target = backup->command_target;
+	memcpy(MyBEEntry->st_progress.param, backup->param,
+		   sizeof(beentry->st_progress.param));
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }

@@ -64,6 +64,7 @@
 #include "catalog/pg_type.h"
 #include "catalog/schemapg.h"
 #include "catalog/storage.h"
+#include "commands/cluster.h"
 #include "commands/policy.h"
 #include "commands/publicationcmds.h"
 #include "commands/trigger.h"
@@ -1256,6 +1257,10 @@ retry:
 
 	/* make sure relation is marked as having no open file yet */
 	relation->rd_smgr = NULL;
+
+	/* Is CLUSTER CONCURRENTLY in progress? */
+	relation->rd_cluster_concurrent =
+		is_concurrent_cluster_in_progress(targetRelId);
 
 	/*
 	 * now we can free the memory allocated for pg_class_tuple

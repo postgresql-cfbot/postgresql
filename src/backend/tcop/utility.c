@@ -1299,6 +1299,17 @@ ProcessUtilitySlow(ParseState *pstate,
 					lockmode = AlterTableGetLockLevel(atstmt->cmds);
 					relid = AlterTableLookupRelation(atstmt, lockmode);
 
+					/*
+					 * If lockmode allows, check if VACUUM FULL / CLUSTER
+					 * CONCURRENT is in progress. If lockmode is too weak,
+					 * cluster_rel() should detect incompatible DDLs executed
+					 * by us.
+					 *
+					 * XXX We might skip the changes for DDLs which do not
+					 * change the tuple descriptor.
+					 */
+					check_for_concurrent_cluster(relid, lockmode);
+
 					if (OidIsValid(relid))
 					{
 						AlterTableUtilityContext atcontext;

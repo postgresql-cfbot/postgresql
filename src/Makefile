@@ -23,6 +23,7 @@ SUBDIRS = \
 	interfaces \
 	backend/replication/libpqwalreceiver \
 	backend/replication/pgoutput \
+	backend/replication/pgoutput_cluster \
 	fe_utils \
 	bin \
 	pl \

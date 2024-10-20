@@ -155,18 +155,8 @@ typedef struct PgBackendStatus
 	 */
 	char	   *st_activity_raw;
 
-	/*
-	 * Command progress reporting.  Any command which wishes can advertise
-	 * that it is running by setting st_progress_command,
-	 * st_progress_command_target, and st_progress_param[].
-	 * st_progress_command_target should be the OID of the relation which the
-	 * command targets (we assume there's just one, as this is meant for
-	 * utility commands), but the meaning of each element in the
-	 * st_progress_param array is command-specific.
-	 */
-	ProgressCommandType st_progress_command;
-	Oid			st_progress_command_target;
-	int64		st_progress_param[PGSTAT_NUM_PROGRESS_PARAM];
+	/* Command progress reporting. */
+	PgBackendProgress	st_progress;
 
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	uint64		st_query_id;

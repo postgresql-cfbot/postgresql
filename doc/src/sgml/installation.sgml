@@ -1064,6 +1064,20 @@ build-postgresql:
        </listitem>
       </varlistentry>
 
+      <varlistentry id="configure-option-with-oauth">
+       <term><option>--with-oauth=<replaceable>LIBRARY</replaceable></option></term>
+       <listitem>
+        <para>
+         Build with OAuth authentication and authorization support.  The only
+         <replaceable>LIBRARY</replaceable> supported is <option>curl</option>.
+         This requires the <productname>curl</productname> package to be
+         installed.  Building with this will check for the required header files
+         and libraries to make sure that your <productname>curl</productname>
+         installation is sufficient before proceeding.
+        </para>
+       </listitem>
+      </varlistentry>
+
       <varlistentry id="configure-option-with-systemd">
        <term><option>--with-systemd</option></term>
        <listitem>
@@ -2504,6 +2518,21 @@ ninja install
        <para>
         Build with BSD Authentication support.  (The BSD Authentication
         framework is currently only available on OpenBSD.)  Defaults to auto.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry id="configure-with-oauth">
+      <term><option>-Doauth={ auto | <replaceable>LIBRARY</replaceable> | disabled }</option></term>
+      <listitem>
+       <para>
+        Build with OAuth authentication and authorization support.  The only
+        <replaceable>LIBRARY</replaceable> supported is <option>curl</option>.
+        This requires the <productname>curl</productname> package to be
+        installed.  Building with this will check for the required header files
+        and libraries to make sure that your <productname>curl</productname>
+        installation is sufficient before proceeding. The default for this
+        option is auto.
        </para>
       </listitem>
      </varlistentry>

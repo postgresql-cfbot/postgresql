@@ -250,7 +250,7 @@ transfer_relfile(FileNameMap *map, const char *type_suffix, bool vm_must_add_fro
 				case TRANSFER_MODE_COPY:
 					pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\"",
 						   old_file, new_file);
-					copyFile(old_file, new_file, map->nspname, map->relname);
+					copyFile(old_file, new_file, map->nspname, map->relname, segno);
 					break;
 				case TRANSFER_MODE_COPY_FILE_RANGE:
 					pg_log(PG_VERBOSE, "copying \"%s\" to \"%s\" with copy_file_range",

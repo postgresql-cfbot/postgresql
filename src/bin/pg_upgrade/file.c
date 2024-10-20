@@ -80,12 +80,14 @@ cloneFile(const char *src, const char *dst,
  */
 void
 copyFile(const char *src, const char *dst,
-		 const char *schemaName, const char *relName)
+		 const char *schemaName, const char *relName,
+		 int segno)
 {
 #ifndef WIN32
 	int			src_fd;
 	int			dest_fd;
 	char	   *buffer;
+	BlockNumber blocknum;
 
 	if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) < 0)
 		pg_fatal("error while copying relation \"%s.%s\": could not open file \"%s\": %m",
@@ -101,6 +103,8 @@ copyFile(const char *src, const char *dst,
 
 	buffer = (char *) pg_malloc(COPY_BUF_SIZE);
 
+	blocknum = segno * old_cluster.controldata.largesz;
+
 	/* perform data copying i.e read src source, write to destination */
 	while (true)
 	{
@@ -112,6 +116,31 @@ copyFile(const char *src, const char *dst,
 
 		if (nbytes == 0)
 			break;
+
+		/*
+		 * Update checksums if upgrading between different settings
+		 */
+		if (old_cluster.controldata.data_checksum_version != new_cluster.controldata.data_checksum_version)
+		{
+			/* must deal in whole blocks */
+			nbytes = nbytes / BLCKSZ * BLCKSZ;
+
+			for (int i = 0; i * BLCKSZ < nbytes; i++)
+			{
+				char	   *page = buffer + i * BLCKSZ;
+				PageHeader	header = (PageHeader) page;
+
+				if (PageIsNew(page))
+					continue;
+
+				if (new_cluster.controldata.data_checksum_version == 1)
+					header->pd_checksum = pg_checksum_page(page, blocknum);
+				else
+					header->pd_checksum = 0;
+
+				blocknum++;
+			}
+		}
 
 		errno = 0;
 		if (write(dest_fd, buffer, nbytes) != nbytes)

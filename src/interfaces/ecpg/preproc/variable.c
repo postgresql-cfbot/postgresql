@@ -277,7 +277,12 @@ remove_typedefs(int brace_level)
 				prev->next = p->next;
 
 			if (p->type->type_enum == ECPGt_struct || p->type->type_enum == ECPGt_union)
-				free(p->struct_member_list);
+				ECPGfree_struct_member(p->struct_member_list);
+			free(p->type->type_storage);
+			free(p->type->type_str);
+			free(p->type->type_dimension);
+			free(p->type->type_index);
+			free(p->type->type_sizeof);
 			free(p->type);
 			free(p->name);
 			free(p);
@@ -310,10 +315,12 @@ remove_variables(int brace_level)
 			for (ptr = cur; ptr != NULL; ptr = ptr->next)
 			{
 				struct arguments *varptr,
-						   *prevvar;
+						   *prevvar,
+						   *nextvar;
 
-				for (varptr = prevvar = ptr->argsinsert; varptr != NULL; varptr = varptr->next)
+				for (varptr = prevvar = ptr->argsinsert; varptr != NULL; varptr = nextvar)
 				{
+					nextvar = varptr->next;
 					if (p == varptr->variable)
 					{
 						/* remove from list */
@@ -321,10 +328,12 @@ remove_variables(int brace_level)
 							ptr->argsinsert = varptr->next;
 						else
 							prevvar->next = varptr->next;
+						free(varptr);
 					}
 				}
-				for (varptr = prevvar = ptr->argsresult; varptr != NULL; varptr = varptr->next)
+				for (varptr = prevvar = ptr->argsresult; varptr != NULL; varptr = nextvar)
 				{
+					nextvar = varptr->next;
 					if (p == varptr->variable)
 					{
 						/* remove from list */
@@ -332,6 +341,7 @@ remove_variables(int brace_level)
 							ptr->argsresult = varptr->next;
 						else
 							prevvar->next = varptr->next;
+						free(varptr);
 					}
 				}
 			}
@@ -371,7 +381,20 @@ struct arguments *argsresult = NULL;
 void
 reset_variables(void)
 {
+	struct arguments *p,
+			   *next;
+
+	for (p = argsinsert; p; p = next)
+	{
+		next = p->next;
+		free(p);
+	}
 	argsinsert = NULL;
+	for (p = argsresult; p; p = next)
+	{
+		next = p->next;
+		free(p);
+	}
 	argsresult = NULL;
 }
 
@@ -430,6 +453,7 @@ remove_variable_from_list(struct arguments **list, struct variable *var)
 			prev->next = p->next;
 		else
 			*list = p->next;
+		free(p);
 	}
 }
 

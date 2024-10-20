@@ -92,22 +92,51 @@ typedef struct HeapScanDescData
 	 */
 	ParallelBlockTableScanWorkerData *rs_parallelworkerdata;
 
-	/*
-	 * These fields are only used for bitmap scans for the "skip fetch"
-	 * optimization. Bitmap scans needing no fields from the heap may skip
-	 * fetching an all visible block, instead using the number of tuples per
-	 * block reported by the bitmap to determine how many NULL-filled tuples
-	 * to return.
-	 */
-	Buffer		rs_vmbuffer;
-	int			rs_empty_tuples_pending;
-
 	/* these fields only used in page-at-a-time mode and for bitmap scans */
 	int			rs_cindex;		/* current tuple's index in vistuples */
 	int			rs_ntuples;		/* number of visible tuples on page */
 	OffsetNumber rs_vistuples[MaxHeapTuplesPerPage];	/* their offsets */
 }			HeapScanDescData;
 typedef struct HeapScanDescData *HeapScanDesc;
+
+
+/*
+* For prefetching, we use *two* iterators, one for the pages we are
+* actually scanning and another that runs ahead of the first for
+* prefetching. prefetch_pages tracks exactly how many pages ahead
+* the prefetch iterator is.  Also, prefetch_target tracks the
+* desired prefetch distance, which starts small and increases up to the
+* prefetch_maximum.  This is to avoid doing a lot of prefetching in
+* a scan that stops after a few tuples because of a LIMIT.
+*/
+typedef struct BitmapHeapScanDescData
+{
+	HeapScanDescData rs_heap_base;
+
+	/* used to validate prefetch block stays ahead of current block */
+	BlockNumber rs_prefetch_blockno;
+	/* maximum value for prefetch_target */
+	int			rs_prefetch_maximum;
+	/* Current target for prefetch distance */
+	int			rs_prefetch_target;
+	/* # pages prefetch iterator is ahead of current */
+	int			rs_prefetch_pages;
+
+	/*
+	 * These fields are only used for bitmap scans for the "skip fetch"
+	 * optimization. Bitmap scans needing no fields from the heap may skip
+	 * fetching an all visible block, instead using the number of tuples per
+	 * block reported by the bitmap to determine how many NULL-filled tuples
+	 * to return. They are common to parallel and serial BitmapHeapScans
+	 */
+
+	/* page of VM containing info for current block */
+	Buffer		rs_vmbuffer;
+	/* page of VM containing info for prefetch block */
+	Buffer		rs_pvmbuffer;
+	int			rs_empty_tuples_pending;
+}			BitmapHeapScanDescData;
+typedef struct BitmapHeapScanDescData *BitmapHeapScanDesc;
 
 /*
  * Descriptor for fetches from heap via an index.
@@ -290,7 +319,8 @@ typedef enum
 extern TableScanDesc heap_beginscan(Relation relation, Snapshot snapshot,
 									int nkeys, ScanKey key,
 									ParallelTableScanDesc parallel_scan,
-									uint32 flags);
+									uint32 flags,
+									int prefetch_maximum);
 extern void heap_setscanlimits(TableScanDesc sscan, BlockNumber startBlk,
 							   BlockNumber numBlks);
 extern void heap_prepare_pagescan(TableScanDesc sscan);

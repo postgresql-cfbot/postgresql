@@ -149,7 +149,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	/*
 	 * Is it already toasted?
 	 */
-	if (rel->rd_rel->reltoastrelid != InvalidOid)
+	if (OidIsValid(RelationGetToastRelid(rel)))
 		return false;
 
 	/*

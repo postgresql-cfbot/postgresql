@@ -326,7 +326,7 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		/* Create a QueryDesc, redirecting output to our tuple receiver */
 		queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
 									GetActiveSnapshot(), InvalidSnapshot,
-									dest, params, queryEnv, 0);
+									dest, params, is_matview ? NULL : queryEnv, 0);
 
 		/* call ExecutorStart to prepare the plan for execution */
 		ExecutorStart(queryDesc, GetIntoRelEFlags(into));

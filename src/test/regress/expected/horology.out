@@ -3453,6 +3453,8 @@ SELECT i, to_timestamp('2018-11-02 12:34:56.123456', 'YYYY-MM-DD HH24:MI:SS.FF' 
 
 SELECT i, to_timestamp('2018-11-02 12:34:56.123456789', 'YYYY-MM-DD HH24:MI:SS.FF' || i) FROM generate_series(1, 6) i;
 ERROR:  date/time field value out of range: "2018-11-02 12:34:56.123456789"
+SELECT to_timestamp('1000000000,999', 'Y,YYY');
+ERROR:  invalid input string for "Y,YYY"
 SELECT to_date('1 4 1902', 'Q MM YYYY');  -- Q is ignored
   to_date   
 ------------
@@ -3783,6 +3785,8 @@ SELECT to_date('0000-02-01','YYYY-MM-DD');  -- allowed, though it shouldn't be
  02-01-0001 BC
 (1 row)
 
+SELECT to_date('100000000', 'CC');
+ERROR:  date out of range: "100000000"
 -- to_char's TZ format code produces zone abbrev if known
 SELECT to_char('2012-12-12 12:00'::timestamptz, 'YYYY-MM-DD HH:MI:SS TZ');
          to_char         

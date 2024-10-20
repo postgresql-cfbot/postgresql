@@ -13,6 +13,8 @@ subdir = src/test/authentication
 top_builddir = ../../..
 include $(top_builddir)/src/Makefile.global
 
+export enable_injection_points
+
 check:
 	$(prove_check)
 

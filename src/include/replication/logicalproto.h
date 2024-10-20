@@ -113,6 +113,8 @@ typedef struct LogicalRepRelation
 	char		replident;		/* replica identity */
 	char		relkind;		/* remote relation kind */
 	Bitmapset  *attkeys;		/* Bitmap of key columns */
+	bool	   *remotegenlist;	/* Array to store whether each column is
+								 * generated */
 } LogicalRepRelation;
 
 /* Type mapping info */

@@ -766,7 +766,7 @@ send_relation_and_attrs(Relation relation, TransactionId xid,
 	{
 		Form_pg_attribute att = TupleDescAttr(desc, i);
 
-		if (att->attisdropped || att->attgenerated)
+		if (att->attisdropped)
 			continue;
 
 		if (att->atttypid < FirstGenbkiObjectId)
@@ -1009,6 +1009,37 @@ pgoutput_row_filter_init(PGOutputData *data, List *publications,
 }
 
 /*
+ * Return a column list bitmap for the specified table.
+ *
+ * Generated columns are excluded.
+ */
+static Bitmapset *
+prepare_nogen_columns_bms(PGOutputData *data, RelationSyncEntry *entry,
+						  TupleDesc desc)
+{
+	Bitmapset  *cols = NULL;
+	MemoryContext oldcxt = NULL;
+
+	pgoutput_ensure_entry_cxt(data, entry);
+	oldcxt = MemoryContextSwitchTo(entry->entry_cxt);
+
+	for (int i = 0; i < desc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, i);
+
+		/* Skip if the attribute is dropped or generated */
+		if (att->attisdropped || att->attgenerated)
+			continue;
+
+		cols = bms_add_member(cols, i + 1);
+	}
+
+	MemoryContextSwitchTo(oldcxt);
+
+	return cols;
+}
+
+/*
  * Initialize the column list.
  */
 static void
@@ -1042,13 +1073,20 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 		Bitmapset  *cols = NULL;
 
 		/*
-		 * If the publication is FOR ALL TABLES then it is treated the same as
-		 * if there are no column lists (even if other publications have a
-		 * list).
+		 * Process potential column lists for the following cases:
+		 *
+		 * a. Any publication that is not FOR ALL TABLES.
+		 *
+		 * b. When the publication is FOR ALL TABLES and
+		 * 'publish_generated_columns' is false. FOR ALL TABLES publication
+		 * doesn't have user-defined column lists, so all columns will be
+		 * replicated by default. However, if 'publish_generated_columns' is
+		 * set to false, column lists must still be created to exclude any
+		 * generated columns from being published.
 		 */
-		if (!pub->alltables)
+		if (!(pub->alltables && pub->pubgencols))
 		{
-			bool		pub_no_list = true;
+			bool		pub_rel_has_collist = false;
 
 			/*
 			 * Check for the presence of a column list in this publication.
@@ -1063,47 +1101,53 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 
 			if (HeapTupleIsValid(cftuple))
 			{
+				bool		pub_no_list = true;
+
 				/* Lookup the column list attribute. */
 				cfdatum = SysCacheGetAttr(PUBLICATIONRELMAP, cftuple,
 										  Anum_pg_publication_rel_prattrs,
 										  &pub_no_list);
 
-				/* Build the column list bitmap in the per-entry context. */
-				if (!pub_no_list)	/* when not null */
+				pub_rel_has_collist = !pub_no_list;
+			}
+
+			/* Build the column list bitmap in the per-entry context. */
+			if (pub_rel_has_collist || !pub->pubgencols)
+			{
+				int			nliveatts = 0;
+				TupleDesc	desc = RelationGetDescr(relation);
+
+				pgoutput_ensure_entry_cxt(data, entry);
+
+				if (pub_rel_has_collist)
+					cols = pub_collist_to_bitmapset(cols, cfdatum, entry->entry_cxt);
+				else
+					cols = prepare_nogen_columns_bms(data, entry, desc);
+
+				/* Get the number of live attributes. */
+				for (int i = 0; i < desc->natts; i++)
 				{
-					int			i;
-					int			nliveatts = 0;
-					TupleDesc	desc = RelationGetDescr(relation);
+					Form_pg_attribute att = TupleDescAttr(desc, i);
 
-					pgoutput_ensure_entry_cxt(data, entry);
+					if (att->attisdropped)
+						continue;
 
-					cols = pub_collist_to_bitmapset(cols, cfdatum,
-													entry->entry_cxt);
-
-					/* Get the number of live attributes. */
-					for (i = 0; i < desc->natts; i++)
-					{
-						Form_pg_attribute att = TupleDescAttr(desc, i);
-
-						if (att->attisdropped || att->attgenerated)
-							continue;
-
-						nliveatts++;
-					}
-
-					/*
-					 * If column list includes all the columns of the table,
-					 * set it to NULL.
-					 */
-					if (bms_num_members(cols) == nliveatts)
-					{
-						bms_free(cols);
-						cols = NULL;
-					}
+					nliveatts++;
 				}
 
-				ReleaseSysCache(cftuple);
+				/*
+				 * If column list includes all the columns of the table, set
+				 * it to NULL.
+				 */
+				if (bms_num_members(cols) == nliveatts)
+				{
+					bms_free(cols);
+					cols = NULL;
+				}
 			}
+
+			if (HeapTupleIsValid(cftuple))
+				ReleaseSysCache(cftuple);
 		}
 
 		if (first)

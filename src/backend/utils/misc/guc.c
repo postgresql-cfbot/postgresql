@@ -40,6 +40,7 @@
 #include "miscadmin.h"
 #include "parser/scansup.h"
 #include "port/pg_bitutils.h"
+#include "postmaster/postmaster.h"
 #include "storage/fd.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -6331,6 +6332,11 @@ ParseLongOption(const char *string, char **name, char **value)
 	Assert(string);
 	Assert(name);
 	Assert(value);
+
+	/* parse_subprogram() returns SUBPROGRAM_POSTMASTER if no match */
+	if (unlikely(parse_subprogram(string) != SUBPROGRAM_POSTMASTER))
+		ereport(ERROR,
+				(errmsg("--%s must be first argument", string)));
 
 	equal_pos = strcspn(string, "=");
 

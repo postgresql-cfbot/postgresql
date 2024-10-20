@@ -3442,6 +3442,7 @@ construct_array_builtin(Datum *elems, int nelems, Oid elmtype)
 			break;
 
 		case TEXTOID:
+		case NUMERICOID:
 			elmlen = -1;
 			elmbyval = false;
 			elmalign = TYPALIGN_INT;

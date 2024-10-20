@@ -659,6 +659,10 @@ pg_parse_query(const char *query_string)
 
 #endif							/* DEBUG_NODE_TESTS_ENABLED */
 
+	if (Debug_print_parse)
+		elog_node_display(LOG, "raw parse tree", raw_parsetree_list,
+						  Debug_pretty_print);
+
 	TRACE_POSTGRESQL_QUERY_PARSE_DONE(query_string);
 
 	return raw_parsetree_list;

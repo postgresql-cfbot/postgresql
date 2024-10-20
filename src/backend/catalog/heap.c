@@ -742,7 +742,6 @@ InsertPgAttributeTuples(Relation pg_attribute_rel,
 		slot[slotCount]->tts_values[Anum_pg_attribute_attnum - 1] = Int16GetDatum(attrs->attnum);
 		slot[slotCount]->tts_values[Anum_pg_attribute_attcacheoff - 1] = Int32GetDatum(-1);
 		slot[slotCount]->tts_values[Anum_pg_attribute_atttypmod - 1] = Int32GetDatum(attrs->atttypmod);
-		slot[slotCount]->tts_values[Anum_pg_attribute_attndims - 1] = Int16GetDatum(attrs->attndims);
 		slot[slotCount]->tts_values[Anum_pg_attribute_attbyval - 1] = BoolGetDatum(attrs->attbyval);
 		slot[slotCount]->tts_values[Anum_pg_attribute_attalign - 1] = CharGetDatum(attrs->attalign);
 		slot[slotCount]->tts_values[Anum_pg_attribute_attstorage - 1] = CharGetDatum(attrs->attstorage);
@@ -1062,7 +1061,6 @@ AddNewRelationType(const char *typeName,
 				   TYPALIGN_DOUBLE, /* alignment - must be the largest! */
 				   TYPSTORAGE_EXTENDED, /* fully TOASTable */
 				   -1,			/* typmod */
-				   0,			/* array dimensions for typBaseType */
 				   false,		/* Type NOT NULL */
 				   InvalidOid); /* rowtypes never have a collation */
 }
@@ -1385,7 +1383,6 @@ heap_create_with_catalog(const char *relname,
 				   TYPALIGN_DOUBLE, /* alignment - must be the largest! */
 				   TYPSTORAGE_EXTENDED, /* fully TOASTable */
 				   -1,			/* typmod */
-				   0,			/* array dimensions for typBaseType */
 				   false,		/* Type NOT NULL */
 				   InvalidOid); /* rowtypes never have a collation */
 

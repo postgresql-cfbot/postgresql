@@ -1537,7 +1537,7 @@ create_merge_append_path(PlannerInfo *root,
 
 			cost_sort(&sort_path,
 					  root,
-					  pathkeys,
+					  list_length(pathkeys),
 					  subpath->disabled_nodes,
 					  subpath->total_cost,
 					  subpath->rows,
@@ -1866,7 +1866,7 @@ create_unique_path(PlannerInfo *root, RelOptInfo *rel, Path *subpath,
 		/*
 		 * Estimate cost for sort+unique implementation
 		 */
-		cost_sort(&sort_path, root, NIL,
+		cost_sort(&sort_path, root, list_length(subpath->pathtarget->exprs),
 				  subpath->disabled_nodes,
 				  subpath->total_cost,
 				  rel->rows,
@@ -3101,7 +3101,7 @@ create_sort_path(PlannerInfo *root,
 
 	pathnode->subpath = subpath;
 
-	cost_sort(&pathnode->path, root, pathkeys,
+	cost_sort(&pathnode->path, root, list_length(pathkeys),
 			  subpath->disabled_nodes,
 			  subpath->total_cost,
 			  subpath->rows,
@@ -3436,7 +3436,7 @@ create_groupingsets_path(PlannerInfo *root,
 			else
 			{
 				/* Account for cost of sort, but don't charge input cost again */
-				cost_sort(&sort_path, root, NIL, 0,
+				cost_sort(&sort_path, root, list_length(subpath->pathtarget->exprs), 0,
 						  0.0,
 						  subpath->rows,
 						  subpath->pathtarget->width,

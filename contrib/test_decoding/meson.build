@@ -63,6 +63,7 @@ tests += {
       'twophase_snapshot',
       'slot_creation_error',
       'skip_snapshot_restore',
+      'snapshot_build',
     ],
     'regress_args': [
       '--temp-config', files('logical.conf'),

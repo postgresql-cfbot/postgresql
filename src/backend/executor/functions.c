@@ -33,9 +33,14 @@
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/plancache.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 
+/*
+ * GUC variables
+ */
+bool		enable_sql_func_custom_plans = true;
 
 /*
  * Specialized DestReceiver for collecting query output in a SQL function
@@ -111,6 +116,11 @@ typedef struct
 	Tuplestorestate *tstore;	/* where we accumulate result tuples */
 
 	JunkFilter *junkFilter;		/* will be NULL if function returns VOID */
+
+	/* Cached plans support */
+	List	   *queryTree_list; /* list of query lists */
+	List	   *plansource_list;	/* list of plansource */
+	List	   *cplan_list;		/* list of cached plans */
 
 	/*
 	 * func_state is a List of execution_state records, each of which is the
@@ -454,6 +464,40 @@ sql_fn_resolve_param_name(SQLFunctionParseInfoPtr pinfo,
 	return NULL;
 }
 
+/* Precheck command for validity in a function */
+static void
+check_planned_stmt(PlannedStmt *stmt, SQLFunctionCachePtr fcache)
+{
+
+	/*
+	 * Precheck all commands for validity in a function.  This should
+	 * generally match the restrictions spi.c applies.
+	 */
+	if (stmt->commandType == CMD_UTILITY)
+	{
+		if (IsA(stmt->utilityStmt, CopyStmt) &&
+			((CopyStmt *) stmt->utilityStmt)->filename == NULL)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("cannot COPY to/from client in an SQL function")));
+
+		if (IsA(stmt->utilityStmt, TransactionStmt))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+			/* translator: %s is a SQL statement name */
+					 errmsg("%s is not allowed in an SQL function",
+							CreateCommandName(stmt->utilityStmt))));
+	}
+
+	if (fcache->readonly_func && !CommandIsReadOnly(stmt))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+		/* translator: %s is a SQL statement name */
+				 errmsg("%s is not allowed in a non-volatile function",
+						CreateCommandName((Node *) stmt))));
+
+}
+
 /*
  * Set up the per-query execution_state records for a SQL function.
  *
@@ -466,85 +510,117 @@ init_execution_state(List *queryTree_list,
 					 bool lazyEvalOK)
 {
 	List	   *eslist = NIL;
+	List	   *cplan_list = NIL;
 	execution_state *lasttages = NULL;
 	ListCell   *lc1;
 
 	foreach(lc1, queryTree_list)
 	{
-		List	   *qtlist = lfirst_node(List, lc1);
+		List	   *qtlist;
 		execution_state *firstes = NULL;
 		execution_state *preves = NULL;
 		ListCell   *lc2;
 
-		foreach(lc2, qtlist)
+		if (fcache->plansource_list)
 		{
-			Query	   *queryTree = lfirst_node(Query, lc2);
-			PlannedStmt *stmt;
-			execution_state *newes;
+			CachedPlan *cplan;
+			CachedPlanSource *plansource;
+			int			cur_idx;
 
-			/* Plan the query if needed */
-			if (queryTree->commandType == CMD_UTILITY)
-			{
-				/* Utility commands require no planning. */
-				stmt = makeNode(PlannedStmt);
-				stmt->commandType = CMD_UTILITY;
-				stmt->canSetTag = queryTree->canSetTag;
-				stmt->utilityStmt = queryTree->utilityStmt;
-				stmt->stmt_location = queryTree->stmt_location;
-				stmt->stmt_len = queryTree->stmt_len;
-				stmt->queryId = queryTree->queryId;
-			}
-			else
-				stmt = pg_plan_query(queryTree,
-									 fcache->src,
-									 CURSOR_OPT_PARALLEL_OK,
-									 NULL);
+			/* Find plan source, corresponding to this query list */
+			cur_idx = foreach_current_index(lc1);
+			plansource = list_nth(fcache->plansource_list, cur_idx);
 
 			/*
-			 * Precheck all commands for validity in a function.  This should
-			 * generally match the restrictions spi.c applies.
+			 * Get plan for the query. If paramLI is set, we can get custom
+			 * plan
 			 */
-			if (stmt->commandType == CMD_UTILITY)
+			cplan = GetCachedPlan(plansource, fcache->paramLI, NULL, NULL);
+
+			/* Record cplan in plan list to be released on replanning */
+			cplan_list = lappend(cplan_list, cplan);
+
+			/* For each planned statement create execution state */
+			foreach(lc2, cplan->stmt_list)
 			{
-				if (IsA(stmt->utilityStmt, CopyStmt) &&
-					((CopyStmt *) stmt->utilityStmt)->filename == NULL)
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot COPY to/from client in an SQL function")));
+				PlannedStmt *stmt = lfirst(lc2);
+				execution_state *newes;
 
-				if (IsA(stmt->utilityStmt, TransactionStmt))
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					/* translator: %s is a SQL statement name */
-							 errmsg("%s is not allowed in an SQL function",
-									CreateCommandName(stmt->utilityStmt))));
+				/* Check that stmt is valid for SQL function */
+				check_planned_stmt(stmt, fcache);
+
+				newes = (execution_state *) palloc(sizeof(execution_state));
+
+				if (preves)
+					preves->next = newes;
+				else
+					firstes = newes;
+
+				newes->next = NULL;
+				newes->status = F_EXEC_START;
+				newes->setsResult = false;	/* might change below */
+				newes->lazyEval = false;	/* might change below */
+				newes->stmt = stmt;
+				newes->qd = NULL;
+
+				if (stmt->canSetTag)
+					lasttages = newes;
+
+				preves = newes;
 			}
+		}
+		else
+		{
+			qtlist = lfirst_node(List, lc1);
 
-			if (fcache->readonly_func && !CommandIsReadOnly(stmt))
-				ereport(ERROR,
-						(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				/* translator: %s is a SQL statement name */
-						 errmsg("%s is not allowed in a non-volatile function",
-								CreateCommandName((Node *) stmt))));
+			foreach(lc2, qtlist)
+			{
+				Query	   *queryTree = lfirst_node(Query, lc2);
+				PlannedStmt *stmt;
+				execution_state *newes;
 
-			/* OK, build the execution_state for this query */
-			newes = (execution_state *) palloc(sizeof(execution_state));
-			if (preves)
-				preves->next = newes;
-			else
-				firstes = newes;
+				/* Plan the query if needed */
+				if (queryTree->commandType == CMD_UTILITY)
+				{
+					/* Utility commands require no planning. */
+					stmt = makeNode(PlannedStmt);
+					stmt->commandType = CMD_UTILITY;
+					stmt->canSetTag = queryTree->canSetTag;
+					stmt->utilityStmt = queryTree->utilityStmt;
+					stmt->stmt_location = queryTree->stmt_location;
+					stmt->stmt_len = queryTree->stmt_len;
+					stmt->queryId = queryTree->queryId;
+				}
+				else
+				{
+					/* Get generic plan for the query */
+					stmt = pg_plan_query(queryTree,
+										 fcache->src,
+										 CURSOR_OPT_PARALLEL_OK,
+										 NULL);
+				}
 
-			newes->next = NULL;
-			newes->status = F_EXEC_START;
-			newes->setsResult = false;	/* might change below */
-			newes->lazyEval = false;	/* might change below */
-			newes->stmt = stmt;
-			newes->qd = NULL;
+				/* Check that stmt is valid for SQL function */
+				check_planned_stmt(stmt, fcache);
 
-			if (queryTree->canSetTag)
-				lasttages = newes;
+				newes = (execution_state *) palloc(sizeof(execution_state));
+				if (preves)
+					preves->next = newes;
+				else
+					firstes = newes;
 
-			preves = newes;
+				newes->next = NULL;
+				newes->status = F_EXEC_START;
+				newes->setsResult = false;	/* might change below */
+				newes->lazyEval = false;	/* might change below */
+				newes->stmt = stmt;
+				newes->qd = NULL;
+
+				if (queryTree->canSetTag)
+					lasttages = newes;
+
+				preves = newes;
+			}
 		}
 
 		eslist = lappend(eslist, firstes);
@@ -573,6 +649,7 @@ init_execution_state(List *queryTree_list,
 			fcache->lazyEval = lasttages->lazyEval = true;
 	}
 
+	fcache->cplan_list = cplan_list;
 	return eslist;
 }
 
@@ -596,6 +673,7 @@ init_sql_fcache(FunctionCallInfo fcinfo, Oid collation, bool lazyEvalOK)
 	ListCell   *lc;
 	Datum		tmp;
 	bool		isNull;
+	List	   *plansource_list;
 
 	/*
 	 * Create memory context that holds all the SQLFunctionCache data.  It
@@ -680,6 +758,7 @@ init_sql_fcache(FunctionCallInfo fcinfo, Oid collation, bool lazyEvalOK)
 	 * plancache.c.
 	 */
 	queryTree_list = NIL;
+	plansource_list = NIL;
 	if (!isNull)
 	{
 		Node	   *n;
@@ -695,8 +774,16 @@ init_sql_fcache(FunctionCallInfo fcinfo, Oid collation, bool lazyEvalOK)
 		{
 			Query	   *parsetree = lfirst_node(Query, lc);
 			List	   *queryTree_sublist;
+			CachedPlanSource *plansource;
 
 			AcquireRewriteLocks(parsetree, true, false);
+
+			if (enable_sql_func_custom_plans)
+			{
+				plansource = CreateCachedPlan(NULL, fcache->src, CreateCommandTag((Node *)parsetree));
+				plansource_list = lappend(plansource_list, plansource);
+			}
+
 			queryTree_sublist = pg_rewrite_query(parsetree);
 			queryTree_list = lappend(queryTree_list, queryTree_sublist);
 		}
@@ -711,6 +798,13 @@ init_sql_fcache(FunctionCallInfo fcinfo, Oid collation, bool lazyEvalOK)
 		{
 			RawStmt    *parsetree = lfirst_node(RawStmt, lc);
 			List	   *queryTree_sublist;
+			CachedPlanSource *plansource;
+
+			if (enable_sql_func_custom_plans)
+			{
+				plansource = CreateCachedPlan(parsetree, fcache->src, CreateCommandTag(parsetree->stmt));
+				plansource_list = lappend(plansource_list, plansource);
+			}
 
 			queryTree_sublist = pg_analyze_and_rewrite_withcb(parsetree,
 															  fcache->src,
@@ -750,6 +844,34 @@ init_sql_fcache(FunctionCallInfo fcinfo, Oid collation, bool lazyEvalOK)
 											   procedureStruct->prokind,
 											   false,
 											   &resulttlist);
+
+	/*
+	 * Queries could be rewritten by check_sql_fn_retval(). Now when they have
+	 * their final form, we can complete plan cache entry creation.
+	 */
+	if (plansource_list != NIL)
+	{
+		ListCell   *qlc;
+		ListCell   *plc;
+
+		forboth(qlc, queryTree_list, plc, plansource_list)
+		{
+			List	   *queryTree_sublist = lfirst(qlc);
+			CachedPlanSource *plansource = lfirst(plc);
+
+
+			/* Finish filling in the CachedPlanSource */
+			CompleteCachedPlan(plansource,
+							   queryTree_sublist,
+							   NULL,
+							   NULL,
+							   0,
+							   (ParserSetupHook) sql_fn_parser_setup,
+							   fcache->pinfo,
+							   CURSOR_OPT_PARALLEL_OK | CURSOR_OPT_NO_SCROLL,
+							   false);
+		}
+	}
 
 	/*
 	 * Construct a JunkFilter we can use to coerce the returned rowtype to the
@@ -795,10 +917,18 @@ init_sql_fcache(FunctionCallInfo fcinfo, Oid collation, bool lazyEvalOK)
 		lazyEvalOK = true;
 	}
 
-	/* Finally, plan the queries */
-	fcache->func_state = init_execution_state(queryTree_list,
-											  fcache,
-											  lazyEvalOK);
+	fcache->queryTree_list = queryTree_list;
+	fcache->plansource_list = plansource_list;
+
+	/*
+	 * Finally, plan the queries. Skip planning if we use cached plans
+	 * machinery - anyway we'll have to replan on the first run when
+	 * parameters are substituted.
+	 */
+	if (plansource_list == NIL)
+		fcache->func_state = init_execution_state(queryTree_list,
+												  fcache,
+												  lazyEvalOK);
 
 	/* Mark fcache with time of creation to show it's valid */
 	fcache->lxid = MyProc->vxid.lxid;
@@ -969,7 +1099,13 @@ postquel_sub_params(SQLFunctionCachePtr fcache,
 			prm->value = MakeExpandedObjectReadOnly(fcinfo->args[i].value,
 													prm->isnull,
 													get_typlen(argtypes[i]));
-			prm->pflags = 0;
+
+			/*
+			 * PARAM_FLAG_CONST is necessary to build efficient custom plan.
+			 */
+			if (fcache->plansource_list)
+				prm->pflags = PARAM_FLAG_CONST;
+
 			prm->ptype = argtypes[i];
 		}
 	}
@@ -1023,6 +1159,33 @@ postquel_get_single_result(TupleTableSlot *slot,
 }
 
 /*
+ * Release plans. This function is called prior to planning
+ * statements with new parameters. When custom plans are generated
+ * for each function call in a statement, they can consume too much memory, so
+ * release them. Generic plans will survive it as plansource holds
+ * reference to a generic plan.
+ */
+static void
+release_plans(List *cplans)
+{
+	ListCell   *lc;
+
+	/*
+	 * We support separate plan list, so that we visit each plan here only
+	 * once
+	 */
+	foreach(lc, cplans)
+	{
+		CachedPlan *cplan = lfirst(lc);
+
+		ReleaseCachedPlan(cplan, NULL);
+	}
+
+	/* Cleanup the list itself */
+	list_free(cplans);
+}
+
+/*
  * fmgr_sql: function call manager for SQL functions
  */
 Datum
@@ -1040,6 +1203,7 @@ fmgr_sql(PG_FUNCTION_ARGS)
 	Datum		result;
 	List	   *eslist;
 	ListCell   *eslc;
+	bool		build_cached_plans = false;
 
 	/*
 	 * Setup error traceback support for ereport()
@@ -1130,11 +1294,53 @@ fmgr_sql(PG_FUNCTION_ARGS)
 	}
 
 	/*
+	 * We could skip actual planning if decided to use cached plans. In this
+	 * case we have to build cached plans now.
+	 */
+	if (fcache->plansource_list != NIL && eslist == NIL)
+		build_cached_plans = true;
+
+	/*
 	 * Convert params to appropriate format if starting a fresh execution. (If
 	 * continuing execution, we can re-use prior params.)
 	 */
-	if (is_first && es && es->status == F_EXEC_START)
+	if ((is_first && es && es->status == F_EXEC_START) || build_cached_plans)
+	{
 		postquel_sub_params(fcache, fcinfo);
+		if (fcache->plansource_list)
+		{
+			ListCell *lc;
+
+			/* replan the queries */
+			release_plans(fcache->cplan_list);
+
+			foreach (lc, fcache->func_state)
+			{
+				execution_state *cur_es = lfirst(lc);
+				/*
+				 * Execution state can be NULL if statement is
+				 * completely replaced by do instead nothing rule.
+				 */
+				if (cur_es)
+					pfree(cur_es);
+			}
+			list_free(fcache->func_state);
+
+			fcache->func_state = init_execution_state(fcache->queryTree_list,
+													  fcache,
+													  lazyEvalOK);
+			/* restore execution state and eslist-related variables */
+			eslist = fcache->func_state;
+			/* find the first non-NULL execution state */
+			foreach(eslc, eslist)
+			{
+				es = (execution_state *) lfirst(eslc);
+
+				if (es)
+					break;
+			}
+		}
+	}
 
 	/*
 	 * Build tuplestore to hold results, if we don't have one already. Note

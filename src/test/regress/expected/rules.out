@@ -3845,3 +3845,38 @@ DROP TABLE ruletest_t3;
 DROP TABLE ruletest_t2;
 DROP TABLE ruletest_t1;
 DROP USER regress_rule_user1;
+-- Test that SQL functions correctly handle DO NOTHING rule
+CREATE TABLE some_data (i int, data text);
+CREATE TABLE some_data_values (i int, data text);
+CREATE FUNCTION insert_data(i int, data text)
+RETURNS INT
+AS $$
+INSERT INTO some_data VALUES ($1, $2);
+SELECT 1;
+$$ LANGUAGE SQL;
+INSERT INTO some_data_values SELECT i , 'data'|| i FROM generate_series(1, 10) i;
+CREATE RULE some_data_noinsert AS ON INSERT TO some_data DO INSTEAD NOTHING;
+SELECT insert_data(i, data) FROM some_data_values;
+ insert_data 
+-------------
+           1
+           1
+           1
+           1
+           1
+           1
+           1
+           1
+           1
+           1
+(10 rows)
+
+SELECT * FROM some_data ORDER BY i;
+ i | data 
+---+------
+(0 rows)
+
+DROP RULE some_data_noinsert ON some_data;
+DROP TABLE some_data_values;
+DROP TABLE some_data;
+DROP FUNCTION insert_data(int, text);

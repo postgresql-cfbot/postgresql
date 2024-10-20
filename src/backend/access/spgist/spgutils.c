@@ -66,6 +66,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->amsummarizing = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL | VACUUM_OPTION_PARALLEL_COND_CLEANUP;
+	amroutine->amunloggedstoragecompatible = true;
 	amroutine->amkeytype = InvalidOid;
 
 	amroutine->ambuild = spgbuild;

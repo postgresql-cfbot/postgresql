@@ -28,7 +28,7 @@
  * RmgrNames is an array of the built-in resource manager names, to make error
  * messages a bit nicer.
  */
-#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode) \
+#define PG_RMGR(symname,name,redo,desc,identify,startup,cleanup,mask,decode,undo) \
   name,
 
 static const char *const RmgrNames[RM_MAX_ID + 1] = {
@@ -416,6 +416,12 @@ extractPageInfo(XLogReaderState *record)
 		 * We can safely ignore these. When we compare the sizes later on,
 		 * we'll notice that they differ, and copy the missing tail from
 		 * source system.
+		 */
+	}
+	else if (rmid == RM_SMGR_ID && rminfo == XLOG_SMGR_BUFPERSISTENCE)
+	{
+		/*
+		 * We can safely ignore these. These don't make any on-disk changes.
 		 */
 	}
 	else if (rmid == RM_XACT_ID &&

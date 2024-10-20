@@ -611,8 +611,7 @@ heapam_relation_set_new_filelocator(Relation rel,
 	{
 		Assert(rel->rd_rel->relkind == RELKIND_RELATION ||
 			   rel->rd_rel->relkind == RELKIND_TOASTVALUE);
-		smgrcreate(srel, INIT_FORKNUM, false);
-		log_smgrcreate(newrlocator, INIT_FORKNUM);
+		RelationCreateFork(srel, INIT_FORKNUM, true, true);
 	}
 
 	smgrclose(srel);
@@ -656,16 +655,17 @@ heapam_relation_copy_data(Relation rel, const RelFileLocator *newrlocator)
 	{
 		if (smgrexists(RelationGetSmgr(rel), forkNum))
 		{
-			smgrcreate(dstrel, forkNum, false);
+			bool wal_log = RelationIsPermanent(rel) |
+				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
+				 forkNum == INIT_FORKNUM);
 
 			/*
-			 * WAL log creation if the relation is persistent, or this is the
-			 * init fork of an unlogged relation.
+			 * Usually, we don't use UNDO log for FSM or VM forks, as their
+			 * creation is not transactional. However, we're currently copying
+			 * the entire relation in a transactional manner, which requires
+			 * after-crash cleanup.
 			 */
-			if (RelationIsPermanent(rel) ||
-				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
-				 forkNum == INIT_FORKNUM))
-				log_smgrcreate(newrlocator, forkNum);
+			RelationCreateFork(dstrel, forkNum, wal_log, true);
 			RelationCopyStorage(RelationGetSmgr(rel), dstrel, forkNum,
 								rel->rd_rel->relpersistence);
 		}

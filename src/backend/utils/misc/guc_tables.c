@@ -880,6 +880,16 @@ struct config_bool ConfigureNamesBool[] =
 		NULL, NULL, NULL
 	},
 	{
+		{"enable_nestloop_prefetch", PGC_USERSET, QUERY_TUNING_METHOD,
+			gettext_noop("Enables prefetching in nested-loop join plans."),
+			NULL,
+			GUC_EXPLAIN
+		},
+		&enable_nestloop_prefetch,
+		true,
+		NULL, NULL, NULL
+	},
+	{
 		{"enable_mergejoin", PGC_USERSET, QUERY_TUNING_METHOD,
 			gettext_noop("Enables the planner's use of merge join plans."),
 			NULL,

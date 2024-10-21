@@ -107,7 +107,9 @@ extern void ExecMarkPos(PlanState *node);
 extern void ExecRestrPos(PlanState *node);
 extern bool ExecSupportsMarkRestore(struct Path *pathnode);
 extern bool ExecSupportsBackwardScan(Plan *node);
+extern bool ExecSupportsPrefetch(Plan *node);
 extern bool ExecMaterializesOutput(NodeTag plantype);
+extern void ExecPrefetch(PlanState *node);
 
 /*
  * prototypes from functions in execCurrent.c

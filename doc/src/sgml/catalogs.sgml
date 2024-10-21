@@ -4590,6 +4590,17 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
        partial index.
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>indisenabled</structfield> <type>bool</type>
+      </para>
+      <para>
+       If true, the index is currently enabled and should be used for queries.
+       If false, the index is disabled and should not be used for queries,
+       but is still maintained when the table is modified. Default is true.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

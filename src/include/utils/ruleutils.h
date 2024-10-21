@@ -29,7 +29,7 @@ extern char *pg_get_indexdef_columns(Oid indexrelid, bool pretty);
 extern char *pg_get_indexdef_columns_extended(Oid indexrelid,
 											  bits16 flags);
 extern char *pg_get_querydef(Query *query, bool pretty);
-
+extern char *pg_get_viewdef_string(Oid viewoid, bool pretty);
 extern char *pg_get_partkeydef_columns(Oid relid, bool pretty);
 extern char *pg_get_partconstrdef_string(Oid partitionId, char *aliasname);
 

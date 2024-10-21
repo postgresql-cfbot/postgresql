@@ -193,6 +193,8 @@ struct ParseState
 {
 	ParseState *parentParseState;	/* stack link */
 	const char *p_sourcetext;	/* source text, or NULL if not available */
+	ParseLoc	p_stmt_location;	/* start location, or -1 if unknown */
+	ParseLoc	p_stmt_len;		/* length in bytes; 0 means "rest of string" */
 	List	   *p_rtable;		/* range table so far */
 	List	   *p_rteperminfos; /* list of RTEPermissionInfo nodes for each
 								 * RTE_RELATION entry in rtable */

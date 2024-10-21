@@ -17,16 +17,17 @@
 #include "catalog/objectaddress.h"
 #include "nodes/params.h"
 #include "nodes/parsenodes.h"
+#include "parser/parse_node.h"
 #include "tcop/dest.h"
 #include "utils/relcache.h"
 
 
 extern void SetMatViewPopulatedState(Relation relation, bool newstate);
 
-extern ObjectAddress ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
+extern ObjectAddress ExecRefreshMatView(RefreshMatViewStmt *stmt, ParseState *pstate,
 										QueryCompletion *qc);
 extern ObjectAddress RefreshMatViewByOid(Oid matviewOid, bool is_create, bool skipData,
-										 bool concurrent, const char *queryString,
+										 bool concurrent, ParseState *pstate,
 										 QueryCompletion *qc);
 
 extern DestReceiver *CreateTransientRelDestReceiver(Oid transientoid);

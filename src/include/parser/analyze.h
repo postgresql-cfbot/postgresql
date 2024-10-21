@@ -46,8 +46,9 @@ extern List *transformUpdateTargetList(ParseState *pstate,
 									   List *origTlist);
 extern List *transformReturningList(ParseState *pstate, List *returningList,
 									ParseExprKind exprKind);
-extern Query *transformTopLevelStmt(ParseState *pstate, RawStmt *parseTree);
+extern Query *transformOptionalSelectInto(ParseState *pstate, Node *parseTree);
 extern Query *transformStmt(ParseState *pstate, Node *parseTree);
+extern void setQueryStmtLen(ParseState *pstate, Query *qry, int stmt_len);
 
 extern bool stmt_requires_parse_analysis(RawStmt *parseTree);
 extern bool analyze_requires_snapshot(RawStmt *parseTree);

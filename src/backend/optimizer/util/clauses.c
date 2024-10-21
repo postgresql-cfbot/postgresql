@@ -4686,7 +4686,7 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 		pstate->p_sourcetext = src;
 		sql_fn_parser_setup(pstate, pinfo);
 
-		querytree = transformTopLevelStmt(pstate, linitial(raw_parsetree_list));
+		querytree = transformOptionalSelectInto(pstate, ((RawStmt *) linitial(raw_parsetree_list))->stmt);
 
 		free_parsestate(pstate);
 	}

@@ -39,10 +39,20 @@ typedef struct
 	int			size;			/* number of input relations in clump */
 } Clump;
 
+/* The original length and hashtable of a RelInfoList */
+typedef struct
+{
+	int			savelength;
+	struct HTAB *savehash;
+} RelInfoListInfo;
+
 static List *merge_clump(PlannerInfo *root, List *clumps, Clump *new_clump,
 						 int num_gene, bool force);
 static bool desirable_join(PlannerInfo *root,
 						   RelOptInfo *outer_rel, RelOptInfo *inner_rel);
+static RelInfoListInfo save_relinfolist(RelInfoList *relinfo_list);
+static void restore_relinfolist(RelInfoList *relinfo_list,
+								RelInfoListInfo *info);
 
 
 /*
@@ -60,8 +70,8 @@ geqo_eval(PlannerInfo *root, Gene *tour, int num_gene)
 	MemoryContext oldcxt;
 	RelOptInfo *joinrel;
 	Cost		fitness;
-	int			savelength;
-	struct HTAB *savehash;
+	RelInfoListInfo save_join_rel;
+	RelInfoListInfo save_grouped_rel;
 
 	/*
 	 * Create a private memory context that will hold all temp storage
@@ -78,25 +88,29 @@ geqo_eval(PlannerInfo *root, Gene *tour, int num_gene)
 	oldcxt = MemoryContextSwitchTo(mycontext);
 
 	/*
-	 * gimme_tree will add entries to root->join_rel_list, which may or may
-	 * not already contain some entries.  The newly added entries will be
-	 * recycled by the MemoryContextDelete below, so we must ensure that the
-	 * list is restored to its former state before exiting.  We can do this by
-	 * truncating the list to its original length.  NOTE this assumes that any
-	 * added entries are appended at the end!
+	 * gimme_tree will add entries to root->join_rel_list and
+	 * root->grouped_rel_list, which may or may not already contain some
+	 * entries.  The newly added entries will be recycled by the
+	 * MemoryContextDelete below, so we must ensure that each list within the
+	 * RelInfoList structures is restored to its former state before exiting.
+	 * We can do this by truncating each list to its original length.  NOTE
+	 * this assumes that any added entries are appended at the end!
 	 *
-	 * We also must take care not to mess up the outer join_rel_hash, if there
-	 * is one.  We can do this by just temporarily setting the link to NULL.
-	 * (If we are dealing with enough join rels, which we very likely are, a
-	 * new hash table will get built and used locally.)
+	 * We also must take care not to mess up the outer hash tables within the
+	 * RelInfoList structures, if any.  We can do this by just temporarily
+	 * setting each link to NULL.  (If we are dealing with enough join rels or
+	 * grouped rels, which we very likely are, new hash tables will get built
+	 * and used locally.)
 	 *
 	 * join_rel_level[] shouldn't be in use, so just Assert it isn't.
 	 */
-	savelength = list_length(root->join_rel_list);
-	savehash = root->join_rel_hash;
+	save_join_rel = save_relinfolist(root->join_rel_list);
+	save_grouped_rel = save_relinfolist(root->grouped_rel_list);
+
 	Assert(root->join_rel_level == NULL);
 
-	root->join_rel_hash = NULL;
+	root->join_rel_list->hash = NULL;
+	root->grouped_rel_list->hash = NULL;
 
 	/* construct the best path for the given combination of relations */
 	joinrel = gimme_tree(root, tour, num_gene);
@@ -118,12 +132,11 @@ geqo_eval(PlannerInfo *root, Gene *tour, int num_gene)
 		fitness = DBL_MAX;
 
 	/*
-	 * Restore join_rel_list to its former state, and put back original
-	 * hashtable if any.
+	 * Restore each of the list in join_rel_list and grouped_rel_list to its
+	 * former state, and put back original hashtables if any.
 	 */
-	root->join_rel_list = list_truncate(root->join_rel_list,
-										savelength);
-	root->join_rel_hash = savehash;
+	restore_relinfolist(root->join_rel_list, &save_join_rel);
+	restore_relinfolist(root->grouped_rel_list, &save_grouped_rel);
 
 	/* release all the memory acquired within gimme_tree */
 	MemoryContextSwitchTo(oldcxt);
@@ -279,6 +292,27 @@ merge_clump(PlannerInfo *root, List *clumps, Clump *new_clump, int num_gene,
 				/* Find and save the cheapest paths for this joinrel */
 				set_cheapest(joinrel);
 
+				/*
+				 * Except for the topmost scan/join rel, consider generating
+				 * partial aggregation paths for the grouped relation on top
+				 * of the paths of this rel.  After that, we're done creating
+				 * paths for the grouped relation, so run set_cheapest().
+				 */
+				if (!bms_equal(joinrel->relids, root->all_query_rels))
+				{
+					RelOptInfo *rel_grouped;
+
+					rel_grouped = find_grouped_rel(root, joinrel->relids);
+					if (rel_grouped)
+					{
+						Assert(IS_GROUPED_REL(rel_grouped));
+
+						generate_grouped_paths(root, rel_grouped, joinrel,
+											   rel_grouped->agg_info);
+						set_cheapest(rel_grouped);
+					}
+				}
+
 				/* Absorb new clump into old */
 				old_clump->joinrel = joinrel;
 				old_clump->size += new_clump->size;
@@ -335,4 +369,28 @@ desirable_join(PlannerInfo *root,
 
 	/* Otherwise postpone the join till later. */
 	return false;
+}
+
+/*
+ * Save the original length and hashtable of a RelInfoList.
+ */
+static RelInfoListInfo
+save_relinfolist(RelInfoList *relinfo_list)
+{
+	RelInfoListInfo info;
+
+	info.savelength = list_length(relinfo_list->items);
+	info.savehash = relinfo_list->hash;
+
+	return info;
+}
+
+/*
+ * Restore the original length and hashtable of a RelInfoList.
+ */
+static void
+restore_relinfolist(RelInfoList *relinfo_list, RelInfoListInfo *info)
+{
+	relinfo_list->items = list_truncate(relinfo_list->items, info->savelength);
+	relinfo_list->hash = info->savehash;
 }

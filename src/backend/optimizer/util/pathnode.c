@@ -262,6 +262,12 @@ compare_path_costs_fuzzily(Path *path1, Path *path2, double fuzz_factor)
  * unparameterized path, too, if there is one; the users of that list find
  * it more convenient if that's included.
  *
+ * cheapest_parameterized_paths also always includes the fewest-row
+ * unparameterized path, if there is one, for grouped relations.  Different
+ * paths of a grouped relation can have very different row counts, and in some
+ * cases the cheapest-total unparameterized path may not be the one with the
+ * fewest row.
+ *
  * This is normally called only after we've finished constructing the path
  * list for the rel node.
  */
@@ -271,6 +277,7 @@ set_cheapest(RelOptInfo *parent_rel)
 	Path	   *cheapest_startup_path;
 	Path	   *cheapest_total_path;
 	Path	   *best_param_path;
+	Path	   *fewest_row_path;
 	List	   *parameterized_paths;
 	ListCell   *p;
 
@@ -280,6 +287,7 @@ set_cheapest(RelOptInfo *parent_rel)
 		elog(ERROR, "could not devise a query plan for the given query");
 
 	cheapest_startup_path = cheapest_total_path = best_param_path = NULL;
+	fewest_row_path = NULL;
 	parameterized_paths = NIL;
 
 	foreach(p, parent_rel->pathlist)
@@ -341,6 +349,8 @@ set_cheapest(RelOptInfo *parent_rel)
 			if (cheapest_total_path == NULL)
 			{
 				cheapest_startup_path = cheapest_total_path = path;
+				if (IS_GROUPED_REL(parent_rel))
+					fewest_row_path = path;
 				continue;
 			}
 
@@ -364,12 +374,37 @@ set_cheapest(RelOptInfo *parent_rel)
 				 compare_pathkeys(cheapest_total_path->pathkeys,
 								  path->pathkeys) == PATHKEYS_BETTER2))
 				cheapest_total_path = path;
+
+			/*
+			 * Find the fewest-row unparameterized path for a grouped
+			 * relation.  If we find two paths of the same row count, try to
+			 * keep the one with the cheaper total cost; if the costs are
+			 * identical, keep the better-sorted one.
+			 */
+			if (IS_GROUPED_REL(parent_rel))
+			{
+				if (fewest_row_path->rows > path->rows)
+					fewest_row_path = path;
+				else if (fewest_row_path->rows == path->rows)
+				{
+					cmp = compare_path_costs(fewest_row_path, path, TOTAL_COST);
+					if (cmp > 0 ||
+						(cmp == 0 &&
+						 compare_pathkeys(fewest_row_path->pathkeys,
+										  path->pathkeys) == PATHKEYS_BETTER2))
+						fewest_row_path = path;
+				}
+			}
 		}
 	}
 
 	/* Add cheapest unparameterized path, if any, to parameterized_paths */
 	if (cheapest_total_path)
 		parameterized_paths = lcons(cheapest_total_path, parameterized_paths);
+
+	/* Add fewest-row unparameterized path, if any, to parameterized_paths */
+	if (fewest_row_path && fewest_row_path != cheapest_total_path)
+		parameterized_paths = lcons(fewest_row_path, parameterized_paths);
 
 	/*
 	 * If there is no unparameterized path, use the best parameterized path as
@@ -2787,8 +2822,7 @@ create_projection_path(PlannerInfo *root,
 	pathnode->path.pathtype = T_Result;
 	pathnode->path.parent = rel;
 	pathnode->path.pathtarget = target;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe &&
@@ -3043,8 +3077,7 @@ create_incremental_sort_path(PlannerInfo *root,
 	pathnode->path.parent = rel;
 	/* Sort doesn't project, so use source path's pathtarget */
 	pathnode->path.pathtarget = subpath->pathtarget;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
@@ -3091,8 +3124,7 @@ create_sort_path(PlannerInfo *root,
 	pathnode->path.parent = rel;
 	/* Sort doesn't project, so use source path's pathtarget */
 	pathnode->path.pathtarget = subpath->pathtarget;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;
@@ -3253,8 +3285,7 @@ create_agg_path(PlannerInfo *root,
 	pathnode->path.pathtype = T_Agg;
 	pathnode->path.parent = rel;
 	pathnode->path.pathtarget = target;
-	/* For now, assume we are above any joins, so no parameterization */
-	pathnode->path.param_info = NULL;
+	pathnode->path.param_info = subpath->param_info;
 	pathnode->path.parallel_aware = false;
 	pathnode->path.parallel_safe = rel->consider_parallel &&
 		subpath->parallel_safe;

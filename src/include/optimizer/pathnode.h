@@ -314,10 +314,16 @@ extern void setup_simple_rel_arrays(PlannerInfo *root);
 extern void expand_planner_arrays(PlannerInfo *root, int add_size);
 extern RelOptInfo *build_simple_rel(PlannerInfo *root, int relid,
 									RelOptInfo *parent);
+extern RelOptInfo *build_simple_grouped_rel(PlannerInfo *root,
+											RelOptInfo *rel_plain);
+extern RelOptInfo *build_grouped_rel(PlannerInfo *root,
+									 RelOptInfo *rel_plain);
 extern RelOptInfo *find_base_rel(PlannerInfo *root, int relid);
 extern RelOptInfo *find_base_rel_noerr(PlannerInfo *root, int relid);
 extern RelOptInfo *find_base_rel_ignore_join(PlannerInfo *root, int relid);
 extern RelOptInfo *find_join_rel(PlannerInfo *root, Relids relids);
+extern void add_grouped_rel(PlannerInfo *root, RelOptInfo *rel);
+extern RelOptInfo *find_grouped_rel(PlannerInfo *root, Relids relids);
 extern RelOptInfo *build_join_rel(PlannerInfo *root,
 								  Relids joinrelids,
 								  RelOptInfo *outer_rel,
@@ -353,4 +359,5 @@ extern RelOptInfo *build_child_join_rel(PlannerInfo *root,
 										SpecialJoinInfo *sjinfo,
 										int nappinfos, AppendRelInfo **appinfos);
 
+extern RelAggInfo *create_rel_agg_info(PlannerInfo *root, RelOptInfo *rel);
 #endif							/* PATHNODE_H */

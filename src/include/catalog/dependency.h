@@ -101,6 +101,8 @@ typedef struct ObjectAddresses ObjectAddresses;
 /* in dependency.c */
 
 extern void AcquireDeletionLock(const ObjectAddress *object, int flags);
+extern void LockNotPinnedObjectById(const ObjectAddress *object);
+extern void LockNotPinnedObject(Oid classid, Oid objid);
 
 extern void ReleaseDeletionLock(const ObjectAddress *object);
 
@@ -172,6 +174,7 @@ extern long changeDependenciesOf(Oid classId, Oid oldObjectId,
 extern long changeDependenciesOn(Oid refClassId, Oid oldRefObjectId,
 								 Oid newRefObjectId);
 
+extern bool isObjectPinned(const ObjectAddress *object);
 extern Oid	getExtensionOfObject(Oid classId, Oid objectId);
 extern List *getAutoExtensionsOfObject(Oid classId, Oid objectId);
 

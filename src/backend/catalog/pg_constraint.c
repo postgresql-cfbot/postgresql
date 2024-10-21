@@ -256,17 +256,26 @@ CreateConstraintEntry(const char *constraintName,
 
 		if (constraintNTotalKeys > 0)
 		{
+			bool		locked_object = false;
+
 			for (i = 0; i < constraintNTotalKeys; i++)
 			{
 				ObjectAddressSubSet(relobject, RelationRelationId, relId,
 									constraintKey[i]);
 				add_exact_object_address(&relobject, addrs_auto);
+
+				if (!locked_object)
+				{
+					LockNotPinnedObject(RelationRelationId, relId);
+					locked_object = true;
+				}
 			}
 		}
 		else
 		{
 			ObjectAddressSet(relobject, RelationRelationId, relId);
 			add_exact_object_address(&relobject, addrs_auto);
+			LockNotPinnedObject(RelationRelationId, relId);
 		}
 	}
 
@@ -279,6 +288,7 @@ CreateConstraintEntry(const char *constraintName,
 
 		ObjectAddressSet(domobject, TypeRelationId, domainId);
 		add_exact_object_address(&domobject, addrs_auto);
+		LockNotPinnedObject(TypeRelationId, domainId);
 	}
 
 	record_object_address_dependencies(&conobject, addrs_auto,
@@ -298,17 +308,26 @@ CreateConstraintEntry(const char *constraintName,
 
 		if (foreignNKeys > 0)
 		{
+			bool		locked_object = false;
+
 			for (i = 0; i < foreignNKeys; i++)
 			{
 				ObjectAddressSubSet(relobject, RelationRelationId,
 									foreignRelId, foreignKey[i]);
 				add_exact_object_address(&relobject, addrs_normal);
+
+				if (!locked_object)
+				{
+					LockNotPinnedObject(RelationRelationId, foreignRelId);
+					locked_object = true;
+				}
 			}
 		}
 		else
 		{
 			ObjectAddressSet(relobject, RelationRelationId, foreignRelId);
 			add_exact_object_address(&relobject, addrs_normal);
+			LockNotPinnedObject(RelationRelationId, foreignRelId);
 		}
 	}
 
@@ -324,6 +343,7 @@ CreateConstraintEntry(const char *constraintName,
 
 		ObjectAddressSet(relobject, RelationRelationId, indexRelId);
 		add_exact_object_address(&relobject, addrs_normal);
+		LockNotPinnedObject(RelationRelationId, indexRelId);
 	}
 
 	if (foreignNKeys > 0)
@@ -343,15 +363,18 @@ CreateConstraintEntry(const char *constraintName,
 		{
 			oprobject.objectId = pfEqOp[i];
 			add_exact_object_address(&oprobject, addrs_normal);
+			LockNotPinnedObject(OperatorRelationId, pfEqOp[i]);
 			if (ppEqOp[i] != pfEqOp[i])
 			{
 				oprobject.objectId = ppEqOp[i];
 				add_exact_object_address(&oprobject, addrs_normal);
+				LockNotPinnedObject(OperatorRelationId, ppEqOp[i]);
 			}
 			if (ffEqOp[i] != pfEqOp[i])
 			{
 				oprobject.objectId = ffEqOp[i];
 				add_exact_object_address(&oprobject, addrs_normal);
+				LockNotPinnedObject(OperatorRelationId, ffEqOp[i]);
 			}
 		}
 	}
@@ -863,9 +886,12 @@ ConstraintSetParentConstraint(Oid childConstrId,
 		ObjectAddressSet(depender, ConstraintRelationId, childConstrId);
 
 		ObjectAddressSet(referenced, ConstraintRelationId, parentConstrId);
+		LockNotPinnedObject(ConstraintRelationId, parentConstrId);
 		recordDependencyOn(&depender, &referenced, DEPENDENCY_PARTITION_PRI);
 
 		ObjectAddressSet(referenced, RelationRelationId, childTableId);
+
+		LockNotPinnedObject(RelationRelationId, childTableId);
 		recordDependencyOn(&depender, &referenced, DEPENDENCY_PARTITION_SEC);
 	}
 	else

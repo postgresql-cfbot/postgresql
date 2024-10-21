@@ -190,12 +190,14 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 	/* dependency on the PL handler function */
 	ObjectAddressSet(referenced, ProcedureRelationId, handlerOid);
 	add_exact_object_address(&referenced, addrs);
+	LockNotPinnedObject(ProcedureRelationId, handlerOid);
 
 	/* dependency on the inline handler function, if any */
 	if (OidIsValid(inlineOid))
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, inlineOid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, inlineOid);
 	}
 
 	/* dependency on the validator function, if any */
@@ -203,6 +205,7 @@ CreateProceduralLanguage(CreatePLangStmt *stmt)
 	{
 		ObjectAddressSet(referenced, ProcedureRelationId, valOid);
 		add_exact_object_address(&referenced, addrs);
+		LockNotPinnedObject(ProcedureRelationId, valOid);
 	}
 
 	record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);

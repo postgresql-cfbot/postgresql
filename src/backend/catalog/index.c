@@ -1116,6 +1116,7 @@ index_create(Relation heapRelation,
 		else
 		{
 			bool		have_simple_col = false;
+			bool		locked_object = false;
 
 			addrs = new_object_addresses();
 
@@ -1128,6 +1129,12 @@ index_create(Relation heapRelation,
 										heapRelationId,
 										indexInfo->ii_IndexAttrNumbers[i]);
 					add_exact_object_address(&referenced, addrs);
+
+					if (!locked_object)
+					{
+						LockNotPinnedObject(RelationRelationId, heapRelationId);
+						locked_object = true;
+					}
 					have_simple_col = true;
 				}
 			}
@@ -1143,6 +1150,8 @@ index_create(Relation heapRelation,
 				ObjectAddressSet(referenced, RelationRelationId,
 								 heapRelationId);
 				add_exact_object_address(&referenced, addrs);
+
+				LockNotPinnedObject(RelationRelationId, heapRelationId);
 			}
 
 			record_object_address_dependencies(&myself, addrs, DEPENDENCY_AUTO);
@@ -1158,9 +1167,13 @@ index_create(Relation heapRelation,
 		if (OidIsValid(parentIndexRelid))
 		{
 			ObjectAddressSet(referenced, RelationRelationId, parentIndexRelid);
+
+			LockNotPinnedObject(RelationRelationId, parentIndexRelid);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_PRI);
 
 			ObjectAddressSet(referenced, RelationRelationId, heapRelationId);
+
+			LockNotPinnedObject(RelationRelationId, heapRelationId);
 			recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_SEC);
 		}
 
@@ -1176,6 +1189,7 @@ index_create(Relation heapRelation,
 			{
 				ObjectAddressSet(referenced, CollationRelationId, collationIds[i]);
 				add_exact_object_address(&referenced, addrs);
+				LockNotPinnedObject(CollationRelationId, collationIds[i]);
 			}
 		}
 
@@ -1184,6 +1198,7 @@ index_create(Relation heapRelation,
 		{
 			ObjectAddressSet(referenced, OperatorClassRelationId, opclassIds[i]);
 			add_exact_object_address(&referenced, addrs);
+			LockNotPinnedObject(OperatorClassRelationId, opclassIds[i]);
 		}
 
 		record_object_address_dependencies(&myself, addrs, DEPENDENCY_NORMAL);
@@ -1993,6 +2008,14 @@ index_constraint_create(Relation heapRelation,
 	 */
 	ObjectAddressSet(myself, ConstraintRelationId, conOid);
 	ObjectAddressSet(idxaddr, RelationRelationId, indexRelationId);
+
+	/*
+	 * CommandCounterIncrement() here to ensure the new constraint entry is
+	 * visible when LockNotPinnedObject() will check its existence before
+	 * recording the dependencies.
+	 */
+	CommandCounterIncrement();
+	LockNotPinnedObject(ConstraintRelationId, conOid);
 	recordDependencyOn(&idxaddr, &myself, DEPENDENCY_INTERNAL);
 
 	/*
@@ -2004,9 +2027,12 @@ index_constraint_create(Relation heapRelation,
 		ObjectAddress referenced;
 
 		ObjectAddressSet(referenced, ConstraintRelationId, parentConstraintId);
+		LockNotPinnedObject(ConstraintRelationId, parentConstraintId);
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_PRI);
 		ObjectAddressSet(referenced, RelationRelationId,
 						 RelationGetRelid(heapRelation));
+
+		LockNotPinnedObject(RelationRelationId, RelationGetRelid(heapRelation));
 		recordDependencyOn(&myself, &referenced, DEPENDENCY_PARTITION_SEC);
 	}
 

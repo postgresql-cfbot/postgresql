@@ -611,7 +611,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	 * attempts to access arbitrary network destinations, so require the user
 	 * to have been specifically authorized to create subscriptions.
 	 */
-	if (!has_privs_of_role(owner, ROLE_PG_CREATE_SUBSCRIPTION))
+	if (!has_privs_of_role(owner, ROLE_PG_CREATE_SUBSCRIPTION, MyDatabaseId))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to create subscription"),

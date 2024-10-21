@@ -92,15 +92,15 @@ check_password_hook_type check_password_hook = NULL;
 
 static void AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 						List *memberSpecs, List *memberIds,
-						Oid grantorId, GrantRoleOptions *popt);
+						Oid grantorId, GrantRoleOptions *popt, Oid db_id);
 static void DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 						List *memberSpecs, List *memberIds,
 						Oid grantorId, GrantRoleOptions *popt,
-						DropBehavior behavior);
+						DropBehavior behavior, Oid db_id);
 static void check_role_membership_authorization(Oid currentUserId, Oid roleid,
-												bool is_grant);
+												bool is_grant, Oid db_id);
 static Oid	check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId,
-							   bool is_grant);
+							   bool is_grant, Oid db_id);
 static RevokeRoleGrantAction *initialize_revoke_actions(CatCList *memlist);
 static bool plan_single_revoke(CatCList *memlist,
 							   RevokeRoleGrantAction *actions,
@@ -517,11 +517,12 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 			char	   *oldrolename = NameStr(oldroleform->rolname);
 
 			/* can only add this role to roles for which you have rights */
-			check_role_membership_authorization(currentUserId, oldroleid, true);
+			check_role_membership_authorization(currentUserId, oldroleid,
+												true, InvalidOid);
 			AddRoleMems(currentUserId, oldrolename, oldroleid,
 						thisrole_list,
 						thisrole_oidlist,
-						InvalidOid, &popt);
+						InvalidOid, &popt, InvalidOid);
 
 			ReleaseSysCache(oldroletup);
 		}
@@ -557,7 +558,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 
 		AddRoleMems(BOOTSTRAP_SUPERUSERID, stmt->role, roleid,
 					memberSpecs, memberIds,
-					BOOTSTRAP_SUPERUSERID, &poptself);
+					BOOTSTRAP_SUPERUSERID, &poptself, InvalidOid);
 
 		/*
 		 * We must make the implicit grant visible to the code below, else the
@@ -577,7 +578,7 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 		if (createrole_self_grant_enabled)
 			AddRoleMems(currentUserId, stmt->role, roleid,
 						memberSpecs, memberIds,
-						currentUserId, &createrole_self_grant_options);
+						currentUserId, &createrole_self_grant_options, InvalidOid);
 	}
 
 	/*
@@ -589,12 +590,12 @@ CreateRole(ParseState *pstate, CreateRoleStmt *stmt)
 	 */
 	AddRoleMems(currentUserId, stmt->role, roleid,
 				rolemembers, roleSpecsToIds(rolemembers),
-				InvalidOid, &popt);
+				InvalidOid, &popt, InvalidOid);
 	popt.specified |= GRANT_ROLE_SPECIFIED_ADMIN;
 	popt.admin = true;
 	AddRoleMems(currentUserId, stmt->role, roleid,
 				adminmembers, roleSpecsToIds(adminmembers),
-				InvalidOid, &popt);
+				InvalidOid, &popt, InvalidOid);
 
 	/* Post creation hook for new role */
 	InvokeObjectPostCreateHook(AuthIdRelationId, roleid, 0);
@@ -771,7 +772,7 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	 * and also ADMIN OPTION on the role.
 	 */
 	if (!have_createrole_privilege() ||
-		!is_admin_of_role(GetUserId(), roleid))
+		!is_admin_of_role(GetUserId(), roleid, InvalidOid))
 	{
 		/* things an unprivileged user certainly can't do */
 		if (dinherit || dcreaterole || dcreatedb || dcanlogin || dconnlimit ||
@@ -818,7 +819,7 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 	}
 
 	/* To add members to a role, you need ADMIN OPTION. */
-	if (drolemembers && !is_admin_of_role(currentUserId, roleid))
+	if (drolemembers && !is_admin_of_role(currentUserId, roleid, InvalidOid))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to alter role"),
@@ -977,11 +978,11 @@ AlterRole(ParseState *pstate, AlterRoleStmt *stmt)
 		if (stmt->action == +1) /* add members to role */
 			AddRoleMems(currentUserId, rolename, roleid,
 						rolemembers, roleSpecsToIds(rolemembers),
-						InvalidOid, &popt);
+						InvalidOid, &popt, InvalidOid);
 		else if (stmt->action == -1)	/* drop members from role */
 			DelRoleMems(currentUserId, rolename, roleid,
 						rolemembers, roleSpecsToIds(rolemembers),
-						InvalidOid, &popt, DROP_RESTRICT);
+						InvalidOid, &popt, DROP_RESTRICT, InvalidOid);
 	}
 
 	/*
@@ -1036,7 +1037,7 @@ AlterRoleSet(AlterRoleSetStmt *stmt)
 		else
 		{
 			if ((!have_createrole_privilege() ||
-				 !is_admin_of_role(GetUserId(), roleid))
+				 !is_admin_of_role(GetUserId(), roleid, InvalidOid))
 				&& roleid != GetUserId())
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
@@ -1171,7 +1172,7 @@ DropRole(DropRoleStmt *stmt)
 					 errmsg("permission denied to drop role"),
 					 errdetail("Only roles with the %s attribute may drop roles with the %s attribute.",
 							   "SUPERUSER", "SUPERUSER")));
-		if (!is_admin_of_role(GetUserId(), roleid))
+		if (!is_admin_of_role(GetUserId(), roleid, InvalidOid))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to drop role"),
@@ -1212,7 +1213,7 @@ DropRole(DropRoleStmt *stmt)
 					BTEqualStrategyNumber, F_OIDEQ,
 					ObjectIdGetDatum(roleid));
 
-		sscan = systable_beginscan(pg_auth_members_rel, AuthMemRoleMemIndexId,
+		sscan = systable_beginscan(pg_auth_members_rel, AuthMemRoleMemDbIndexId,
 								   true, NULL, 1, &scankey);
 
 		while (HeapTupleIsValid(tmp_tuple = systable_getnext(sscan)))
@@ -1232,7 +1233,7 @@ DropRole(DropRoleStmt *stmt)
 					BTEqualStrategyNumber, F_OIDEQ,
 					ObjectIdGetDatum(roleid));
 
-		sscan = systable_beginscan(pg_auth_members_rel, AuthMemMemRoleIndexId,
+		sscan = systable_beginscan(pg_auth_members_rel, AuthMemMemRoleDbIndexId,
 								   true, NULL, 1, &scankey);
 
 		while (HeapTupleIsValid(tmp_tuple = systable_getnext(sscan)))
@@ -1425,7 +1426,7 @@ RenameRole(const char *oldname, const char *newname)
 	else
 	{
 		if (!have_createrole_privilege() ||
-			!is_admin_of_role(GetUserId(), roleid))
+			!is_admin_of_role(GetUserId(), roleid, InvalidOid))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to rename role"),
@@ -1485,6 +1486,7 @@ GrantRole(ParseState *pstate, GrantRoleStmt *stmt)
 	ListCell   *item;
 	GrantRoleOptions popt;
 	Oid			currentUserId = GetUserId();
+	Oid			dbid;
 
 	/* Parse options list. */
 	InitGrantRoleOptions(&popt);
@@ -1533,6 +1535,14 @@ GrantRole(ParseState *pstate, GrantRoleStmt *stmt)
 
 	grantee_ids = roleSpecsToIds(stmt->grantee_roles);
 
+	/* Lookup OID of database, if specified. */
+	if (stmt->database == NULL)
+		dbid = InvalidOid;
+	else if (strcmp(stmt->database, "") == 0)
+		dbid = MyDatabaseId;
+	else
+		dbid = get_database_oid(stmt->database, false);
+
 	/* AccessShareLock is enough since we aren't modifying pg_authid */
 	pg_authid_rel = table_open(AuthIdRelationId, AccessShareLock);
 
@@ -1557,15 +1567,15 @@ GrantRole(ParseState *pstate, GrantRoleStmt *stmt)
 
 		roleid = get_role_oid(rolename, false);
 		check_role_membership_authorization(currentUserId,
-											roleid, stmt->is_grant);
+											roleid, stmt->is_grant, dbid);
 		if (stmt->is_grant)
 			AddRoleMems(currentUserId, rolename, roleid,
 						stmt->grantee_roles, grantee_ids,
-						grantor, &popt);
+						grantor, &popt, dbid);
 		else
 			DelRoleMems(currentUserId, rolename, roleid,
 						stmt->grantee_roles, grantee_ids,
-						grantor, &popt, stmt->behavior);
+						grantor, &popt, stmt->behavior, dbid);
 	}
 
 	/*
@@ -1590,7 +1600,7 @@ DropOwnedObjects(DropOwnedStmt *stmt)
 	{
 		Oid			roleid = lfirst_oid(cell);
 
-		if (!has_privs_of_role(GetUserId(), roleid))
+		if (!has_privs_of_role(GetUserId(), roleid, MyDatabaseId))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to drop objects"),
@@ -1619,7 +1629,7 @@ ReassignOwnedObjects(ReassignOwnedStmt *stmt)
 	{
 		Oid			roleid = lfirst_oid(cell);
 
-		if (!has_privs_of_role(GetUserId(), roleid))
+		if (!has_privs_of_role(GetUserId(), roleid, MyDatabaseId))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to reassign objects"),
@@ -1630,7 +1640,7 @@ ReassignOwnedObjects(ReassignOwnedStmt *stmt)
 	/* Must have privileges on the receiving side too */
 	newrole = get_rolespec_oid(stmt->newrole, false);
 
-	if (!has_privs_of_role(GetUserId(), newrole))
+	if (!has_privs_of_role(GetUserId(), newrole, MyDatabaseId))
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("permission denied to reassign objects"),
@@ -1676,11 +1686,12 @@ roleSpecsToIds(List *memberNames)
  * grantorId: OID that should be recorded as having granted the membership
  * (InvalidOid if not set explicitly)
  * popt: information about grant options
+ * db_id: OID of the database in which membership should be granted
  */
 static void
 AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 			List *memberSpecs, List *memberIds,
-			Oid grantorId, GrantRoleOptions *popt)
+			Oid grantorId, GrantRoleOptions *popt, Oid db_id)
 {
 	Relation	pg_authmem_rel;
 	TupleDesc	pg_authmem_dsc;
@@ -1690,7 +1701,7 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 	Assert(list_length(memberSpecs) == list_length(memberIds));
 
 	/* Validate grantor (and resolve implicit grantor if not specified). */
-	grantorId = check_role_grantor(currentUserId, roleid, grantorId, true);
+	grantorId = check_role_grantor(currentUserId, roleid, grantorId, true, db_id);
 
 	pg_authmem_rel = table_open(AuthMemRelationId, RowExclusiveLock);
 	pg_authmem_dsc = RelationGetDescr(pg_authmem_rel);
@@ -1769,7 +1780,7 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 		int			i;
 
 		/* Get the list of members for this role. */
-		memlist = SearchSysCacheList1(AUTHMEMROLEMEM,
+		memlist = SearchSysCacheList1(AUTHMEMROLEMEMDB,
 									  ObjectIdGetDatum(roleid));
 
 		/*
@@ -1834,12 +1845,15 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 			ObjectIdGetDatum(memberid);
 		new_record[Anum_pg_auth_members_grantor - 1] =
 			ObjectIdGetDatum(grantorId);
+		new_record[Anum_pg_auth_members_dbid - 1] =
+			ObjectIdGetDatum(db_id);
 
 		/* Find any existing tuple */
-		authmem_tuple = SearchSysCache3(AUTHMEMROLEMEM,
+		authmem_tuple = SearchSysCache4(AUTHMEMROLEMEMDB,
 										ObjectIdGetDatum(roleid),
 										ObjectIdGetDatum(memberid),
-										ObjectIdGetDatum(grantorId));
+										ObjectIdGetDatum(grantorId),
+										ObjectIdGetDatum(db_id));
 
 		/*
 		 * If we found a tuple, update it with new option values, unless there
@@ -1886,10 +1900,16 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 
 			if (!at_least_one_change)
 			{
-				ereport(NOTICE,
-						(errmsg("role \"%s\" has already been granted membership in role \"%s\" by role \"%s\"",
-								get_rolespec_name(memberRole), rolename,
-								GetUserNameFromId(grantorId, false))));
+				if (OidIsValid(db_id))
+					ereport(NOTICE,
+							(errmsg("role \"%s\" has already been granted membership in role \"%s\" in database \"%s\" by role \"%s\"",
+									get_rolespec_name(memberRole), rolename, get_database_name(db_id),
+									GetUserNameFromId(grantorId, false))));
+				else
+					ereport(NOTICE,
+							(errmsg("role \"%s\" has already been granted membership in role \"%s\" by role \"%s\"",
+									get_rolespec_name(memberRole), rolename,
+									GetUserNameFromId(grantorId, false))));
 				ReleaseSysCache(authmem_tuple);
 				continue;
 			}
@@ -1974,11 +1994,12 @@ AddRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
  * grantorId: who is revoking the membership
  * popt: information about grant options
  * behavior: RESTRICT or CASCADE behavior for recursive removal
+ * db_id: OID of the database in which membership should be removed
  */
 static void
 DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 			List *memberSpecs, List *memberIds,
-			Oid grantorId, GrantRoleOptions *popt, DropBehavior behavior)
+			Oid grantorId, GrantRoleOptions *popt, DropBehavior behavior, Oid db_id)
 {
 	Relation	pg_authmem_rel;
 	TupleDesc	pg_authmem_dsc;
@@ -1991,7 +2012,7 @@ DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 	Assert(list_length(memberSpecs) == list_length(memberIds));
 
 	/* Validate grantor (and resolve implicit grantor if not specified). */
-	grantorId = check_role_grantor(currentUserId, roleid, grantorId, false);
+	grantorId = check_role_grantor(currentUserId, roleid, grantorId, false, db_id);
 
 	pg_authmem_rel = table_open(AuthMemRelationId, RowExclusiveLock);
 	pg_authmem_dsc = RelationGetDescr(pg_authmem_rel);
@@ -2004,7 +2025,7 @@ DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
 	LockSharedObject(AuthIdRelationId, roleid, 0,
 					 ShareUpdateExclusiveLock);
 
-	memlist = SearchSysCacheList1(AUTHMEMROLEMEM, ObjectIdGetDatum(roleid));
+	memlist = SearchSysCacheList1(AUTHMEMROLEMEMDB, ObjectIdGetDatum(roleid));
 	actions = initialize_revoke_actions(memlist);
 
 	/*
@@ -2109,7 +2130,7 @@ DelRoleMems(Oid currentUserId, const char *rolename, Oid roleid,
  */
 static void
 check_role_membership_authorization(Oid currentUserId, Oid roleid,
-									bool is_grant)
+									bool is_grant, Oid dbid)
 {
 	/*
 	 * The charter of pg_database_owner is to have exactly one, implicit,
@@ -2152,7 +2173,7 @@ check_role_membership_authorization(Oid currentUserId, Oid roleid,
 		/*
 		 * Otherwise, must have admin option on the role to be changed.
 		 */
-		if (!is_admin_of_role(currentUserId, roleid))
+		if (!is_admin_of_role(currentUserId, roleid, dbid))
 		{
 			if (is_grant)
 				ereport(ERROR,
@@ -2202,7 +2223,7 @@ check_role_membership_authorization(Oid currentUserId, Oid roleid,
  * the operation.
  */
 static Oid
-check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId, bool is_grant)
+check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId, bool is_grant, Oid db_id)
 {
 	/* If the grantor ID was not specified, pick one to use. */
 	if (!OidIsValid(grantorId))
@@ -2226,7 +2247,7 @@ check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId, bool is_grant)
 		 * established that the current user has permission to perform the
 		 * operation.)
 		 */
-		grantorId = select_best_admin(currentUserId, roleid);
+		grantorId = select_best_admin(currentUserId, roleid, db_id);
 		if (!OidIsValid(grantorId))
 			elog(ERROR, "no possible grantors");
 		return grantorId;
@@ -2243,7 +2264,7 @@ check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId, bool is_grant)
 	 */
 	if (is_grant)
 	{
-		if (!has_privs_of_role(currentUserId, grantorId))
+		if (!has_privs_of_role(currentUserId, grantorId, db_id))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to grant privileges as role \"%s\"",
@@ -2252,7 +2273,7 @@ check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId, bool is_grant)
 							   GetUserNameFromId(grantorId, false))));
 
 		if (grantorId != BOOTSTRAP_SUPERUSERID &&
-			select_best_admin(grantorId, roleid) != grantorId)
+			select_best_admin(grantorId, roleid, db_id) != grantorId)
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to grant privileges as role \"%s\"",
@@ -2262,7 +2283,7 @@ check_role_grantor(Oid currentUserId, Oid roleid, Oid grantorId, bool is_grant)
 	}
 	else
 	{
-		if (!has_privs_of_role(currentUserId, grantorId))
+		if (!has_privs_of_role(currentUserId, grantorId, db_id))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to revoke privileges granted by role \"%s\"",
@@ -2578,4 +2599,43 @@ assign_createrole_self_grant(const char *newval, void *extra)
 		(options & GRANT_ROLE_SPECIFIED_INHERIT) != 0;
 	createrole_self_grant_options.set =
 		(options & GRANT_ROLE_SPECIFIED_SET) != 0;
+}
+
+/*
+ * DropDatabaseSpecificRoles
+ *
+ * Delete pg_auth_members entries corresponding to a database that's being
+ * dropped.
+ */
+void
+DropDatabaseSpecificRoles(Oid databaseId)
+{
+	Relation	pg_authmem_rel;
+	ScanKeyData scankey;
+	SysScanDesc sscan;
+	HeapTuple	tup;
+
+	pg_authmem_rel = table_open(AuthMemRelationId, RowExclusiveLock);
+
+	ScanKeyInit(&scankey,
+				Anum_pg_auth_members_dbid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(databaseId));
+
+	sscan = systable_beginscan(pg_authmem_rel, AuthMemMemRoleDbIndexId,
+							   true, NULL, 1, &scankey);
+
+	while (HeapTupleIsValid(tup = systable_getnext(sscan)))
+	{
+		Form_pg_auth_members authmem_form;
+
+		authmem_form = (Form_pg_auth_members) GETSTRUCT(tup);
+		deleteSharedDependencyRecordsFor(AuthMemRelationId,
+										 authmem_form->oid, 0);
+		CatalogTupleDelete(pg_authmem_rel, &tup->t_self);
+	}
+
+	systable_endscan(sscan);
+
+	table_close(pg_authmem_rel, RowExclusiveLock);
 }

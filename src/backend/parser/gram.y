@@ -367,7 +367,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 
 %type <str>		opt_type
 %type <str>		foreign_server_version opt_foreign_server_version
-%type <str>		opt_in_database
+%type <str>		opt_in_database opt_grant_in_database
 
 %type <str>		parameter_name
 %type <list>	OptSchemaEltList parameter_name_list
@@ -7930,6 +7930,11 @@ grantee:
 		;
 
 
+opt_grant_in_database:
+			IN_P CURRENT_P DATABASE { $$ = ""; }
+			| opt_in_database { $$ = $1; }
+		;
+
 opt_grant_grant_option:
 			WITH GRANT OPTION { $$ = true; }
 			| /*EMPTY*/ { $$ = false; }
@@ -7942,32 +7947,34 @@ opt_grant_grant_option:
  *****************************************************************************/
 
 GrantRoleStmt:
-			GRANT privilege_list TO role_list opt_granted_by
+			GRANT privilege_list TO role_list opt_grant_in_database opt_granted_by
 				{
 					GrantRoleStmt *n = makeNode(GrantRoleStmt);
 
 					n->is_grant = true;
 					n->granted_roles = $2;
 					n->grantee_roles = $4;
+					n->database = $5;
 					n->opt = NIL;
-					n->grantor = $5;
+					n->grantor = $6;
 					$$ = (Node *) n;
 				}
-		  | GRANT privilege_list TO role_list WITH grant_role_opt_list opt_granted_by
+		  | GRANT privilege_list TO role_list opt_grant_in_database WITH grant_role_opt_list opt_granted_by
 				{
 					GrantRoleStmt *n = makeNode(GrantRoleStmt);
 
 					n->is_grant = true;
 					n->granted_roles = $2;
 					n->grantee_roles = $4;
-					n->opt = $6;
-					n->grantor = $7;
+					n->database = $5;
+					n->opt = $7;
+					n->grantor = $8;
 					$$ = (Node *) n;
 				}
 		;
 
 RevokeRoleStmt:
-			REVOKE privilege_list FROM role_list opt_granted_by opt_drop_behavior
+			REVOKE privilege_list FROM role_list opt_grant_in_database opt_granted_by opt_drop_behavior
 				{
 					GrantRoleStmt *n = makeNode(GrantRoleStmt);
 
@@ -7975,11 +7982,12 @@ RevokeRoleStmt:
 					n->opt = NIL;
 					n->granted_roles = $2;
 					n->grantee_roles = $4;
-					n->grantor = $5;
-					n->behavior = $6;
+					n->database = $5;
+					n->grantor = $6;
+					n->behavior = $7;
 					$$ = (Node *) n;
 				}
-			| REVOKE ColId OPTION FOR privilege_list FROM role_list opt_granted_by opt_drop_behavior
+			| REVOKE ColId OPTION FOR privilege_list FROM role_list opt_grant_in_database opt_granted_by opt_drop_behavior
 				{
 					GrantRoleStmt *n = makeNode(GrantRoleStmt);
 					DefElem *opt;
@@ -7990,8 +7998,9 @@ RevokeRoleStmt:
 					n->opt = list_make1(opt);
 					n->granted_roles = $5;
 					n->grantee_roles = $7;
-					n->grantor = $8;
-					n->behavior = $9;
+					n->database = $8;
+					n->grantor = $9;
+					n->behavior = $10;
 					$$ = (Node *) n;
 				}
 		;

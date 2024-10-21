@@ -70,7 +70,15 @@ my %replace_types = (
 	'PLpgSQL_Expr' => 'ignore',
 	'PLAssignStmt' => 'ignore',
 	'plassign_target' => 'ignore',
-	'plassign_equals' => 'ignore',);
+	'plassign_equals' => 'ignore',
+	'plpgsql_strict_expr' => 'ignore',
+	'plpgsql_strict_named_expr' => 'ignore',
+	'plpgsql_strict_expr_list' => 'ignore',
+	'plpgsql_strict_named_expr_list' => 'ignore',
+	'PLpgSQLStrictExpr' => 'ignore',
+	'PLpgSQLStrictExprs' => 'ignore',
+	'PLpgSQLStrictNamedExprs' => 'ignore',
+	'PLAssignStmtStrictExpr' => 'ignore',);
 
 my %replace_types_used;
 

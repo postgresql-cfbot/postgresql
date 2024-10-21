@@ -4702,6 +4702,9 @@
 { oid => '2580', descr => 'convert jsonb to float8',
   proname => 'float8', prorettype => 'float8', proargtypes => 'jsonb',
   prosrc => 'jsonb_float8' },
+{ oid => '8079', descr => 'convert jsonb to text',
+  proname => 'text', prorettype => 'text', proargtypes => 'jsonb',
+  prosrc => 'jsonb_text' },
 
 # formatting
 { oid => '1770', descr => 'format timestamp with time zone to text',

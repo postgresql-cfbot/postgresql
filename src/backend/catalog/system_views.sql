@@ -601,6 +601,53 @@ FROM
     pg_shseclabel l
     JOIN pg_authid rol ON l.classoid = rol.tableoid AND l.objoid = rol.oid;
 
+CREATE VIEW pg_privileges AS
+    SELECT
+        a.classid::regclass,
+        a.objid,
+        a.objsubid,
+        a.type,
+        a.schema,
+        a.name,
+        a.identity,
+        a.grantor::regrole,
+        a.grantee::regrole,
+        a.privilege_type,
+        a.is_grantable
+    FROM
+    (
+        SELECT
+            pg_shdepend.classid,
+            pg_shdepend.objid,
+            pg_shdepend.objsubid,
+            identify.*,
+            aclexplode.*
+        FROM pg_catalog.pg_shdepend
+        JOIN pg_catalog.pg_database ON pg_database.datname = current_database() AND pg_database.oid = pg_shdepend.dbid
+        JOIN pg_catalog.pg_authid ON pg_authid.oid = pg_shdepend.refobjid AND pg_shdepend.refclassid = 'pg_authid'::regclass,
+        LATERAL pg_catalog.pg_identify_object(pg_shdepend.classid,pg_shdepend.objid,pg_shdepend.objsubid) AS identify,
+        LATERAL pg_catalog.aclexplode(pg_catalog.pg_get_acl(pg_shdepend.classid,pg_shdepend.objid,pg_shdepend.objsubid)) AS aclexplode
+        WHERE pg_shdepend.deptype = 'a' AND pg_shdepend.dbid = (( SELECT pg_database_1.oid
+                   FROM pg_database pg_database_1
+                  WHERE pg_database_1.datname = current_database()))
+    ) AS a ;
+
+CREATE VIEW pg_ownerships AS
+    SELECT
+        a.classid::regclass,
+        a.objid,
+        a.objsubid,
+        identify.*,
+        a.refobjid::regrole AS owner
+    FROM pg_catalog.pg_shdepend AS a
+    JOIN pg_catalog.pg_database ON pg_database.datname = current_database() AND pg_database.oid = a.dbid
+    JOIN pg_catalog.pg_authid ON pg_authid.oid = a.refobjid AND a.refclassid = 'pg_authid'::regclass,
+    LATERAL pg_catalog.pg_identify_object(a.classid, a.objid, a.objsubid) AS identify
+    WHERE a.deptype = 'o' AND a.dbid = (( SELECT pg_database_1.oid
+          FROM pg_database pg_database_1
+          WHERE pg_database_1.datname = current_database()
+    ));
+
 CREATE VIEW pg_settings AS
     SELECT * FROM pg_show_all_settings() AS A;
 

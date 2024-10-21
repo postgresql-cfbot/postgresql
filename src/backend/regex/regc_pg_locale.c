@@ -63,18 +63,7 @@
  * NB: the coding here assumes pg_wchar is an unsigned type.
  */
 
-typedef enum
-{
-	PG_REGEX_STRATEGY_C,		/* C locale (encoding independent) */
-	PG_REGEX_STRATEGY_BUILTIN,	/* built-in Unicode semantics */
-	PG_REGEX_STRATEGY_LIBC_WIDE,	/* Use locale_t <wctype.h> functions */
-	PG_REGEX_STRATEGY_LIBC_1BYTE,	/* Use locale_t <ctype.h> functions */
-	PG_REGEX_STRATEGY_ICU,		/* Use ICU uchar.h functions */
-} PG_Locale_Strategy;
-
-static PG_Locale_Strategy pg_regex_strategy;
 static pg_locale_t pg_regex_locale;
-static Oid	pg_regex_collation;
 
 /*
  * Hard-wired character properties for C locale
@@ -232,7 +221,6 @@ void
 pg_set_regex_collation(Oid collation)
 {
 	pg_locale_t locale = 0;
-	PG_Locale_Strategy strategy;
 
 	if (!OidIsValid(collation))
 	{
@@ -253,8 +241,9 @@ pg_set_regex_collation(Oid collation)
 		 * catalog access is available, so we can't call
 		 * pg_newlocale_from_collation().
 		 */
-		strategy = PG_REGEX_STRATEGY_C;
-		collation = C_COLLATION_OID;
+		static struct pg_locale_struct dummy_locale = {.ctype_is_c = true};
+
+		locale = &dummy_locale;
 	}
 	else
 	{
@@ -264,121 +253,80 @@ pg_set_regex_collation(Oid collation)
 			ereport(ERROR,
 					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					 errmsg("nondeterministic collations are not supported for regular expressions")));
-
-		if (locale->ctype_is_c)
-		{
-			/*
-			 * C/POSIX collations use this path regardless of database
-			 * encoding
-			 */
-			strategy = PG_REGEX_STRATEGY_C;
-			locale = 0;
-			collation = C_COLLATION_OID;
-		}
-		else if (locale->provider == COLLPROVIDER_BUILTIN)
-		{
-			Assert(GetDatabaseEncoding() == PG_UTF8);
-			strategy = PG_REGEX_STRATEGY_BUILTIN;
-		}
-#ifdef USE_ICU
-		else if (locale->provider == COLLPROVIDER_ICU)
-		{
-			strategy = PG_REGEX_STRATEGY_ICU;
-		}
-#endif
-		else
-		{
-			Assert(locale->provider == COLLPROVIDER_LIBC);
-			if (GetDatabaseEncoding() == PG_UTF8)
-				strategy = PG_REGEX_STRATEGY_LIBC_WIDE;
-			else
-				strategy = PG_REGEX_STRATEGY_LIBC_1BYTE;
-		}
 	}
 
-	pg_regex_strategy = strategy;
 	pg_regex_locale = locale;
-	pg_regex_collation = collation;
 }
 
 static int
 pg_wc_isdigit(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISDIGIT));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_isdigit(c, true);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISDIGIT));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isdigit(c, true);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswdigit_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswdigit_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					isdigit_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_isdigit(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_isdigit(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static int
 pg_wc_isalpha(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISALPHA));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_isalpha(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISALPHA));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isalpha(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswalpha_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswalpha_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					isalpha_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_isalpha(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_isalpha(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static int
 pg_wc_isalnum(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISALNUM));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_isalnum(c, true);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISALNUM));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isalnum(c, true);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswalnum_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswalnum_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					isalnum_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_isalnum(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_isalnum(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
@@ -394,218 +342,206 @@ pg_wc_isword(pg_wchar c)
 static int
 pg_wc_isupper(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISUPPER));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_isupper(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISUPPER));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isupper(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswupper_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswupper_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					isupper_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_isupper(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_isupper(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static int
 pg_wc_islower(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISLOWER));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_islower(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISLOWER));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_islower(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswlower_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswlower_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					islower_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_islower(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_islower(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static int
 pg_wc_isgraph(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISGRAPH));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_isgraph(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISGRAPH));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isgraph(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswgraph_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswgraph_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					isgraph_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_isgraph(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_isgraph(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static int
 pg_wc_isprint(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISPRINT));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_isprint(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISPRINT));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isprint(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswprint_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswprint_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					isprint_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_isprint(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_isprint(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static int
 pg_wc_ispunct(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISPUNCT));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_ispunct(c, true);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISPUNCT));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_ispunct(c, true);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswpunct_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswpunct_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					ispunct_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_ispunct(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_ispunct(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static int
 pg_wc_isspace(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
+		return (c <= (pg_wchar) 127 && (pg_char_properties[c] & PG_ISSPACE));
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return pg_u_isspace(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
 	{
-		case PG_REGEX_STRATEGY_C:
-			return (c <= (pg_wchar) 127 &&
-					(pg_char_properties[c] & PG_ISSPACE));
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return pg_u_isspace(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return iswspace_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return iswspace_l((wint_t) c, pg_regex_locale->info.lt);
+		else
 			return (c <= (pg_wchar) UCHAR_MAX &&
 					isspace_l((unsigned char) c, pg_regex_locale->info.lt));
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_isspace(c);
-#endif
-			break;
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_isspace(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static pg_wchar
 pg_wc_toupper(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
 	{
-		case PG_REGEX_STRATEGY_C:
-			if (c <= (pg_wchar) 127)
-				return pg_ascii_toupper((unsigned char) c);
-			return c;
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return unicode_uppercase_simple(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return towupper_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (c <= (pg_wchar) 127)
+			return pg_ascii_toupper((unsigned char) c);
+		return c;
+	}
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return unicode_uppercase_simple(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
+	{
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return towupper_l((wint_t) c, pg_regex_locale->info.lt);
+		else
+		{
 			if (c <= (pg_wchar) UCHAR_MAX)
 				return toupper_l((unsigned char) c, pg_regex_locale->info.lt);
 			return c;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_toupper(c);
-#endif
-			break;
+		}
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_toupper(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
 static pg_wchar
 pg_wc_tolower(pg_wchar c)
 {
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
 	{
-		case PG_REGEX_STRATEGY_C:
-			if (c <= (pg_wchar) 127)
-				return pg_ascii_tolower((unsigned char) c);
-			return c;
-		case PG_REGEX_STRATEGY_BUILTIN:
-			return unicode_lowercase_simple(c);
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			if (sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF)
-				return towlower_l((wint_t) c, pg_regex_locale->info.lt);
-			/* FALL THRU */
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		if (c <= (pg_wchar) 127)
+			return pg_ascii_tolower((unsigned char) c);
+		return c;
+	}
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+		return unicode_lowercase_simple(c);
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
+	{
+		if (GetDatabaseEncoding() == PG_UTF8 &&
+			(sizeof(wchar_t) >= 4 || c <= (pg_wchar) 0xFFFF))
+			return towlower_l((wint_t) c, pg_regex_locale->info.lt);
+		else
+		{
 			if (c <= (pg_wchar) UCHAR_MAX)
 				return tolower_l((unsigned char) c, pg_regex_locale->info.lt);
 			return c;
-		case PG_REGEX_STRATEGY_ICU:
-#ifdef USE_ICU
-			return u_tolower(c);
-#endif
-			break;
+		}
 	}
+#ifdef USE_ICU
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+		return u_tolower(c);
+#endif
+
 	return 0;					/* can't get here, but keep compiler quiet */
 }
 
@@ -628,7 +564,7 @@ typedef int (*pg_wc_probefunc) (pg_wchar c);
 typedef struct pg_ctype_cache
 {
 	pg_wc_probefunc probefunc;	/* pg_wc_isalpha or a sibling */
-	Oid			collation;		/* collation this entry is for */
+	pg_locale_t locale;			/* locale this entry is for */
 	struct cvec cv;				/* cache entry contents */
 	struct pg_ctype_cache *next;	/* chain link */
 } pg_ctype_cache;
@@ -697,7 +633,7 @@ pg_ctype_get_cache(pg_wc_probefunc probefunc, int cclasscode)
 	for (pcc = pg_ctype_cache_list; pcc != NULL; pcc = pcc->next)
 	{
 		if (pcc->probefunc == probefunc &&
-			pcc->collation == pg_regex_collation)
+			pcc->locale == pg_regex_locale)
 			return &pcc->cv;
 	}
 
@@ -708,7 +644,7 @@ pg_ctype_get_cache(pg_wc_probefunc probefunc, int cclasscode)
 	if (pcc == NULL)
 		return NULL;
 	pcc->probefunc = probefunc;
-	pcc->collation = pg_regex_collation;
+	pcc->locale = pg_regex_locale;
 	pcc->cv.nchrs = 0;
 	pcc->cv.chrspace = 128;
 	pcc->cv.chrs = (chr *) malloc(pcc->cv.chrspace * sizeof(chr));
@@ -732,37 +668,41 @@ pg_ctype_get_cache(pg_wc_probefunc probefunc, int cclasscode)
 	 * would always be true for production values of MAX_SIMPLE_CHR, but it's
 	 * useful to allow it to be small for testing purposes.)
 	 */
-	switch (pg_regex_strategy)
+	if (pg_regex_locale->ctype_is_c)
 	{
-		case PG_REGEX_STRATEGY_C:
 #if MAX_SIMPLE_CHR >= 127
-			max_chr = (pg_wchar) 127;
-			pcc->cv.cclasscode = -1;
+		max_chr = (pg_wchar) 127;
+		pcc->cv.cclasscode = -1;
 #else
-			max_chr = (pg_wchar) MAX_SIMPLE_CHR;
+		max_chr = (pg_wchar) MAX_SIMPLE_CHR;
 #endif
-			break;
-		case PG_REGEX_STRATEGY_BUILTIN:
+	}
+	else if (pg_regex_locale->provider == COLLPROVIDER_BUILTIN)
+	{
+		max_chr = (pg_wchar) MAX_SIMPLE_CHR;
+	}
+	else if (pg_regex_locale->provider == COLLPROVIDER_LIBC)
+	{
+		if (GetDatabaseEncoding() == PG_UTF8)
 			max_chr = (pg_wchar) MAX_SIMPLE_CHR;
-			break;
-		case PG_REGEX_STRATEGY_LIBC_WIDE:
-			max_chr = (pg_wchar) MAX_SIMPLE_CHR;
-			break;
-		case PG_REGEX_STRATEGY_LIBC_1BYTE:
+		else
+		{
 #if MAX_SIMPLE_CHR >= UCHAR_MAX
 			max_chr = (pg_wchar) UCHAR_MAX;
 			pcc->cv.cclasscode = -1;
 #else
 			max_chr = (pg_wchar) MAX_SIMPLE_CHR;
 #endif
-			break;
-		case PG_REGEX_STRATEGY_ICU:
-			max_chr = (pg_wchar) MAX_SIMPLE_CHR;
-			break;
-		default:
-			Assert(false);
-			max_chr = 0;		/* can't get here, but keep compiler quiet */
-			break;
+		}
+	}
+	else if (pg_regex_locale->provider == COLLPROVIDER_ICU)
+	{
+		max_chr = (pg_wchar) MAX_SIMPLE_CHR;
+	}
+	else
+	{
+		Assert(false);
+		max_chr = 0;			/* can't get here, but keep compiler quiet */
 	}
 
 	/*

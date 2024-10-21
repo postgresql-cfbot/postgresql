@@ -23,6 +23,7 @@
 
 typedef struct PgStat_PendingIO
 {
+	uint64		bytes[IOOBJECT_NUM_TYPES][IOCONTEXT_NUM_TYPES][IOOP_NUM_TYPES];
 	PgStat_Counter counts[IOOBJECT_NUM_TYPES][IOCONTEXT_NUM_TYPES][IOOP_NUM_TYPES];
 	instr_time	pending_times[IOOBJECT_NUM_TYPES][IOCONTEXT_NUM_TYPES][IOOP_NUM_TYPES];
 } PgStat_PendingIO;
@@ -31,6 +32,12 @@ typedef struct PgStat_PendingIO
 static PgStat_PendingIO PendingIOStats;
 static bool have_iostats = false;
 
+static inline bool pgstat_io_count_checks(IOObject io_object,
+										  IOContext io_context, IOOp io_op,
+										  uint64 bytes);
+static inline void pgstat_count_io_op_n_inline(IOObject io_object,
+											   IOContext io_context, IOOp io_op,
+											   uint32 cnt, uint64 bytes);
 
 /*
  * Check that stats have not been counted for any combination of IOObject,
@@ -73,21 +80,50 @@ pgstat_bktype_io_stats_valid(PgStat_BktypeIO *backend_io,
 	return true;
 }
 
-void
-pgstat_count_io_op(IOObject io_object, IOContext io_context, IOOp io_op)
-{
-	pgstat_count_io_op_n(io_object, io_context, io_op, 1);
-}
-
-void
-pgstat_count_io_op_n(IOObject io_object, IOContext io_context, IOOp io_op, uint32 cnt)
+static inline bool
+pgstat_io_count_checks(IOObject io_object, IOContext io_context, IOOp io_op, uint64 bytes)
 {
 	Assert((unsigned int) io_object < IOOBJECT_NUM_TYPES);
 	Assert((unsigned int) io_context < IOCONTEXT_NUM_TYPES);
 	Assert((unsigned int) io_op < IOOP_NUM_TYPES);
 	Assert(pgstat_tracks_io_op(MyBackendType, io_object, io_context, io_op));
 
+	/* Only IOOP_READ, IOOP_WRITE and IOOP_EXTEND can do IO in bytes. */
+	Assert((io_op == IOOP_READ || io_op == IOOP_WRITE || io_op == IOOP_EXTEND) ||
+		   bytes == 0);
+
+	/*
+	 * If IO done in bytes and byte is <= 0, this means there is an error
+	 * while doing an IO. Don't count these IOs.
+	 */
+	if ((io_op == IOOP_READ || io_op == IOOP_WRITE || io_op == IOOP_EXTEND) &&
+		bytes <= 0)
+		return false;
+
+	return true;
+}
+
+void
+pgstat_count_io_op(IOObject io_object, IOContext io_context, IOOp io_op, uint64 bytes)
+{
+	if (!pgstat_io_count_checks(io_object, io_context, io_op, bytes))
+		return;
+	pgstat_count_io_op_n_inline(io_object, io_context, io_op, 1, bytes);
+}
+
+void
+pgstat_count_io_op_n(IOObject io_object, IOContext io_context, IOOp io_op, uint32 cnt, uint64 bytes)
+{
+	if (!pgstat_io_count_checks(io_object, io_context, io_op, bytes))
+		return;
+	pgstat_count_io_op_n_inline(io_object, io_context, io_op, cnt, bytes);
+}
+
+static inline void
+pgstat_count_io_op_n_inline(IOObject io_object, IOContext io_context, IOOp io_op, uint32 cnt, uint64 bytes)
+{
 	PendingIOStats.counts[io_object][io_context][io_op] += cnt;
+	PendingIOStats.bytes[io_object][io_context][io_op] += bytes;
 
 	have_iostats = true;
 }
@@ -120,8 +156,12 @@ pgstat_prepare_io_time(bool track_io_guc)
  */
 void
 pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
-						instr_time start_time, uint32 cnt)
+						instr_time start_time, uint32 cnt, uint64 bytes)
 {
+
+	if (!pgstat_io_count_checks(io_object, io_context, io_op, bytes))
+		return;
+
 	if (track_io_timing)
 	{
 		instr_time	io_time;
@@ -150,7 +190,7 @@ pgstat_count_io_op_time(IOObject io_object, IOContext io_context, IOOp io_op,
 					   io_time);
 	}
 
-	pgstat_count_io_op_n(io_object, io_context, io_op, cnt);
+	pgstat_count_io_op_n_inline(io_object, io_context, io_op, cnt, bytes);
 }
 
 PgStat_IO *
@@ -215,6 +255,9 @@ pgstat_io_flush_cb(bool nowait)
 
 				bktype_shstats->counts[io_object][io_context][io_op] +=
 					PendingIOStats.counts[io_object][io_context][io_op];
+
+				bktype_shstats->bytes[io_object][io_context][io_op] +=
+					PendingIOStats.bytes[io_object][io_context][io_op];
 
 				time = PendingIOStats.pending_times[io_object][io_context][io_op];
 

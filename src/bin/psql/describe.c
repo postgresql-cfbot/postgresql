@@ -1715,28 +1715,19 @@ describeOneTableDetails(const char *schemaname,
 	if (tableinfo.relkind == RELKIND_SEQUENCE)
 	{
 		PGresult   *result = NULL;
-		printQueryOpt myopt = pset.popt;
-		char	   *footers[2] = {NULL, NULL};
 
 		if (pset.sversion >= 100000)
 		{
 			printfPQExpBuffer(&buf,
-							  "SELECT pg_catalog.format_type(seqtypid, NULL) AS \"%s\",\n"
-							  "       seqstart AS \"%s\",\n"
-							  "       seqmin AS \"%s\",\n"
-							  "       seqmax AS \"%s\",\n"
-							  "       seqincrement AS \"%s\",\n"
-							  "       CASE WHEN seqcycle THEN '%s' ELSE '%s' END AS \"%s\",\n"
-							  "       seqcache AS \"%s\"\n",
-							  gettext_noop("Type"),
-							  gettext_noop("Start"),
-							  gettext_noop("Minimum"),
-							  gettext_noop("Maximum"),
-							  gettext_noop("Increment"),
+							  "SELECT pg_catalog.format_type(seqtypid, NULL),\n"
+							  "       seqstart,\n"
+							  "       seqmin,\n"
+							  "       seqmax,\n"
+							  "       seqincrement,\n"
+							  "       CASE WHEN seqcycle THEN '%s' ELSE '%s' END,\n"
+							  "       seqcache\n",
 							  gettext_noop("yes"),
-							  gettext_noop("no"),
-							  gettext_noop("Cycles?"),
-							  gettext_noop("Cache"));
+							  gettext_noop("no"));
 			appendPQExpBuffer(&buf,
 							  "FROM pg_catalog.pg_sequence\n"
 							  "WHERE seqrelid = '%s';",
@@ -1745,22 +1736,15 @@ describeOneTableDetails(const char *schemaname,
 		else
 		{
 			printfPQExpBuffer(&buf,
-							  "SELECT 'bigint' AS \"%s\",\n"
-							  "       start_value AS \"%s\",\n"
-							  "       min_value AS \"%s\",\n"
-							  "       max_value AS \"%s\",\n"
-							  "       increment_by AS \"%s\",\n"
-							  "       CASE WHEN is_cycled THEN '%s' ELSE '%s' END AS \"%s\",\n"
-							  "       cache_value AS \"%s\"\n",
-							  gettext_noop("Type"),
-							  gettext_noop("Start"),
-							  gettext_noop("Minimum"),
-							  gettext_noop("Maximum"),
-							  gettext_noop("Increment"),
+							  "SELECT 'bigint',\n"
+							  "       start_value,\n"
+							  "       min_value,\n"
+							  "       max_value,\n"
+							  "       increment_by,\n"
+							  "       CASE WHEN is_cycled THEN '%s' ELSE '%s' END,\n"
+							  "       cache_value\n",
 							  gettext_noop("yes"),
-							  gettext_noop("no"),
-							  gettext_noop("Cycles?"),
-							  gettext_noop("Cache"));
+							  gettext_noop("no"));
 			appendPQExpBuffer(&buf, "FROM %s", fmtId(schemaname));
 			/* must be separate because fmtId isn't reentrant */
 			appendPQExpBuffer(&buf, ".%s;", fmtId(relationname));
@@ -1769,6 +1753,59 @@ describeOneTableDetails(const char *schemaname,
 		res = PSQLexec(buf.data);
 		if (!res)
 			goto error_return;
+
+		numrows = PQntuples(res);
+
+		/*
+		 * XXX reset to use expanded output for sequences (maybe we should
+		 * keep this disabled, just like for tables?)
+		 */
+		myopt.expanded = pset.popt.topt.expanded;
+
+		printTableInit(&cont, &myopt, title.data, 7, numrows);
+		printTableInitialized = true;
+
+		if (tableinfo.relpersistence == 'u')
+			printfPQExpBuffer(&title, _("Unlogged sequence \"%s.%s\""),
+							  schemaname, relationname);
+		else
+			printfPQExpBuffer(&title, _("Sequence \"%s.%s\""),
+							  schemaname, relationname);
+
+		printTableAddHeader(&cont, gettext_noop("Type"), true, 'l');
+		printTableAddHeader(&cont, gettext_noop("Start"), true, 'r');
+		printTableAddHeader(&cont, gettext_noop("Minimum"), true, 'r');
+		printTableAddHeader(&cont, gettext_noop("Maximum"), true, 'r');
+		printTableAddHeader(&cont, gettext_noop("Increment"), true, 'r');
+		printTableAddHeader(&cont, gettext_noop("Cycles?"), true, 'l');
+		printTableAddHeader(&cont, gettext_noop("Cache"), true, 'r');
+
+		/* Generate table cells to be printed */
+		for (i = 0; i < numrows; i++)
+		{
+			/* Type */
+			printTableAddCell(&cont, PQgetvalue(res, i, 0), false, false);
+
+			/* Start */
+			printTableAddCell(&cont, PQgetvalue(res, i, 1), false, false);
+
+			/* Minimum */
+			printTableAddCell(&cont, PQgetvalue(res, i, 2), false, false);
+
+			/* Maximum */
+			printTableAddCell(&cont, PQgetvalue(res, i, 3), false, false);
+
+			/* Increment */
+			printTableAddCell(&cont, PQgetvalue(res, i, 4), false, false);
+
+			/* Cycles? */
+			printTableAddCell(&cont, PQgetvalue(res, i, 5), false, false);
+
+			/* Cache */
+			printTableAddCell(&cont, PQgetvalue(res, i, 6), false, false);
+		}
+
+		/* Footer information about a sequence */
 
 		/* Get the column that owns this sequence */
 		printfPQExpBuffer(&buf, "SELECT pg_catalog.quote_ident(nspname) || '.' ||"
@@ -1801,32 +1838,53 @@ describeOneTableDetails(const char *schemaname,
 			switch (PQgetvalue(result, 0, 1)[0])
 			{
 				case 'a':
-					footers[0] = psprintf(_("Owned by: %s"),
-										  PQgetvalue(result, 0, 0));
+					printTableAddFooter(&cont,
+										psprintf(_("Owned by: %s"),
+												 PQgetvalue(result, 0, 0)));
 					break;
 				case 'i':
-					footers[0] = psprintf(_("Sequence for identity column: %s"),
-										  PQgetvalue(result, 0, 0));
+					printTableAddFooter(&cont,
+										psprintf(_("Sequence for identity column: %s"),
+												 PQgetvalue(result, 0, 0)));
 					break;
 			}
 		}
 		PQclear(result);
 
-		if (tableinfo.relpersistence == 'u')
-			printfPQExpBuffer(&title, _("Unlogged sequence \"%s.%s\""),
-							  schemaname, relationname);
-		else
-			printfPQExpBuffer(&title, _("Sequence \"%s.%s\""),
-							  schemaname, relationname);
+		/* Print any publications */
+		if (pset.sversion >= 180000)
+		{
+			int			tuples;
 
-		myopt.footers = footers;
-		myopt.topt.default_footer = false;
-		myopt.title = title.data;
-		myopt.translate_header = true;
+			printfPQExpBuffer(&buf,
+							  "SELECT pubname\n"
+							  "FROM pg_catalog.pg_publication p\n"
+							  "WHERE p.puballsequences AND pg_catalog.pg_relation_is_publishable('%s')\n"
+							  "ORDER BY 1;",
+							  oid);
 
-		printQuery(res, &myopt, pset.queryFout, false, pset.logfile);
+			result = PSQLexec(buf.data);
+			if (!result)
+				goto error_return;
 
-		free(footers[0]);
+			/* Might be an empty set - that's ok */
+			tuples = PQntuples(result);
+			if (tuples > 0)
+			{
+				printTableAddFooter(&cont, _("Publications:"));
+
+				for (i = 0; i < tuples; i++)
+				{
+					printfPQExpBuffer(&buf, "    \"%s\"",
+									  PQgetvalue(result, i, 0));
+
+					printTableAddFooter(&cont, buf.data);
+				}
+			}
+			PQclear(result);
+		}
+
+		printTable(&cont, pset.queryFout, false, pset.logfile);
 
 		retval = true;
 		goto error_return;		/* not an error, just return early */
@@ -2048,6 +2106,12 @@ describeOneTableDetails(const char *schemaname,
 
 	for (i = 0; i < cols; i++)
 		printTableAddHeader(&cont, headers[i], true, 'l');
+
+	res = PSQLexec(buf.data);
+	if (!res)
+		goto error_return;
+
+	numrows = PQntuples(res);
 
 	/* Generate table cells to be printed */
 	for (i = 0; i < numrows; i++)
@@ -6233,7 +6297,7 @@ listPublications(const char *pattern)
 	PQExpBufferData buf;
 	PGresult   *res;
 	printQueryOpt myopt = pset.popt;
-	static const bool translate_columns[] = {false, false, false, false, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, false, false, false, false, false};
 
 	if (pset.sversion < 100000)
 	{
@@ -6250,16 +6314,24 @@ listPublications(const char *pattern)
 	printfPQExpBuffer(&buf,
 					  "SELECT pubname AS \"%s\",\n"
 					  "  pg_catalog.pg_get_userbyid(pubowner) AS \"%s\",\n"
-					  "  puballtables AS \"%s\",\n"
-					  "  pubinsert AS \"%s\",\n"
-					  "  pubupdate AS \"%s\",\n"
-					  "  pubdelete AS \"%s\"",
+					  "  puballtables AS \"%s\"",
 					  gettext_noop("Name"),
 					  gettext_noop("Owner"),
-					  gettext_noop("All tables"),
+					  gettext_noop("All tables"));
+
+	if (pset.sversion >= 180000)
+		appendPQExpBuffer(&buf,
+						  ",\n  puballsequences AS \"%s\"",
+						  gettext_noop("All sequences"));
+
+	appendPQExpBuffer(&buf,
+					  ",\n  pubinsert AS \"%s\",\n"
+					  "  pubupdate AS \"%s\",\n"
+					  "  pubdelete AS \"%s\"",
 					  gettext_noop("Inserts"),
 					  gettext_noop("Updates"),
 					  gettext_noop("Deletes"));
+
 	if (pset.sversion >= 110000)
 		appendPQExpBuffer(&buf,
 						  ",\n  pubtruncate AS \"%s\"",
@@ -6357,6 +6429,7 @@ describePublications(const char *pattern)
 	PGresult   *res;
 	bool		has_pubtruncate;
 	bool		has_pubviaroot;
+	bool		has_pubsequence;
 
 	PQExpBufferData title;
 	printTableContent cont;
@@ -6373,6 +6446,7 @@ describePublications(const char *pattern)
 
 	has_pubtruncate = (pset.sversion >= 110000);
 	has_pubviaroot = (pset.sversion >= 130000);
+	has_pubsequence = (pset.sversion >= 180000);
 
 	initPQExpBuffer(&buf);
 
@@ -6386,6 +6460,10 @@ describePublications(const char *pattern)
 	if (has_pubviaroot)
 		appendPQExpBufferStr(&buf,
 							 ", pubviaroot");
+	if (has_pubsequence)
+		appendPQExpBufferStr(&buf,
+							 ", puballsequences");
+
 	appendPQExpBufferStr(&buf,
 						 "\nFROM pg_catalog.pg_publication\n");
 
@@ -6437,6 +6515,8 @@ describePublications(const char *pattern)
 			ncols++;
 		if (has_pubviaroot)
 			ncols++;
+		if (has_pubsequence)
+			ncols++;
 
 		initPQExpBuffer(&title);
 		printfPQExpBuffer(&title, _("Publication %s"), pubname);
@@ -6444,6 +6524,8 @@ describePublications(const char *pattern)
 
 		printTableAddHeader(&cont, gettext_noop("Owner"), true, align);
 		printTableAddHeader(&cont, gettext_noop("All tables"), true, align);
+		if (has_pubsequence)
+			printTableAddHeader(&cont, gettext_noop("All sequences"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Inserts"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Updates"), true, align);
 		printTableAddHeader(&cont, gettext_noop("Deletes"), true, align);
@@ -6454,6 +6536,8 @@ describePublications(const char *pattern)
 
 		printTableAddCell(&cont, PQgetvalue(res, i, 2), false, false);
 		printTableAddCell(&cont, PQgetvalue(res, i, 3), false, false);
+		if (has_pubsequence)
+			printTableAddCell(&cont, PQgetvalue(res, i, 9), false, false);	/* all sequences */
 		printTableAddCell(&cont, PQgetvalue(res, i, 4), false, false);
 		printTableAddCell(&cont, PQgetvalue(res, i, 5), false, false);
 		printTableAddCell(&cont, PQgetvalue(res, i, 6), false, false);

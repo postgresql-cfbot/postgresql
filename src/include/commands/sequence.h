@@ -45,6 +45,8 @@ typedef FormData_pg_sequence_data *Form_pg_sequence_data;
 /* XLOG stuff */
 #define XLOG_SEQ_LOG			0x00
 
+#define SEQ_LOG_CNT_INVALID		0
+
 typedef struct xl_seq_rec
 {
 	RelFileLocator locator;
@@ -60,6 +62,7 @@ extern ObjectAddress AlterSequence(ParseState *pstate, AlterSeqStmt *stmt);
 extern void SequenceChangePersistence(Oid relid, char newrelpersistence);
 extern void DeleteSequenceTuple(Oid relid);
 extern void ResetSequence(Oid seq_relid);
+extern void SetSequence(Oid relid, int64 next, bool is_called, int64 log_cnt);
 extern void ResetSequenceCaches(void);
 
 extern void seq_redo(XLogReaderState *record);

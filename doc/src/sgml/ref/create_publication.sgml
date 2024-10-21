@@ -22,9 +22,14 @@ PostgreSQL documentation
  <refsynopsisdiv>
 <synopsis>
 CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
-    [ FOR ALL TABLES
+    [ FOR ALL <replaceable class="parameter">object_type</replaceable> [, ...]
       | FOR <replaceable class="parameter">publication_object</replaceable> [, ... ] ]
     [ WITH ( <replaceable class="parameter">publication_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
+
+<phrase>where <replaceable class="parameter">object type</replaceable> is one of:</phrase>
+
+    TABLES
+    SEQUENCES
 
 <phrase>where <replaceable class="parameter">publication_object</replaceable> is one of:</phrase>
 
@@ -158,6 +163,16 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
     </listitem>
    </varlistentry>
 
+   <varlistentry id="sql-createpublication-params-for-all-sequences">
+    <term><literal>FOR ALL SEQUENCES</literal></term>
+    <listitem>
+     <para>
+      Marks the publication as one that synchronizes changes for all sequences
+      in the database, including sequences created in the future.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="sql-createpublication-params-with">
     <term><literal>WITH ( <replaceable class="parameter">publication_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )</literal></term>
     <listitem>
@@ -240,10 +255,10 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
   <title>Notes</title>
 
   <para>
-   If <literal>FOR TABLE</literal>, <literal>FOR ALL TABLES</literal> or
-   <literal>FOR TABLES IN SCHEMA</literal> are not specified, then the
-   publication starts out with an empty set of tables.  That is useful if
-   tables or schemas are to be added later.
+   If <literal>FOR TABLE</literal>, <literal>FOR ALL TABLES</literal>,
+   <literal>FOR TABLES IN SCHEMA</literal> or <literal>FOR ALL SEQUENCES</literal>
+   are not specified, then the publication starts out with an empty set of
+   tables.  That is useful if tables or schemas are to be added later.
   </para>
 
   <para>
@@ -259,8 +274,9 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
 
   <para>
    To add a table to a publication, the invoking user must have ownership
-   rights on the table.  The <command>FOR ALL TABLES</command> and
-   <command>FOR TABLES IN SCHEMA</command> clauses require the invoking
+   rights on the table.  The <command>FOR ALL TABLES</command>,
+   <command>FOR TABLES IN SCHEMA</command> and
+   <command>FOR ALL SEQUENCES</command> clauses require the invoking
    user to be a superuser.
   </para>
 
@@ -402,6 +418,21 @@ CREATE PUBLICATION sales_publication FOR TABLES IN SCHEMA marketing, sales;
 <programlisting>
 CREATE PUBLICATION users_filtered FOR TABLE users (user_id, firstname);
 </programlisting></para>
+
+  <para>
+   Create a publication that publishes all sequences for synchronization:
+<programlisting>
+CREATE PUBLICATION all_sequences FOR ALL SEQUENCES;
+</programlisting>
+  </para>
+
+  <para>
+   Create a publication that publishes all changes in all tables, and
+   all sequences for synchronization:
+<programlisting>
+CREATE PUBLICATION all_tables_sequences FOR ALL TABLES, SEQUENCES;
+</programlisting>
+  </para>
  </refsect1>
 
  <refsect1>

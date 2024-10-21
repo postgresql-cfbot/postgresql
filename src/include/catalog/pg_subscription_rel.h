@@ -89,7 +89,9 @@ extern void UpdateSubscriptionRelState(Oid subid, Oid relid, char state,
 extern char GetSubscriptionRelState(Oid subid, Oid relid, XLogRecPtr *sublsn);
 extern void RemoveSubscriptionRel(Oid subid, Oid relid);
 
-extern bool HasSubscriptionRelations(Oid subid);
-extern List *GetSubscriptionRelations(Oid subid, bool not_ready);
+extern bool HasSubscriptionTables(Oid subid);
+extern List *GetSubscriptionRelations(Oid subid, bool get_tables,
+									  bool get_sequences,
+									  bool all_states);
 
 #endif							/* PG_SUBSCRIPTION_REL_H */

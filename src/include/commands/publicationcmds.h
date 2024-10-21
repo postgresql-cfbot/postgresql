@@ -35,5 +35,6 @@ extern bool pub_rf_contains_invalid_column(Oid pubid, Relation relation,
 										   List *ancestors, bool pubviaroot);
 extern bool pub_collist_contains_invalid_column(Oid pubid, Relation relation,
 												List *ancestors, bool pubviaroot);
+extern ObjectAddress RenamePublication(const char *oldname, const char *newname);
 
 #endif							/* PUBLICATIONCMDS_H */

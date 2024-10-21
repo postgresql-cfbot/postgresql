@@ -47,6 +47,16 @@ extern bool join_clause_is_movable_to(RestrictInfo *rinfo, RelOptInfo *baserel);
 extern bool join_clause_is_movable_into(RestrictInfo *rinfo,
 										Relids currentrelids,
 										Relids current_and_outer);
+extern RestrictInfo *find_restrictinfo(PlannerInfo *root, int rinfo_serial,
+									   Relids child_required_relids);
+extern void add_restrictinfo(PlannerInfo *root, RestrictInfo *child_rinfo);
+extern List *get_child_restrictinfos(PlannerInfo *root,
+									 List *parent_restrictinfos,
+									 int nappinfos, AppendRelInfo **appinfos);
+extern List *get_child_restrictinfos_multilevel(PlannerInfo *root,
+												List *parent_clauselist,
+												RelOptInfo *child_rel,
+												RelOptInfo *top_parent);
 
 /*
  * clause_sides_match_join

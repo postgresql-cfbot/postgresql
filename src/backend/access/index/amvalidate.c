@@ -149,7 +149,7 @@ identify_opfamily_groups(CatCList *oprlist, CatCList *proclist)
  * In any case the function result type must match restype exactly.
  */
 bool
-check_amproc_signature(Oid funcid, Oid restype, bool exact,
+check_amproc_signature(Oid funcid, Oid restype, bool retset, bool exact,
 					   int minargs, int maxargs,...)
 {
 	bool		result = true;
@@ -163,8 +163,9 @@ check_amproc_signature(Oid funcid, Oid restype, bool exact,
 		elog(ERROR, "cache lookup failed for function %u", funcid);
 	procform = (Form_pg_proc) GETSTRUCT(tp);
 
-	if (procform->prorettype != restype || procform->proretset ||
-		procform->pronargs < minargs || procform->pronargs > maxargs)
+	if ((procform->prorettype != restype && OidIsValid(restype))
+		|| procform->proretset != retset || procform->pronargs < minargs
+		|| procform->pronargs > maxargs)
 		result = false;
 
 	va_start(ap, maxargs);
@@ -191,7 +192,7 @@ check_amproc_signature(Oid funcid, Oid restype, bool exact,
 bool
 check_amoptsproc_signature(Oid funcid)
 {
-	return check_amproc_signature(funcid, VOIDOID, true, 1, 1, INTERNALOID);
+	return check_amproc_signature(funcid, VOIDOID, false, true, 1, 1, INTERNALOID);
 }
 
 /*

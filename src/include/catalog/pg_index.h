@@ -48,7 +48,6 @@ CATALOG(pg_index,2610,IndexRelationId) BKI_SCHEMA_MACRO
 	/* variable-length fields start here, but we allow direct access to indkey */
 	int2vector	indkey BKI_FORCE_NOT_NULL;	/* column numbers of indexed cols,
 											 * or 0 */
-
 #ifdef CATALOG_VARLEN
 	oidvector	indcollation BKI_LOOKUP_OPT(pg_collation) BKI_FORCE_NOT_NULL;	/* collation identifiers */
 	oidvector	indclass BKI_LOOKUP(pg_opclass) BKI_FORCE_NOT_NULL; /* opclass identifiers */

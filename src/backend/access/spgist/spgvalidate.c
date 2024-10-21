@@ -109,7 +109,7 @@ spgvalidate(Oid opclassoid)
 		switch (procform->amprocnum)
 		{
 			case SPGIST_CONFIG_PROC:
-				ok = check_amproc_signature(procform->amproc, VOIDOID, true,
+				ok = check_amproc_signature(procform->amproc, VOIDOID, false, true,
 											2, 2, INTERNALOID, INTERNALOID);
 				configIn.attType = procform->amproclefttype;
 				memset(&configOut, 0, sizeof(configOut));
@@ -164,11 +164,11 @@ spgvalidate(Oid opclassoid)
 			case SPGIST_CHOOSE_PROC:
 			case SPGIST_PICKSPLIT_PROC:
 			case SPGIST_INNER_CONSISTENT_PROC:
-				ok = check_amproc_signature(procform->amproc, VOIDOID, true,
+				ok = check_amproc_signature(procform->amproc, VOIDOID, false, true,
 											2, 2, INTERNALOID, INTERNALOID);
 				break;
 			case SPGIST_LEAF_CONSISTENT_PROC:
-				ok = check_amproc_signature(procform->amproc, BOOLOID, true,
+				ok = check_amproc_signature(procform->amproc, BOOLOID, false, true,
 											2, 2, INTERNALOID, INTERNALOID);
 				break;
 			case SPGIST_COMPRESS_PROC:
@@ -177,7 +177,7 @@ spgvalidate(Oid opclassoid)
 					ok = false;
 				else
 					ok = check_amproc_signature(procform->amproc,
-												configOutLeafType, true,
+												configOutLeafType, false, true,
 												1, 1, procform->amproclefttype);
 				break;
 			case SPGIST_OPTIONS_PROC:

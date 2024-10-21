@@ -764,7 +764,7 @@ SPI_execute_plan_with_paramlist(SPIPlanPtr plan, ParamListInfo params,
  * end of the command.
  *
  * This is currently not documented in spi.sgml because it is only intended
- * for use by RI triggers.
+ * for use by RI triggers and FOR PORTION OF.
  *
  * Passing snapshot == InvalidSnapshot will select the normal behavior of
  * fetching a new snapshot for each query.

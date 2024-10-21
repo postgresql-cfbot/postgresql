@@ -1353,7 +1353,7 @@ DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
 }
 
 /*
- * FindFkPeriodOpers -
+ * FindFkPeriodOpersAndProcs -
  *
  * Looks up the operator oids used for the PERIOD part of a temporal foreign key.
  * The opclass should be the opclass of that PERIOD element.
@@ -1362,11 +1362,14 @@ DeconstructFkConstraintRow(HeapTuple tuple, int *numfks,
  * aggedcontainedbyoperoid is also a ContainedBy operator,
  * but one whose rhs is a multirange.
  * That way foreign keys can compare fkattr <@ range_agg(pkattr).
+ * intersectprocoid is used to limit the effect of CASCADE/SET NULL/SET DEFAULT
+ * when the PK record is changed with FOR PORTION OF.
  */
 void
-FindFKPeriodOpers(Oid opclass,
-				  Oid *containedbyoperoid,
-				  Oid *aggedcontainedbyoperoid)
+FindFKPeriodOpersAndProcs(Oid opclass,
+						  Oid *containedbyoperoid,
+						  Oid *aggedcontainedbyoperoid,
+						  Oid *intersectprocoid)
 {
 	Oid			opfamily = InvalidOid;
 	Oid			opcintype = InvalidOid;
@@ -1407,6 +1410,15 @@ FindFKPeriodOpers(Oid opclass,
 									 ANYMULTIRANGEOID,
 									 aggedcontainedbyoperoid,
 									 &strat);
+
+	/*
+	 * If the command uses FOR PORTION OF,
+	 * we will also need an intersect support proc.
+	 * If this is missing we don't need to complain here,
+	 * because FOR PORTION OF will not be allowed.
+	 */
+	if (opfamily != InvalidOid && opcintype != InvalidOid)
+		*intersectprocoid = get_opfamily_proc(opfamily, opcintype, opcintype, GIST_INTERSECT_PROC);
 }
 
 /*

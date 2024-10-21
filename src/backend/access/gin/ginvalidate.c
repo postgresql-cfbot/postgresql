@@ -104,37 +104,37 @@ ginvalidate(Oid opclassoid)
 		switch (procform->amprocnum)
 		{
 			case GIN_COMPARE_PROC:
-				ok = check_amproc_signature(procform->amproc, INT4OID, false,
+				ok = check_amproc_signature(procform->amproc, INT4OID, false, false,
 											2, 2, opckeytype, opckeytype);
 				break;
 			case GIN_EXTRACTVALUE_PROC:
 				/* Some opclasses omit nullFlags */
-				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false, false,
 											2, 3, opcintype, INTERNALOID,
 											INTERNALOID);
 				break;
 			case GIN_EXTRACTQUERY_PROC:
 				/* Some opclasses omit nullFlags and searchMode */
-				ok = check_amproc_signature(procform->amproc, INTERNALOID, false,
+				ok = check_amproc_signature(procform->amproc, INTERNALOID, false, false,
 											5, 7, opcintype, INTERNALOID,
 											INT2OID, INTERNALOID, INTERNALOID,
 											INTERNALOID, INTERNALOID);
 				break;
 			case GIN_CONSISTENT_PROC:
 				/* Some opclasses omit queryKeys and nullFlags */
-				ok = check_amproc_signature(procform->amproc, BOOLOID, false,
+				ok = check_amproc_signature(procform->amproc, BOOLOID, false, false,
 											6, 8, INTERNALOID, INT2OID,
 											opcintype, INT4OID,
 											INTERNALOID, INTERNALOID,
 											INTERNALOID, INTERNALOID);
 				break;
 			case GIN_COMPARE_PARTIAL_PROC:
-				ok = check_amproc_signature(procform->amproc, INT4OID, false,
+				ok = check_amproc_signature(procform->amproc, INT4OID, false, false,
 											4, 4, opckeytype, opckeytype,
 											INT2OID, INTERNALOID);
 				break;
 			case GIN_TRICONSISTENT_PROC:
-				ok = check_amproc_signature(procform->amproc, CHAROID, false,
+				ok = check_amproc_signature(procform->amproc, CHAROID, false, false,
 											7, 7, INTERNALOID, INT2OID,
 											opcintype, INT4OID,
 											INTERNALOID, INTERNALOID,

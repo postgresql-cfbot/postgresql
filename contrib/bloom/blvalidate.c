@@ -105,7 +105,7 @@ blvalidate(Oid opclassoid)
 		switch (procform->amprocnum)
 		{
 			case BLOOM_HASH_PROC:
-				ok = check_amproc_signature(procform->amproc, INT4OID, false,
+				ok = check_amproc_signature(procform->amproc, INT4OID, false, false,
 											1, 1, opckeytype);
 				break;
 			case BLOOM_OPTIONS_PROC:

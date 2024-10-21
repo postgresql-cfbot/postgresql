@@ -830,6 +830,128 @@ FROM (VALUES (float8 '-infinity'),
 (22 rows)
 
 RESET extra_float_digits;
+-- gamma functions
+-- we run these with extra_float_digits = -1, to get consistently rounded
+-- results on all platforms.
+SET extra_float_digits = -1;
+SELECT x,
+       gamma(x),
+       lgamma(x)
+FROM (VALUES (0.5), (1), (2), (3), (4), (5)) AS t(x);
+  x  |      gamma      |      lgamma      
+-----+-----------------+------------------
+ 0.5 | 1.7724538509055 |  0.5723649429247
+   1 |               1 |                0
+   2 |               1 |                0
+   3 |               2 | 0.69314718055995
+   4 |               6 |  1.7917594692281
+   5 |              24 |  3.1780538303479
+(6 rows)
+
+-- test special cases for gamma functions
+SELECT gamma(float8 '-infinity');
+ gamma 
+-------
+   NaN
+(1 row)
+
+SELECT lgamma(float8 '-infinity');
+  lgamma  
+----------
+ Infinity
+(1 row)
+
+SELECT gamma(float8 '-1000000.5');
+ERROR:  value out of range: underflow
+SELECT lgamma(float8 '-1000000.5');
+      lgamma      
+------------------
+ -12815524.147684
+(1 row)
+
+SELECT gamma(float8 '-1000000');
+ gamma 
+-------
+   NaN
+(1 row)
+
+SELECT lgamma(float8 '-1000000');
+  lgamma  
+----------
+ Infinity
+(1 row)
+
+SELECT gamma(float8 '-1');
+ gamma 
+-------
+   NaN
+(1 row)
+
+SELECT lgamma(float8 '-1');
+  lgamma  
+----------
+ Infinity
+(1 row)
+
+SELECT gamma(float8 '-0');
+   gamma   
+-----------
+ -Infinity
+(1 row)
+
+SELECT lgamma(float8 '-0');
+  lgamma  
+----------
+ Infinity
+(1 row)
+
+SELECT gamma(float8 '0');
+  gamma   
+----------
+ Infinity
+(1 row)
+
+SELECT lgamma(float8 '0');
+  lgamma  
+----------
+ Infinity
+(1 row)
+
+SELECT gamma(float8 '1000000');
+ERROR:  value out of range: overflow
+SELECT lgamma(float8 '1000000');
+     lgamma      
+-----------------
+ 12815504.569148
+(1 row)
+
+SELECT lgamma(float8 '1e308');
+ERROR:  value out of range: overflow
+SELECT gamma(float8 'infinity');
+  gamma   
+----------
+ Infinity
+(1 row)
+
+SELECT lgamma(float8 'infinity');
+  lgamma  
+----------
+ Infinity
+(1 row)
+
+SELECT gamma(float8 'nan');
+ gamma 
+-------
+   NaN
+(1 row)
+
+SELECT lgamma(float8 'nan');
+ lgamma 
+--------
+    NaN
+(1 row)
+
+RESET extra_float_digits;
 -- test for over- and underflow
 INSERT INTO FLOAT8_TBL(f1) VALUES ('10e400');
 ERROR:  "10e400" is out of range for type double precision

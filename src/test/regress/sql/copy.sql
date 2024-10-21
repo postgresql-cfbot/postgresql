@@ -348,3 +348,27 @@ COPY parted_si(id, data) FROM :'filename';
 SELECT tableoid::regclass, id % 2 = 0 is_even, count(*) from parted_si GROUP BY 1, 2 ORDER BY 1;
 
 DROP TABLE parted_si;
+
+-- Test COPY FORMAT raw
+\set filename :abs_srcdir '/data/emp.data'
+CREATE TABLE copy_raw_test (col text);
+COPY copy_raw_test FROM :'filename' (FORMAT raw);
+SELECT col FROM copy_raw_test;
+TRUNCATE copy_raw_test;
+COPY copy_raw_test FROM :'filename' (FORMAT raw, DELIMITER E'\n');
+SELECT col FROM copy_raw_test ORDER BY col COLLATE "C";
+COPY copy_raw_test TO stdout (FORMAT raw, DELIMITER E'\n***\n');
+\qecho
+TRUNCATE copy_raw_test;
+COPY copy_raw_test FROM stdin (FORMAT raw, DELIMITER E'\n***\n');
+abc\.
+***
+"def",
+***
+
+***
+ghi
+***
+\.
+SELECT col FROM copy_raw_test ORDER BY col COLLATE "C";
+COPY copy_raw_test TO stdout (FORMAT raw, DELIMITER E'\n***\n');

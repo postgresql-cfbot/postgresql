@@ -263,6 +263,38 @@ AtEOXact_PgStat_Database(bool isCommit, bool parallel)
 }
 
 /*
+ * reports parallel_workers_to_launch and parallel_workers_launched into
+ * PgStat_StatDBEntry
+ */
+void
+pgstat_update_parallel_workers_stats(PgStat_Counter parallel_workers_to_launch, PgStat_Counter parallel_workers_launched)
+{
+	PgStat_StatDBEntry *dbentry;
+	if (!OidIsValid(MyDatabaseId))
+		return;
+
+	dbentry = pgstat_prep_database_pending(MyDatabaseId);
+	dbentry->parallel_workers_to_launch += parallel_workers_to_launch;
+	dbentry->parallel_workers_launched += parallel_workers_launched;
+}
+
+/*
+ * reports parallel_maint_workers_to_launch and parallel_maint_workers_launched into
+ * PgStat_StatDBEntry
+ */
+void
+pgstat_update_parallel_maint_workers_stats(PgStat_Counter parallel_maint_workers_to_launch, PgStat_Counter parallel_maint_workers_launched)
+{
+	PgStat_StatDBEntry *dbentry;
+	if (!OidIsValid(MyDatabaseId))
+		return;
+
+	dbentry = pgstat_prep_database_pending(MyDatabaseId);
+	dbentry->parallel_maint_workers_to_launch += parallel_maint_workers_to_launch;
+	dbentry->parallel_maint_workers_launched += parallel_maint_workers_launched;
+}
+
+/*
  * Subroutine for pgstat_report_stat(): Handle xact commit/rollback and I/O
  * timings.
  */
@@ -425,6 +457,10 @@ pgstat_database_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	PGSTAT_ACCUM_DBCOUNT(sessions_abandoned);
 	PGSTAT_ACCUM_DBCOUNT(sessions_fatal);
 	PGSTAT_ACCUM_DBCOUNT(sessions_killed);
+	PGSTAT_ACCUM_DBCOUNT(parallel_workers_to_launch);
+	PGSTAT_ACCUM_DBCOUNT(parallel_workers_launched);
+	PGSTAT_ACCUM_DBCOUNT(parallel_maint_workers_to_launch);
+	PGSTAT_ACCUM_DBCOUNT(parallel_maint_workers_launched);
 #undef PGSTAT_ACCUM_DBCOUNT
 
 	pgstat_unlock_entry(entry_ref);

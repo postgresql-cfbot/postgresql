@@ -387,6 +387,11 @@ typedef struct PgStat_StatDBEntry
 	PgStat_Counter sessions_fatal;
 	PgStat_Counter sessions_killed;
 
+	PgStat_Counter parallel_workers_to_launch;
+	PgStat_Counter parallel_workers_launched;
+	PgStat_Counter parallel_maint_workers_to_launch;
+	PgStat_Counter parallel_maint_workers_launched;
+
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatDBEntry;
 
@@ -583,6 +588,8 @@ extern void pgstat_report_deadlock(void);
 extern void pgstat_report_checksum_failures_in_db(Oid dboid, int failurecount);
 extern void pgstat_report_checksum_failure(void);
 extern void pgstat_report_connect(Oid dboid);
+extern void pgstat_update_parallel_workers_stats(PgStat_Counter parallel_workers_to_launch, PgStat_Counter parallel_workers_launched);
+extern void pgstat_update_parallel_maint_workers_stats(PgStat_Counter parallel_maint_workers_to_launch, PgStat_Counter parallel_maint_workers_launched);
 
 #define pgstat_count_buffer_read_time(n)							\
 	(pgStatBlockReadTime += (n))

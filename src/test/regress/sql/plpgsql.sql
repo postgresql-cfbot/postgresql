@@ -4774,3 +4774,15 @@ BEGIN
   GET DIAGNOSTICS x = ROW_COUNT;
   RETURN;
 END; $$ LANGUAGE plpgsql;
+
+--
+-- Check returned type with the declared type
+--
+create function my_f(a integer, b integer)
+returns table(first_col integer, lots_of_cols_later numeric) language plpgsql as
+$function$
+begin
+  return query select a, b;
+end;
+$function$;
+select * from my_f(1,1);

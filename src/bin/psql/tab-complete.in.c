@@ -2266,7 +2266,7 @@ match_previous_words(int pattern_id,
 	else if (Matches("ALTER", "SUBSCRIPTION", MatchAny))
 		COMPLETE_WITH("CONNECTION", "ENABLE", "DISABLE", "OWNER TO",
 					  "RENAME TO", "REFRESH PUBLICATION", "SET", "SKIP (",
-					  "ADD PUBLICATION", "DROP PUBLICATION");
+					  "ADD PUBLICATION", "DROP PUBLICATION", "CONFLICT RESOLVER (");
 	/* ALTER SUBSCRIPTION <name> REFRESH PUBLICATION */
 	else if (Matches("ALTER", "SUBSCRIPTION", MatchAny, MatchAnyN, "REFRESH", "PUBLICATION"))
 		COMPLETE_WITH("WITH (");
@@ -2297,6 +2297,19 @@ match_previous_words(int pattern_id,
 	else if (Matches("ALTER", "SUBSCRIPTION", MatchAny, MatchAnyN,
 					 "ADD|DROP|SET", "PUBLICATION", MatchAny, "WITH", "("))
 		COMPLETE_WITH("copy_data", "refresh");
+	/* ALTER SUBSCRIPTION <name> CONFLICT RESOLVER (<conflict_type> = <conflict_resolver> [, ..]) */
+	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
+			TailMatches("RESOLVER", "("))
+		COMPLETE_WITH("insert_exists", "update_origin_differs", "update_exists",
+					  "update_missing", "delete_origin_differs", "delete_missing");
+	/* ALTER SUBSCRIPTION <name> RESET CONFLICT RESOLVER ALL|FOR <conflict_type> */
+	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
+			 TailMatches("RESET", "CONFLICT", "RESOLVER"))
+		COMPLETE_WITH("ALL", "FOR (");
+	else if (HeadMatches("ALTER", "SUBSCRIPTION", MatchAny) &&
+			 TailMatches("RESOLVER", "FOR", "("))
+		COMPLETE_WITH("insert_exists", "update_origin_differs", "update_exists",
+					  "update_missing", "delete_origin_differs", "delete_missing");
 
 	/* ALTER SCHEMA <name> */
 	else if (Matches("ALTER", "SCHEMA", MatchAny))
@@ -3668,8 +3681,13 @@ match_previous_words(int pattern_id,
 	{
 		/* complete with nothing here as this refers to remote publications */
 	}
+	/* Complete "CREATE SUBSCRIPTION <name> ... CONFLICT RESOLVER ( <confoptions> ) */
 	else if (Matches("CREATE", "SUBSCRIPTION", MatchAnyN, "PUBLICATION", MatchAny))
-		COMPLETE_WITH("WITH (");
+		COMPLETE_WITH("CONFLICT RESOLVER", "WITH (");
+	else if (HeadMatches("CREATE", "SUBSCRIPTION") && TailMatches("CONFLICT", "RESOLVER", "("))
+		COMPLETE_WITH("insert_exists", "update_origin_differs", "update_exists",
+					  "update_missing", "delete_origin_differs", "delete_missing");
+
 	/* Complete "CREATE SUBSCRIPTION <name> ...  WITH ( <opt>" */
 	else if (Matches("CREATE", "SUBSCRIPTION", MatchAnyN, "WITH", "("))
 		COMPLETE_WITH("binary", "connect", "copy_data", "create_slot",

@@ -36,6 +36,7 @@
 #include "executor/executor.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "parser/scansup.h"
 #include "pgstat.h"
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
@@ -583,6 +584,7 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	bits32		supported_opts;
 	SubOpts		opts = {0};
 	AclResult	aclresult;
+	List	   *conflict_resolvers = NIL;
 
 	/*
 	 * Parse and check options.
@@ -596,6 +598,10 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 					  SUBOPT_DISABLE_ON_ERR | SUBOPT_PASSWORD_REQUIRED |
 					  SUBOPT_RUN_AS_OWNER | SUBOPT_FAILOVER | SUBOPT_ORIGIN);
 	parse_subscription_options(pstate, stmt->options, supported_opts, &opts);
+
+	/* Parse and get conflict resolvers list. */
+	conflict_resolvers =
+		ParseAndGetSubConflictResolvers(pstate, stmt->resolvers, true, opts.twophase);
 
 	/*
 	 * Since creating a replication slot is not transactional, rolling back
@@ -722,6 +728,9 @@ CreateSubscription(ParseState *pstate, CreateSubscriptionStmt *stmt,
 	heap_freetuple(tup);
 
 	recordDependencyOnOwner(SubscriptionRelationId, subid, owner);
+
+	/* Update the Conflict Resolvers in pg_subscription_conflict */
+	SetSubConflictResolvers(subid, conflict_resolvers);
 
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));
 	replorigin_create(originname);
@@ -1331,6 +1340,20 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 								 errmsg("cannot disable two_phase when prepared transactions are present"),
 								 errhint("Resolve these transactions and try again.")));
 
+					/*
+					 * two_phase cannot be enabled if sub has a time based
+					 * resolver set, as it may result in data divergence.
+					 *
+					 * XXX: This restriction may be removed if the solution in
+					 * ParseAndGetSubConflictResolvers() comments is
+					 * implemented.
+					 */
+					if (opts.twophase && CheckIfSubHasTimeStampResolver(subid))
+						ereport(ERROR,
+								(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+								 errmsg("cannot enable \"%s\" when a time based resolver is configured",
+										"two_phase")));
+
 					/* Change system catalog accordingly */
 					values[Anum_pg_subscription_subtwophasestate - 1] =
 						CharGetDatum(opts.twophase ?
@@ -1579,6 +1602,51 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				replaces[Anum_pg_subscription_subskiplsn - 1] = true;
 
 				update_tuple = true;
+				break;
+			}
+		case ALTER_SUBSCRIPTION_CONFLICT_RESOLVERS:
+			{
+				List	   *conflict_resolvers = NIL;
+				bool		sub_twophase = false;
+
+				if (sub->twophasestate != LOGICALREP_TWOPHASE_STATE_DISABLED)
+					sub_twophase = true;
+
+				/*
+				 * Get the list of conflict types and resolvers and validate
+				 * them.
+				 */
+				conflict_resolvers = ParseAndGetSubConflictResolvers(pstate,
+																	 stmt->resolvers,
+																	 false,
+																	 sub_twophase);
+
+				/*
+				 * Update the conflict resolvers for the corresponding
+				 * conflict types in the pg_subscription_conflict catalog.
+				 */
+				UpdateSubConflictResolvers(conflict_resolvers, subid);
+				break;
+			}
+		case ALTER_SUBSCRIPTION_CONFLICT_RESOLVER_RESET_ALL:
+			{
+				List	   *conflict_resolvers = NIL;
+
+				/*
+				 * Create list of conflict resolvers and set them in the
+				 * catalog.
+				 */
+				conflict_resolvers = GetDefaultConflictResolvers();
+				UpdateSubConflictResolvers(conflict_resolvers, subid);
+				break;
+			}
+		case ALTER_SUBSCRIPTION_CONFLICT_RESOLVER_RESET:
+			{
+				/*
+				 * Reset the conflict resolver for this conflict type to its
+				 * default.
+				 */
+				ResetSubConflictResolver(subid, stmt->conflict_type_name);
 				break;
 			}
 
@@ -1831,6 +1899,9 @@ DropSubscription(DropSubscriptionStmt *stmt, bool isTopLevel)
 
 	/* Remove any associated relation synchronization states. */
 	RemoveSubscriptionRel(subid, InvalidOid);
+
+	/* Remove any associated conflict resolvers */
+	RemoveSubConflictResolvers(subid);
 
 	/* Remove the origin tracking if exists. */
 	ReplicationOriginNameForLogicalRep(subid, InvalidOid, originname, sizeof(originname));

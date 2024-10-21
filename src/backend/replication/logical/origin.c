@@ -159,6 +159,7 @@ typedef struct ReplicationStateCtl
 RepOriginId replorigin_session_origin = InvalidRepOriginId; /* assumed identity */
 XLogRecPtr	replorigin_session_origin_lsn = InvalidXLogRecPtr;
 TimestampTz replorigin_session_origin_timestamp = 0;
+uint64		replorigin_session_origin_sysid = 0;
 
 /*
  * Base address into a shared memory array of replication states of size

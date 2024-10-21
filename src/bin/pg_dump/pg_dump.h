@@ -655,6 +655,13 @@ typedef struct _PublicationSchemaInfo
 /*
  * The SubscriptionInfo struct is used to represent subscription.
  */
+
+typedef struct _ConflictTypeResolver
+{
+	const char *conflict_type;
+	const char *resolver;
+} ConflictTypeResolver;
+
 typedef struct _SubscriptionInfo
 {
 	DumpableObject dobj;
@@ -673,6 +680,7 @@ typedef struct _SubscriptionInfo
 	char	   *suborigin;
 	char	   *suboriginremotelsn;
 	char	   *subfailover;
+	SimplePtrList conflict_resolvers;
 } SubscriptionInfo;
 
 /*

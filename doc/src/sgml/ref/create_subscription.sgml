@@ -24,6 +24,7 @@ PostgreSQL documentation
 CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceable>
     CONNECTION '<replaceable class="parameter">conninfo</replaceable>'
     PUBLICATION <replaceable class="parameter">publication_name</replaceable> [, ...]
+    [ CONFLICT RESOLVER ( <replaceable class="parameter">conflict_type</replaceable> = <replaceable class="parameter">conflict_resolver</replaceable> [, ...] ) ]
     [ WITH ( <replaceable class="parameter">subscription_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 </synopsis>
  </refsynopsisdiv>
@@ -94,6 +95,216 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
      <para>
       Names of the publications on the publisher to subscribe to.
      </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createsubscription-params-with-conflict-resolver">
+    <term><literal>CONFLICT RESOLVER ( <replaceable class="parameter">conflict_type</replaceable> = <replaceable class="parameter">conflict_resolver</replaceable> [, ... ] )</literal></term>
+    <listitem>
+     <para>
+      This optional clause specifies conflict resolvers for different conflict types.
+     </para>
+
+     <table id="sql-createsubscription-params-conflict-type-resolver-summary">
+      <title>Conflict type/resolver Summary</title>
+      <tgroup cols="3">
+       <thead>
+        <row><entry>Conflict type</entry>        <entry>Default resolver</entry>  <entry>Possible resolvers</entry></row>
+       </thead>
+       <tbody>
+        <row><entry>insert_exists</entry>        <entry>error</entry>             <entry>apply_remote, error, keep_local</entry></row>
+        <row><entry>update_exists</entry>        <entry>error</entry>             <entry>apply_remote, error, keep_local</entry></row>
+        <row><entry>update_missing</entry>       <entry>skip</entry>              <entry>apply_or_error, apply_or_skip, error, skip</entry></row>
+        <row><entry>update_origin_differs</entry><entry>apply_remote</entry>      <entry>apply_remote, error, keep_local</entry></row>
+        <row><entry>delete_missing</entry>       <entry>skip</entry>              <entry>error, skip</entry></row>
+        <row><entry>delete_origin_differs</entry><entry>apply_remote</entry>      <entry>apply_remote, error, keep_local</entry></row>
+       </tbody>
+      </tgroup>
+     </table>
+
+     <para>
+      The scenarios that trigger conflicts, along with the behavior for each
+      <replaceable class="parameter">conflict_type</replaceable>, are listed below.
+      <variablelist>
+       <varlistentry id="sql-createsubscription-params-with-conflict_type-insert-exists" xreflabel="insert_exists">
+        <term><literal>insert_exists</literal> (<type>enum</type>)</term>
+        <listitem>
+         <para>
+          This conflict occurs when inserting a row that violates a
+          <literal>NOT DEFERRABLE</literal> unique constraint.
+          The default behavior is an error will be raised until the conflict
+          is resolved manually or the resolver is configured to a non-default
+          value that can automatically resolve the conflict.
+         </para>
+         <para>
+          To log the origin and commit timestamp details of the conflicting key,
+          <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
+          should be enabled on the subscriber.
+         </para>
+        </listitem>
+       </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_type-update-exists" xreflabel="update_exists">
+       <term><literal>update_exists</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This conflict occurs when the updated value of a row violates
+         a <literal>NOT DEFERRABLE</literal>
+         unique constraint.
+         The default behavior is an error will be raised until the conflict
+         is resolved manually or the resolver is configured to a non-default
+         value that can automatically resolve the conflict.
+        </para>
+        <para>
+         Note that when updating a partitioned table, if the updated row
+         value satisfies another partition constraint resulting in the
+         row being inserted into a new partition, the <literal>insert_exists</literal>
+         conflict may arise if the new row violates a <literal>NOT DEFERRABLE</literal>
+         unique constraint.
+        </para>
+        <para>
+         To log the origin and commit timestamp details of the conflicting key,
+         <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
+         should be enabled on the subscriber.
+        </para>
+        <warning>
+         <para>
+          If the local table contains multiple <literal>NOT DEFERRABLE</literal> unique constraint
+          columns and the conflict resolution strategy for an INSERT or UPDATE favors applying the changes,
+          then a remote INSERT or UPDATE could trigger multiple <literal>update_exists</literal> conflicts.
+          Each conflict will be detected and resolved in sequence, potentially leading to the deletion of
+          multiple local rows.
+         </para>
+        </warning>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_type-update-missing" xreflabel="update_missing">
+       <term><literal>update_missing</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This conflict occurs when the tuple to be updated was not found.
+         The default behavior is to simply skip the update.
+        </para>
+       </listitem>
+      </varlistentry>
+
+       <varlistentry id="sql-createsubscription-params-with-conflict_type-update-origin-differs" xreflabel="update_origin_differs">
+        <term><literal>update_origin_differs</literal> (<type>enum</type>)</term>
+        <listitem>
+         <para>
+          This conflict occurs when updating a row that was previously
+          modified by another origin.
+          The default behavoir is that the update will be applied regardless
+          of the origin of the local row.
+         </para>
+         <para>
+          Note that this conflict can only be detected when
+          <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
+          is enabled on the subscriber.
+         </para>
+        </listitem>
+      </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_type-delete-missing" xreflabel="delete_missing">
+       <term><literal>delete_missing</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This conflict occurs when the tuple to be deleted was not found.
+         The default behavior is to simply skip the delete.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_type-delete-origin-differs" xreflabel="delete_origin_differs">
+       <term><literal>delete_origin_differs</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This conflict occurs when deleting a row that was previously modified
+         by another origin.
+         The default behavior is that the delete will be applied regardless
+         of the origin of the local row.
+        </para>
+        <para>
+         Note that this conflict can only be detected when
+         <link linkend="guc-track-commit-timestamp"><varname>track_commit_timestamp</varname></link>
+         is enabled on the subscriber.
+        </para>
+       </listitem>
+      </varlistentry>
+
+     </variablelist>
+    </para>
+
+    <para>
+     The behavior of each <replaceable class="parameter">conflict_resolver</replaceable>
+     is described below. Users can choose from the following resolvers for automatic conflict
+     resolution.
+     <variablelist>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_resolver-error">
+       <term><literal>error</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This resolver throws an error and stops replication.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_resolver-skip">
+       <term><literal>skip</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This resolver skips processing the remote change and continues replication
+         with the next change.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_resolver-apply-remote">
+       <term><literal>apply_remote</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This resolver applies the remote change.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_resolver-keep-local">
+       <term><literal>keep_local</literal> (<type>enum</type>)</term>
+        <listitem>
+         <para>
+          This resolver maintains the local tuple; the remote change is not applied.
+         </para>
+        </listitem>
+       </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_resolver-apply-or-error">
+       <term><literal>apply_or_error</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This resolver is only used for <literal>update_missing</literal>.
+         An attempt is made to convert the update into an insert; if this cannot
+         be done due to missing information, then an error is thrown, and replication
+         is stopped.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry id="sql-createsubscription-params-with-conflict_resolver-apply-or-skip">
+       <term><literal>apply_or_skip</literal> (<type>enum</type>)</term>
+       <listitem>
+        <para>
+         This resolver is only used for <literal>update_missing</literal>.
+         An attempt is made to convert the update into an insert; if this
+         cannot be done due to missing information, then the change is skipped.
+        </para>
+       </listitem>
+      </varlistentry>
+
+      </variablelist>
+     </para>
+
     </listitem>
    </varlistentry>
 

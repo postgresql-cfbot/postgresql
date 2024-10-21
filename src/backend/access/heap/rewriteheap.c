@@ -150,6 +150,7 @@ typedef struct RewriteStateData
 	HTAB	   *rs_old_new_tid_map; /* unmatched B tuples */
 	HTAB	   *rs_logical_mappings;	/* logical remapping files */
 	uint32		rs_num_rewrite_mappings;	/* # in memory mappings */
+	BulkInsertState rs_bistate;
 }			RewriteStateData;
 
 /*
@@ -260,7 +261,8 @@ begin_heap_rewrite(Relation old_heap, Relation new_heap, TransactionId oldest_xm
 	state->rs_freeze_xid = freeze_xid;
 	state->rs_cutoff_multi = cutoff_multi;
 	state->rs_cxt = rw_cxt;
-	state->rs_bulkstate = smgr_bulk_start_rel(new_heap, MAIN_FORKNUM);
+	state->rs_bulkstate = smgr_bulk_start_rel(new_heap, MAIN_FORKNUM); /* This is a BulkWriteState */
+	state->rs_bistate = GetBulkInsertState(); /* This is a BulkInsertState ... */
 
 	/* Initialize hash tables used to track update chains */
 	hash_ctl.keysize = sizeof(TidHashKey);
@@ -310,6 +312,8 @@ end_heap_rewrite(RewriteState state)
 		ItemPointerSetInvalid(&unresolved->tuple->t_data->t_ctid);
 		raw_heap_insert(state, unresolved->tuple);
 	}
+
+	FreeBulkInsertState(state->rs_bistate);
 
 	/* Write the last page, if any */
 	if (state->rs_buffer)
@@ -624,7 +628,7 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 		options |= HEAP_INSERT_NO_LOGICAL;
 
 		heaptup = heap_toast_insert_or_update(state->rs_new_rel, tup, NULL,
-											  options);
+											  options, state->rs_bistate);
 	}
 	else
 		heaptup = tup;

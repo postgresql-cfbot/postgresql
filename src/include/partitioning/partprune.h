@@ -26,6 +26,7 @@ struct RelOptInfo;
  *		Stores information needed at runtime for pruning computations
  *		related to a single partitioned table.
  *
+ * is_valid			Has the information in this struct been initialized?
  * strategy			Partition strategy, e.g. LIST, RANGE, HASH.
  * partnatts		Number of columns in the partition key.
  * nparts			Number of partitions in this partitioned table.
@@ -48,6 +49,7 @@ struct RelOptInfo;
  */
 typedef struct PartitionPruneContext
 {
+	bool		is_valid;
 	char		strategy;
 	int			partnatts;
 	int			nparts;
@@ -70,10 +72,10 @@ typedef struct PartitionPruneContext
 #define PruneCxtStateIdx(partnatts, step_id, keyno) \
 	((partnatts) * (step_id) + (keyno))
 
-extern PartitionPruneInfo *make_partition_pruneinfo(struct PlannerInfo *root,
-													struct RelOptInfo *parentrel,
-													List *subpaths,
-													List *prunequal);
+extern int make_partition_pruneinfo(struct PlannerInfo *root,
+									struct RelOptInfo *parentrel,
+									List *subpaths,
+									List *prunequal);
 extern Bitmapset *prune_append_rel_partitions(struct RelOptInfo *rel);
 extern Bitmapset *get_matching_partitions(PartitionPruneContext *context,
 										  List *pruning_steps);

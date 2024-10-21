@@ -553,7 +553,10 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->dependsOnRole = glob->dependsOnRole;
 	result->parallelModeNeeded = glob->parallelModeNeeded;
 	result->planTree = top_plan;
+	result->partPruneInfos = glob->partPruneInfos;
 	result->rtable = glob->finalrtable;
+	result->unprunableRelids = bms_difference(bms_add_range(NULL, 1, list_length(result->rtable)),
+											  glob->prunableRelids);
 	result->permInfos = glob->finalrteperminfos;
 	result->resultRelations = glob->resultRelations;
 	result->appendRelations = glob->appendRelations;

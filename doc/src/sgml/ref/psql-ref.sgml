@@ -1419,7 +1419,8 @@ SELECT $1 \parse stmt1
         is specified, only members of operator families whose names match that
         pattern are listed.
         If <literal>+</literal> is appended to the command name, each operator
-        is listed with its sort operator family (if it is an ordering operator).
+        is listed with its sort operator family (if it is an ordering operator),
+        and whether it is leak-proof.
         </para>
         </listitem>
       </varlistentry>

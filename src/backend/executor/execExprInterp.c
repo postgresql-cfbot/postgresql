@@ -69,6 +69,7 @@
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/date.h"
+#include "utils/datetime.h"
 #include "utils/datum.h"
 #include "utils/expandedrecord.h"
 #include "utils/json.h"
@@ -4213,10 +4214,88 @@ ExecEvalXmlExpr(ExprState *state, ExprEvalStep *op)
 				*op->resnull = false;
 			}
 			break;
+			case IS_XMLCAST:
+			{
+				Datum *argvalue = op->d.xmlexpr.argvalue;
+				bool *argnull = op->d.xmlexpr.argnull;
+				char *str;
 
-		default:
-			elog(ERROR, "unrecognized XML operation");
+				Assert(list_length(xexpr->args) == 1);
+
+				if (argnull[0])
+					return;
+
+				value = argvalue[0];
+
+				switch (xexpr->targetType)
+				{
+				case XMLOID:
+					/* These data types must be converted to their ISO 8601 representations */
+					if (xexpr->type == TIMESTAMPOID || xexpr->type == TIMESTAMPTZOID ||
+						xexpr->type == DATEOID || xexpr->type == BYTEAOID || xexpr->type == BOOLOID)
+					{
+						text *mapped_value = cstring_to_text(
+							map_sql_value_to_xml_value(value, xexpr->type, false));
+						*op->resvalue = PointerGetDatum(mapped_value);
+					}
+					/* INTERVAL data nust be converted to ISO 8601, e.g. '1 year 2 mons' -> 'P1Y2M' */
+					else if (xexpr->type == INTERVALOID)
+					{
+						Interval *in = DatumGetIntervalP(value);
+
+						struct pg_itm tt, *itm = &tt;
+						char buf[MAXDATELEN + 1];
+
+						if (INTERVAL_NOT_FINITE(in))
+						{
+							if (INTERVAL_IS_NOBEGIN(in))
+								strcpy(buf, EARLY);
+							else if (INTERVAL_IS_NOEND(in))
+								strcpy(buf, LATE);
+							else
+								elog(ERROR, "invalid interval argument");
+						}
+						else
+						{
+							interval2itm(*in, itm);
+							EncodeInterval(itm, INTSTYLE_ISO_8601, buf);
+						}
+
+						*op->resvalue = PointerGetDatum(cstring_to_text(buf));
+					}
+					/* no need to escape the result, as the origin is also an XML */
+					else if (xexpr->type == XMLOID)
+						*op->resvalue = PointerGetDatum(DatumGetXmlP(value));
+					/* we  make sure that potential predifined entitties are escaped */
+					else
+						*op->resvalue = PointerGetDatum(
+							DatumGetXmlP((DirectFunctionCall1(xmltext, value))));
+					break;
+				case TEXTOID:
+				case VARCHAROID:
+				case NAMEOID:
+				case BPCHAROID:
+					/*
+					 * when casting from XML to a character string we make sure that
+					 * all escaped xml characters are unescaped.
+					 */
+					str = text_to_cstring(DatumGetTextPP(value));
+					*op->resvalue = PointerGetDatum(
+						cstring_to_text(unescape_xml(str)));
+
+					pfree(str);
+					break;
+				default:
+					*op->resvalue = PointerGetDatum(DatumGetTextP(value));
+					break;
+				}
+
+				*op->resnull = false;
+			}
 			break;
+			default:
+				elog(ERROR, "unrecognized XML operation");
+				break;
 	}
 }
 

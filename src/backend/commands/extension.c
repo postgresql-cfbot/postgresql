@@ -337,6 +337,16 @@ get_extension_control_filename(const char *extname)
 
 	get_share_path(my_exec_path, sharepath);
 	result = (char *) palloc(MAXPGPATH);
+	/*
+	 * If extension_destdir is set, try to find the file there first
+	 */
+	if (*extension_destdir != '\0')
+	{
+		snprintf(result, MAXPGPATH, "%s%s/extension/%s.control",
+				 extension_destdir, sharepath, extname);
+		if (pg_file_exists(result))
+			return result;
+	}
 	snprintf(result, MAXPGPATH, "%s/extension/%s.control",
 			 sharepath, extname);
 
@@ -376,6 +386,16 @@ get_extension_aux_control_filename(ExtensionControlFile *control,
 	scriptdir = get_extension_script_directory(control);
 
 	result = (char *) palloc(MAXPGPATH);
+	/*
+	 * If extension_destdir is set, try to find the file there first
+	 */
+	if (*extension_destdir != '\0')
+	{
+		snprintf(result, MAXPGPATH, "%s%s/%s--%s.control",
+				 extension_destdir, scriptdir, control->name, version);
+		if (pg_file_exists(result))
+			return result;
+	}
 	snprintf(result, MAXPGPATH, "%s/%s--%s.control",
 			 scriptdir, control->name, version);
 
@@ -394,6 +414,23 @@ get_extension_script_filename(ExtensionControlFile *control,
 	scriptdir = get_extension_script_directory(control);
 
 	result = (char *) palloc(MAXPGPATH);
+	/*
+	 * If extension_destdir is set, try to find the file there first
+	 */
+	if (*extension_destdir != '\0')
+	{
+		if (from_version)
+			snprintf(result, MAXPGPATH, "%s%s/%s--%s--%s.sql",
+					 extension_destdir, scriptdir, control->name, from_version, version);
+		else
+			snprintf(result, MAXPGPATH, "%s%s/%s--%s.sql",
+					 extension_destdir, scriptdir, control->name, version);
+		if (pg_file_exists(result))
+		{
+			pfree(scriptdir);
+			return result;
+		}
+	}
 	if (from_version)
 		snprintf(result, MAXPGPATH, "%s/%s--%s--%s.sql",
 				 scriptdir, control->name, from_version, version);
@@ -1152,6 +1189,59 @@ get_ext_ver_list(ExtensionControlFile *control)
 	char	   *location;
 	DIR		   *dir;
 	struct dirent *de;
+
+	/*
+	 * If extension_destdir is set, try to find the files there first
+	 */
+	if (*extension_destdir != '\0')
+	{
+		char		location[MAXPGPATH];
+
+		snprintf(location, MAXPGPATH, "%s%s", extension_destdir,
+				get_extension_script_directory(control));
+		dir = AllocateDir(location);
+		while ((de = ReadDir(dir, location)) != NULL)
+		{
+			char	   *vername;
+			char	   *vername2;
+			ExtensionVersionInfo *evi;
+			ExtensionVersionInfo *evi2;
+
+			/* must be a .sql file ... */
+			if (!is_extension_script_filename(de->d_name))
+				continue;
+
+			/* ... matching extension name followed by separator */
+			if (strncmp(de->d_name, control->name, extnamelen) != 0 ||
+				de->d_name[extnamelen] != '-' ||
+				de->d_name[extnamelen + 1] != '-')
+				continue;
+
+			/* extract version name(s) from 'extname--something.sql' filename */
+			vername = pstrdup(de->d_name + extnamelen + 2);
+			*strrchr(vername, '.') = '\0';
+			vername2 = strstr(vername, "--");
+			if (!vername2)
+			{
+				/* It's an install, not update, script; record its version name */
+				evi = get_ext_ver_info(vername, &evi_list);
+				evi->installable = true;
+				continue;
+			}
+			*vername2 = '\0';		/* terminate first version */
+			vername2 += 2;			/* and point to second */
+
+			/* if there's a third --, it's bogus, ignore it */
+			if (strstr(vername2, "--"))
+				continue;
+
+			/* Create ExtensionVersionInfos and link them together */
+			evi = get_ext_ver_info(vername, &evi_list);
+			evi2 = get_ext_ver_info(vername2, &evi_list);
+			evi->reachable = lappend(evi->reachable, evi2);
+		}
+		FreeDir(dir);
+	}
 
 	location = get_extension_script_directory(control);
 	dir = AllocateDir(location);

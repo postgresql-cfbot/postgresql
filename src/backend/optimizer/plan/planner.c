@@ -6855,7 +6855,7 @@ plan_cluster_use_sort(Oid tableOid, Oid indexOid)
 
 	/* Estimate the cost of seq scan + sort */
 	seqScanPath = create_seqscan_path(root, rel, NULL, 0);
-	cost_sort(&seqScanAndSortPath, root, NIL,
+	cost_sort(&seqScanAndSortPath, root, rel->max_attr,
 			  seqScanPath->disabled_nodes,
 			  seqScanPath->total_cost, rel->tuples, rel->reltarget->width,
 			  comparisonCost, maintenance_work_mem, -1.0);

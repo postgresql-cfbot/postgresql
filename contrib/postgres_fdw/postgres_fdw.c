@@ -3667,7 +3667,7 @@ adjust_foreign_grouping_path_cost(PlannerInfo *root,
 
 		cost_sort(&sort_path,
 				  root,
-				  pathkeys,
+				  list_length(pathkeys),
 				  0,
 				  *p_startup_cost + *p_run_cost,
 				  retrieved_rows,

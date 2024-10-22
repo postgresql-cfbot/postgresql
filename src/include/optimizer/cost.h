@@ -108,7 +108,7 @@ extern void cost_resultscan(Path *path, PlannerInfo *root,
 							RelOptInfo *baserel, ParamPathInfo *param_info);
 extern void cost_recursive_union(Path *runion, Path *nrterm, Path *rterm);
 extern void cost_sort(Path *path, PlannerInfo *root,
-					  List *pathkeys, int disabled_nodes,
+					  int npathkeys, int disabled_nodes,
 					  Cost input_cost, double tuples, int width,
 					  Cost comparison_cost, int sort_mem,
 					  double limit_tuples);

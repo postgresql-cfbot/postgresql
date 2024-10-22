@@ -174,7 +174,8 @@ typedef enum ExtVacReportType
 {
 	PGSTAT_EXTVAC_INVALID = 0,
 	PGSTAT_EXTVAC_HEAP = 1,
-	PGSTAT_EXTVAC_INDEX = 2
+	PGSTAT_EXTVAC_INDEX = 2,
+	PGSTAT_EXTVAC_DB = 3,
 } ExtVacReportType;
 
 /* ----------

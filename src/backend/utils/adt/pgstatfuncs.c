@@ -2102,7 +2102,48 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 
 #define EXTVACHEAPSTAT_COLUMNS	27
 #define EXTVACIDXSTAT_COLUMNS	19
+#define EXTVACDBSTAT_COLUMNS	15
 #define EXTVACSTAT_COLUMNS Max(EXTVACHEAPSTAT_COLUMNS, EXTVACIDXSTAT_COLUMNS)
+
+static void
+tuplestore_put_for_database(Oid dbid, ReturnSetInfo *rsinfo,
+							PgStat_StatDBEntry *dbentry)
+{
+	Datum		values[EXTVACDBSTAT_COLUMNS];
+	bool		nulls[EXTVACDBSTAT_COLUMNS];
+	char		buf[256];
+	int			i = 0;
+
+	memset(nulls, 0, EXTVACDBSTAT_COLUMNS * sizeof(bool));
+
+	values[i++] = ObjectIdGetDatum(dbid);
+
+	values[i++] = Int64GetDatum(dbentry->vacuum_ext.total_blks_read);
+	values[i++] = Int64GetDatum(dbentry->vacuum_ext.total_blks_hit);
+	values[i++] = Int64GetDatum(dbentry->vacuum_ext.total_blks_dirtied);
+	values[i++] = Int64GetDatum(dbentry->vacuum_ext.total_blks_written);
+
+	values[i++] = Int64GetDatum(dbentry->vacuum_ext.wal_records);
+	values[i++] = Int64GetDatum(dbentry->vacuum_ext.wal_fpi);
+
+	/* Convert to numeric, like pg_stat_statements */
+	snprintf(buf, sizeof buf, UINT64_FORMAT, dbentry->vacuum_ext.wal_bytes);
+	values[i++] = DirectFunctionCall3(numeric_in,
+									  CStringGetDatum(buf),
+									  ObjectIdGetDatum(0),
+									  Int32GetDatum(-1));
+
+	values[i++] = Float8GetDatum(dbentry->vacuum_ext.blk_read_time);
+	values[i++] = Float8GetDatum(dbentry->vacuum_ext.blk_write_time);
+	values[i++] = Float8GetDatum(dbentry->vacuum_ext.delay_time);
+	values[i++] = Float8GetDatum(dbentry->vacuum_ext.system_time);
+	values[i++] = Float8GetDatum(dbentry->vacuum_ext.user_time);
+	values[i++] = Float8GetDatum(dbentry->vacuum_ext.total_time);
+	values[i++] = Int32GetDatum(dbentry->vacuum_ext.interrupts);
+
+	Assert(i == rsinfo->setDesc->natts);
+	tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+}
 
 static void
 tuplestore_put_for_relation(Oid relid, ReturnSetInfo *rsinfo,
@@ -2195,8 +2236,9 @@ pg_stats_vacuum(FunctionCallInfo fcinfo, ExtVacReportType type, int ncolumns)
 		if (OidIsValid(relid))
 		{
 			tabentry = pgstat_fetch_stat_tabentry(relid);
-			if (tabentry == NULL || tabentry->vacuum_ext.type != type)
-				/* Table don't exists or isn't an heap relation. */
+
+			if ((tabentry == NULL || tabentry->vacuum_ext.type != type))
+				/* Table don't exists or isn't a heap or index relation. */
 				return;
 
 			tuplestore_put_for_relation(relid, rsinfo, tabentry);
@@ -2204,7 +2246,7 @@ pg_stats_vacuum(FunctionCallInfo fcinfo, ExtVacReportType type, int ncolumns)
 		else
 		{
 			SnapshotIterator		hashiter;
-			PgStat_SnapshotEntry   *entry;
+			PgStat_SnapshotEntry    *entry;
 
 			pgstat_update_snapshot(PGSTAT_KIND_RELATION);
 
@@ -2220,6 +2262,22 @@ pg_stats_vacuum(FunctionCallInfo fcinfo, ExtVacReportType type, int ncolumns)
 				if (tabentry != NULL && tabentry->vacuum_ext.type == type)
 					tuplestore_put_for_relation(entry->key.objid, rsinfo, tabentry);
 			}
+		}
+	}
+	else if (type == PGSTAT_EXTVAC_DB)
+	{
+		PgStat_StatDBEntry	    *dbentry;
+		Oid						dbid = PG_GETARG_OID(0);
+
+		if (OidIsValid(dbid))
+		{
+			dbentry = pgstat_fetch_stat_dbentry(dbid);
+
+			if (dbentry == NULL)
+				/* Database doesn't exist */
+				return;
+
+			tuplestore_put_for_database(dbid, rsinfo, dbentry);
 		}
 	}
 }
@@ -2245,3 +2303,14 @@ pg_stat_vacuum_indexes(PG_FUNCTION_ARGS)
 
 	PG_RETURN_VOID();
 }
+
+/*
+ * Get the vacuum statistics for the database.
+ */
+Datum
+pg_stat_vacuum_database(PG_FUNCTION_ARGS)
+{
+	pg_stats_vacuum(fcinfo, PGSTAT_EXTVAC_DB, EXTVACDBSTAT_COLUMNS);
+
+	PG_RETURN_VOID();
+ }

@@ -7,6 +7,10 @@
 -- Statistic wal_fpi is not displayed in this test because its behavior is unstable.
 --
 
+CREATE DATABASE regression_statistic_vacuum_db;
+CREATE DATABASE regression_statistic_vacuum_db1;
+\c regression_statistic_vacuum_db;
+
 -- conditio sine qua non
 SHOW track_counts;  -- must be on
 -- not enabled by default, but we want to test it...
@@ -140,7 +144,7 @@ FROM pg_stat_vacuum_tables WHERE relname = 'vestat';
 SELECT pages_frozen AS pf, pages_all_visible AS pv, rev_all_frozen_pages AS hafp,rev_all_visible_pages AS havp
 FROM pg_stat_vacuum_tables WHERE relname = 'vestat' \gset
 
-UPDATE vestat SET x = x1001;
+UPDATE vestat SET x = x+1001;
 VACUUM (PARALLEL 0, BUFFER_USAGE_LIMIT 128) vestat;
 
 SELECT pages_frozen > :pf AS pages_frozen,pages_all_visible > :pv AS pages_all_visible,rev_all_frozen_pages > :hafp AS rev_all_frozen_pages,rev_all_visible_pages > :havp AS rev_all_visible_pages
@@ -156,4 +160,62 @@ FROM pg_stat_vacuum_tables WHERE relname = 'vestat';
 
 SELECT min(relid) FROM pg_stat_vacuum_tables(0) where relid > 0;
 
+-- Now check vacuum statistics for current database
+SELECT dbname,
+       db_blks_hit > 0 AS db_blks_hit,
+       total_blks_dirtied > 0 AS total_blks_dirtied,
+       total_blks_written > 0 AS total_blks_written,
+       wal_records > 0 AS wal_records,
+       wal_fpi > 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes,
+       user_time > 0 AS user_time,
+       total_time > 0 AS total_time
+FROM
+pg_stat_vacuum_database
+WHERE dbname = current_database();
+
 DROP TABLE vestat CASCADE;
+
+-- ensure pending stats are flushed
+SELECT pg_stat_force_next_flush();
+
+CREATE TABLE vestat (x int) WITH (autovacuum_enabled = off, fillfactor = 10);
+INSERT INTO vestat SELECT x FROM generate_series(1,:sample_size) as x;
+ANALYZE vestat;
+UPDATE vestat SET x = 10001;
+VACUUM (PARALLEL 0, BUFFER_USAGE_LIMIT 128) vestat;
+
+\c regression_statistic_vacuum_db1;
+
+-- Now check vacuum statistics for postgres database from another database
+SELECT dbname,
+       db_blks_hit > 0 AS db_blks_hit,
+       total_blks_dirtied > 0 AS total_blks_dirtied,
+       total_blks_written > 0 AS total_blks_written,
+       wal_records > 0 AS wal_records,
+       wal_fpi > 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes,
+       user_time > 0 AS user_time,
+       total_time > 0 AS total_time
+FROM
+pg_stat_vacuum_database
+WHERE dbname = 'regression_statistic_vacuum_db';
+
+\c regression_statistic_vacuum_db
+
+DROP TABLE vestat CASCADE;
+
+\c regression_statistic_vacuum_db1;
+SELECT count(*)
+FROM pg_database d
+CROSS JOIN pg_stat_vacuum_tables(0)
+WHERE oid = 0; -- must be 0
+
+SELECT count(*)
+FROM pg_database d
+CROSS JOIN pg_stat_vacuum_database(0)
+WHERE oid = 0; -- must be 0
+
+\c postgres
+DROP DATABASE regression_statistic_vacuum_db1;
+DROP DATABASE regression_statistic_vacuum_db;

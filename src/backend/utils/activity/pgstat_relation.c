@@ -219,6 +219,7 @@ pgstat_report_vacuum_error(Oid tableoid, ExtVacReportType m_type)
 	PgStatShared_Relation *shtabentry;
 	PgStat_StatTabEntry *tabentry;
 	Oid			dboid =  MyDatabaseId;
+	PgStat_StatDBEntry *dbentry;	/* pending database entry */
 
 	if (!pgstat_track_counts)
 		return;
@@ -232,6 +233,10 @@ pgstat_report_vacuum_error(Oid tableoid, ExtVacReportType m_type)
 	tabentry->vacuum_ext.interrupts++;
 	tabentry->vacuum_ext.type = m_type;
 	pgstat_unlock_entry(entry_ref);
+
+	dbentry = pgstat_prep_database_pending(dboid);
+	dbentry->vacuum_ext.interrupts++;
+	dbentry->vacuum_ext.type = m_type;
 }
 
 /*
@@ -245,6 +250,7 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_Relation *shtabentry;
 	PgStat_StatTabEntry *tabentry;
+	PgStatShared_Database *dbentry;
 	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
 	TimestampTz ts;
 
@@ -298,6 +304,16 @@ pgstat_report_vacuum(Oid tableoid, bool shared,
 	 * VACUUM command has processed all tables and committed.
 	 */
 	pgstat_flush_io(false);
+	if (dboid != InvalidOid)
+	{
+		entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_DATABASE,
+											dboid, InvalidOid, false);
+		dbentry = (PgStatShared_Database *) entry_ref->shared_stats;
+
+		pgstat_accumulate_extvac_stats(&dbentry->stats.vacuum_ext, params, false);
+		pgstat_unlock_entry(entry_ref);
+	}
+
 }
 
 /*

@@ -1424,7 +1424,6 @@ SELECT
   COALESCE(stats.user_time, 0) AS user_time,
   COALESCE(stats.total_time, 0) AS total_time,
   COALESCE(stats.interrupts, 0) AS interrupts
-
 FROM pg_class rel
   JOIN pg_namespace ns ON ns.oid = rel.relnamespace
   LEFT JOIN pg_stat_vacuum_tables(rel.oid) stats ON true
@@ -1464,3 +1463,29 @@ FROM
   JOIN pg_namespace ns ON ns.oid = rel.relnamespace
   LEFT JOIN pg_stat_vacuum_indexes(rel.oid) stats ON true
 WHERE rel.relkind = 'i';
+
+CREATE VIEW pg_stat_vacuum_database AS
+SELECT
+  db.oid as dboid,
+  db.datname AS dbname,
+
+  COALESCE(stats.db_blks_read, 0) AS db_blks_read,
+  COALESCE(stats.db_blks_hit, 0) AS db_blks_hit,
+  COALESCE(stats.total_blks_dirtied, 0) AS total_blks_dirtied,
+  COALESCE(stats.total_blks_written, 0) AS total_blks_written,
+
+  COALESCE(stats.wal_records, 0) AS wal_records,
+  COALESCE(stats.wal_fpi, 0) AS wal_fpi,
+  COALESCE(stats.wal_bytes, 0) AS wal_bytes,
+
+  COALESCE(stats.blk_read_time, 0) AS blk_read_time,
+  COALESCE(stats.blk_write_time, 0) AS blk_write_time,
+
+  COALESCE(stats.delay_time, 0) AS delay_time,
+  COALESCE(stats.system_time, 0) AS system_time,
+  COALESCE(stats.user_time, 0) AS user_time,
+  COALESCE(stats.total_time, 0) AS total_time,
+  COALESCE(stats.interrupts, 0) AS interrupts
+FROM
+  pg_database db
+  LEFT JOIN pg_stat_vacuum_database(db.oid) stats ON true;

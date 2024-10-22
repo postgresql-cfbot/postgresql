@@ -25719,6 +25719,19 @@ SELECT relname FROM pg_class WHERE pg_table_is_visible(oid);
         Is type (or domain) visible in search path?
        </para></entry>
       </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_variable_is_visible</primary>
+        </indexterm>
+        <function>pg_variable_is_visible</function> ( <parameter>variable</parameter> <type>oid</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Is session variable visible in search path?
+       </para></entry>
+      </row>
      </tbody>
     </tgroup>
    </table>

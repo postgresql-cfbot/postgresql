@@ -41,6 +41,7 @@
 #include "catalog/pg_ts_parser.h"
 #include "catalog/pg_ts_template.h"
 #include "catalog/pg_type.h"
+#include "catalog/pg_variable.h"
 #include "commands/dbcommands.h"
 #include "common/hashfn_unstable.h"
 #include "funcapi.h"
@@ -986,6 +987,67 @@ RelationIsVisibleExt(Oid relid, bool *is_missing)
 	return visible;
 }
 
+/*
+ * VariableIsVisible
+ *		Determine whether a variable (identified by OID) is visible in the
+ *		current search path. Visible means "would be found by searching
+ *		for the unqualified variable name".
+ */
+bool
+VariableIsVisible(Oid varid)
+{
+	HeapTuple	vartup;
+	Form_pg_variable varform;
+	Oid			varnamespace;
+	bool		visible;
+
+	vartup = SearchSysCache1(VARIABLEOID, ObjectIdGetDatum(varid));
+	if (!HeapTupleIsValid(vartup))
+		elog(ERROR, "cache lookup failed for session variable %u", varid);
+	varform = (Form_pg_variable) GETSTRUCT(vartup);
+
+	recomputeNamespacePath();
+
+	/*
+	 * Quick check: if it ain't in the path at all, it ain't visible. We
+	 * don't expect usage of session variables in the system namespace.
+	 */
+	varnamespace = varform->varnamespace;
+	if (!list_member_oid(activeSearchPath, varnamespace))
+		visible = false;
+	else
+	{
+		/*
+		 * If it is in the path, it might still not be visible; it could be
+		 * hidden by another variable of the same name earlier in the path. So
+		 * we must do a slow check for conflicting relations.
+		 */
+		char	   *varname = NameStr(varform->varname);
+		ListCell   *l;
+
+		visible = false;
+		foreach(l, activeSearchPath)
+		{
+			Oid			namespaceId = lfirst_oid(l);
+
+			if (namespaceId == varnamespace)
+			{
+				/* found it first in path */
+				visible = true;
+				break;
+			}
+			if (OidIsValid(get_varname_varid(varname, namespaceId)))
+			{
+				/* found something else first in path */
+				break;
+			}
+		}
+	}
+
+	ReleaseSysCache(vartup);
+
+	return visible;
+}
 
 /*
  * TypenameGetTypid
@@ -3289,6 +3351,381 @@ TSConfigIsVisibleExt(Oid cfgid, bool *is_missing)
 	return visible;
 }
 
+/*
+ * Returns oid of session variable specified by possibly qualified identifier.
+ *
+ * If not found, returns InvalidOid if missing_ok, else throws error.
+ */
+Oid
+LookupVariable(const char *nspname,
+			   const char *varname,
+			   bool missing_ok)
+{
+	Oid			namespaceId;
+	Oid			varoid = InvalidOid;
+	ListCell   *l;
+
+	if (nspname)
+	{
+		namespaceId = LookupExplicitNamespace(nspname, missing_ok);
+
+		/* if nspname is a known namespace, the variable must be there */
+		if (OidIsValid(namespaceId))
+		{
+			varoid = GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+									 PointerGetDatum(varname),
+									 ObjectIdGetDatum(namespaceId));
+		}
+	}
+	else
+	{
+		/* iterate over the schemas on the search_path */
+		recomputeNamespacePath();
+
+		foreach(l, activeSearchPath)
+		{
+			namespaceId = lfirst_oid(l);
+
+			varoid = GetSysCacheOid2(VARIABLENAMENSP, Anum_pg_variable_oid,
+									 PointerGetDatum(varname),
+									 ObjectIdGetDatum(namespaceId));
+
+			if (OidIsValid(varoid))
+				break;
+		}
+	}
+
+	if (!OidIsValid(varoid) && !missing_ok)
+	{
+		if (nspname)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("session variable \"%s.%s\" does not exist",
+							nspname, varname)));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("session variable \"%s\" does not exist",
+							varname)));
+	}
+
+	return varoid;
+}
+
+/*
+ * The input list contains names with indirection expressions used as the left
+ * part of LET statement. The following routine returns a new list with only
+ * initial strings (names) - without indirection expressions.
+ */
+List *
+NamesFromList(List *names)
+{
+	ListCell   *l;
+	List	   *result = NIL;
+
+	foreach(l, names)
+	{
+		Node	   *n = lfirst(l);
+
+		if (IsA(n, String))
+		{
+			result = lappend(result, n);
+		}
+		else
+			break;
+	}
+
+	return result;
+}
+
+/* -----
+ * IdentifyVariable - try to find a variable from a list of identifiers
+ *
+ * Returns the OID of the variable found, or InvalidOid.
+ *
+ * "names" is a list of up to four identifiers; possible meanings are:
+ * - variable  (searched on the search_path)
+ * - schema.variable
+ * - variable.attribute  (searched on the search_path)
+ * - schema.variable.attribute
+ * - database.schema.variable
+ * - database.schema.variable.attribute
+ *
+ * If there is more than one way to identify a variable, "not_unique" will be
+ * set to true.
+ *
+ * Unless "noerror" is true, an error is raised if there are more than four
+ *  identifiers in the list, or if the named database is not the current one.
+ * This is useful if we want to identify a shadowed variable.
+ *
+ * If an attribute is identified, it is stored in "attrname", otherwise the
+ * parameter is set to NULL.
+ *
+ * The identified session variable will be locked with an AccessShareLock.
+ * -----
+ */
+Oid
+IdentifyVariable(List *names, char **attrname, bool *not_unique, bool noerror)
+{
+	Oid			varid = InvalidOid;
+	Oid			old_varid = InvalidOid;
+	uint64		inval_count;
+	bool		retry = false;
+
+	/*
+	 * DDL operations can change the results of a name lookup.  Since all such
+	 * operations will generate invalidation messages, we keep track of
+	 * whether any such messages show up while we're performing the operation,
+	 * and retry until either (1) no more invalidation messages show up or (2)
+	 * the answer doesn't change.
+	 */
+	for (;;)
+	{
+		Node	   *field1 = NULL;
+		Node	   *field2 = NULL;
+		Node	   *field3 = NULL;
+		Node	   *field4 = NULL;
+		char	   *a = NULL;
+		char	   *b = NULL;
+		char	   *c = NULL;
+		char	   *d = NULL;
+		Oid			varoid_without_attr = InvalidOid;
+		Oid			varoid_with_attr = InvalidOid;
+
+		*not_unique = false;
+		*attrname = NULL;
+		varid = InvalidOid;
+
+		inval_count = SharedInvalidMessageCounter;
+
+		switch (list_length(names))
+		{
+			case 1:
+				field1 = linitial(names);
+
+				Assert(IsA(field1, String));
+
+				varid = LookupVariable(NULL, strVal(field1), true);
+				break;
+
+			case 2:
+				field1 = linitial(names);
+				field2 = lsecond(names);
+
+				Assert(IsA(field1, String));
+				a = strVal(field1);
+
+				if (IsA(field2, String))
+				{
+					/* when both fields are of string type */
+					b = strVal(field2);
+
+					/*
+					 * a.b can mean "schema"."variable" or "variable"."field".
+					 * Check both variants, and returns InvalidOid with
+					 * not_unique flag, when both interpretations are
+					 * possible.
+					 */
+					varoid_without_attr = LookupVariable(a, b, true);
+					varoid_with_attr = LookupVariable(NULL, a, true);
+				}
+				else
+				{
+					/* the last field of list can be star too */
+					Assert(IsA(field2, A_Star));
+
+					/*
+					 * In this case, the field1 should be variable name. But
+					 * direct unboxing of composite session variables is not
+					 * supported now, and then we don't need to try lookup
+					 * related variable.
+					 *
+					 * Unboxing is supported by syntax (var).*
+					 */
+					return InvalidOid;
+				}
+
+				if (OidIsValid(varoid_without_attr) && OidIsValid(varoid_with_attr))
+				{
+					*not_unique = true;
+					varid = varoid_without_attr;
+				}
+				else if (OidIsValid(varoid_without_attr))
+				{
+					varid = varoid_without_attr;
+				}
+				else if (OidIsValid(varoid_with_attr))
+				{
+					*attrname = b;
+					varid = varoid_with_attr;
+				}
+				break;
+
+			case 3:
+				{
+					bool		field1_is_catalog = false;
+
+					field1 = linitial(names);
+					field2 = lsecond(names);
+					field3 = lthird(names);
+
+					Assert(IsA(field1, String));
+					Assert(IsA(field2, String));
+
+					a = strVal(field1);
+					b = strVal(field2);
+
+					if (IsA(field3, String))
+					{
+						c = strVal(field3);
+
+						/*
+						 * a.b.c can mean catalog.schema.variable or
+						 * schema.variable.field.
+						 *
+						 * Check both variants, and set not_unique flag, when
+						 * both interpretations are possible.
+						 *
+						 * When third node is star, only possible
+						 * interpretation is schema.variable.*, but this
+						 * pattern is not supported now.
+						 */
+						varoid_with_attr = LookupVariable(a, b, true);
+
+						/*
+						 * check pattern catalog.schema.variable only when
+						 * there is possibility to success.
+						 */
+						if (strcmp(a, get_database_name(MyDatabaseId)) == 0)
+						{
+							field1_is_catalog = true;
+							varoid_without_attr = LookupVariable(b, c, true);
+						}
+					}
+					else
+					{
+						Assert(IsA(field3, A_Star));
+						return InvalidOid;
+					}
+
+					if (OidIsValid(varoid_without_attr) && OidIsValid(varoid_with_attr))
+					{
+						*not_unique = true;
+						varid = varoid_without_attr;
+					}
+					else if (OidIsValid(varoid_without_attr))
+					{
+						varid = varoid_without_attr;
+					}
+					else if (OidIsValid(varoid_with_attr))
+					{
+						*attrname = c;
+						varid = varoid_with_attr;
+					}
+
+					/*
+					 * When we didn't find variable, we can (when it is
+					 * allowed) raise cross-database reference error.
+					 */
+					if (!OidIsValid(varid) && !noerror && !field1_is_catalog)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("cross-database references are not implemented: %s",
+										NameListToString(names))));
+				}
+				break;
+
+			case 4:
+				{
+					field1 = linitial(names);
+					field2 = lsecond(names);
+					field3 = lthird(names);
+					field4 = lfourth(names);
+
+					Assert(IsA(field1, String));
+					Assert(IsA(field2, String));
+					Assert(IsA(field3, String));
+
+					a = strVal(field1);
+					b = strVal(field2);
+					c = strVal(field3);
+
+					/*
+					 * In this case, "a" is used as catalog name - check it.
+					 */
+					if (strcmp(a, get_database_name(MyDatabaseId)) != 0)
+					{
+						if (!noerror)
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("cross-database references are not implemented: %s",
+											NameListToString(names))));
+					}
+
+					if (IsA(field4, String))
+					{
+						d = strVal(field4);
+					}
+					else
+					{
+						Assert(IsA(field4, A_Star));
+						return InvalidOid;
+					}
+
+					*attrname = d;
+					varid = LookupVariable(b, c, true);
+				}
+				break;
+
+			default:
+				if (!noerror)
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("improper qualified name (too many dotted names): %s",
+									NameListToString(names))));
+				return InvalidOid;
+		}
+
+		/*
+		 * If, upon retry, we get back the same OID we did last time, then the
+		 * invalidation messages we processed did not change the final answer.
+		 * So we're done.
+		 *
+		 * If we got a different OID, we've locked the variable that used to
+		 * have this name rather than the one that does now.  So release the
+		 * lock.
+		 */
+		if (retry)
+		{
+			if (old_varid == varid)
+				break;
+
+			if (OidIsValid(old_varid))
+				UnlockDatabaseObject(VariableRelationId, old_varid, 0, AccessShareLock);
+		}
+
+		/*
+		 * Lock the variable.  This will also accept any pending invalidation
+		 * messages.  If we got back InvalidOid, indicating not found, then
+		 * there's nothing to lock, but we accept invalidation messages
+		 * anyway, to flush any negative catcache entries that may be
+		 * lingering.
+		 */
+		if (!OidIsValid(varid))
+			AcceptInvalidationMessages();
+		else if (OidIsValid(varid))
+			LockDatabaseObject(VariableRelationId, varid, 0, AccessShareLock);
+
+		if (inval_count == SharedInvalidMessageCounter)
+			break;
+
+		retry = true;
+		old_varid = varid;
+		varid = InvalidOid;
+	}
+
+	return varid;
+}
 
 /*
  * DeconstructQualifiedName
@@ -5084,4 +5521,15 @@ pg_is_other_temp_schema(PG_FUNCTION_ARGS)
 	Oid			oid = PG_GETARG_OID(0);
 
 	PG_RETURN_BOOL(isOtherTempNamespace(oid));
+}
+
+Datum
+pg_variable_is_visible(PG_FUNCTION_ARGS)
+{
+	Oid			oid = PG_GETARG_OID(0);
+
+	if (!SearchSysCacheExists1(VARIABLEOID, ObjectIdGetDatum(oid)))
+		PG_RETURN_NULL();
+
+	PG_RETURN_BOOL(VariableIsVisible(oid));
 }

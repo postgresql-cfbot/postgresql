@@ -142,6 +142,9 @@ typedef struct Query
 	 */
 	int			resultRelation pg_node_attr(query_jumble_ignore);
 
+	/* target variable of LET statement */
+	Oid			resultVariable;
+
 	/* has aggregates in tlist or havingQual */
 	bool		hasAggs pg_node_attr(query_jumble_ignore);
 	/* has window functions in tlist */
@@ -162,6 +165,8 @@ typedef struct Query
 	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
 	/* parser has added an RTE_GROUP RTE */
 	bool		hasGroupRTE pg_node_attr(query_jumble_ignore);
+	/* uses session variables */
+	bool		hasSessionVariables pg_node_attr(query_jumble_ignore);
 	/* is a RETURN statement */
 	bool		isReturn pg_node_attr(query_jumble_ignore);
 
@@ -2093,6 +2098,20 @@ typedef struct MergeStmt
 } MergeStmt;
 
 /* ----------------------
+ *		Let Statement
+ * ----------------------
+ */
+typedef struct LetStmt
+{
+	NodeTag		type;
+	List	   *target;			/* target variable */
+	Node	   *query;			/* source expression */
+	bool		plpgsql_mode;	/* true, when command will be executed
+								 * (parsed) by plpgsql runtime */
+	int			location;
+} LetStmt;
+
+/* ----------------------
  *		Select Statement
  *
  * A "simple" SELECT is represented in the output of gram.y by a single
@@ -2306,6 +2325,7 @@ typedef enum ObjectType
 	OBJECT_TSTEMPLATE,
 	OBJECT_TYPE,
 	OBJECT_USER_MAPPING,
+	OBJECT_VARIABLE,
 	OBJECT_VIEW,
 } ObjectType;
 
@@ -3437,6 +3457,26 @@ typedef struct AlterStatsStmt
 	bool		missing_ok;		/* skip error if statistics object is missing */
 } AlterStatsStmt;
 
+
+/* ----------------------
+ *		{Create|Alter} VARIABLE Statement
+ * ----------------------
+ */
+typedef struct CreateSessionVarStmt
+{
+	NodeTag		type;
+	RangeVar   *variable;		/* the variable to create */
+	TypeName   *typeName;		/* the type of variable */
+	CollateClause *collClause;
+	bool		if_not_exists;	/* do nothing if it already exists */
+	bool		not_null;		/* disallow nulls */
+	bool		is_immutable;	/* don't allow changes */
+	bool		is_transact;	/* supports transactions */
+	Node	   *defexpr;		/* default expression */
+	char		XactEndAction;	/* on transaction end action */
+} CreateSessionVarStmt;
+
+
 /* ----------------------
  *		Create Function Statement
  * ----------------------
@@ -3944,6 +3984,7 @@ typedef enum DiscardMode
 	DISCARD_PLANS,
 	DISCARD_SEQUENCES,
 	DISCARD_TEMP,
+	DISCARD_VARIABLES,
 } DiscardMode;
 
 typedef struct DiscardStmt

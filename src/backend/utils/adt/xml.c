@@ -2722,6 +2722,35 @@ escape_xml(const char *str)
 	return buf.data;
 }
 
+/*
+ * Unescape characters in XML text nodes
+ */
+char *
+unescape_xml(const char *str)
+{
+#ifdef USE_LIBXML
+
+	volatile xmlParserCtxtPtr ctxt = NULL;
+	xmlChar *xmlbuf = NULL;
+	char *res;
+
+	ctxt = xmlNewParserCtxt();
+	xmlbuf = xmlStringDecodeEntities(ctxt, (xmlChar*) str, XML_SUBSTITUTE_REF, 0, 0, 0);
+
+	Assert(xmlbuf);
+
+	res = pstrdup((char *) xmlbuf);
+
+	xmlFree(xmlbuf);
+	xmlFreeParserCtxt(ctxt);
+
+	return res;
+#else
+	NO_XML_SUPPORT();
+	return NULL;
+#endif /* not USE_LIBXML */
+}
+
 
 static char *
 _SPI_strdup(const char *s)

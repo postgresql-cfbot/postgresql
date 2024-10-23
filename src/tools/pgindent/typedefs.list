@@ -3874,6 +3874,8 @@ rewind_source
 rewrite_event
 rf_context
 rfile
+rinfo_tab_entry
+rinfo_tab_key
 rm_detail_t
 role_auth_extra
 rolename_hash

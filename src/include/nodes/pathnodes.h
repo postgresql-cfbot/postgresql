@@ -316,6 +316,12 @@ struct PlannerInfo
 	/* set true once ECs are canonical */
 	bool		ec_merging_done;
 
+	/* counter for assigning RestrictInfo serial numbers */
+	int			last_rinfo_serial;
+
+	/* Hash table to store and retrieve child RestrictInfos. */
+	struct rinfohash_hash *child_rinfo_hash pg_node_attr(read_write_ignore);
+
 	/* list of "canonical" PathKeys */
 	List	   *canon_pathkeys;
 
@@ -338,9 +344,6 @@ struct PlannerInfo
 
 	/* list of SpecialJoinInfos */
 	List	   *join_info_list;
-
-	/* counter for assigning RestrictInfo serial numbers */
-	int			last_rinfo_serial;
 
 	/*
 	 * all_result_relids is empty for SELECT, otherwise it contains at least
@@ -1377,6 +1380,14 @@ typedef struct JoinDomain
  * NB: if ec_merged isn't NULL, this class has been merged into another, and
  * should be ignored in favor of using the pointed-to class.
  *
+ * When there are hundreds of partitions or inheritance children involved, there
+ * can be thousands of derived child clauses all linked in ec_derives which is
+ * scanned linearly before creating a new clause in create_join_clause(). For
+ * faster lookup the child derived clauses are stored in a hash table located
+ * outside the equivalence class in PlannerInfo. We do not need one hash table
+ * per EquivalenceClass since, unlike a linked list, a hash tables can
+ * efficiently handle thousands of entries.
+ *
  * NB: EquivalenceClasses are never copied after creation.  Therefore,
  * copyObject() copies pointers to them as pointers, and equal() compares
  * pointers to EquivalenceClasses via pointer equality.  This is implemented
@@ -1393,7 +1404,7 @@ typedef struct EquivalenceClass
 	Oid			ec_collation;	/* collation, if datatypes are collatable */
 	List	   *ec_members;		/* list of EquivalenceMembers */
 	List	   *ec_sources;		/* list of generating RestrictInfos */
-	List	   *ec_derives;		/* list of derived RestrictInfos */
+	List	   *ec_derives;		/* list of derived parent RestrictInfos */
 	Relids		ec_relids;		/* all relids appearing in ec_members, except
 								 * for child members (see below) */
 	bool		ec_has_const;	/* any pseudoconstants in ec_members? */

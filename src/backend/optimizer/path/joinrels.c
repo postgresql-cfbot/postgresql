@@ -19,6 +19,7 @@
 #include "optimizer/joininfo.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "optimizer/restrictinfo.h"
 #include "partitioning/partbounds.h"
 #include "utils/memutils.h"
 
@@ -1651,10 +1652,8 @@ try_partitionwise_join(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2,
 		 * Construct restrictions applicable to the child join from those
 		 * applicable to the parent join.
 		 */
-		child_restrictlist =
-			(List *) adjust_appendrel_attrs(root,
-											(Node *) parent_restrictlist,
-											nappinfos, appinfos);
+		child_restrictlist = get_child_restrictinfos(root, parent_restrictlist,
+													 nappinfos, appinfos);
 
 		/* Find or construct the child join's RelOptInfo */
 		child_joinrel = joinrel->part_rels[cnt_parts];

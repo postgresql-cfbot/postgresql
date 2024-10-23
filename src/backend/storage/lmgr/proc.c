@@ -80,9 +80,6 @@ PROC_HDR   *ProcGlobal = NULL;
 NON_EXEC_STATIC PGPROC *AuxiliaryProcs = NULL;
 PGPROC	   *PreparedXactProcs = NULL;
 
-/* If we are waiting for a lock, this points to the associated LOCALLOCK */
-static LOCALLOCK *lockAwaited = NULL;
-
 static DeadLockState deadlock_state = DS_NOT_YET_CHECKED;
 
 /* Is a deadlock check pending? */
@@ -754,18 +751,6 @@ HaveNFreeProcs(int n, int *nfree)
 }
 
 /*
- * Check if the current process is awaiting a lock.
- */
-bool
-IsWaitingForLock(void)
-{
-	if (lockAwaited == NULL)
-		return false;
-
-	return true;
-}
-
-/*
  * Cancel any pending wait for lock, when aborting a transaction, and revert
  * any strong lock count acquisition for a lock being acquired.
  *
@@ -776,6 +761,7 @@ IsWaitingForLock(void)
 void
 LockErrorCleanup(void)
 {
+	LOCALLOCK  *lockAwaited;
 	LWLock	   *partitionLock;
 	DisableTimeoutParams timeouts[2];
 
@@ -784,6 +770,7 @@ LockErrorCleanup(void)
 	AbortStrongLockAcquire();
 
 	/* Nothing to do if we weren't waiting for a lock */
+	lockAwaited = GetAwaitedLock();
 	if (lockAwaited == NULL)
 	{
 		RESUME_INTERRUPTS();
@@ -1078,10 +1065,7 @@ AuxiliaryPidGetProc(int pid)
 
 
 /*
- * ProcSleep -- put a process to sleep on the specified lock
- *
- * Caller must have set MyProc->heldLocks to reflect locks already held
- * on the lockable object by this process (under all XIDs).
+ * JoinWaitQueue -- join the wait queue on the specified lock
  *
  * It's not actually guaranteed that we need to wait when this function is
  * called, because it could be that when we try to find a position at which
@@ -1090,35 +1074,47 @@ AuxiliaryPidGetProc(int pid)
  * we get the lock immediately. Because of this, it's sensible for this function
  * to have a dontWait argument, despite the name.
  *
- * The lock table's partition lock must be held at entry, and will be held
- * at exit.
+ * On entry, the caller has already set up LOCK and PROCLOCK entries to
+ * reflect that we have "requested" the lock.  The caller is responsible for
+ * cleaning that up, if we end up not joining the queue after all.
  *
- * Result: PROC_WAIT_STATUS_OK if we acquired the lock, PROC_WAIT_STATUS_ERROR
- * if not (if dontWait = true, we would have had to wait; if dontWait = false,
- * this is a deadlock).
+ * The lock table's partition lock must be held at entry, and is still held
+ * at exit.  The caller must release it before calling ProcSleep().
  *
- * ASSUME: that no one will fiddle with the queue until after
- *		we release the partition lock.
+ * Result is one of the following:
+ *
+ *  PROC_WAIT_STATUS_OK       - lock was immediately granted
+ *  PROC_WAIT_STATUS_WAITING  - joined the wait queue; call ProcSleep()
+ *  PROC_WAIT_STATUS_ERROR    - immediate deadlock was detected, or would
+ *                              need to wait and dontWait == true
  *
  * NOTES: The process queue is now a priority queue for locking.
  */
 ProcWaitStatus
-ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
+JoinWaitQueue(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 {
 	LOCKMODE	lockmode = locallock->tag.mode;
 	LOCK	   *lock = locallock->lock;
 	PROCLOCK   *proclock = locallock->proclock;
 	uint32		hashcode = locallock->hashcode;
-	LWLock	   *partitionLock = LockHashPartitionLock(hashcode);
+	LWLock	   *partitionLock PG_USED_FOR_ASSERTS_ONLY = LockHashPartitionLock(hashcode);
 	dclist_head *waitQueue = &lock->waitProcs;
 	PGPROC	   *insert_before = NULL;
-	LOCKMASK	myHeldLocks = MyProc->heldLocks;
-	TimestampTz standbyWaitStart = 0;
+	LOCKMASK	myHeldLocks;
 	bool		early_deadlock = false;
-	bool		allow_autovacuum_cancel = true;
-	bool		logged_recovery_conflict = false;
-	ProcWaitStatus myWaitStatus;
 	PGPROC	   *leader = MyProc->lockGroupLeader;
+
+	Assert(LWLockHeldByMeInMode(partitionLock, LW_EXCLUSIVE));
+
+	/*
+	 * Set bitmask of locks this process already holds on this object.
+	 */
+	myHeldLocks = MyProc->heldLocks = proclock->holdMask;
+
+	/*
+	 * Set bitmask of locks this process already holds on this object.
+	 */
+	myHeldLocks = MyProc->heldLocks = proclock->holdMask;
 
 	/*
 	 * If group locking is in use, locks held by members of my locking group
@@ -1203,7 +1199,6 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 				{
 					/* Skip the wait and just grant myself the lock. */
 					GrantLock(lock, proclock, lockmode);
-					GrantAwaitedLock();
 					return PROC_WAIT_STATUS_OK;
 				}
 
@@ -1215,6 +1210,13 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 			aheadRequests |= LOCKBIT_ON(proc->waitLockMode);
 		}
 	}
+
+	/*
+	 * If we detected deadlock, give up without waiting.  This must agree with
+	 * CheckDeadLock's recovery code.
+	 */
+	if (early_deadlock)
+		return PROC_WAIT_STATUS_ERROR;
 
 	/*
 	 * At this point we know that we'd really need to sleep. If we've been
@@ -1240,34 +1242,43 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 
 	MyProc->waitStatus = PROC_WAIT_STATUS_WAITING;
 
-	/*
-	 * If we detected deadlock, give up without waiting.  This must agree with
-	 * CheckDeadLock's recovery code.
-	 */
-	if (early_deadlock)
-	{
-		RemoveFromWaitQueue(MyProc, hashcode);
-		return PROC_WAIT_STATUS_ERROR;
-	}
+	return PROC_WAIT_STATUS_WAITING;
+}
 
-	/* mark that we are waiting for a lock */
-	lockAwaited = locallock;
+/*
+ * ProcSleep -- put process to sleep waiting on lock
+ *
+ * This must be called when JoinWaitQueue() returns PROC_WAIT_STATUS_WAITING.
+ * Returns after the lock has been granted, or if a deadlock is detected.  Can
+ * also bail out with ereport(ERROR), if some other error condition, or a
+ * timeout or cancellation is triggered.
+ *
+ * Result is one of the following:
+ *
+ *  PROC_WAIT_STATUS_OK      - lock was granted
+ *  PROC_WAIT_STATUS_ERROR   - a deadlock was detected
+ */
+ProcWaitStatus
+ProcSleep(LOCALLOCK *locallock)
+{
+	LOCKMODE	lockmode = locallock->tag.mode;
+	LOCK	   *lock = locallock->lock;
+	uint32		hashcode = locallock->hashcode;
+	LWLock	   *partitionLock = LockHashPartitionLock(hashcode);
+	TimestampTz standbyWaitStart = 0;
+	bool		allow_autovacuum_cancel = true;
+	bool		logged_recovery_conflict = false;
+	ProcWaitStatus myWaitStatus;
+
+	/* The caller must've armed the on-error cleanup mechanism */
+	Assert(GetAwaitedLock() == locallock);
+	Assert(!LWLockHeldByMe(partitionLock));
 
 	/*
-	 * Release the lock table's partition lock.
-	 *
-	 * NOTE: this may also cause us to exit critical-section state, possibly
-	 * allowing a cancel/die interrupt to be accepted. This is OK because we
-	 * have recorded the fact that we are waiting for a lock, and so
-	 * LockErrorCleanup will clean up if cancel/die happens.
-	 */
-	LWLockRelease(partitionLock);
-
-	/*
-	 * Also, now that we will successfully clean up after an ereport, it's
-	 * safe to check to see if there's a buffer pin deadlock against the
-	 * Startup process.  Of course, that's only necessary if we're doing Hot
-	 * Standby and are not the Startup process ourselves.
+	 * Now that we will successfully clean up after an ereport, it's safe to
+	 * check to see if there's a buffer pin deadlock against the Startup
+	 * process.  Of course, that's only necessary if we're doing Hot Standby
+	 * and are not the Startup process ourselves.
 	 */
 	if (RecoveryInProgress() && !InRecovery)
 		CheckRecoveryConflictDeadlock();
@@ -1677,28 +1688,11 @@ ProcSleep(LOCALLOCK *locallock, LockMethod lockMethodTable, bool dontWait)
 							NULL, false);
 
 	/*
-	 * Re-acquire the lock table's partition lock.  We have to do this to hold
-	 * off cancel/die interrupts before we can mess with lockAwaited (else we
-	 * might have a missed or duplicated locallock update).
-	 */
-	LWLockAcquire(partitionLock, LW_EXCLUSIVE);
-
-	/*
-	 * We no longer want LockErrorCleanup to do anything.
-	 */
-	lockAwaited = NULL;
-
-	/*
-	 * If we got the lock, be sure to remember it in the locallock table.
-	 */
-	if (MyProc->waitStatus == PROC_WAIT_STATUS_OK)
-		GrantAwaitedLock();
-
-	/*
 	 * We don't have to do anything else, because the awaker did all the
-	 * necessary update of the lock table and MyProc.
+	 * necessary updates of the lock table and MyProc. (The caller is
+	 * responsible for updating the local lock table.)
 	 */
-	return MyProc->waitStatus;
+	return myWaitStatus;
 }
 
 

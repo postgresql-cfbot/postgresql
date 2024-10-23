@@ -12,15 +12,18 @@
  */
 #include "postgres.h"
 
+#include "catalog/namespace.h"
 #include "catalog/pg_type.h"
 #include "common/int.h"
 #include "common/pg_prng.h"
 #include "libpq/pqformat.h"
+#include "miscadmin.h"
 #include "port/pg_bitutils.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
+#include "utils/tuplesort.h"
 #include "utils/typcache.h"
 
 /*
@@ -1684,4 +1687,206 @@ array_sample(PG_FUNCTION_ARGS)
 	result = array_shuffle_n(array, n, false, elmtyp, typentry);
 
 	PG_RETURN_ARRAYTYPE_P(result);
+}
+
+
+#define WHITESPACE " \t\n\r\v\f"
+
+typedef enum
+{
+	PARSE_SORT_ORDER_INIT,
+	PARSE_SORT_ORDER_DIRECTION_SET,
+	PARSE_SORT_ORDER_NULLS_OPTION,
+	PARSE_SORT_ORDER_ERROR,
+	PARSE_SORT_ORDER_DONE
+} ParseSortOrderState;
+
+static bool
+parse_sort_order(const char *str, bool *sort_asc, bool *nulls_first)
+{
+	char	   *token;
+	char	   *saveptr;
+	char	   *str_copy = pstrdup(str);
+	bool		nulls_first_set = false;
+	ParseSortOrderState state = PARSE_SORT_ORDER_INIT;
+
+	token = strtok_r(str_copy, WHITESPACE, &saveptr);
+
+	while (token != NULL && state != PARSE_SORT_ORDER_ERROR)
+	{
+		switch (state)
+		{
+			case PARSE_SORT_ORDER_INIT:
+				if (pg_strcasecmp(token, "ASC") == 0)
+				{
+					*sort_asc = true;
+					state = PARSE_SORT_ORDER_DIRECTION_SET;
+				}
+				else if (pg_strcasecmp(token, "DESC") == 0)
+				{
+					*sort_asc = false;
+					state = PARSE_SORT_ORDER_DIRECTION_SET;
+				}
+				else if (pg_strcasecmp(token, "NULLS") == 0)
+					state = PARSE_SORT_ORDER_NULLS_OPTION;
+				else
+					state = PARSE_SORT_ORDER_ERROR;
+				break;
+
+			case PARSE_SORT_ORDER_DIRECTION_SET:
+				if (pg_strcasecmp(token, "NULLS") == 0)
+					state = PARSE_SORT_ORDER_NULLS_OPTION;
+				else
+					state = PARSE_SORT_ORDER_ERROR;
+				break;
+
+			case PARSE_SORT_ORDER_NULLS_OPTION:
+				if (pg_strcasecmp(token, "FIRST") == 0)
+				{
+					*nulls_first = true;
+					nulls_first_set = true;
+					state = PARSE_SORT_ORDER_DONE;
+				}
+				else if (pg_strcasecmp(token, "LAST") == 0)
+				{
+					*nulls_first = false;
+					nulls_first_set = true;
+					state = PARSE_SORT_ORDER_DONE;
+				}
+				else
+					state = PARSE_SORT_ORDER_ERROR;
+				break;
+
+			case PARSE_SORT_ORDER_DONE:
+				/* No more tokens should be processed after first/last */
+				state = PARSE_SORT_ORDER_ERROR;
+				break;
+
+			default:
+				state = PARSE_SORT_ORDER_ERROR;
+				break;
+		}
+
+		token = strtok_r(NULL, WHITESPACE, &saveptr);
+	}
+
+	if (state == PARSE_SORT_ORDER_INIT ||
+		state == PARSE_SORT_ORDER_DIRECTION_SET)
+		state = PARSE_SORT_ORDER_DONE;
+
+	if (state == PARSE_SORT_ORDER_NULLS_OPTION)
+		state = PARSE_SORT_ORDER_ERROR;
+
+	if (!nulls_first_set && state == PARSE_SORT_ORDER_DONE)
+		*nulls_first = !*sort_asc;
+
+	pfree(str_copy);
+	return state == PARSE_SORT_ORDER_DONE;
+}
+
+/*
+ * array_sort
+ *
+ * Sorts the array in either ascending or descending order.
+ * The array must be empty or one-dimensional.
+ */
+Datum
+array_sort(PG_FUNCTION_ARGS)
+{
+	ArrayType  *array = PG_GETARG_ARRAYTYPE_P(0);
+	text	   *dirstr = (fcinfo->nargs > 1) ? PG_GETARG_TEXT_PP(1) : NULL;
+	bool		sort_asc = true;
+	bool		nulls_first = false;
+	Oid			elmtyp;
+	Oid			array_type;
+	Oid			collation = PG_GET_COLLATION();
+	TypeCacheEntry *typentry;
+	Tuplesortstate *tuplesortstate;
+	ArrayIterator array_iterator;
+	Datum		value;
+	bool		isnull;
+	ArrayBuildStateAny *astate = NULL;
+
+	if (ARR_NDIM(array) < 1)
+		PG_RETURN_ARRAYTYPE_P(array);
+
+	if (dirstr != NULL)
+	{
+		if (!parse_sort_order(text_to_cstring(dirstr), &sort_asc, &nulls_first))
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("second parameter must be a valid sort direction")));
+	}
+
+	elmtyp = ARR_ELEMTYPE(array);
+	typentry = (TypeCacheEntry *) fcinfo->flinfo->fn_extra;
+	if (ARR_NDIM(array) == 1)
+	{
+		if (typentry == NULL || typentry->type_id != elmtyp)
+		{
+			typentry = lookup_type_cache(elmtyp, sort_asc ? TYPECACHE_LT_OPR : TYPECACHE_GT_OPR);
+			if ((sort_asc && !OidIsValid(typentry->lt_opr)) ||
+				(!sort_asc && !OidIsValid(typentry->gt_opr)))
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FUNCTION),
+						errmsg("could not identify an ordering operator for type %s",
+								format_type_be(elmtyp))));
+			fcinfo->flinfo->fn_extra = (void *) typentry;
+		}
+	}
+	else
+	{
+		if (typentry == NULL || typentry->typelem != elmtyp)
+		{
+			array_type = get_array_type(elmtyp);
+			if (!OidIsValid(array_type))
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_OBJECT),
+						 errmsg("could not find array type for data type %s",
+								format_type_be(elmtyp))));
+			typentry = lookup_type_cache(array_type, sort_asc ? TYPECACHE_LT_OPR : TYPECACHE_GT_OPR);
+			if ((sort_asc && !OidIsValid(typentry->lt_opr)) ||
+				(!sort_asc && !OidIsValid(typentry->gt_opr)))
+				ereport(ERROR,
+						(errcode(ERRCODE_UNDEFINED_FUNCTION),
+						 errmsg("could not identify an ordering operator for type %s",
+								format_type_be(elmtyp))));
+			fcinfo->flinfo->fn_extra = (void *) typentry;
+		}
+	}
+
+	tuplesortstate = tuplesort_begin_datum(typentry->type_id,
+										   sort_asc ? typentry->lt_opr : typentry->gt_opr,
+										   collation,
+										   nulls_first, work_mem, NULL, false);
+
+	array_iterator = array_create_iterator(array, ARR_NDIM(array) - 1, NULL);
+	while (array_iterate(array_iterator, &value, &isnull))
+	{
+		tuplesort_putdatum(tuplesortstate, value, isnull);
+	}
+	array_free_iterator(array_iterator);
+
+	/*
+	 * Do the sort.
+	 */
+	tuplesort_performsort(tuplesortstate);
+
+	while (tuplesort_getdatum(tuplesortstate, true, false, &value, &isnull, NULL))
+	{
+		astate = accumArrayResultAny(astate, value, isnull,
+									 typentry->type_id, CurrentMemoryContext);
+	}
+
+	tuplesort_end(tuplesortstate);
+
+	/* Avoid leaking memory when handed toasted input */
+	PG_FREE_IF_COPY(array, 0);
+	PG_RETURN_DATUM(makeArrayResultAny(astate, CurrentMemoryContext, true));
+}
+
+Datum
+array_sort_order(PG_FUNCTION_ARGS)
+{
+	return array_sort(fcinfo);
 }

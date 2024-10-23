@@ -20423,6 +20423,38 @@ SELECT NULLIF(value, '(none)') ...
 
       <row>
        <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>array_sort</primary>
+        </indexterm>
+        <function>array_sort</function> ( <type>anyarray</type> <optional> COLLATE <replaceable>collation_name</replaceable> </optional> <optional> , <parameter>dir</parameter> </optional>)
+        <returnvalue>anyarray</returnvalue>
+       </para>
+       <para>
+        Sorts the array based on the given parameter.
+       </para>
+       <para>
+        If the <literal>COLLATE</literal> option is specified then sorting is based on <replaceable>collation_name</replaceable>, otherwise
+        using array element type's collation.
+        <parameter>dir</parameter> must be one of the following, and that the starred options are the defaults when null position is omitted.
+<programlisting>
+ asc
+ desc
+ asc nulls first
+ asc nulls last *
+ desc nulls first *
+ desc nulls last
+ nulls first
+ nulls last
+</programlisting>
+       </para>
+       <para>
+        <literal>array_sort(ARRAY[[2,4],[2,1],[6,5]])</literal>
+        <returnvalue>{{2,1},{2,4},{6,5}}</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
         <indexterm id="function-array-to-string">
          <primary>array_to_string</primary>
         </indexterm>

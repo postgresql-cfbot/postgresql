@@ -827,3 +827,27 @@ SELECT array_dims(array_sample('[-1:2][2:3]={{1,2},{3,NULL},{5,6},{7,8}}'::int[]
 SELECT array_dims(array_sample('{{{1,2},{3,NULL}},{{5,6},{7,8}},{{9,10},{11,12}}}'::int[], 2));
 SELECT array_sample('{1,2,3,4,5,6}'::int[], -1); -- fail
 SELECT array_sample('{1,2,3,4,5,6}'::int[], 7); --fail
+
+-- array_sort
+SELECT array_sort('{}'::int[]);
+SELECT array_sort('{1,3,5,2,4,6}'::int[]);
+SELECT array_sort('{1,3,5,2,4,6}'::int[], 'desc');
+SELECT array_sort('{1.1,3.3,5.5,2.2,4.4,6.6}'::float8[], 'asc');
+SELECT array_sort('{1.1,3.3,5.5,2.2,4.4,6.6}'::float8[], 'desc');
+SELECT array_sort('{1.1,3.3,5.5,2.2,4.4,6.6}'::numeric[]);
+SELECT array_sort('{1.1,3.3,5.5,2.2,4.4,6.6}'::numeric[], 'desc');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc}'::text[] COLLATE "C");
+SELECT array_sort('{foo,bar,CCC,Abc,bbc}'::text[] COLLATE "C", 'asc');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc}'::text[] COLLATE "C", 'desc');
+-- nulls first/last tests
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C");
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'asc');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'desc');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'nulls first');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'nulls first');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'asc nulls first');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'asc nulls last');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'desc nulls first');
+SELECT array_sort('{foo,bar,CCC,Abc,bbc,null}'::text[] COLLATE "C", 'desc nulls last');
+-- multidimensional array tests
+SELECT array_sort(ARRAY[[2,4],[2,1],[6,5]]);

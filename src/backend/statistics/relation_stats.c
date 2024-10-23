@@ -54,6 +54,10 @@ static bool relation_statistics_update(FunctionCallInfo fcinfo, int elevel);
 
 /*
  * Internal function for modifying statistics for a relation.
+ *
+ * Up to four pg_class columns may be updated even though only three relation
+ * statistics may be modified; relallfrozen is always set to -1 when
+ * relallvisible is updated manually.
  */
 static bool
 relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
@@ -62,9 +66,9 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 	Relation	crel;
 	HeapTuple	ctup;
 	Form_pg_class pgcform;
-	int			replaces[3] = {0};
-	Datum		values[3] = {0};
-	bool		nulls[3] = {0};
+	int			replaces[4] = {0};
+	Datum		values[4] = {0};
+	bool		nulls[4] = {0};
 	int			ncols = 0;
 	TupleDesc	tupdesc;
 	HeapTuple	newtup;
@@ -159,6 +163,16 @@ relation_statistics_update(FunctionCallInfo fcinfo, int elevel)
 		{
 			replaces[ncols] = Anum_pg_class_relallvisible;
 			values[ncols] = Int32GetDatum(relallvisible);
+			ncols++;
+
+			/*
+			 * If we are modifying relallvisible manually, it is not clear
+			 * what relallfrozen value would make sense. Therefore, set it to
+			 * -1, or unknown. It will be updated the next time these fields
+			 *  are updated.
+			 */
+			replaces[ncols] = Anum_pg_class_relallfrozen;
+			values[ncols] = Int32GetDatum(-1);
 			ncols++;
 		}
 	}

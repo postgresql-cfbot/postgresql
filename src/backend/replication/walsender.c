@@ -1026,6 +1026,7 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	WALReadError errinfo;
 	XLogSegNo	segno;
 	TimeLineID	currTLI;
+	Size		rbytes;
 
 	/*
 	 * Make sure we have enough WAL available before retrieving the current
@@ -1063,11 +1064,17 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	else
 		count = flushptr - targetPagePtr;	/* part of the page available */
 
-	/* now actually read the data, we know it's there */
-	if (!WALRead(state,
+	/* attempt to read WAL from WAL buffers first */
+	rbytes = WALReadFromBuffers(cur_page, targetPagePtr, count, currTLI);
+	cur_page += rbytes;
+	targetPagePtr += rbytes;
+
+	/* now read the remaining WAL from WAL file */
+	if ((count - rbytes) > 0 &&
+		!WALRead(state,
 				 cur_page,
 				 targetPagePtr,
-				 count,
+				 (count - rbytes),
 				 currTLI,		/* Pass the current TLI because only
 								 * WalSndSegmentOpen controls whether new TLI
 								 * is needed. */

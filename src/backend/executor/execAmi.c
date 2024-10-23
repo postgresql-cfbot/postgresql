@@ -595,6 +595,28 @@ ExecSupportsBackwardScan(Plan *node)
 }
 
 /*
+ * ExecSupportsPrefetch - does a plan type support prefetching?
+ *
+ * For now only plain index scans do, we could extend that to IOS. Not sure
+ * about other plans.
+ */
+bool
+ExecSupportsPrefetch(Plan *node)
+{
+	if (node == NULL)
+		return false;
+
+	switch (nodeTag(node))
+	{
+		case T_IndexScan:
+			return true;
+
+		default:
+			return false;
+	}
+}
+
+/*
  * An IndexScan or IndexOnlyScan node supports backward scan only if the
  * index's AM does.
  */
@@ -650,4 +672,23 @@ ExecMaterializesOutput(NodeTag plantype)
 	}
 
 	return false;
+}
+
+
+/*
+ * ExecPrefetch
+ */
+void
+ExecPrefetch(PlanState *node)
+{
+	switch (nodeTag(node))
+	{
+		case T_IndexScanState:
+			ExecPrefetchIndexScan((IndexScanState *) node);
+			break;
+
+		default:
+			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
+			break;
+	}
 }

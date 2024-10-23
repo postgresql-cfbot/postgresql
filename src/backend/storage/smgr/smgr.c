@@ -283,8 +283,7 @@ smgrdestroy(SMgrRelation reln)
 
 	Assert(reln->pincount == 0);
 
-	for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-		smgrsw[reln->smgr_which].smgr_close(reln, forknum);
+	smgrclose(reln);
 
 	dlist_delete(&reln->node);
 
@@ -490,8 +489,7 @@ smgrdounlinkall(SMgrRelation *rels, int nrels, bool isRedo)
 		rlocators[i] = rlocator;
 
 		/* Close the forks at smgr level */
-		for (forknum = 0; forknum <= MAX_FORKNUM; forknum++)
-			smgrsw[which].smgr_close(rels[i], forknum);
+		smgrclose(rels[i]);
 	}
 
 	/*

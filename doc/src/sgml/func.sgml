@@ -29524,7 +29524,7 @@ DETAIL:  Make sure pg_wal_replay_wait() isn't called within a transaction with a
         <indexterm>
          <primary>pg_replication_origin_session_setup</primary>
         </indexterm>
-        <function>pg_replication_origin_session_setup</function> ( <parameter>node_name</parameter> <type>text</type> )
+        <function>pg_replication_origin_session_setup</function> ( <parameter>node_name</parameter> <type>text</type>, <parameter>acquired_by</parameter> <type>integer</type> <literal>DEFAULT</literal> <literal>0</literal> )
         <returnvalue>void</returnvalue>
        </para>
        <para>

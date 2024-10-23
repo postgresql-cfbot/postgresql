@@ -9413,6 +9413,29 @@ do_pg_abort_backup(int code, Datum arg)
 }
 
 /*
+ * Create a consistent copy of control data to be used for backup and update it
+ * to require a backup label for recovery. Also recalculate the CRC.
+ */
+void
+backup_control_file(uint8_t *controlFile)
+{
+	ControlFileData *controlData = ((ControlFileData *)controlFile);
+
+	memset(controlFile + sizeof(ControlFileData), 0,
+		   PG_CONTROL_FILE_SIZE - sizeof(ControlFileData));
+
+	LWLockAcquire(ControlFileLock, LW_SHARED);
+	memcpy(controlFile, ControlFile, sizeof(ControlFileData));
+	LWLockRelease(ControlFileLock);
+
+	controlData->backupLabelRequired = true;
+
+	INIT_CRC32C(controlData->crc);
+	COMP_CRC32C(controlData->crc, controlFile, offsetof(ControlFileData, crc));
+	FIN_CRC32C(controlData->crc);
+}
+
+/*
  * Register a handler that will warn about unterminated backups at end of
  * session, unless this has already been done.
  */

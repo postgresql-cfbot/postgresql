@@ -3239,7 +3239,7 @@ struct config_int ConfigureNamesInt[] =
 		{"max_sync_workers_per_subscription",
 			PGC_SIGHUP,
 			REPLICATION_SUBSCRIBERS,
-			gettext_noop("Maximum number of table synchronization workers per subscription."),
+			gettext_noop("Maximum number of workers per subscription for synchronizing tables and sequences."),
 			NULL,
 		},
 		&max_sync_workers_per_subscription,

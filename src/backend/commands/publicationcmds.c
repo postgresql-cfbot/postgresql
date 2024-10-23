@@ -747,11 +747,13 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 		aclcheck_error(aclresult, OBJECT_DATABASE,
 					   get_database_name(MyDatabaseId));
 
-	/* FOR ALL TABLES requires superuser */
-	if (stmt->for_all_tables && !superuser())
+	/* FOR ALL TABLES or FOR ALL SEQUENCES requires superuser */
+	if ((stmt->for_all_tables || stmt->for_all_sequences) && !superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
-				 errmsg("must be superuser to create FOR ALL TABLES publication")));
+				 errmsg("must be superuser to create a %s publication",
+						stmt->for_all_tables ? "FOR ALL TABLES" :
+						"FOR ALL SEQUENCES")));
 
 	rel = table_open(PublicationRelationId, RowExclusiveLock);
 
@@ -783,6 +785,8 @@ CreatePublication(ParseState *pstate, CreatePublicationStmt *stmt)
 	values[Anum_pg_publication_oid - 1] = ObjectIdGetDatum(puboid);
 	values[Anum_pg_publication_puballtables - 1] =
 		BoolGetDatum(stmt->for_all_tables);
+	values[Anum_pg_publication_puballsequences - 1] =
+		BoolGetDatum(stmt->for_all_sequences);
 	values[Anum_pg_publication_pubinsert - 1] =
 		BoolGetDatum(pubactions.pubinsert);
 	values[Anum_pg_publication_pubupdate - 1] =
@@ -1904,12 +1908,16 @@ AlterPublicationOwner_internal(Relation rel, HeapTuple tup, Oid newOwnerId)
 			aclcheck_error(aclresult, OBJECT_DATABASE,
 						   get_database_name(MyDatabaseId));
 
-		if (form->puballtables && !superuser_arg(newOwnerId))
+		/* FOR ALL TABLES or FOR ALL SEQUENCES requires superuser */
+		if ((form->puballtables || form->puballsequences) &&
+			!superuser_arg(newOwnerId))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to change owner of publication \"%s\"",
 							NameStr(form->pubname)),
-					 errhint("The owner of a FOR ALL TABLES publication must be a superuser.")));
+					 errhint("The owner of a %s publication must be a superuser.",
+							 form->puballtables ? "FOR ALL TABLES" :
+							 "FOR ALL SEQUENCES")));
 
 		if (!superuser_arg(newOwnerId) && is_schema_publication(form->oid))
 			ereport(ERROR,

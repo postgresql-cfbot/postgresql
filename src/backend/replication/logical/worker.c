@@ -91,7 +91,7 @@
  * behave as if two_phase = off. When the apply worker detects that all
  * tablesyncs have become READY (while the tri-state was PENDING) it will
  * restart the apply worker process. This happens in
- * process_syncing_tables_for_apply.
+ * ProcessSyncingTablesForApply.
  *
  * When the (re-started) apply worker finds that all tablesyncs are READY for a
  * two_phase tri-state of PENDING it start streaming messages with the
@@ -486,6 +486,11 @@ should_apply_changes_for_rel(LogicalRepRelMapEntry *rel)
 			return (rel->state == SUBREL_STATE_READY ||
 					(rel->state == SUBREL_STATE_SYNCDONE &&
 					 rel->statelsn <= remote_final_lsn));
+
+		case WORKERTYPE_SEQUENCESYNC:
+			/* Should never happen. */
+			Assert(0);
+			break;
 
 		case WORKERTYPE_UNKNOWN:
 			/* Should never happen. */
@@ -1026,8 +1031,11 @@ apply_handle_commit(StringInfo s)
 
 	apply_handle_commit_internal(&commit_data);
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(commit_data.end_lsn);
+	/*
+	 * Process any tables that are being synchronized in parallel and any
+	 * newly added relations.
+	 */
+	SyncProcessRelations(commit_data.end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 	reset_apply_error_context_info();
@@ -1148,8 +1156,11 @@ apply_handle_prepare(StringInfo s)
 
 	in_remote_transaction = false;
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
+	/*
+	 * Process any tables that are being synchronized in parallel and any
+	 * newly added relations.
+	 */
+	SyncProcessRelations(prepare_data.end_lsn);
 
 	/*
 	 * Since we have already prepared the transaction, in a case where the
@@ -1204,8 +1215,11 @@ apply_handle_commit_prepared(StringInfo s)
 	store_flush_position(prepare_data.end_lsn, XactLastCommitEnd);
 	in_remote_transaction = false;
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
+	/*
+	 * Process any tables that are being synchronized in parallel and any
+	 * newly added relations.
+	 */
+	SyncProcessRelations(prepare_data.end_lsn);
 
 	clear_subscription_skip_lsn(prepare_data.end_lsn);
 
@@ -1270,8 +1284,11 @@ apply_handle_rollback_prepared(StringInfo s)
 	store_flush_position(rollback_data.rollback_end_lsn, InvalidXLogRecPtr);
 	in_remote_transaction = false;
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(rollback_data.rollback_end_lsn);
+	/*
+	 * Process any tables that are being synchronized in parallel and any
+	 * newly added relations.
+	 */
+	SyncProcessRelations(rollback_data.rollback_end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 	reset_apply_error_context_info();
@@ -1405,8 +1422,11 @@ apply_handle_stream_prepare(StringInfo s)
 
 	pgstat_report_stat(false);
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(prepare_data.end_lsn);
+	/*
+	 * Process any tables that are being synchronized in parallel and any
+	 * newly added relations.
+	 */
+	SyncProcessRelations(prepare_data.end_lsn);
 
 	/*
 	 * Similar to prepare case, the subskiplsn could be left in a case of
@@ -2247,8 +2267,11 @@ apply_handle_stream_commit(StringInfo s)
 			break;
 	}
 
-	/* Process any tables that are being synchronized in parallel. */
-	process_syncing_tables(commit_data.end_lsn);
+	/*
+	 * Process any tables that are being synchronized in parallel and any
+	 * newly added relations.
+	 */
+	SyncProcessRelations(commit_data.end_lsn);
 
 	pgstat_report_activity(STATE_IDLE, NULL);
 
@@ -3716,8 +3739,11 @@ LogicalRepApplyLoop(XLogRecPtr last_received)
 			AcceptInvalidationMessages();
 			maybe_reread_subscription();
 
-			/* Process any table synchronization changes. */
-			process_syncing_tables(last_received);
+			/*
+			 * Process any tables that are being synchronized in parallel and
+			 * any newly added relations.
+			 */
+			SyncProcessRelations(last_received);
 		}
 
 		/* Cleanup the memory. */
@@ -4626,8 +4652,8 @@ run_apply_worker()
 }
 
 /*
- * Common initialization for leader apply worker, parallel apply worker and
- * tablesync worker.
+ * Common initialization for leader apply worker, parallel apply worker,
+ * tablesync worker and sequencesync worker.
  *
  * Initialize the database connection, in-memory subscription and necessary
  * config options.
@@ -4706,6 +4732,10 @@ InitializeLogRepWorker(void)
 				(errmsg("logical replication table synchronization worker for subscription \"%s\", table \"%s\" has started",
 						MySubscription->name,
 						get_rel_name(MyLogicalRepWorker->relid))));
+	else if (am_sequencesync_worker())
+		ereport(LOG,
+				(errmsg("logical replication sequence synchronization worker for subscription \"%s\" has started",
+						MySubscription->name)));
 	else
 		ereport(LOG,
 				(errmsg("logical replication apply worker for subscription \"%s\" has started",
@@ -4725,14 +4755,17 @@ replorigin_reset(int code, Datum arg)
 	replorigin_session_origin_timestamp = 0;
 }
 
-/* Common function to setup the leader apply or tablesync worker. */
+/*
+ * Common function to setup the leader apply, tablesync worker and sequencesync
+ * worker.
+ */
 void
 SetupApplyOrSyncWorker(int worker_slot)
 {
 	/* Attach to slot */
 	logicalrep_worker_attach(worker_slot);
 
-	Assert(am_tablesync_worker() || am_leader_apply_worker());
+	Assert(am_tablesync_worker() || am_sequencesync_worker() || am_leader_apply_worker());
 
 	/* Setup signal handling */
 	pqsignal(SIGHUP, SignalHandlerForConfigReload);
@@ -4775,8 +4808,11 @@ SetupApplyOrSyncWorker(int worker_slot)
 	 * the subscription relation state.
 	 */
 	CacheRegisterSyscacheCallback(SUBSCRIPTIONRELMAP,
-								  invalidate_syncing_table_states,
+								  SyncInvalidateRelationStates,
 								  (Datum) 0);
+
+	if (am_sequencesync_worker())
+		before_shmem_exit(logicalrep_seqsyncworker_failuretime, (Datum) 0);
 }
 
 /* Logical Replication Apply worker entry point */

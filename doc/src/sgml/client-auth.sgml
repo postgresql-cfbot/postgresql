@@ -647,6 +647,16 @@ include_dir         <replaceable>directory</replaceable>
          </para>
         </listitem>
        </varlistentry>
+
+       <varlistentry>
+        <term><literal>oauth</literal></term>
+        <listitem>
+         <para>
+          Authorize and optionally authenticate using a third-party OAuth 2.0
+          identity provider. See <xref linkend="auth-oauth"/> for details.
+         </para>
+        </listitem>
+       </varlistentry>
       </variablelist>
 
       </para>
@@ -1132,6 +1142,12 @@ omicron         bryanh                  guest1
       <link linkend="auth-bsd">BSD authentication</link>, which
       relies on the BSD Authentication framework (currently available
       only on OpenBSD).
+     </para>
+    </listitem>
+    <listitem>
+     <para>
+      <link linkend="auth-oauth">OAuth authorization/authentication</link>,
+      which relies on an external OAuth 2.0 identity provider.
      </para>
     </listitem>
    </itemizedlist>
@@ -2310,6 +2326,18 @@ host ... radius radiusservers="server1,server2" radiussecrets="""secret one"",""
      exists by default on OpenBSD systems.
     </para>
    </note>
+  </sect1>
+
+  <sect1 id="auth-oauth">
+   <title>OAuth Authorization/Authentication</title>
+
+   <indexterm zone="auth-oauth">
+    <primary>OAuth Authorization/Authentication</primary>
+   </indexterm>
+
+   <para>
+    TODO
+   </para>
   </sect1>
 
   <sect1 id="client-authentication-problems">

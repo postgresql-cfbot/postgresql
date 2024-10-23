@@ -397,10 +397,10 @@ static ObjectAddress ATExecValidateConstraint(List **wqueue,
 											  Relation rel, char *constrName,
 											  bool recurse, bool recursing, LOCKMODE lockmode);
 static int	transformColumnNameList(Oid relId, List *colList,
-									int16 *attnums, Oid *atttypids);
+									int16 *attnums, Oid *atttypids, Oid *attcollids);
 static int	transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
 									   List **attnamelist,
-									   int16 *attnums, Oid *atttypids,
+									   int16 *attnums, Oid *atttypids, Oid *attcollids,
 									   Oid *opclasses, bool *pk_has_without_overlaps);
 static Oid	transformFkeyCheckAttrs(Relation pkrel,
 									int numattrs, int16 *attnums,
@@ -9587,6 +9587,8 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	int16		fkattnum[INDEX_MAX_KEYS] = {0};
 	Oid			pktypoid[INDEX_MAX_KEYS] = {0};
 	Oid			fktypoid[INDEX_MAX_KEYS] = {0};
+	Oid			pkcolloid[INDEX_MAX_KEYS] = {0};
+	Oid			fkcolloid[INDEX_MAX_KEYS] = {0};
 	Oid			opclasses[INDEX_MAX_KEYS] = {0};
 	Oid			pfeqoperators[INDEX_MAX_KEYS] = {0};
 	Oid			ppeqoperators[INDEX_MAX_KEYS] = {0};
@@ -9687,7 +9689,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	 */
 	numfks = transformColumnNameList(RelationGetRelid(rel),
 									 fkconstraint->fk_attrs,
-									 fkattnum, fktypoid);
+									 fkattnum, fktypoid, fkcolloid);
 	with_period = fkconstraint->fk_with_period || fkconstraint->pk_with_period;
 	if (with_period && !fkconstraint->fk_with_period)
 		ereport(ERROR,
@@ -9696,7 +9698,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 	numfkdelsetcols = transformColumnNameList(RelationGetRelid(rel),
 											  fkconstraint->fk_del_set_cols,
-											  fkdelsetcols, NULL);
+											  fkdelsetcols, NULL, NULL);
 	validateFkOnDeleteSetColumns(numfks, fkattnum,
 								 numfkdelsetcols, fkdelsetcols,
 								 fkconstraint->fk_del_set_cols);
@@ -9711,7 +9713,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	{
 		numpks = transformFkeyGetPrimaryKey(pkrel, &indexOid,
 											&fkconstraint->pk_attrs,
-											pkattnum, pktypoid,
+											pkattnum, pktypoid, pkcolloid,
 											opclasses, &pk_has_without_overlaps);
 
 		/* If the primary key uses WITHOUT OVERLAPS, the fk must use PERIOD */
@@ -9724,7 +9726,7 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	{
 		numpks = transformColumnNameList(RelationGetRelid(pkrel),
 										 fkconstraint->pk_attrs,
-										 pkattnum, pktypoid);
+										 pkattnum, pktypoid, pkcolloid);
 
 		/* Since we got pk_attrs, one should be a period. */
 		if (with_period && !fkconstraint->pk_with_period)
@@ -9826,6 +9828,8 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		Oid			pktype = pktypoid[i];
 		Oid			fktype = fktypoid[i];
 		Oid			fktyped;
+		Oid			pkcoll = pkcolloid[i];
+		Oid			fkcoll = fkcolloid[i];
 		HeapTuple	cla_ht;
 		Form_pg_opclass cla_tup;
 		Oid			amid;
@@ -9968,6 +9972,40 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 							   format_type_be(fktype),
 							   format_type_be(pktype))));
 
+		/*
+		 * This shouldn't be possible, but better check to make sure we have a
+		 * consistent state for the check below.
+		 */
+		if ((pkcoll && !fkcoll) || (!pkcoll && fkcoll))
+			elog(ERROR, "key columns are not both collatable");
+
+		if (pkcoll && fkcoll)
+		{
+			bool		pkcolldet;
+			bool		fkcolldet;
+
+			pkcolldet = get_collation_isdeterministic(pkcoll);
+			fkcolldet = get_collation_isdeterministic(fkcoll);
+
+			/*
+			 * SQL requires that both collations are the same.  This is
+			 * because we need a consistent notion of equality on both
+			 * columns.  We relax this by allowing different collations if
+			 * they are both deterministic.  (This is also for backward
+			 * compatibility, because PostgreSQL has always allowed this.)
+			 */
+			if ((!pkcolldet || !fkcolldet) && pkcoll != fkcoll)
+				ereport(ERROR,
+						(errcode(ERRCODE_COLLATION_MISMATCH),
+						 errmsg("foreign key constraint \"%s\" cannot be implemented", fkconstraint->conname),
+						 errdetail("Key columns \"%s\" and \"%s\" have incompatible collations: \"%s\" and \"%s\".  "
+								   "If either collation is nondeterministic, then both collations have to be the same.",
+								   strVal(list_nth(fkconstraint->fk_attrs, i)),
+								   strVal(list_nth(fkconstraint->pk_attrs, i)),
+								   get_collation_name(fkcoll),
+								   get_collation_name(pkcoll))));
+		}
+
 		if (old_check_ok)
 		{
 			/*
@@ -9988,6 +10026,8 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			CoercionPathType new_pathtype;
 			Oid			old_castfunc;
 			Oid			new_castfunc;
+			Oid			old_fkcoll;
+			Oid			new_fkcoll;
 			Form_pg_attribute attr = TupleDescAttr(tab->oldDesc,
 												   fkattnum[i] - 1);
 
@@ -10002,6 +10042,9 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 										&old_castfunc);
 			new_pathtype = findFkeyCast(pfeqop_right, new_fktype,
 										&new_castfunc);
+
+			old_fkcoll = attr->attcollation;
+			new_fkcoll = fkcoll;
 
 			/*
 			 * Upon a change to the cast from the FK column to its pfeqop
@@ -10026,9 +10069,10 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			 * turn conform to the domain.  Consequently, we need not treat
 			 * domains specially here.
 			 *
-			 * Since we require that all collations share the same notion of
-			 * equality (which they do, because texteq reduces to bitwise
-			 * equality), we don't compare collation here.
+			 * If the collation changes, revalidation is required, unless both
+			 * collations are deterministic, because those share the same
+			 * notion of equality (because texteq reduces to bitwise
+			 * equality).
 			 *
 			 * We need not directly consider the PK type.  It's necessarily
 			 * binary coercible to the opcintype of the unique index column,
@@ -10038,7 +10082,9 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			old_check_ok = (new_pathtype == old_pathtype &&
 							new_castfunc == old_castfunc &&
 							(!IsPolymorphicType(pfeqop_right) ||
-							 new_fktype == old_fktype));
+							 new_fktype == old_fktype) &&
+							(new_fkcoll == old_fkcoll ||
+							 (get_collation_isdeterministic(old_fkcoll) && get_collation_isdeterministic(new_fkcoll))));
 		}
 
 		pfeqoperators[i] = pfeqop;
@@ -11982,7 +12028,7 @@ ATExecValidateConstraint(List **wqueue, Relation rel, char *constrName,
  */
 static int
 transformColumnNameList(Oid relId, List *colList,
-						int16 *attnums, Oid *atttypids)
+						int16 *attnums, Oid *atttypids, Oid *attcollids)
 {
 	ListCell   *l;
 	int			attnum;
@@ -12013,6 +12059,8 @@ transformColumnNameList(Oid relId, List *colList,
 		attnums[attnum] = attform->attnum;
 		if (atttypids != NULL)
 			atttypids[attnum] = attform->atttypid;
+		if (attcollids != NULL)
+			attcollids[attnum] = attform->attcollation;
 		ReleaseSysCache(atttuple);
 		attnum++;
 	}
@@ -12036,7 +12084,7 @@ transformColumnNameList(Oid relId, List *colList,
 static int
 transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
 						   List **attnamelist,
-						   int16 *attnums, Oid *atttypids,
+						   int16 *attnums, Oid *atttypids, Oid *attcollids,
 						   Oid *opclasses, bool *pk_has_without_overlaps)
 {
 	List	   *indexoidlist;
@@ -12110,6 +12158,7 @@ transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
 
 		attnums[i] = pkattno;
 		atttypids[i] = attnumTypeId(pkrel, pkattno);
+		attcollids[i] = attnumCollationId(pkrel, pkattno);
 		opclasses[i] = indclass->values[i];
 		*attnamelist = lappend(*attnamelist,
 							   makeString(pstrdup(NameStr(*attnumAttName(pkrel, pkattno)))));

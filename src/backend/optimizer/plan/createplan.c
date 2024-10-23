@@ -1149,10 +1149,10 @@ mark_async_capable_plan(Plan *plan, Path *path)
 				SubqueryScan *scan_plan = (SubqueryScan *) plan;
 
 				/*
-				 * If the generated plan node includes a gating Result node,
-				 * we can't execute it asynchronously.
+				 * If the generated plan node includes a gating Result node or
+				 * a Sort node, we can't execute it asynchronously.
 				 */
-				if (IsA(plan, Result))
+				if (IsA(plan, Result) || IsA(plan, Sort))
 					return false;
 
 				/*
@@ -1170,10 +1170,10 @@ mark_async_capable_plan(Plan *plan, Path *path)
 				FdwRoutine *fdwroutine = path->parent->fdwroutine;
 
 				/*
-				 * If the generated plan node includes a gating Result node,
-				 * we can't execute it asynchronously.
+				 * If the generated plan node includes a gating Result node or
+				 * a Sort node, we can't execute it asynchronously.
 				 */
-				if (IsA(plan, Result))
+				if (IsA(plan, Result) || IsA(plan, Sort))
 					return false;
 
 				Assert(fdwroutine != NULL);
@@ -1186,9 +1186,9 @@ mark_async_capable_plan(Plan *plan, Path *path)
 
 			/*
 			 * If the generated plan node includes a Result node for the
-			 * projection, we can't execute it asynchronously.
+			 * projection or a Sort node, we can't execute it asynchronously.
 			 */
-			if (IsA(plan, Result))
+			if (IsA(plan, Result) || IsA(plan, Sort))
 				return false;
 
 			/*
@@ -1450,6 +1450,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	ListCell   *subpaths;
 	RelOptInfo *rel = best_path->path.parent;
 	PartitionPruneInfo *partpruneinfo = NULL;
+	bool		consider_async = false;
 
 	/*
 	 * We don't have the actual creation of the MergeAppend node split out
@@ -1464,6 +1465,9 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	plan->righttree = NULL;
 	node->apprelids = rel->relids;
 
+	consider_async = (enable_async_merge_append &&
+					  !best_path->path.parallel_safe &&
+					  list_length(best_path->subpaths) > 1);
 	/*
 	 * Compute sort column info, and adjust MergeAppend's tlist as needed.
 	 * Because we pass adjust_tlist_in_place = true, we may ignore the
@@ -1538,6 +1542,10 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 			label_sort_with_costsize(root, sort, best_path->limit_tuples);
 			subplan = (Plan *) sort;
 		}
+
+		/* If needed, check to see if subplan can be executed asynchronously */
+		if (consider_async)
+			mark_async_capable_plan(subplan, subpath);
 
 		subplans = lappend(subplans, subplan);
 	}

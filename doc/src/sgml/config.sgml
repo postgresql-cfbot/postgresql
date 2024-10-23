@@ -10418,6 +10418,43 @@ dynamic_library_path = 'C:\tools\postgresql;H:\my_project\lib;$libdir'
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-extension-destdir" xreflabel="extension_destdir">
+      <term><varname>extension_destdir</varname> (<type>string</type>)
+      <indexterm>
+       <primary><varname>extension_destdir</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Specifies a directory prefix into which extensions should be
+        installed. Only superusers and users with the appropriate
+        <literal>SET</literal> privilege can change this setting. When set,
+        the postmaster will search this directory for an extension before
+        searching the default paths.
+       </para>
+
+       <para>
+        For example, this configuration:
+<programlisting>
+extension_destdir = '/mnt/extensions'
+</programlisting>
+        will allow <productname>PostgreSQL</productname> to first look for
+        extension control files, SQL files, and loadable modules installed in
+        <literal>/mnt/extensions</literal> and fall back on the
+        default directories if they're not found there.
+       </para>
+
+       <para>
+        Note that the files should be installed in their full paths under the
+        <varname>extension_destdir</varname> prefix. When using
+        <link linkend="extend-pgxs">PGXS</link> to install an extension, pass
+        the destination directory via the <varname>DESTDIR</varname> variable
+        to install the files in the proper location. For more information see
+        <xref linkend="extend-extensions-files-directory"/>.
+       </para>
+      </listitem>
+     </varlistentry>
+
      </variablelist>
     </sect2>
    </sect1>

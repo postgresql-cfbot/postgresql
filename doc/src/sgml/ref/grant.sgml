@@ -98,6 +98,7 @@ GRANT { USAGE | ALL [ PRIVILEGES ] }
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
 
 GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replaceable class="parameter">role_specification</replaceable> [, ...]
+    [ IN DATABASE <replaceable class="parameter">database_name</replaceable> | IN CURRENT DATABASE ]
     [ WITH { ADMIN | INHERIT | SET } { OPTION | TRUE | FALSE } ]
     [ GRANTED BY <replaceable class="parameter">role_specification</replaceable> ]
 
@@ -263,6 +264,27 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
   </para>
 
   <para>
+   Membership is effective cluster-wide unless otherwise constrained
+   through the use of a database-specific clause.  Both database-specific and
+   cluster-wide versions of a role membership grant may exist at the same
+   time.  In the event that multiple grants apply, the membership privileges
+   conferred are additive.
+  </para>
+
+  <para>
+   If <literal>IN DATABASE <replaceable class="parameter">database_name</replaceable></literal>
+   is specified, membership in <replaceable class="parameter">role_name</replaceable>
+   will be effective only when the recipient is connected to the database specified by
+   <replaceable class="parameter">database_name</replaceable>.
+  </para>
+
+  <para>
+   If <literal>IN CURRENT DATABASE</literal> is specified, the membership in
+   <replaceable class="parameter">role_name</replaceable> will be effective only when the
+   recipient is connected to the same database that the grant was issued in.
+  </para>
+
+  <para>
    Each of the options described below can be set to either
    <literal>TRUE</literal> or <literal>FALSE</literal>. The keyword
    <literal>OPTION</literal> is accepted as a synonym for
@@ -279,7 +301,15 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
    do that.  A role is not considered to hold <literal>WITH ADMIN
    OPTION</literal> on itself.  Database superusers can grant or revoke
    membership in any role to anyone. This option defaults to
-   <literal>FALSE</literal>.
+   <literal>FALSE</literal>.  A cluster-wide admin option for the role being granted
+   is required for performing both cluster-wide role membership grants as well as
+   database-specific role membership grants when connected to a database that is not
+   the target of the grant.  A database-specific admin option is only sufficient for
+   performing a role membership grant that is both database-specific and for the
+   currently connected database.  Database-specific admin options can not be
+   used to grant cluster-wide role membership, nor can they be used to grant
+   database-specific role membership for other databases than the currently
+   connected database.
   </para>
 
   <para>
@@ -334,6 +364,10 @@ GRANT <replaceable class="parameter">role_name</replaceable> [, ...] TO <replace
    to <literal>PUBLIC</literal>.  Note also that this form of the command
    does not allow the noise word <literal>GROUP</literal>
    in <replaceable class="parameter">role_specification</replaceable>.
+  </para>
+
+  <para>
+   See <xref linkend="role-membership"/> for more information about role memberships.
   </para>
  </refsect2>
  </refsect1>
@@ -456,10 +490,18 @@ GRANT ALL PRIVILEGES ON kinds TO manuel;
   </para>
 
   <para>
-   Grant membership in role <literal>admins</literal> to user <literal>joe</literal>:
+   Grant cluster-wide membership in role <literal>admins</literal> to user <literal>joe</literal>:
 
 <programlisting>
 GRANT admins TO joe;
+</programlisting></para>
+
+  <para>
+   Grant read and write access to user <literal>alice</literal> in the database
+   named <literal>sales</literal>:
+
+<programlisting>
+GRANT pg_read_all_data, pg_write_all_data TO alice IN DATABASE sales;
 </programlisting></para>
  </refsect1>
 

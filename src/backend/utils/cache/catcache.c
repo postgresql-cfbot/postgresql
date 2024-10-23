@@ -1223,7 +1223,7 @@ IndexScanOK(CatCache *cache)
 
 		case AUTHNAME:
 		case AUTHOID:
-		case AUTHMEMMEMROLE:
+		case AUTHMEMMEMDBROLE:
 		case DATABASEOID:
 
 			/*

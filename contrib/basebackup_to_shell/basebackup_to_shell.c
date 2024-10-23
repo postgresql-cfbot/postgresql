@@ -104,7 +104,7 @@ shell_check_detail(char *target, char *target_detail)
 
 		StartTransactionCommand();
 		roleid = get_role_oid(shell_required_role, true);
-		if (!has_privs_of_role(GetUserId(), roleid))
+		if (!has_cluster_privs_of_role(GetUserId(), roleid))
 			ereport(ERROR,
 					(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 					 errmsg("permission denied to use basebackup_to_shell")));

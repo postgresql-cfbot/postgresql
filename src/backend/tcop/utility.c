@@ -940,7 +940,7 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			break;
 
 		case T_CheckPointStmt:
-			if (!has_privs_of_role(GetUserId(), ROLE_PG_CHECKPOINT))
+			if (!has_cluster_privs_of_role(GetUserId(), ROLE_PG_CHECKPOINT))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				/* translator: %s is name of a SQL command, eg CHECKPOINT */

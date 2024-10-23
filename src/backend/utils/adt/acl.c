@@ -1395,7 +1395,7 @@ aclmask(const Acl *acl, Oid roleid, Oid ownerId,
 
 	/* Owner always implicitly has all grant options */
 	if ((mask & ACLITEM_ALL_GOPTION_BITS) &&
-		has_privs_of_role(roleid, ownerId))
+		has_privs_of_role(roleid, ownerId, MyDatabaseId))
 	{
 		result = mask & ACLITEM_ALL_GOPTION_BITS;
 		if ((how == ACLMASK_ALL) ? (result == mask) : (result != 0))
@@ -1438,7 +1438,7 @@ aclmask(const Acl *acl, Oid roleid, Oid ownerId,
 			continue;			/* already checked it */
 
 		if ((aidata->ai_privs & remaining) &&
-			has_privs_of_role(roleid, aidata->ai_grantee))
+			has_privs_of_role(roleid, aidata->ai_grantee, MyDatabaseId))
 		{
 			result |= aidata->ai_privs & mask;
 			if ((how == ACLMASK_ALL) ? (result == mask) : (result != 0))
@@ -4995,7 +4995,7 @@ pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode)
 {
 	if (mode & ACL_GRANT_OPTION_FOR(ACL_CREATE))
 	{
-		if (is_admin_of_role(roleid, role_oid))
+		if (is_admin_of_role(roleid, role_oid, MyDatabaseId))
 			return ACLCHECK_OK;
 	}
 	if (mode & ACL_CREATE)
@@ -5005,7 +5005,7 @@ pg_role_aclcheck(Oid role_oid, Oid roleid, AclMode mode)
 	}
 	if (mode & ACL_USAGE)
 	{
-		if (has_privs_of_role(roleid, role_oid))
+		if (has_privs_of_role(roleid, role_oid, MyDatabaseId))
 			return ACLCHECK_OK;
 	}
 	if (mode & ACL_SET)
@@ -5034,7 +5034,7 @@ initialize_acl(void)
 		 * of pg_auth_members (for roles_is_member_of()) pg_database (for
 		 * roles_is_member_of())
 		 */
-		CacheRegisterSyscacheCallback(AUTHMEMROLEMEM,
+		CacheRegisterSyscacheCallback(AUTHMEMROLEMEMDB,
 									  RoleMembershipCacheCallback,
 									  (Datum) 0);
 		CacheRegisterSyscacheCallback(AUTHOID,
@@ -5114,7 +5114,62 @@ roles_list_append(List *roles_list, bloom_filter **bf, Oid role)
 }
 
 /*
- * Get a list of roles that the specified roleid is a member of
+ * Append role memberships to the list of roles
+ */
+static void
+append_role_memberships(List *roles_list, enum RoleRecurseType type,
+						Oid admin_of, Oid *admin_role, Oid memberid,
+						Oid databaseId, bloom_filter *bf)
+{
+	CatCList   *memlist;
+	int			i;
+	Oid			targetDatabaseId;
+
+	if (!OidIsValid(databaseId))
+		targetDatabaseId = InvalidOid;
+	else
+		targetDatabaseId = MyDatabaseId;
+
+	memlist = SearchSysCacheList2(AUTHMEMMEMDBROLE,
+								  ObjectIdGetDatum(memberid),
+								  ObjectIdGetDatum(targetDatabaseId));
+	for (i = 0; i < memlist->n_members; i++)
+	{
+		HeapTuple	tup = &memlist->members[i]->tuple;
+		Form_pg_auth_members form = (Form_pg_auth_members) GETSTRUCT(tup);
+		Oid			otherid = form->roleid;
+		Oid			db_id = form->dbid;
+
+		/*
+		 * While otherid==InvalidOid shouldn't appear in the catalog, the
+		 * OidIsValid() avoids crashing if that arises.
+		 */
+		if (otherid == admin_of && form->admin_option &&
+			db_id == databaseId &&
+			OidIsValid(admin_of) && !OidIsValid(*admin_role))
+			*admin_role = memberid;
+
+		/* If we're supposed to ignore non-heritable grants, do so. */
+		if (type == ROLERECURSE_PRIVS && db_id == databaseId && !form->inherit_option)
+			continue;
+
+		/* If we're supposed to ignore non-SET grants, do so. */
+		if (type == ROLERECURSE_SETROLE && db_id == databaseId && !form->set_option)
+			continue;
+
+		/*
+		 * Even though there shouldn't be any loops in the membership graph,
+		 * we must test for having already seen this role. It is legal for
+		 * instance to have both A->B and A->C->B.
+		 */
+		roles_list = roles_list_append(roles_list, &bf, otherid);
+	}
+	ReleaseSysCacheList(memlist);
+}
+
+/*
+ * Get a list of roles that the specified roleid is a member of, possibly
+ * scoped to specified database with databaseId.
  *
  * Type ROLERECURSE_MEMBERS recurses through all grants; ROLERECURSE_PRIVS
  * recurses only through inheritable grants; and ROLERECURSE_SETROLE recurses
@@ -5134,7 +5189,7 @@ roles_list_append(List *roles_list, bloom_filter **bf, Oid role)
  */
 static List *
 roles_is_member_of(Oid roleid, enum RoleRecurseType type,
-				   Oid admin_of, Oid *admin_role)
+				   Oid admin_of, Oid *admin_role, Oid databaseId)
 {
 	Oid			dba;
 	List	   *roles_list;
@@ -5157,7 +5212,7 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 	 * ROLE_PG_READ_ALL_SETTINGS for a physical walsender SHOW command.  In
 	 * that case, no role gets pg_database_owner.
 	 */
-	if (!OidIsValid(MyDatabaseId))
+	if (!OidIsValid(MyDatabaseId))	/* XXX or databaseId? */
 		dba = InvalidOid;
 	else
 	{
@@ -5186,42 +5241,18 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 	foreach(l, roles_list)
 	{
 		Oid			memberid = lfirst_oid(l);
-		CatCList   *memlist;
-		int			i;
 
 		/* Find roles that memberid is directly a member of */
-		memlist = SearchSysCacheList1(AUTHMEMMEMROLE,
-									  ObjectIdGetDatum(memberid));
-		for (i = 0; i < memlist->n_members; i++)
-		{
-			HeapTuple	tup = &memlist->members[i]->tuple;
-			Form_pg_auth_members form = (Form_pg_auth_members) GETSTRUCT(tup);
-			Oid			otherid = form->roleid;
+		append_role_memberships(roles_list, type, admin_of, admin_role,
+								memberid, InvalidOid, bf);
 
-			/*
-			 * While otherid==InvalidOid shouldn't appear in the catalog, the
-			 * OidIsValid() avoids crashing if that arises.
-			 */
-			if (otherid == admin_of && form->admin_option &&
-				OidIsValid(admin_of) && !OidIsValid(*admin_role))
-				*admin_role = memberid;
-
-			/* If we're supposed to ignore non-heritable grants, do so. */
-			if (type == ROLERECURSE_PRIVS && !form->inherit_option)
-				continue;
-
-			/* If we're supposed to ignore non-SET grants, do so. */
-			if (type == ROLERECURSE_SETROLE && !form->set_option)
-				continue;
-
-			/*
-			 * Even though there shouldn't be any loops in the membership
-			 * graph, we must test for having already seen this role. It is
-			 * legal for instance to have both A->B and A->C->B.
-			 */
-			roles_list = roles_list_append(roles_list, &bf, otherid);
-		}
-		ReleaseSysCacheList(memlist);
+		/*
+		 * Find roles that memberid is directly a member of in the current
+		 * database
+		 */
+		if (OidIsValid(databaseId))
+			append_role_memberships(roles_list, type, admin_of, admin_role,
+									memberid, databaseId, bf);
 
 		/* implement pg_database_owner implicit membership */
 		if (memberid == dba && OidIsValid(dba))
@@ -5257,7 +5288,8 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
 
 
 /*
- * Does member have the privileges of role (directly or indirectly)?
+ * Does member have the privileges of role (directly or indirectly) in
+ * specified database or cluster-wise?
  *
  * This is defined not to recurse through grants that are not inherited,
  * and only inherited grants confer the associated privileges automatically.
@@ -5265,7 +5297,7 @@ roles_is_member_of(Oid roleid, enum RoleRecurseType type,
  * See also member_can_set_role, below.
  */
 bool
-has_privs_of_role(Oid member, Oid role)
+has_privs_of_role(Oid member, Oid role, Oid database)
 {
 	/* Fast path for simple case */
 	if (member == role)
@@ -5280,8 +5312,19 @@ has_privs_of_role(Oid member, Oid role)
 	 * multi-level recursion, then see if target role is any one of them.
 	 */
 	return list_member_oid(roles_is_member_of(member, ROLERECURSE_PRIVS,
-											  InvalidOid, NULL),
+											  InvalidOid, NULL, database),
 						   role);
+}
+
+
+/*
+ * Does member have the privileges of role *cluster-wide*?
+ *
+ */
+bool
+has_cluster_privs_of_role(Oid member, Oid role)
+{
+	return has_privs_of_role(member, role, InvalidOid);
 }
 
 /*
@@ -5314,7 +5357,7 @@ member_can_set_role(Oid member, Oid role)
 	 * multi-level recursion, then see if target role is any one of them.
 	 */
 	return list_member_oid(roles_is_member_of(member, ROLERECURSE_SETROLE,
-											  InvalidOid, NULL),
+											  InvalidOid, NULL, MyDatabaseId),
 						   role);
 }
 
@@ -5360,7 +5403,7 @@ is_member_of_role(Oid member, Oid role)
 	 * recursion, then see if target role is any one of them.
 	 */
 	return list_member_oid(roles_is_member_of(member, ROLERECURSE_MEMBERS,
-											  InvalidOid, NULL),
+											  InvalidOid, NULL, InvalidOid),
 						   role);
 }
 
@@ -5384,7 +5427,7 @@ is_member_of_role_nosuper(Oid member, Oid role)
 	 * recursion, then see if target role is any one of them.
 	 */
 	return list_member_oid(roles_is_member_of(member, ROLERECURSE_MEMBERS,
-											  InvalidOid, NULL),
+											  InvalidOid, NULL, InvalidOid),
 						   role);
 }
 
@@ -5395,7 +5438,7 @@ is_member_of_role_nosuper(Oid member, Oid role)
  * or a superuser?
  */
 bool
-is_admin_of_role(Oid member, Oid role)
+is_admin_of_role(Oid member, Oid role, Oid databaseId)
 {
 	Oid			admin_role;
 
@@ -5406,7 +5449,7 @@ is_admin_of_role(Oid member, Oid role)
 	if (member == role)
 		return false;
 
-	(void) roles_is_member_of(member, ROLERECURSE_MEMBERS, role, &admin_role);
+	(void) roles_is_member_of(member, ROLERECURSE_MEMBERS, role, &admin_role, databaseId);
 	return OidIsValid(admin_role);
 }
 
@@ -5420,7 +5463,7 @@ is_admin_of_role(Oid member, Oid role)
  * over more indirect inheritance.
  */
 Oid
-select_best_admin(Oid member, Oid role)
+select_best_admin(Oid member, Oid role, Oid databaseId)
 {
 	Oid			admin_role;
 
@@ -5428,7 +5471,7 @@ select_best_admin(Oid member, Oid role)
 	if (member == role)
 		return InvalidOid;
 
-	(void) roles_is_member_of(member, ROLERECURSE_PRIVS, role, &admin_role);
+	(void) roles_is_member_of(member, ROLERECURSE_PRIVS, role, &admin_role, databaseId);
 	return admin_role;
 }
 
@@ -5504,7 +5547,7 @@ select_best_grantor(Oid roleId, AclMode privileges,
 	 * doesn't query any role memberships.
 	 */
 	roles_list = roles_is_member_of(roleId, ROLERECURSE_PRIVS,
-									InvalidOid, NULL);
+									InvalidOid, NULL, InvalidOid);
 
 	/* initialize candidate result as default */
 	*grantorId = roleId;

@@ -1142,7 +1142,7 @@ ExecAlterDefaultPrivilegesStmt(ParseState *pstate, AlterDefaultPrivilegesStmt *s
 
 			iacls.roleid = get_rolespec_oid(rolespec, false);
 
-			if (!has_privs_of_role(GetUserId(), iacls.roleid))
+			if (!has_privs_of_role(GetUserId(), iacls.roleid, MyDatabaseId))
 				ereport(ERROR,
 						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 						 errmsg("permission denied to change default privileges")));
@@ -3430,7 +3430,7 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 	 * pg_read_all_data role, which allows read access to all relations.
 	 */
 	if (mask & ACL_SELECT && !(result & ACL_SELECT) &&
-		has_privs_of_role(roleid, ROLE_PG_READ_ALL_DATA))
+		has_privs_of_role(roleid, ROLE_PG_READ_ALL_DATA, MyDatabaseId))
 		result |= ACL_SELECT;
 
 	/*
@@ -3442,7 +3442,7 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 	 */
 	if (mask & (ACL_INSERT | ACL_UPDATE | ACL_DELETE) &&
 		!(result & (ACL_INSERT | ACL_UPDATE | ACL_DELETE)) &&
-		has_privs_of_role(roleid, ROLE_PG_WRITE_ALL_DATA))
+		has_privs_of_role(roleid, ROLE_PG_WRITE_ALL_DATA, MyDatabaseId))
 		result |= (mask & (ACL_INSERT | ACL_UPDATE | ACL_DELETE));
 
 	/*
@@ -3453,7 +3453,7 @@ pg_class_aclmask_ext(Oid table_oid, Oid roleid, AclMode mask,
 	 */
 	if (mask & ACL_MAINTAIN &&
 		!(result & ACL_MAINTAIN) &&
-		has_privs_of_role(roleid, ROLE_PG_MAINTAIN))
+		has_privs_of_role(roleid, ROLE_PG_MAINTAIN, MyDatabaseId))
 		result |= ACL_MAINTAIN;
 
 	return result;
@@ -3752,8 +3752,8 @@ pg_namespace_aclmask_ext(Oid nsp_oid, Oid roleid,
 	 * to all schemas.
 	 */
 	if (mask & ACL_USAGE && !(result & ACL_USAGE) &&
-		(has_privs_of_role(roleid, ROLE_PG_READ_ALL_DATA) ||
-		 has_privs_of_role(roleid, ROLE_PG_WRITE_ALL_DATA)))
+		(has_privs_of_role(roleid, ROLE_PG_READ_ALL_DATA, MyDatabaseId) ||
+		 has_privs_of_role(roleid, ROLE_PG_WRITE_ALL_DATA, MyDatabaseId)))
 		result |= ACL_USAGE;
 	return result;
 }
@@ -4208,7 +4208,7 @@ object_ownercheck(Oid classid, Oid objectid, Oid roleid)
 		table_close(rel, AccessShareLock);
 	}
 
-	return has_privs_of_role(roleid, ownerId);
+	return has_privs_of_role(roleid, ownerId, MyDatabaseId);
 }
 
 /*

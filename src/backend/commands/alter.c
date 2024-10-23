@@ -219,7 +219,7 @@ AlterObjectRename_internal(Relation rel, Oid objectId, const char *new_name)
 		Assert(!isnull);
 		ownerId = DatumGetObjectId(datum);
 
-		if (!has_privs_of_role(GetUserId(), DatumGetObjectId(ownerId)))
+		if (!has_privs_of_role(GetUserId(), DatumGetObjectId(ownerId), MyDatabaseId))
 			aclcheck_error(ACLCHECK_NOT_OWNER, get_object_type(classId, objectId),
 						   old_name);
 
@@ -739,7 +739,7 @@ AlterObjectNamespace_internal(Relation rel, Oid objid, Oid nspOid)
 		Assert(!isnull);
 		ownerId = DatumGetObjectId(owner);
 
-		if (!has_privs_of_role(GetUserId(), ownerId))
+		if (!has_privs_of_role(GetUserId(), ownerId, MyDatabaseId))
 			aclcheck_error(ACLCHECK_NOT_OWNER, get_object_type(classId, objid),
 						   NameStr(*(DatumGetName(name))));
 
@@ -961,7 +961,7 @@ AlterObjectOwner_internal(Oid classId, Oid objectId, Oid new_ownerId)
 		if (!superuser())
 		{
 			/* must be owner */
-			if (!has_privs_of_role(GetUserId(), old_ownerId))
+			if (!has_privs_of_role(GetUserId(), old_ownerId, MyDatabaseId))
 			{
 				char	   *objname;
 				char		namebuf[NAMEDATALEN];

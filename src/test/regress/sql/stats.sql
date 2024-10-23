@@ -377,6 +377,98 @@ SELECT seq_scan, :'test_last_seq' = last_seq_scan AS seq_ok, idx_scan, :'test_la
 FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
 
 -----
+-- Test that parallel_seq_scan, last_parallel_seq_scan, parallel_idx_scan, last_parallel_idx_scan are correctly maintained
+--
+-- We can't use a temporary table for parallel test. So, perform test using a permanent table,
+-- but disable autovacuum on it. That way autovacuum etc won't
+-- interfere. To be able to check that timestamps increase, we sleep for 100ms
+-- between tests, assuming that there aren't systems with a coarser timestamp
+-- granularity.
+-----
+
+BEGIN;
+CREATE TABLE test_parallel_scan(idx_col int primary key, noidx_col int) WITH (autovacuum_enabled = false);
+INSERT INTO test_parallel_scan(idx_col, noidx_col) SELECT i, i FROM generate_series(1, 10_000) i;
+COMMIT;
+
+VACUUM ANALYZE test_parallel_scan;
+
+SELECT pg_stat_force_next_flush();
+
+SELECT parallel_seq_scan, last_parallel_seq_scan, parallel_idx_scan, last_parallel_idx_scan
+FROM pg_stat_all_tables WHERE relid = 'test_parallel_scan'::regclass;
+
+-- ensure we start out with exactly one parallel index and parallel sequential scan
+BEGIN;
+SET LOCAL parallel_setup_cost TO 0;
+SET LOCAL min_parallel_table_scan_size TO '100kB';
+SET LOCAL min_parallel_index_scan_size TO '100kB';
+SET LOCAL enable_seqscan TO on;
+SET LOCAL enable_indexscan TO on;
+SET LOCAL enable_bitmapscan TO off;
+SET LOCAL enable_indexonlyscan TO off;
+EXPLAIN (COSTS off) SELECT count(*) FROM test_parallel_scan WHERE noidx_col = 1;
+SELECT count(*) FROM test_parallel_scan WHERE noidx_col = 1;
+SET LOCAL enable_seqscan TO off;
+EXPLAIN (COSTS off) SELECT count(*) FROM test_parallel_scan WHERE idx_col BETWEEN 1 AND 6000;
+SELECT count(*) FROM test_parallel_scan WHERE idx_col BETWEEN 1 AND 6000;
+SELECT pg_stat_force_next_flush();
+COMMIT;
+
+-- fetch timestamps from before the next test
+SELECT parallel_seq_scan, parallel_idx_scan
+FROM pg_stat_all_tables WHERE relid = 'test_parallel_scan'::regclass;
+SELECT last_parallel_seq_scan AS test_last_seq, last_parallel_idx_scan AS test_last_idx
+FROM pg_stat_all_tables WHERE relid = 'test_parallel_scan'::regclass \gset
+SELECT pg_sleep(0.1); -- assume a minimum timestamp granularity of 100ms
+
+-- cause one parallel sequential scan
+BEGIN;
+SET LOCAL parallel_setup_cost TO 0;
+SET LOCAL min_parallel_table_scan_size TO '100kB';
+SET LOCAL min_parallel_index_scan_size TO '100kB';
+SET LOCAL enable_seqscan TO on;
+SET LOCAL enable_indexscan TO off;
+SET LOCAL enable_bitmapscan TO off;
+SET LOCAL enable_indexonlyscan TO off;
+EXPLAIN (COSTS off) SELECT count(*) FROM test_parallel_scan WHERE noidx_col = 1;
+SELECT count(*) FROM test_parallel_scan WHERE noidx_col = 1;
+SELECT pg_stat_force_next_flush();
+COMMIT;
+-- check that just sequential scan stats were incremented
+SELECT parallel_seq_scan, :'test_last_seq' < last_parallel_seq_scan AS seq_ok,
+       parallel_idx_scan, :'test_last_idx' = last_parallel_idx_scan AS idx_ok
+FROM pg_stat_all_tables WHERE relid = 'test_parallel_scan'::regclass;
+
+-- fetch timestamps from before the next test
+SELECT last_parallel_seq_scan AS test_last_seq, last_parallel_idx_scan AS test_last_idx
+FROM pg_stat_all_tables WHERE relid = 'test_parallel_scan'::regclass \gset
+SELECT pg_sleep(0.1);
+
+-- cause one parallel index scan
+BEGIN;
+SET LOCAL parallel_setup_cost TO 0;
+SET LOCAL min_parallel_table_scan_size TO '100kB';
+SET LOCAL min_parallel_index_scan_size TO '100kB';
+SET LOCAL enable_seqscan TO off;
+SET LOCAL enable_indexscan TO on;
+SET LOCAL enable_bitmapscan TO off;
+SET LOCAL enable_indexonlyscan TO off;
+EXPLAIN (COSTS off) SELECT count(*) FROM test_parallel_scan WHERE idx_col BETWEEN 1 AND 6000;
+SELECT count(*) FROM test_parallel_scan WHERE idx_col BETWEEN 1 AND 6000;
+SELECT pg_stat_force_next_flush();
+COMMIT;
+-- check that just index scan stats were incremented
+SELECT parallel_seq_scan, :'test_last_seq' = last_parallel_seq_scan AS seq_ok,
+       parallel_idx_scan, :'test_last_idx' < last_parallel_idx_scan AS idx_ok
+FROM pg_stat_all_tables WHERE relid = 'test_parallel_scan'::regclass;
+
+-- fetch timestamps from before the next test
+SELECT last_parallel_seq_scan AS test_last_seq, last_parallel_idx_scan AS test_last_idx
+FROM pg_stat_all_tables WHERE relid = 'test_parallel_scan'::regclass \gset
+SELECT pg_sleep(0.1);
+
+-----
 -- Test reset of some stats for shared table
 -----
 

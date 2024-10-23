@@ -420,7 +420,7 @@ spgrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	resetSpGistScanOpaque(so);
 
 	/* count an indexscan for stats */
-	pgstat_count_index_scan(scan->indexRelation);
+	pgstat_count_index_scan(scan->indexRelation, false);
 }
 
 void

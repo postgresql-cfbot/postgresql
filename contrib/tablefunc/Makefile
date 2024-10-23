@@ -3,7 +3,7 @@
 MODULES = tablefunc
 
 EXTENSION = tablefunc
-DATA = tablefunc--1.0.sql
+DATA = tablefunc--1.0.sql tablefunc--1.0--1.1.sql
 PGFILEDESC = "tablefunc - various functions that return tables"
 
 REGRESS = tablefunc

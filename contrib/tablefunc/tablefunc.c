@@ -42,7 +42,9 @@
 #include "lib/stringinfo.h"
 #include "miscadmin.h"
 #include "tablefunc.h"
+#include "utils/array.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 
 PG_MODULE_MAGIC;
 
@@ -90,6 +92,12 @@ typedef struct
 	float8		carry_val;		/* hold second generated value */
 	bool		use_carry;		/* use second generated value */
 } normal_rand_fctx;
+
+typedef struct
+{
+	FunctionCallInfo random_val_fcinfo;
+	FunctionCallInfo random_len_fcinfo;
+} rand_array_fctx;
 
 #define xpfree(var_) \
 	do { \
@@ -268,6 +276,166 @@ normal_rand(PG_FUNCTION_ARGS)
 		/* do when there is no more left */
 		SRF_RETURN_DONE(funcctx);
 }
+
+/*
+ * rand_array_internal
+ *		Fill the requested number of array with random values for the
+ *		given range and type into fcinfo.
+ *
+ * Inputs:
+ * fcinfo: includes the number of rows, minlen and maxlen for the array,
+ * minval and maxval for the element in the array.
+ * datatype: the data type for the array element.
+ */
+static Datum
+rand_array_internal(FunctionCallInfo fcinfo, Oid datatype)
+{
+	FuncCallContext *funcctx;
+	rand_array_fctx *fctx;
+
+	/* stuff done only on the first call of the function */
+	if (SRF_IS_FIRSTCALL())
+	{
+		int num_tuples = PG_GETARG_INT32(0);
+		int minlen = PG_GETARG_INT32(1);
+		int maxlen = PG_GETARG_INT32(2);
+		Datum minval = PG_GETARG_DATUM(3),
+			maxval = PG_GETARG_DATUM(4);
+
+		MemoryContext oldcontext;
+
+		FmgrInfo	*random_len_flinfo, *random_val_flinfo;
+		FunctionCallInfo random_len_fcinfo, random_val_fcinfo;
+		Oid random_fn_oid;
+
+		switch(datatype)
+		{
+			case INT4OID:
+				random_fn_oid = F_RANDOM_INT4_INT4;
+				break;
+			case INT8OID:
+				random_fn_oid = F_RANDOM_INT8_INT8;
+				break;
+			case NUMERICOID:
+				random_fn_oid = F_RANDOM_NUMERIC_NUMERIC;
+				break;
+			default:
+				elog(ERROR, "unsupported type %u for rand_array function",
+					 datatype);
+				break;
+		}
+
+		if (num_tuples < 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					 errmsg("number of rows cannot be negative")));
+
+		if (minlen < 0)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("minlen must be greater than or equal to zero"));
+
+		if (maxlen < minlen)
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+					errmsg("maxlen must be greater than or equal to minlen"));
+
+		/* create a function context for cross-call persistence */
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		/*
+		 * switch to memory context appropriate for multiple function calls
+		 */
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		funcctx->max_calls = num_tuples;
+
+		/* allocate memory for user context */
+		fctx = (rand_array_fctx *) palloc(sizeof(rand_array_fctx));
+
+		/* build the random_len_fcinfo */
+		random_len_fcinfo = (FunctionCallInfo) palloc0(SizeForFunctionCallInfo(2));
+		random_len_flinfo = (FmgrInfo *) palloc0(sizeof(FmgrInfo));
+		fmgr_info(F_RANDOM_INT4_INT4, random_len_flinfo);
+		InitFunctionCallInfoData(*random_len_fcinfo, random_len_flinfo, 2,
+								 InvalidOid, NULL, NULL);
+
+		random_len_fcinfo->args[0].isnull = false;
+		random_len_fcinfo->args[1].isnull = false;
+		random_len_fcinfo->args[0].value = Int32GetDatum(minlen);
+		random_len_fcinfo->args[1].value = Int32GetDatum(maxlen);
+
+		/* build the random_val_fcinfo for the specified data type */
+		random_val_fcinfo = (FunctionCallInfo) palloc0(SizeForFunctionCallInfo(2));
+		random_val_flinfo = (FmgrInfo *) palloc0(sizeof(FmgrInfo));
+		fmgr_info(random_fn_oid, random_val_flinfo);
+		InitFunctionCallInfoData(*random_val_fcinfo, random_val_flinfo, 2,
+								 InvalidOid, NULL, NULL);
+
+		random_val_fcinfo->args[0].isnull = false;
+		random_val_fcinfo->args[1].isnull = false;
+		random_val_fcinfo->args[0].value = minval;
+		random_val_fcinfo->args[1].value = maxval;
+
+		fctx->random_val_fcinfo = random_val_fcinfo;
+		fctx->random_len_fcinfo = random_len_fcinfo;
+
+		funcctx->user_fctx = fctx;
+
+		MemoryContextSwitchTo(oldcontext);
+	}
+
+	/* stuff done on every call of the function */
+	funcctx = SRF_PERCALL_SETUP();
+
+	fctx = funcctx->user_fctx;
+
+	if (funcctx->call_cntr < funcctx->max_calls)
+	{
+		int		array_len;
+		int		i;
+		Datum	*results;
+
+		array_len = Int32GetDatum(FunctionCallInvoke(fctx->random_len_fcinfo));
+
+		results = palloc(array_len * sizeof(Datum));
+
+		for(i = 0; i < array_len; i++)
+			results[i] = FunctionCallInvoke(fctx->random_val_fcinfo);
+
+
+		SRF_RETURN_NEXT(funcctx, PointerGetDatum(
+							construct_array_builtin(results, array_len, datatype)));
+	}
+	else
+		/* do when there is no more left */
+		SRF_RETURN_DONE(funcctx);
+}
+
+
+PG_FUNCTION_INFO_V1(rand_array_int);
+Datum
+rand_array_int(PG_FUNCTION_ARGS)
+{
+	return rand_array_internal(fcinfo, INT4OID);
+}
+
+
+PG_FUNCTION_INFO_V1(rand_array_bigint);
+Datum
+rand_array_bigint(PG_FUNCTION_ARGS)
+{
+	return rand_array_internal(fcinfo, INT8OID);
+}
+
+
+PG_FUNCTION_INFO_V1(rand_array_numeric);
+Datum
+rand_array_numeric(PG_FUNCTION_ARGS)
+{
+	return rand_array_internal(fcinfo, NUMERICOID);
+}
+
 
 /*
  * get_normal_pair()

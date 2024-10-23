@@ -110,7 +110,7 @@ $node_standby->stop;
 # segment 000000020000000000000003, before the timeline switching
 # record.  (They are also present in the
 # 000000010000000000000003.partial file, but .partial files are not
-# used automatically.)
+# used when recovering along the latest timeline by default.)
 
 # Now test PITR to the recovery target.  It should find the WAL in
 # segment 000000020000000000000003, but not follow the timeline switch
@@ -172,5 +172,50 @@ $node_pitr2->poll_query_until('postgres', "SELECT pg_is_in_recovery() = 'f';")
 # Verify that we can see the row inserted after the PITR.
 $result = $node_pitr2->safe_psql('postgres', "SELECT max(i) FROM foo;");
 is($result, qq{3}, "check table contents after point-in-time recovery");
+
+# The 000000010000000000000003.partial file could have been generated
+# by pg_receivewal without any standby node involved. In this case, we
+# wouldn't be able to recover from 000000020000000000000003.
+# Now, test PITR to the initial recovery target staying on the backup's
+# current timeline, trying to fetch the data from the
+# 000000010000000000000003.partial file.
+
+my $node_pitr3 = PostgreSQL::Test::Cluster->new('node_pitr3');
+$node_pitr3->init_from_backup(
+	$node_primary, $backup_name,
+	standby => 0,
+	has_restoring => 1);
+$node_pitr3->append_conf(
+	'postgresql.conf', qq{
+recovery_target_name = 'rp'
+recovery_target_action = 'promote'
+recovery_target_timeline = 'current'
+});
+
+my $log_offset = -s $node_pitr3->logfile;
+$node_pitr3->start;
+
+my $msg_logged = 0;
+my $max_attempts = $PostgreSQL::Test::Utils::timeout_default;
+while ($max_attempts-- >= 0)
+{
+	if ($node_pitr3->log_contains(
+			"restored log file \"000000010000000000000003.partial\" from archive",
+			$log_offset))
+	{
+		$msg_logged = 1;
+		last;
+	}
+	sleep 1;
+}
+ok($msg_logged, "restored 000000010000000000000003.partial");
+
+# Wait until recovery finishes.
+$node_pitr3->poll_query_until('postgres', "SELECT pg_is_in_recovery() = 'f';")
+  or die "Timed out while waiting for PITR promotion";
+
+# Check that we see the data we expect.
+$result = $node_pitr3->safe_psql('postgres', "SELECT max(i) FROM foo;");
+is($result, qq{1}, "check table contents after point-in-time recovery");
 
 done_testing();

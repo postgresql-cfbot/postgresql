@@ -74,7 +74,8 @@ free_attrmap(AttrMap *map)
 AttrMap *
 build_attrmap_by_position(TupleDesc indesc,
 						  TupleDesc outdesc,
-						  const char *msg)
+						  const char *msg,
+						  bool	extra)
 {
 	AttrMap    *attrMap;
 	int			nincols;
@@ -115,15 +116,30 @@ build_attrmap_by_position(TupleDesc indesc,
 			/* Found matching column, now check type */
 			if (atttypid != att->atttypid ||
 				(atttypmod != att->atttypmod && atttypmod >= 0))
+			{
+				char *returned_type;
+				char *expected_type;
+
+				returned_type = format_type_with_typemod(att->atttypid,
+														 att->atttypmod);
+				expected_type = format_type_with_typemod(atttypid,
+														 atttypmod);
+
 				ereport(ERROR,
 						(errcode(ERRCODE_DATATYPE_MISMATCH),
 						 errmsg_internal("%s", _(msg)),
-						 errdetail("Returned type %s does not match expected type %s in column %d.",
-								   format_type_with_typemod(att->atttypid,
-															att->atttypmod),
-								   format_type_with_typemod(atttypid,
-															atttypmod),
-								   noutcols)));
+						 extra ?
+						 errdetail("Returned type %s does not match expected type %s in column \"%s\" (position %d).",
+									returned_type,
+									expected_type,
+									pstrdup(NameStr(att->attname)),
+									noutcols)
+						 :
+						 errdetail("Returned type %s does not match expected type %s in column position %d.",
+									returned_type,
+									expected_type,
+									noutcols)));
+			}
 			attrMap->attnums[i] = (AttrNumber) (j + 1);
 			j++;
 			break;

@@ -28,7 +28,7 @@ create or replace function retc(int) returns two_int8s language plpgsql as
 $$ begin return row($1,1); end $$;
 select retc(42);
 ERROR:  returned record type does not match expected record type
-DETAIL:  Returned type integer does not match expected type bigint in column 1.
+DETAIL:  Returned type integer does not match expected type bigint in column position 1.
 CONTEXT:  PL/pgSQL function retc(integer) while casting return value to function's return type
 -- nor extra columns
 create or replace function retc(int) returns two_int8s language plpgsql as
@@ -50,7 +50,7 @@ create or replace function retc(int) returns two_int8s language plpgsql as
 $$ declare r record; begin r := row($1,1); return r; end $$;
 select retc(42);
 ERROR:  returned record type does not match expected record type
-DETAIL:  Returned type integer does not match expected type bigint in column 1.
+DETAIL:  Returned type integer does not match expected type bigint in column position 1.
 CONTEXT:  PL/pgSQL function retc(integer) while casting return value to function's return type
 create or replace function retc(int) returns two_int8s language plpgsql as
 $$ declare r record; begin r := row($1::int8, 1::int8, 42); return r; end $$;
@@ -386,7 +386,7 @@ DETAIL:  Number of returned columns (2) does not match expected column count (3)
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 ERROR:  returned record type does not match expected record type
-DETAIL:  Returned type integer does not match expected type bigint in column 2.
+DETAIL:  Returned type integer does not match expected type bigint in column position 2.
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 -- same with an intermediate record variable
 create or replace function returnsrecord(int) returns record language plpgsql as
@@ -409,7 +409,7 @@ DETAIL:  Number of returned columns (2) does not match expected column count (3)
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 ERROR:  returned record type does not match expected record type
-DETAIL:  Returned type integer does not match expected type bigint in column 2.
+DETAIL:  Returned type integer does not match expected type bigint in column position 2.
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 -- should work the same with a missing column in the actual result value
 create table has_hole(f1 int, f2 int, f3 int);
@@ -434,7 +434,7 @@ DETAIL:  Number of returned columns (2) does not match expected column count (3)
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 ERROR:  returned record type does not match expected record type
-DETAIL:  Returned type integer does not match expected type bigint in column 2.
+DETAIL:  Returned type integer does not match expected type bigint in column position 2.
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 -- same with an intermediate record variable
 create or replace function returnsrecord(int) returns record language plpgsql as
@@ -457,7 +457,7 @@ DETAIL:  Number of returned columns (2) does not match expected column count (3)
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 select * from returnsrecord(42) as r(x int, y bigint);  -- fail
 ERROR:  returned record type does not match expected record type
-DETAIL:  Returned type integer does not match expected type bigint in column 2.
+DETAIL:  Returned type integer does not match expected type bigint in column position 2.
 CONTEXT:  PL/pgSQL function returnsrecord(integer) while casting return value to function's return type
 -- check access to a field of an argument declared "record"
 create function getf1(x record) returns int language plpgsql as

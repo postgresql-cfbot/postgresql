@@ -31,9 +31,20 @@ WHERE oid in ('regular_sized_index'::regclass, 'typically_sized_index'::regclass
   pg_relation_size(oid) >=
   pg_size_bytes(current_setting('min_parallel_index_scan_size'));
 
+-- Get a reference for parallel stats in pg_stat_database
+SELECT sum(parallel_maint_workers_to_launch) AS parallel_maint_workers_to_launch_before,
+       sum(parallel_maint_workers_launched) AS parallel_maint_workers_launched_before
+FROM pg_stat_database \gset
+
 -- Parallel VACUUM with B-Tree page deletions, ambulkdelete calls:
 DELETE FROM parallel_vacuum_table;
 VACUUM (PARALLEL 4, INDEX_CLEANUP ON) parallel_vacuum_table;
+
+-- Check parallel stats in pg_stat_database
+SELECT pg_stat_force_next_flush();
+SELECT sum(parallel_maint_workers_to_launch) > :'parallel_maint_workers_to_launch_before' AS maint_wrk_to_launch,
+       sum(parallel_maint_workers_launched) > :'parallel_maint_workers_launched_before' AS maint_wrk_launched
+FROM pg_stat_database;
 
 -- Since vacuum_in_leader_small_index uses deduplication, we expect an
 -- assertion failure with bug #17245 (in the absence of bugfix):

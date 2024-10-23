@@ -208,6 +208,9 @@ struct ParallelVacuumState
 	int			nindexes_parallel_cleanup;
 	int			nindexes_parallel_condcleanup;
 
+	int			nworkers_to_launch;
+	int			nworkers_launched;
+
 	/* Buffer access strategy used by leader process */
 	BufferAccessStrategy bstrategy;
 
@@ -362,6 +365,9 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 		if ((vacoptions & VACUUM_OPTION_PARALLEL_COND_CLEANUP) != 0)
 			pvs->nindexes_parallel_condcleanup++;
 	}
+	pvs->nworkers_to_launch = 0;
+	pvs->nworkers_launched = 0;
+
 	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_INDEX_STATS, indstats);
 	pvs->indstats = indstats;
 
@@ -436,6 +442,12 @@ void
 parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 {
 	Assert(!IsParallelWorker());
+
+	if (pvs->nworkers_to_launch > 0)
+		pgstat_update_parallel_maint_workers_stats(
+			(PgStat_Counter) pvs->pcxt->nworkers_to_launch,
+			(PgStat_Counter) pvs->pcxt->nworkers_launched
+		);
 
 	/* Copy the updated statistics */
 	for (int i = 0; i < pvs->nindexes; i++)
@@ -739,6 +751,9 @@ parallel_vacuum_process_all_indexes(ParallelVacuumState *pvs, int num_index_scan
 
 		for (int i = 0; i < pvs->pcxt->nworkers_launched; i++)
 			InstrAccumParallelQuery(&pvs->buffer_usage[i], &pvs->wal_usage[i]);
+
+		pvs->nworkers_to_launch += pvs->pcxt->nworkers_to_launch;
+		pvs->nworkers_launched += pvs->pcxt->nworkers_launched;
 	}
 
 	/*

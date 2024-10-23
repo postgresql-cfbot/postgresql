@@ -6886,7 +6886,7 @@ listOpFamilyOperators(const char *access_method_pattern,
 	printQueryOpt myopt = pset.popt;
 	bool		have_where = false;
 
-	static const bool translate_columns[] = {false, false, false, false, false, false};
+	static const bool translate_columns[] = {false, false, false, false, false, false, false};
 
 	initPQExpBuffer(&buf);
 
@@ -6914,8 +6914,15 @@ listOpFamilyOperators(const char *access_method_pattern,
 
 	if (verbose)
 		appendPQExpBuffer(&buf,
-						  ", ofs.opfname AS \"%s\"\n",
-						  gettext_noop("Sort opfamily"));
+						  ", ofs.opfname AS \"%s\",\n"
+						  "  CASE\n"
+						  "    WHEN p.proleakproof THEN '%s'\n"
+						  "    ELSE '%s'\n"
+						  "  END AS \"%s\"\n",
+						  gettext_noop("Sort opfamily"),
+						  gettext_noop("yes"),
+						  gettext_noop("no"),
+						  gettext_noop("Leak-proof"));
 	appendPQExpBufferStr(&buf,
 						 "FROM pg_catalog.pg_amop o\n"
 						 "  LEFT JOIN pg_catalog.pg_opfamily of ON of.oid = o.amopfamily\n"
@@ -6923,7 +6930,9 @@ listOpFamilyOperators(const char *access_method_pattern,
 						 "  LEFT JOIN pg_catalog.pg_namespace nsf ON of.opfnamespace = nsf.oid\n");
 	if (verbose)
 		appendPQExpBufferStr(&buf,
-							 "  LEFT JOIN pg_catalog.pg_opfamily ofs ON ofs.oid = o.amopsortfamily\n");
+							 "  LEFT JOIN pg_catalog.pg_opfamily ofs ON ofs.oid = o.amopsortfamily\n"
+							 "  LEFT JOIN pg_catalog.pg_operator op ON op.oid = o.amopopr\n"
+							 "  LEFT JOIN pg_catalog.pg_proc p ON p.oid = op.oprcode\n");
 
 	if (access_method_pattern)
 	{

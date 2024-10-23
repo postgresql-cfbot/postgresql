@@ -334,3 +334,32 @@ RESET parallel_setup_cost;
 EXPLAIN (COSTS OFF)
 SELECT x, sum(y), avg(y), count(*) FROM pagg_tab_para GROUP BY x HAVING avg(y) < 7 ORDER BY 1, 2, 3;
 SELECT x, sum(y), avg(y), count(*) FROM pagg_tab_para GROUP BY x HAVING avg(y) < 7 ORDER BY 1, 2, 3;
+
+
+-- Add collation check between groupkey and partkey.
+-- If groupkey's collation is not equal to partkey's, we cannot use PARTITIONWISE_AGGREGATE_FULL.
+SET enable_partitionwise_aggregate TO true;
+SET enable_partitionwise_join TO true;
+SET max_parallel_workers_per_gather TO 0;
+SET enable_incremental_sort TO off;
+
+CREATE COLLATION case_insensitive (
+    provider = icu,
+    locale = 'und-u-ks-level2',
+    deterministic = false
+);
+
+CREATE TABLE pagg_tab3 (c text collate case_insensitive) PARTITION BY LIST(c collate "C");
+CREATE TABLE pagg_tab3_p1 PARTITION OF pagg_tab3 FOR VALUES IN ('a', 'b', 'c', 'd');
+CREATE TABLE pagg_tab3_p2 PARTITION OF pagg_tab3 FOR VALUES IN ('e', 'f', 'A');
+CREATE TABLE pagg_tab3_p3 PARTITION OF pagg_tab3 FOR VALUES IN ('B', 'C', 'D', 'E');
+INSERT INTO pagg_tab3 SELECT substr('abcdeABCDE', (i % 10) +1 , 1) FROM generate_series(0, 2999) i;
+ANALYZE pagg_tab3;
+EXPLAIN (COSTS OFF)
+SELECT upper(c collate case_insensitive), count(c) FROM pagg_tab3 GROUP BY c collate case_insensitive ORDER BY 1;
+SELECT upper(c collate case_insensitive), count(c) FROM pagg_tab3 GROUP BY c collate case_insensitive ORDER BY 1;
+
+RESET enable_partitionwise_aggregate;
+RESET enable_partitionwise_join;
+RESET max_parallel_workers_per_gather;
+RESET enable_incremental_sort;

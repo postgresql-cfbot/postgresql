@@ -643,6 +643,8 @@
    until the situation is resolved. A slow or failed standby server that
    uses a replication slot will have the same effect (see
    <xref linkend="streaming-replication-slots"/>).
+   Similarly, if WAL summarization is enabled, old segments are kept
+   until they are summarized.
   </para>
 
   <para>

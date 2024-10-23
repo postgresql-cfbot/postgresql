@@ -1321,7 +1321,7 @@ CopyFrom(CopyFromState cstate)
 	/* Done, clean up */
 	error_context_stack = errcallback.previous;
 
-	if (cstate->opts.on_error != COPY_ON_ERROR_STOP &&
+	if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE &&
 		cstate->num_errors > 0 &&
 		cstate->opts.log_verbosity >= COPY_LOG_VERBOSITY_DEFAULT)
 		ereport(NOTICE,
@@ -1474,10 +1474,11 @@ BeginCopyFrom(ParseState *pstate,
 		cstate->escontext->error_occurred = false;
 
 		/*
-		 * Currently we only support COPY_ON_ERROR_IGNORE. We'll add other
-		 * options later
+		 * Currently we only support COPY_ON_ERROR_IGNORE, COPY_ON_ERROR_NULL.
+		 * We'll add other options later
 		 */
-		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE)
+		if (cstate->opts.on_error == COPY_ON_ERROR_IGNORE ||
+			cstate->opts.on_error == COPY_ON_ERROR_NULL)
 			cstate->escontext->details_wanted = false;
 	}
 	else

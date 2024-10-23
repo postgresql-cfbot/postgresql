@@ -961,6 +961,17 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 			{
 				Assert(cstate->opts.on_error != COPY_ON_ERROR_STOP);
 
+				if (cstate->opts.on_error == COPY_ON_ERROR_NULL)
+				{
+					values[m] = (Datum) 0;
+					nulls[m] = true;
+					/*
+					 * set error_occurred to false, so next
+					 * InputFunctionCallSafe call behave sane.
+					*/
+					cstate->escontext->error_occurred = false;
+					continue;
+				}
 				cstate->num_errors++;
 
 				if (cstate->opts.log_verbosity == COPY_LOG_VERBOSITY_VERBOSE)

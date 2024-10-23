@@ -403,12 +403,14 @@ defGetCopyOnErrorChoice(DefElem *def, ParseState *pstate, bool is_from)
 				 parser_errposition(pstate, def->location)));
 
 	/*
-	 * Allow "stop", or "ignore" values.
+	 * Allow "stop", "ignore", "set_to_null" values.
 	 */
 	if (pg_strcasecmp(sval, "stop") == 0)
 		return COPY_ON_ERROR_STOP;
 	if (pg_strcasecmp(sval, "ignore") == 0)
 		return COPY_ON_ERROR_IGNORE;
+	if (pg_strcasecmp(sval, "set_to_null") == 0)
+		return COPY_ON_ERROR_NULL;
 
 	ereport(ERROR,
 			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),

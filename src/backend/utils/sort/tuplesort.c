@@ -395,6 +395,7 @@ struct Sharedsort
 #define REMOVEABBREV(state,stup,count)	((*(state)->base.removeabbrev) (state, stup, count))
 #define COMPARETUP(state,a,b)	((*(state)->base.comparetup) (a, b, state))
 #define WRITETUP(state,tape,stup)	((*(state)->base.writetup) (state, tape, stup))
+#define FLUSHWRITES(state,tape)	((state)->base.flushwrites ? (*(state)->base.flushwrites) (state, tape) : (void) 0)
 #define READTUP(state,stup,tape,len) ((*(state)->base.readtup) (state, stup, tape, len))
 #define FREESTATE(state)	((state)->base.freestate ? (*(state)->base.freestate) (state) : (void) 0)
 #define LACKMEM(state)		((state)->availMem < 0 && !(state)->slabAllocatorUsed)
@@ -2244,6 +2245,8 @@ mergeonerun(Tuplesortstate *state)
 		}
 	}
 
+	FLUSHWRITES(state, state->destTape);
+
 	/*
 	 * When the heap empties, we're done.  Write an end-of-run marker on the
 	 * output tape.
@@ -2368,6 +2371,8 @@ dumptuples(Tuplesortstate *state, bool alltuples)
 
 		WRITETUP(state, state->destTape, stup);
 	}
+
+	FLUSHWRITES(state, state->destTape);
 
 	state->memtupcount = 0;
 

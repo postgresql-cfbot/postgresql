@@ -1984,6 +1984,50 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 	*run_cost = cpu_operator_cost * tuples;
 }
 
+static Expr *
+identify_sort_expression(PlannerInfo *root, PathKey *key, Relids relids)
+{
+	EquivalenceMember  *candidate = linitial(key->pk_eclass->ec_members);
+	double 				ndistinct = -1.0; /* Not defined */
+
+	if (root == NULL || list_length(key->pk_eclass->ec_members) == 1)
+		/* Fast path */
+		return candidate->em_expr;
+
+	foreach_node(EquivalenceMember, em, key->pk_eclass->ec_members)
+	{
+		VariableStatData	vardata;
+		bool				isdefault = true;
+		double				ndist = -1.0;
+
+		/* Sorting over single partition? */
+		if (em->em_is_child && bms_num_members(relids) > 1)
+			continue;
+
+		if (!bms_is_subset(em->em_relids, relids))
+			/*
+			 * Avoid expressions not based on a table column. At least, the
+			 * candidate value already initialised as the first EC member.
+			 */
+			continue;
+
+		/* Let's check candidate's ndistinct value */
+		examine_variable(root, (Node *) em->em_expr, 0, &vardata);
+		if (HeapTupleIsValid(vardata.statsTuple))
+			ndist = get_variable_numdistinct(&vardata, &isdefault);
+		ReleaseVariableStats(vardata);
+
+		if (ndistinct < 0.0 || (!isdefault && ndist < ndistinct))
+		{
+			candidate = em;
+			ndistinct = ndist;
+		}
+	}
+
+	Assert(candidate != NULL);
+	return candidate->em_expr;
+}
+
 /*
  * cost_incremental_sort
  * 	Determines and returns the cost of sorting a relation incrementally, when
@@ -1999,6 +2043,7 @@ cost_tuplesort(Cost *startup_cost, Cost *run_cost,
 void
 cost_incremental_sort(Path *path,
 					  PlannerInfo *root, List *pathkeys, int presorted_keys,
+					  Relids relids,
 					  int input_disabled_nodes,
 					  Cost input_startup_cost, Cost input_total_cost,
 					  double input_tuples, int width, Cost comparison_cost, int sort_mem,
@@ -2053,21 +2098,20 @@ cost_incremental_sort(Path *path,
 	foreach(l, pathkeys)
 	{
 		PathKey    *key = (PathKey *) lfirst(l);
-		EquivalenceMember *member = (EquivalenceMember *)
-			linitial(key->pk_eclass->ec_members);
+		Expr	   *expr = identify_sort_expression(root, key, relids);
 
 		/*
 		 * Check if the expression contains Var with "varno 0" so that we
 		 * don't call estimate_num_groups in that case.
 		 */
-		if (bms_is_member(0, pull_varnos(root, (Node *) member->em_expr)))
+		if (bms_is_member(0, pull_varnos(root, (Node *) expr)))
 		{
 			unknown_varno = true;
 			break;
 		}
 
 		/* expression not containing any Vars with "varno 0" */
-		presortedExprs = lappend(presortedExprs, member->em_expr);
+		presortedExprs = lappend(presortedExprs, expr);
 
 		if (foreach_current_index(l) + 1 >= presorted_keys)
 			break;

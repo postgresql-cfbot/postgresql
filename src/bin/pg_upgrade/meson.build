@@ -10,6 +10,7 @@ pg_upgrade_sources = files(
   'info.c',
   'option.c',
   'parallel.c',
+  'segresize.c',
   'pg_upgrade.c',
   'relfilenumber.c',
   'server.c',

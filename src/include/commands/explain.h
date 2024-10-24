@@ -141,6 +141,9 @@ extern void ExplainOpenGroup(const char *objtype, const char *labelname,
 							 bool labeled, ExplainState *es);
 extern void ExplainCloseGroup(const char *objtype, const char *labelname,
 							  bool labeled, ExplainState *es);
+extern void show_scan_qual(List *qual, const char *qlabel,
+							PlanState *planstate, List *ancestors,
+							ExplainState *es);
 
 extern DestReceiver *CreateExplainSerializeDestReceiver(ExplainState *es);
 

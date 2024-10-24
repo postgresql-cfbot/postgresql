@@ -869,3 +869,28 @@ select ts_headline('english', '{"a": "aaa bbb", "b": {"c": "ccc ddd fff", "c1": 
 select ts_headline('null'::json, tsquery('aaa & bbb'));
 select ts_headline('{}'::json, tsquery('aaa & bbb'));
 select ts_headline('[]'::json, tsquery('aaa & bbb'));
+
+-- simple dot notation
+drop table if exists test_json_dot;
+create table test_json_dot(id int, test_json json);
+insert into test_json_dot select 1, '{"a": 1, "b": 42}'::json;
+insert into test_json_dot select 1, '{"a": 2, "b": {"c": 42}}'::json;
+insert into test_json_dot select 1, '{"a": 3, "b": {"c": "42"}, "d":[11, 12]}'::json;
+insert into test_json_dot select 1, '{"a": 3, "b": {"c": "42"}, "d":[{"x": [11, 12]}, {"y": [21, 22]}]}'::json;
+
+-- member object access
+select (test_json_dot.test_json).b, json_query(test_json, 'lax $.b' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+select (test_json_dot.test_json).b.c, json_query(test_json, 'lax $.b.c' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+select (test_json_dot.test_json).d, json_query(test_json, 'lax $.d' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+select (test_json_dot.test_json)."d", json_query(test_json, 'lax $.d' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+select (test_json_dot.test_json).'d' from test_json_dot;
+select (test_json_dot.test_json)['d'] from test_json_dot;
+
+-- array element access
+select (test_json_dot.test_json).d->0 from test_json_dot;
+select (test_json_dot.test_json).d[0], json_query(test_json, 'lax $.d[0]' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+select (test_json_dot.test_json).d[1], json_query(test_json, 'lax $.d[1]' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;
+select (test_json_dot.test_json).d[0:] from test_json_dot;
+select (test_json_dot.test_json).d[0::int] from test_json_dot;
+select (test_json_dot.test_json).d[0::float] from test_json_dot;
+select (test_json_dot.test_json).d[0].x[1], json_query(test_json, 'lax $.d[0].x[1]' WITH CONDITIONAL WRAPPER NULL ON EMPTY NULL ON ERROR) as expected from test_json_dot;

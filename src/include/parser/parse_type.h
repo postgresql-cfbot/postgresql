@@ -57,5 +57,6 @@ extern bool parseTypeString(const char *str, Oid *typeid_p, int32 *typmod_p,
 
 /* true if typeid is composite, or domain over composite, but not RECORD */
 #define ISCOMPLEX(typeid) (typeOrDomainTypeRelid(typeid) != InvalidOid)
+#define ISJSON(typeid) (typeid == JSONOID || typeid == JSONBOID)
 
 #endif							/* PARSE_TYPE_H */

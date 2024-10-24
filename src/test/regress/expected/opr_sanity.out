@@ -126,9 +126,12 @@ WHERE p1.oid < p2.oid AND
      p1.proretset != p2.proretset OR
      p1.provolatile != p2.provolatile OR
      p1.pronargs != p2.pronargs);
- oid | proname | oid | proname 
------+---------+-----+---------
-(0 rows)
+ oid  | proname  | oid  | proname 
+------+----------+------+---------
+ 2405 | int2send | 8577 | bytea
+ 2407 | int4send | 8578 | bytea
+ 2409 | int8send | 8579 | bytea
+(3 rows)
 
 -- Look for uses of different type OIDs in the argument/result type fields
 -- for different aliases of the same built-in function.
@@ -876,6 +879,12 @@ uuid_extract_timestamp(uuid)
 uuid_extract_version(uuid)
 crc32(bytea)
 crc32c(bytea)
+bytea(smallint)
+bytea(integer)
+bytea(bigint)
+int2(bytea)
+int4(bytea)
+int8(bytea)
 bytea_larger(bytea,bytea)
 bytea_smaller(bytea,bytea)
 -- restore normal output mode

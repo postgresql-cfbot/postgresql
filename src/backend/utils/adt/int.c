@@ -331,6 +331,61 @@ int4send(PG_FUNCTION_ARGS)
 
 
 /*
+ *		Common code for bytea_int2, bytea_int4 and bytea_int8
+ */
+static int64
+bytea_integer(bytea* v, int max_size)
+{
+	int 	len = VARSIZE_ANY_EXHDR(v);
+	int 	offset = 0;
+	int64 	result = 0;
+
+	if (len > max_size)
+		ereport(ERROR,
+			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+			errmsg("bytea size %d out of valid range, 0..%d",
+					len, max_size)));
+	while (len--)
+	{
+		result = result << 8;
+		result |= ((unsigned char *) VARDATA_ANY(v))[offset];
+		offset++;
+	}
+
+	return result;
+}
+
+/*
+ *		bytea_int2			- converts bytea to int2
+ */
+Datum
+bytea_int2(PG_FUNCTION_ARGS)
+{
+	bytea	*v = PG_GETARG_BYTEA_PP(0);
+	PG_RETURN_INT16((int16)bytea_integer(v, sizeof(int16)));
+}
+
+/*
+ *		bytea_int4			- converts bytea to int4
+ */
+Datum
+bytea_int4(PG_FUNCTION_ARGS)
+{
+	bytea	*v = PG_GETARG_BYTEA_PP(0);
+	PG_RETURN_INT32((int32)bytea_integer(v, sizeof(int32)));
+}
+
+/*
+ *		bytea_int8			- converts bytea to int8
+ */
+Datum
+bytea_int8(PG_FUNCTION_ARGS)
+{
+	bytea	*v = PG_GETARG_BYTEA_PP(0);
+	PG_RETURN_INT64(bytea_integer(v, sizeof(int64)));
+}
+
+/*
  *		===================
  *		CONVERSION ROUTINES
  *		===================

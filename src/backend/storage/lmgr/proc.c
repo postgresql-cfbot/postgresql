@@ -188,7 +188,6 @@ InitProcGlobal(void)
 	/*
 	 * Initialize the data structures.
 	 */
-	ProcGlobal->spins_per_delay = DEFAULT_SPINS_PER_DELAY;
 	dlist_init(&ProcGlobal->freeProcs);
 	dlist_init(&ProcGlobal->autovacFreeProcs);
 	dlist_init(&ProcGlobal->bgworkerFreeProcs);
@@ -380,13 +379,8 @@ InitProcess(void)
 	/*
 	 * Try to get a proc struct from the appropriate free list.  If this
 	 * fails, we must be out of PGPROC structures (not to mention semaphores).
-	 *
-	 * While we are holding the ProcStructLock, also copy the current shared
-	 * estimate of spins_per_delay to local storage.
 	 */
 	SpinLockAcquire(ProcStructLock);
-
-	set_spins_per_delay(ProcGlobal->spins_per_delay);
 
 	if (!dlist_is_empty(procgloballist))
 	{
@@ -585,13 +579,8 @@ InitAuxiliaryProcess(void)
 	/*
 	 * We use the ProcStructLock to protect assignment and releasing of
 	 * AuxiliaryProcs entries.
-	 *
-	 * While we are holding the ProcStructLock, also copy the current shared
-	 * estimate of spins_per_delay to local storage.
 	 */
 	SpinLockAcquire(ProcStructLock);
-
-	set_spins_per_delay(ProcGlobal->spins_per_delay);
 
 	/*
 	 * Find a free auxproc ... *big* trouble if there isn't one ...
@@ -988,9 +977,6 @@ ProcKill(int code, Datum arg)
 		dlist_push_tail(procgloballist, &proc->links);
 	}
 
-	/* Update shared estimate of spins_per_delay */
-	ProcGlobal->spins_per_delay = update_spins_per_delay(ProcGlobal->spins_per_delay);
-
 	SpinLockRelease(ProcStructLock);
 
 	/* wake autovac launcher if needed -- see comments in FreeWorkerInfo */
@@ -1041,9 +1027,6 @@ AuxiliaryProcKill(int code, Datum arg)
 	proc->pid = 0;
 	proc->vxid.procNumber = INVALID_PROC_NUMBER;
 	proc->vxid.lxid = InvalidTransactionId;
-
-	/* Update shared estimate of spins_per_delay */
-	ProcGlobal->spins_per_delay = update_spins_per_delay(ProcGlobal->spins_per_delay);
 
 	SpinLockRelease(ProcStructLock);
 }

@@ -1077,6 +1077,148 @@ spggettuple(IndexScanDesc scan, ScanDirection dir)
 	return false;
 }
 
+static void
+AssertCheckSpGistBatchInfo(SpGistScanOpaque so)
+{
+#ifdef USE_ASSERT_CHECKING
+	/* should be valid items (with respect to the current leaf page) */
+	Assert(0 <= so->batch.firstIndex);
+	Assert(so->batch.firstIndex <= so->batch.lastIndex);
+	Assert(so->batch.lastIndex <= so->nPtrs);
+#endif
+}
+
+/*
+ * FIXME Does this need to worry about recheck/recheckDistances flags in
+ * GISTScanOpaque? Probably yes.
+ *
+ * FIXME Definitely should return recontup for IOS, but that needs changes
+ * to index_batch_add.
+ */
+static void
+_spgist_copy_batch(IndexScanDesc scan, SpGistScanOpaque so,
+				   int start, int end)
+{
+	/*
+	 * We're reading the first batch, and there should always be at least one
+	 * item (otherwise _bt_first would return false). So we should never get
+	 * into situation with empty start/end range. In the worst case, there is
+	 * just a single item, in which case (start == end).
+	 */
+	Assert(start <= end);
+
+	/* The range of items should fit into the current batch size. */
+	Assert((end - start + 1) <= scan->xs_batch->currSize);
+
+	so->batch.firstIndex = start;
+	so->batch.lastIndex = end;
+
+	AssertCheckSpGistBatchInfo(so);
+
+	/*
+	 * Walk through the range of index tuples, copy them into the batch. If
+	 * requested, set the index tuple too.
+	 *
+	 * We don't know if the batch is full already - we just try to add it, and
+	 * bail out if it fails.
+	 *
+	 * FIXME This seems wrong, actually. We use currSize when calculating the
+	 * start/end range, so the add should always succeed.
+	 */
+	while (start <= end)
+	{
+		bool		recheck = so->recheck[start];
+		HeapTuple	htup = NULL;
+
+		if (so->want_itup)
+			htup = so->reconTups[start];
+
+		if (so->numberOfOrderBys > 0)
+			index_store_float8_orderby_distances(scan, so->orderByTypes,
+												 so->distances[so->iPtr],
+												 so->recheckDistances[so->iPtr]);
+
+		/* try to add it to batch, if there's space */
+		if (!index_batch_add(scan, so->heapPtrs[start], recheck, NULL, htup))
+			break;
+
+		start++;
+	}
+
+	/*
+	 * set the starting point
+	 *
+	 * XXX might be better done in indexam.c
+	 */
+	scan->xs_batch->currIndex = -1;
+
+	/* shouldn't be possible to end here with an empty batch */
+	Assert(scan->xs_batch->nheaptids > 0);
+}
+
+
+bool
+spggetbatch(IndexScanDesc scan, ScanDirection dir)
+{
+	SpGistScanOpaque so = (SpGistScanOpaque) scan->opaque;
+
+	if (dir != ForwardScanDirection)
+		elog(ERROR, "SP-GiST only supports forward scan direction");
+
+	/* Copy want_itup to *so so we don't need to pass it around separately */
+	so->want_itup = scan->xs_want_itup;
+
+	for (;;)
+	{
+		int			start,
+					end;
+
+		/* forward directions only, easy to calculate next batch */
+		start = so->batch.lastIndex + 1;
+		end = Min(start + (scan->xs_batch->currSize - 1),
+				  so->nPtrs - 1);	/* index of last item */
+		so->iPtr = (end + 1);
+
+		/* if we found more items on the current page, we're done */
+		if (start <= end)
+		{
+			_spgist_copy_batch(scan, so, start, end);
+			return true;
+		}
+
+		if (so->numberOfOrderBys > 0)
+		{
+			/* Must pfree distances to avoid memory leak */
+			int			i;
+
+			for (i = 0; i < so->nPtrs; i++)
+				if (so->distances[i])
+					pfree(so->distances[i]);
+		}
+
+		if (so->want_itup)
+		{
+			/* Must pfree reconstructed tuples to avoid memory leak */
+			int			i;
+
+			for (i = 0; i < so->nPtrs; i++)
+				pfree(so->reconTups[i]);
+		}
+		so->iPtr = so->nPtrs = 0;
+
+		spgWalk(scan->indexRelation, so, false, storeGettuple);
+
+		if (so->nPtrs == 0)
+			break;				/* must have completed scan */
+
+		/* reset before loading data from batch */
+		so->batch.firstIndex = -1;
+		so->batch.lastIndex = -1;
+	}
+
+	return false;
+}
+
 bool
 spgcanreturn(Relation index, int attno)
 {

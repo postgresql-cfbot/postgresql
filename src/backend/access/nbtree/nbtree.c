@@ -144,6 +144,7 @@ bthandler(PG_FUNCTION_ARGS)
 	amroutine->ambeginscan = btbeginscan;
 	amroutine->amrescan = btrescan;
 	amroutine->amgettuple = btgettuple;
+	amroutine->amgetbatch = btgetbatch;
 	amroutine->amgetbitmap = btgetbitmap;
 	amroutine->amendscan = btendscan;
 	amroutine->ammarkpos = btmarkpos;
@@ -263,6 +264,53 @@ btgettuple(IndexScanDesc scan, ScanDirection dir)
 }
 
 /*
+ *	btgetbatch() -- Get the next batch of tuples in the scan.
+ *
+ * XXX Pretty much like btgettuple(), but for batches of tuples.
+ */
+bool
+btgetbatch(IndexScanDesc scan, ScanDirection dir)
+{
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
+	bool		res;
+
+	/* btree indexes are never lossy */
+	scan->xs_recheck = false;
+
+	/* Each loop iteration performs another primitive index scan */
+	do
+	{
+		/*
+		 * If we've already initialized this scan, we can just advance it in
+		 * the appropriate direction.  If we haven't done so yet, we call
+		 * _bt_first() to get the first item in the scan.
+		 */
+		if (!BTScanPosIsValid(so->currPos))
+			res = _bt_first_batch(scan, dir);
+		else
+		{
+			/*
+			 * Check to see if we should kill tuples from the previous batch.
+			 */
+			_bt_kill_batch(scan);
+
+			/*
+			 * Now continue the scan.
+			 */
+			res = _bt_next_batch(scan, dir);
+		}
+
+		/* If we have a tuple, return it ... */
+		if (res)
+			break;
+
+		/* ... otherwise see if we need another primitive index scan */
+	} while (so->numArrayKeys && _bt_start_prim_scan(scan, dir));
+
+	return res;
+}
+
+/*
  * btgetbitmap() -- gets all matching tuples, and adds them to a bitmap
  */
 int64
@@ -342,6 +390,10 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	so->killedItems = NULL;		/* until needed */
 	so->numKilled = 0;
 
+	/* batch range, initially empty */
+	so->batch.firstIndex = -1;
+	so->batch.lastIndex = -1;
+
 	/*
 	 * We don't know yet whether the scan will be index-only, so we do not
 	 * allocate the tuple workspace arrays until btrescan.  However, we set up
@@ -368,6 +420,9 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 	/* we aren't holding any read locks, but gotta drop the pins */
 	if (BTScanPosIsValid(so->currPos))
 	{
+		/* Transfer killed items from the batch to the regular array. */
+		_bt_kill_batch(scan);
+
 		/* Before leaving current page, deal with any killed items */
 		if (so->numKilled > 0)
 			_bt_killitems(scan);
@@ -411,6 +466,10 @@ btrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 		memcpy(scan->keyData, scankey, scan->numberOfKeys * sizeof(ScanKeyData));
 	so->numberOfKeys = 0;		/* until _bt_preprocess_keys sets it */
 	so->numArrayKeys = 0;		/* ditto */
+
+	/* Reset the batch (even if not batched scan) */
+	so->batch.firstIndex = -1;
+	so->batch.lastIndex = -1;
 }
 
 /*
@@ -424,6 +483,9 @@ btendscan(IndexScanDesc scan)
 	/* we aren't holding any read locks, but gotta drop the pins */
 	if (BTScanPosIsValid(so->currPos))
 	{
+		/* Transfer killed items from the batch to the regular array. */
+		_bt_kill_batch(scan);
+
 		/* Before leaving current page, deal with any killed items */
 		if (so->numKilled > 0)
 			_bt_killitems(scan);
@@ -461,6 +523,25 @@ btmarkpos(IndexScanDesc scan)
 	BTScanPosUnpinIfPinned(so->markPos);
 
 	/*
+	 * With batched scans, we don't maintain the itemIndex when processing the
+	 * batch, so we need to calculate the current value.
+	 *
+	 * FIXME I don't like that this requires knowledge of batching details,
+	 * I'd very much prefer those to remain isolated in indexam.c. The best
+	 * idea I have is a function that returns the batch index, something like
+	 * index_batch_get_index(). That's close to how other places in AMs talk
+	 * to indexam.c (e.g. when setting distances / orderby in spgist).
+	 */
+	if (scan->xs_batch)
+	{
+		/* the index should be valid in the batch */
+		Assert(scan->xs_batch->currIndex >= 0);
+		Assert(scan->xs_batch->currIndex < scan->xs_batch->nheaptids);
+
+		so->currPos.itemIndex = so->batch.firstIndex + scan->xs_batch->currIndex;
+	}
+
+	/*
 	 * Just record the current itemIndex.  If we later step to next page
 	 * before releasing the marked position, _bt_steppage makes a full copy of
 	 * the currPos struct in markPos.  If (as often happens) the mark is moved
@@ -493,6 +574,59 @@ btrestrpos(IndexScanDesc scan)
 		 * accurate.
 		 */
 		so->currPos.itemIndex = so->markItemIndex;
+
+		/*
+		 * We're restoring to a different position on the same page, but the
+		 * wrong batch may be loaded. Check if the current batch includes
+		 * itemIndex, and load the correct batch if not. We don't know in
+		 * which direction the scan will move, so we try to put the current
+		 * index in the middle of a batch. For indexes close to the end of the
+		 * page we may load fewer items, but that seems acceptable.
+		 *
+		 * Then update the index of the current item, even if we already have
+		 * the correct batch loaded.
+		 *
+		 * FIXME Similar to btmarkpos() - I don't like how this leaks details
+		 * that should be specific to indexam.c. The "restored" flag is weird
+		 * too - but even if we need it, we could set it in indexam.c, right?
+		 */
+		if (scan->xs_batch != NULL)
+		{
+			if ((so->currPos.itemIndex < so->batch.firstIndex) ||
+				(so->currPos.itemIndex > so->batch.lastIndex))
+			{
+				int			start = Max(so->currPos.firstItem,
+										so->currPos.itemIndex - (scan->xs_batch->currSize / 2));
+				int			end = Min(so->currPos.lastItem,
+									  start + (scan->xs_batch->currSize - 1));
+
+				Assert(start <= end);
+				Assert((end - start + 1) <= scan->xs_batch->currSize);
+
+				/* make it look empty */
+				scan->xs_batch->nheaptids = 0;
+				scan->xs_batch->prefetchIndex = -1;
+
+				/*
+				 * XXX the scan direction is bogus / not important. It affects
+				 * only how we advance the currIndex, but we'll override that
+				 * anyway to point at the "correct" entry.
+				 */
+				_bt_copy_batch(scan, ForwardScanDirection, so, start, end);
+			}
+
+			/*
+			 * Set the batch index to the "correct" position in the batch,
+			 * even if we haven't re-loaded it from the page. Also remember we
+			 * just did this, so that the next call to
+			 * index_batch_getnext_tid() does not advance it again.
+			 *
+			 * XXX This is a bit weird. There should be a way to not need the
+			 * "restored" flag I think.
+			 */
+			scan->xs_batch->currIndex = (so->currPos.itemIndex - so->batch.firstIndex);
+			scan->xs_batch->restored = true;
+		}
 	}
 	else
 	{
@@ -504,6 +638,9 @@ btrestrpos(IndexScanDesc scan)
 		 */
 		if (BTScanPosIsValid(so->currPos))
 		{
+			/* Transfer killed items from the batch to the regular array. */
+			_bt_kill_batch(scan);
+
 			/* Before leaving current page, deal with any killed items */
 			if (so->numKilled > 0)
 				_bt_killitems(scan);
@@ -526,6 +663,45 @@ btrestrpos(IndexScanDesc scan)
 			{
 				_bt_start_array_keys(scan, so->currPos.dir);
 				so->needPrimScan = false;
+			}
+
+			/*
+			 * With batched scans, we know the current batch is definitely
+			 * wrong (we've moved to a different leaf page). So empty the
+			 * batch, and load the right part of the page.
+			 *
+			 * Similarly to the block above, we place the current index in the
+			 * middle of the batch (if possible). And then we update the index
+			 * to point at the correct batch item.
+			 */
+			if (scan->xs_batch != NULL)
+			{
+				int			start = Max(so->currPos.firstItem,
+										so->currPos.itemIndex - (scan->xs_batch->currSize / 2));
+				int			end = Min(so->currPos.lastItem,
+									  start + (scan->xs_batch->currSize - 1));
+
+				Assert(start <= end);
+				Assert((end - start + 1) <= scan->xs_batch->currSize);
+
+				/* make it look empty */
+				scan->xs_batch->nheaptids = 0;
+				scan->xs_batch->prefetchIndex = -1;
+
+				/* XXX the scan direction is bogus */
+				_bt_copy_batch(scan, ForwardScanDirection, so, start, end);
+
+				/*
+				 * Set the batch index to the "correct" position in the batch,
+				 * even if we haven't re-loaded it from the page. Also
+				 * remember we just did this, so that the next call to
+				 * index_batch_getnext_tid() does not advance it again.
+				 *
+				 * XXX This is a bit weird. There should be a way to not need
+				 * the "restored" flag I think.
+				 */
+				scan->xs_batch->currIndex = (so->currPos.itemIndex - so->batch.firstIndex);
+				scan->xs_batch->restored = true;
 			}
 		}
 		else

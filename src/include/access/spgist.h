@@ -209,6 +209,7 @@ extern void spgrescan(IndexScanDesc scan, ScanKey scankey, int nscankeys,
 					  ScanKey orderbys, int norderbys);
 extern int64 spggetbitmap(IndexScanDesc scan, TIDBitmap *tbm);
 extern bool spggettuple(IndexScanDesc scan, ScanDirection dir);
+extern bool spggetbatch(IndexScanDesc scan, ScanDirection dir);
 extern bool spgcanreturn(Relation index, int attno);
 
 /* spgvacuum.c */

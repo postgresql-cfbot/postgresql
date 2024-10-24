@@ -64,6 +64,9 @@ _hash_next(IndexScanDesc scan, ScanDirection dir)
 	{
 		if (++so->currPos.itemIndex > so->currPos.lastItem)
 		{
+			/* Transfer killed items from the batch to the regular array. */
+			_hash_kill_batch(scan);
+
 			if (so->numKilled > 0)
 				_hash_kill_items(scan);
 
@@ -82,6 +85,9 @@ _hash_next(IndexScanDesc scan, ScanDirection dir)
 	{
 		if (--so->currPos.itemIndex < so->currPos.firstItem)
 		{
+			/* Transfer killed items from the batch to the regular array. */
+			_hash_kill_batch(scan);
+
 			if (so->numKilled > 0)
 				_hash_kill_items(scan);
 
@@ -476,6 +482,9 @@ _hash_readpage(IndexScanDesc scan, Buffer *bufP, ScanDirection dir)
 			if (itemIndex != 0)
 				break;
 
+			/* Transfer killed items from the batch to the regular array. */
+			_hash_kill_batch(scan);
+
 			/*
 			 * Could not find any matching tuples in the current page, move to
 			 * the next page. Before leaving the current page, deal with any
@@ -534,6 +543,9 @@ _hash_readpage(IndexScanDesc scan, Buffer *bufP, ScanDirection dir)
 
 			if (itemIndex != MaxIndexTuplesPerPage)
 				break;
+
+			/* Transfer killed items from the batch to the regular array. */
+			_hash_kill_batch(scan);
 
 			/*
 			 * Could not find any matching tuples in the current page, move to
@@ -712,4 +724,275 @@ _hash_saveitem(HashScanOpaque so, int itemIndex,
 
 	currItem->heapTid = itup->t_tid;
 	currItem->indexOffset = offnum;
+}
+
+static void
+AssertCheckHashBatchInfo(HashScanOpaque so)
+{
+#ifdef USE_ASSERT_CHECKING
+	/* should be valid items (with respect to the current leaf page) */
+	Assert(so->currPos.firstItem <= so->batch.firstIndex);
+	Assert(so->batch.firstIndex <= so->batch.lastIndex);
+	Assert(so->batch.lastIndex <= so->currPos.lastItem);
+#endif
+}
+
+/*
+ *	_hash_first_batch() -- Find the first batch in a scan.
+ *
+ * A batch variant of _hash_first(). Most of the comments for that function
+ * apply here too.
+ *
+ * XXX This only populates the batch, it does not set any other fields like
+ * scan->xs_heaptid or scan->xs_itup. That happens in getnext_tid() calls.
+ *
+ * XXX I'm not sure it works to mix batched and non-batches calls, e.g. get
+ * a TID and then a batch of TIDs. It probably should work as long as we
+ * update itemIndex correctly, but we need to be careful about killed items
+ * (right now the two places use different ways to communicate which items
+ * should be killed).
+ */
+bool
+_hash_first_batch(IndexScanDesc scan, ScanDirection dir)
+{
+	HashScanOpaque so = (HashScanOpaque) scan->opaque;
+
+	Assert(scan->xs_batch->nheaptids == 0);
+
+	/*
+	 * Mark the batch as empty.
+	 *
+	 * This might seems a bit strange, because surely the batch should be
+	 * empty before reading the first batch. So why not an assert? But we can
+	 * get here in different ways - not just after beginscan/rescan, but also
+	 * when iterating over ScalarArrayOps - in which case we'll see the last
+	 * batch of the preceding scan.
+	 */
+	so->batch.firstIndex = -1;
+	so->batch.lastIndex = -1;
+
+	/* we haven't visited any leaf pages yet, so proceed to reading one */
+	if (_hash_first(scan, dir))
+	{
+		/* range of the leaf to copy into the batch */
+		int			start,
+					end;
+
+		/* determine which part of the leaf page to extract */
+		if (ScanDirectionIsForward(dir))
+		{
+			start = so->currPos.firstItem;
+			end = Min(start + (scan->xs_batch->currSize - 1), so->currPos.lastItem);
+			so->currPos.itemIndex = (end + 1);
+		}
+		else
+		{
+			end = so->currPos.lastItem;
+			start = Max(end - (scan->xs_batch->currSize - 1),
+						so->currPos.firstItem);
+			so->currPos.itemIndex = (start - 1);
+		}
+
+		/*
+		 * Copy the selected range of items into the batch, set the batch
+		 * current index properly (before first / after last item, depending
+		 * on scan direction.
+		 */
+		_hash_copy_batch(scan, dir, so, start, end);
+
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ *	_hash_next_batch() -- Get the next batch of items in a scan.
+ *
+ * A batch variant of _hash_next(). Most of the comments for that function
+ * apply here too.
+ *
+ * We should only get here only when the current batch has no more items
+ * in the given direction. We don't get here with empty batches, that's
+ * handled by _hash_fist_batch().
+ *
+ * XXX See also the comments at _hash_first_batch() about returning a single
+ * batch for the page, etc.
+ *
+ * FIXME There's a lot of redundant (almost the same) code here - handling
+ * the current and new leaf page is very similar, and it's also similar to
+ * _hash_first_batch(). We should try to reduce this a bit.
+ */
+bool
+_hash_next_batch(IndexScanDesc scan, ScanDirection dir)
+{
+	HashScanOpaque so = (HashScanOpaque) scan->opaque;
+
+	int			start,
+				end;
+
+	Assert(scan->xs_batch->nheaptids == 0);
+
+	AssertCheckHashBatchInfo(so);
+
+	/*
+	 * Check if we still have some items on the current leaf page. If yes,
+	 * load them into a batch and return.
+	 *
+	 * XXX try combining that with the next block, the inner while loop is
+	 * exactly the same.
+	 */
+	if (ScanDirectionIsForward(dir))
+	{
+		start = so->batch.lastIndex + 1;
+		end = Min(start + (scan->xs_batch->currSize - 1), so->currPos.lastItem);
+		so->currPos.itemIndex = (end + 1);
+	}
+	else
+	{
+		end = so->batch.firstIndex - 1;
+		start = Max(end - (scan->xs_batch->currSize - 1),
+					so->currPos.firstItem);
+		so->currPos.itemIndex = (start - 1);
+	}
+
+	/*
+	 * We have more items on the current leaf page.
+	 */
+	if (start <= end)
+	{
+		_hash_copy_batch(scan, dir, so, start, end);
+		return true;
+	}
+
+	/*
+	 * We've consumed all items from the current leaf page, so try reading the
+	 * next one, and process it.
+	 */
+	if (_hash_next(scan, dir))
+	{
+		/*
+		 * Check if we still have some items on the current leaf page. If yes,
+		 * load them into a batch and return.
+		 *
+		 * XXX try combining that with the next block, the inner while loop is
+		 * exactly the same.
+		 */
+		if (ScanDirectionIsForward(dir))
+		{
+			start = so->currPos.firstItem;
+			end = Min(start + (scan->xs_batch->currSize - 1), so->currPos.lastItem);
+			so->currPos.itemIndex = (end + 1);
+		}
+		else
+		{
+			end = so->currPos.lastItem;
+			start = Max(end - (scan->xs_batch->currSize - 1),
+						so->currPos.firstItem);
+			so->currPos.itemIndex = (start - 1);
+		}
+
+		_hash_copy_batch(scan, dir, so, start, end);
+
+		return true;
+	}
+
+	return false;
+}
+
+/*
+ *	_hash_kill_batch() -- remember the items-to-be-killed from the current batch
+ *
+ * We simply translate the bitmap into the "regular" killedItems array, and let
+ * that to drive which items are killed.
+ */
+void
+_hash_kill_batch(IndexScanDesc scan)
+{
+	HashScanOpaque so = (HashScanOpaque) scan->opaque;
+
+	/* bail out if batching not enabled */
+	if (!scan->xs_batch)
+		return;
+
+	for (int i = 0; i < scan->xs_batch->nKilledItems; i++)
+	{
+		int			index = (so->batch.firstIndex + scan->xs_batch->killedItems[i]);
+
+		/* make sure we have a valid index (in the current leaf page) */
+		Assert((so->batch.firstIndex <= index) &&
+			   (index <= so->batch.lastIndex));
+
+		/*
+		 * Yes, remember it for later. (We'll deal with all such tuples at
+		 * once right before leaving the index page.)  The test for numKilled
+		 * overrun is not just paranoia: if the caller reverses direction in
+		 * the indexscan then the same item might get entered multiple times.
+		 * It's not worth trying to optimize that, so we don't detect it, but
+		 * instead just forget any excess entries.
+		 */
+		if (so->killedItems == NULL)
+			so->killedItems = (int *)
+				palloc(MaxIndexTuplesPerPage * sizeof(int));
+		if (so->numKilled < MaxIndexTuplesPerPage)
+			so->killedItems[so->numKilled++] = index;
+	}
+
+	/* now reset the number of killed items */
+	scan->xs_batch->nKilledItems = 0;
+}
+
+void
+_hash_copy_batch(IndexScanDesc scan, ScanDirection dir, HashScanOpaque so,
+				 int start, int end)
+{
+	/*
+	 * We're reading the first batch, and there should always be at least one
+	 * item (otherwise _bt_first would return false). So we should never get
+	 * into situation with empty start/end range. In the worst case, there is
+	 * just a single item, in which case (start == end).
+	 */
+	Assert(start <= end);
+
+	/* The range of items should fit into the current batch size. */
+	Assert((end - start + 1) <= scan->xs_batch->currSize);
+
+	so->batch.firstIndex = start;
+	so->batch.lastIndex = end;
+
+	AssertCheckHashBatchInfo(so);
+
+	/*
+	 * Walk through the range of index tuples, copy them into the batch. If
+	 * requested, set the index tuple too.
+	 *
+	 * We don't know if the batch is full already - we just try to add it, and
+	 * bail out if it fails.
+	 *
+	 * FIXME This seems wrong, actually. We use currSize when calculating the
+	 * start/end range, so the add should always succeed.
+	 */
+	while (start <= end)
+	{
+		HashScanPosItem *currItem = &so->currPos.items[start];
+
+		/* try to add it to batch, if there's space */
+		if (!index_batch_add(scan, currItem->heapTid, false, NULL, NULL))
+			break;
+
+		start++;
+	}
+
+	/*
+	 * set the starting point
+	 *
+	 * XXX might be better done in indexam.c
+	 */
+	if (ScanDirectionIsForward(dir))
+		scan->xs_batch->currIndex = -1;
+	else
+		scan->xs_batch->currIndex = scan->xs_batch->nheaptids;
+
+	/* shouldn't be possible to end here with an empty batch */
+	Assert(scan->xs_batch->nheaptids > 0);
 }

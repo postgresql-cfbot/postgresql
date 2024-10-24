@@ -749,7 +749,12 @@ heapam_relation_copy_for_cluster(Relation OldHeap, Relation NewHeap,
 
 		tableScan = NULL;
 		heapScan = NULL;
-		indexScan = index_beginscan(OldHeap, OldIndex, SnapshotAny, 0, 0);
+
+		/*
+		 * XXX Maybe enable batching/prefetch for clustering. Seems like it
+		 * might be a pretty substantial win.
+		 */
+		indexScan = index_beginscan(OldHeap, OldIndex, SnapshotAny, 0, 0, false);
 		index_rescan(indexScan, NULL, 0, NULL, 0);
 	}
 	else

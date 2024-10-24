@@ -85,6 +85,7 @@ spghandler(PG_FUNCTION_ARGS)
 	amroutine->ambeginscan = spgbeginscan;
 	amroutine->amrescan = spgrescan;
 	amroutine->amgettuple = spggettuple;
+	amroutine->amgetbatch = spggetbatch;
 	amroutine->amgetbitmap = spggetbitmap;
 	amroutine->amendscan = spgendscan;
 	amroutine->ammarkpos = NULL;

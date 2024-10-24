@@ -188,6 +188,7 @@ BOOL
 BOOLEAN
 BOX
 BTArrayKeyInfo
+BTBatchInfo
 BTBuildState
 BTCycleId
 BTDedupInterval
@@ -967,6 +968,7 @@ GBT_NUMKEY_R
 GBT_VARKEY
 GBT_VARKEY_R
 GENERAL_NAME
+GISTBatchInfo
 GISTBuildBuffers
 GISTBuildState
 GISTDeletedPageContents
@@ -1117,6 +1119,7 @@ Hash
 HashAggBatch
 HashAggSpill
 HashAllocFunc
+HashBatchInfo
 HashBuildState
 HashCompareFunc
 HashCopyFunc
@@ -1220,6 +1223,7 @@ IndexOrderByDistance
 IndexPath
 IndexRuntimeKeyInfo
 IndexScan
+IndexScanBatchData
 IndexScanDesc
 IndexScanState
 IndexStateFlagsAction
@@ -2698,6 +2702,7 @@ SortSupportData
 SortTuple
 SortTupleComparator
 SortedPoint
+SpGistBatchInfo
 SpGistBuildState
 SpGistCache
 SpGistDeadTuple
@@ -3286,6 +3291,7 @@ amendscan_function
 amestimateparallelscan_function
 amgetbitmap_function
 amgettuple_function
+amgetbatch_function
 aminitparallelscan_function
 aminsert_function
 aminsertcleanup_function

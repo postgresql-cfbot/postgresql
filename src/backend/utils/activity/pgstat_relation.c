@@ -801,7 +801,7 @@ pgstat_twophase_postabort(TransactionId xid, uint16 info,
 bool
 pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 {
-	static const PgStat_TableCounts all_zeroes;
+	bool		is_all_zeroes;
 	Oid			dboid;
 	PgStat_TableStatus *lstats; /* pending stats entry  */
 	PgStatShared_Relation *shtabstats;
@@ -816,11 +816,10 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	 * Ignore entries that didn't accumulate any actual counts, such as
 	 * indexes that were opened by the planner but not used.
 	 */
-	if (memcmp(&lstats->counts, &all_zeroes,
-			   sizeof(PgStat_TableCounts)) == 0)
-	{
+	pgstat_entry_all_zeros(&lstats->counts, PgStat_TableCounts, is_all_zeroes);
+
+	if (is_all_zeroes)
 		return true;
-	}
 
 	if (!pgstat_lock_entry(entry_ref, nowait))
 		return false;

@@ -188,6 +188,10 @@ ExecGather(PlanState *pstate)
 			 */
 			estate->es_parallel_workers_to_launch += pcxt->nworkers_to_launch;
 			estate->es_parallel_workers_launched += pcxt->nworkers_launched;
+			estate->es_parallel_nodes += 1;
+
+			if (pcxt->nworkers_to_launch == pcxt->nworkers_launched)
+				estate->es_parallel_nodes_success += 1;
 
 			/* Set up tuple queue readers to read the results. */
 			if (pcxt->nworkers_launched > 0)
@@ -205,6 +209,7 @@ ExecGather(PlanState *pstate)
 				/* No workers?	Then never mind. */
 				node->nreaders = 0;
 				node->reader = NULL;
+				estate->es_parallel_nodes_no_workers += 1;
 			}
 			node->nextreader = 0;
 		}

@@ -482,6 +482,7 @@ extern const struct config_enum_entry archive_mode_options[];
 extern const struct config_enum_entry recovery_target_action_options[];
 extern const struct config_enum_entry wal_sync_method_options[];
 extern const struct config_enum_entry dynamic_shared_memory_options[];
+extern const struct config_enum_entry log_parallel_workers_options[];
 
 /*
  * GUC option variables that are exported from this module
@@ -526,6 +527,7 @@ int			log_min_duration_statement = -1;
 int			log_parameter_max_length = -1;
 int			log_parameter_max_length_on_error = 0;
 int			log_temp_files = -1;
+int			log_parallel_workers = LOG_PARALLEL_WORKERS_NONE;
 double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
 char	   *backtrace_functions;
@@ -5204,6 +5206,16 @@ struct config_enum ConfigureNamesEnum[] =
 		},
 		&debug_logical_replication_streaming,
 		DEBUG_LOGICAL_REP_STREAMING_BUFFERED, debug_logical_replication_streaming_options,
+		NULL, NULL, NULL
+	},
+
+	{
+		{"log_parallel_workers", PGC_SUSET, LOGGING_WHAT,
+			gettext_noop("Log information about parallel worker usage"),
+			NULL
+		},
+		&log_parallel_workers,
+		LOG_PARALLEL_WORKERS_NONE, log_parallel_workers_options,
 		NULL, NULL, NULL
 	},
 

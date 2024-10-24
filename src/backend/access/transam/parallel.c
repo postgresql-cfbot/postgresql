@@ -1623,3 +1623,18 @@ LookupParallelWorkerFunction(const char *libraryname, const char *funcname)
 	return (parallel_worker_main_type)
 		load_external_function(libraryname, funcname, true, NULL);
 }
+
+/*
+ * The function determines if information about workers should
+ * be logged.
+*/
+bool
+LoggingParallelWorkers(int log_parallel_workers,
+					   int parallel_workers_to_launch,
+					   int parallel_workers_launched)
+{
+	return ((log_parallel_workers == LOG_PARALLEL_WORKERS_ALL &&
+			parallel_workers_to_launch > 0) ||
+			(log_parallel_workers == LOG_PARALLEL_WORKERS_FAILURE &&
+			parallel_workers_to_launch != parallel_workers_launched));
+}

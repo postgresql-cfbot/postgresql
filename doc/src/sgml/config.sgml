@@ -7723,6 +7723,24 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
       </listitem>
      </varlistentry>
 
+    <varlistentry id="guc-log-parallel-workers" xreflabel="log_parallel_workers">
+      <term><varname>log_parallel_workers</varname> (<type>enum</type>)
+      <indexterm>
+       <primary><varname>log_parallel_workers</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Controls whether a log message about the number of workers is produced during the
+        execution of a parallel query or utility statement. The default value is
+        <literal>none</literal> which disables logging. <literal>all</literal> displays
+        information for all parallel queries, whereas <literal>failures</literal> displays
+        information only when the number of workers launched is lower than the number of
+        planned workers.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-log-parameter-max-length" xreflabel="log_parameter_max_length">
       <term><varname>log_parameter_max_length</varname> (<type>integer</type>)
       <indexterm>

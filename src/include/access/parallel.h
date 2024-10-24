@@ -19,6 +19,20 @@
 #include "postmaster/bgworker.h"
 #include "storage/shm_mq.h"
 #include "storage/shm_toc.h"
+#include "utils/guc.h"
+
+typedef enum log_parallel_workers_option_list {
+	LOG_PARALLEL_WORKERS_NONE=0,
+	LOG_PARALLEL_WORKERS_ALL,
+	LOG_PARALLEL_WORKERS_FAILURE,
+} log_parallel_workers_option_list;
+
+static const struct config_enum_entry log_parallel_workers_options[] = {
+	{"none", LOG_PARALLEL_WORKERS_NONE, false},
+	{"all", LOG_PARALLEL_WORKERS_ALL, false},
+	{"failure", LOG_PARALLEL_WORKERS_FAILURE, false},
+	{NULL, 0, false}
+};
 
 typedef void (*parallel_worker_main_type) (dsm_segment *seg, shm_toc *toc);
 
@@ -56,6 +70,7 @@ typedef struct ParallelWorkerContext
 extern PGDLLIMPORT volatile sig_atomic_t ParallelMessagePending;
 extern PGDLLIMPORT int ParallelWorkerNumber;
 extern PGDLLIMPORT bool InitializingParallelWorker;
+extern PGDLLEXPORT int log_parallel_workers;
 
 #define		IsParallelWorker()		(ParallelWorkerNumber >= 0)
 
@@ -77,5 +92,9 @@ extern void AtEOSubXact_Parallel(bool isCommit, SubTransactionId mySubId);
 extern void ParallelWorkerReportLastRecEnd(XLogRecPtr last_xlog_end);
 
 extern void ParallelWorkerMain(Datum main_arg);
+
+extern bool LoggingParallelWorkers(int log_parallel_workers,
+								   int parallel_workers_to_launch,
+								   int parallel_workers_launched);
 
 #endif							/* PARALLEL_H */

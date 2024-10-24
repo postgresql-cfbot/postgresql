@@ -132,6 +132,14 @@ typedef enum
 	PROC_WAIT_STATUS_ERROR,
 } ProcWaitStatus;
 
+typedef enum
+{
+	LOGLOCK_OFF,				/* log no lock report */
+	LOGLOCK_ON,					/* log lock report if over deadlock_timeout */
+	LOGLOCK_FAIL,				/* log lock report if lock failed */
+	LOGLOCK_ALL,				/* log lock report if all */
+} LogLockLevel;
+
 /*
  * Each backend has a PGPROC struct in shared memory.  There is also a list of
  * currently-unused PGPROC structs that will be reallocated to new backends.
@@ -456,7 +464,7 @@ extern PGDLLIMPORT int LockTimeout;
 extern PGDLLIMPORT int IdleInTransactionSessionTimeout;
 extern PGDLLIMPORT int TransactionTimeout;
 extern PGDLLIMPORT int IdleSessionTimeout;
-extern PGDLLIMPORT bool log_lock_waits;
+extern PGDLLIMPORT int log_lock_waits;
 
 #ifdef EXEC_BACKEND
 extern PGDLLIMPORT slock_t *ProcStructLock;
@@ -496,5 +504,6 @@ extern PGPROC *AuxiliaryPidGetProc(int pid);
 
 extern void BecomeLockGroupLeader(void);
 extern bool BecomeLockGroupMember(PGPROC *leader, int pid);
+extern void CollectLockHoldersAndWaiters(PROCLOCK *waitProcLock, LOCK *lock, StringInfo lock_holders_sbuf, StringInfo lock_waiters_sbuf, int *lockHoldersNum);
 
 #endif							/* _PROC_H_ */

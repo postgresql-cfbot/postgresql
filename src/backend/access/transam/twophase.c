@@ -730,15 +730,15 @@ pg_prepared_xact(PG_FUNCTION_ARGS)
 		/* this had better match pg_prepared_xacts view in system_views.sql */
 		tupdesc = CreateTemplateTupleDesc(5);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "transaction",
-						   XIDOID, -1, 0);
+						   XIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "gid",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "prepared",
-						   TIMESTAMPTZOID, -1, 0);
+						   TIMESTAMPTZOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "ownerid",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 5, "dbid",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 

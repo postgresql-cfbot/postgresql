@@ -181,15 +181,15 @@ injection_points_stats_fixed(PG_FUNCTION_ARGS)
 	/* Initialise attributes information in the tuple descriptor */
 	tupdesc = CreateTemplateTupleDesc(5);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1, "numattach",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2, "numdetach",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3, "numrun",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 4, "numcached",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 5, "numloaded",
-					   INT8OID, -1, 0);
+					   INT8OID, -1);
 	BlessTupleDesc(tupdesc);
 
 	values[0] = Int64GetDatum(stats->numattach);

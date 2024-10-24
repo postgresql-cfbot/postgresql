@@ -106,25 +106,25 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 		/* Construct a tuple descriptor for the result rows. */
 		tupledesc = CreateTemplateTupleDesc(expected_tupledesc->natts);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 1, "bufferid",
-						   INT4OID, -1, 0);
+						   INT4OID, -1);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 2, "relfilenode",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 3, "reltablespace",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 4, "reldatabase",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 5, "relforknumber",
-						   INT2OID, -1, 0);
+						   INT2OID, -1);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 6, "relblocknumber",
-						   INT8OID, -1, 0);
+						   INT8OID, -1);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 7, "isdirty",
-						   BOOLOID, -1, 0);
+						   BOOLOID, -1);
 		TupleDescInitEntry(tupledesc, (AttrNumber) 8, "usage_count",
-						   INT2OID, -1, 0);
+						   INT2OID, -1);
 
 		if (expected_tupledesc->natts == NUM_BUFFERCACHE_PAGES_ELEM)
 			TupleDescInitEntry(tupledesc, (AttrNumber) 9, "pinning_backends",
-							   INT4OID, -1, 0);
+							   INT4OID, -1);
 
 		fctx->tupdesc = BlessTupleDesc(tupledesc);
 

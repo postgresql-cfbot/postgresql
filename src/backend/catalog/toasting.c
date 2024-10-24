@@ -205,15 +205,15 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	TupleDescInitEntry(tupdesc, (AttrNumber) 1,
 					   "chunk_id",
 					   OIDOID,
-					   -1, 0);
+					   -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 2,
 					   "chunk_seq",
 					   INT4OID,
-					   -1, 0);
+					   -1);
 	TupleDescInitEntry(tupdesc, (AttrNumber) 3,
 					   "chunk_data",
 					   BYTEAOID,
-					   -1, 0);
+					   -1);
 
 	/*
 	 * Ensure that the toast table doesn't itself get toasted, or we'll be

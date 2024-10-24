@@ -133,16 +133,13 @@ extern void TupleDescInitEntry(TupleDesc desc,
 							   AttrNumber attributeNumber,
 							   const char *attributeName,
 							   Oid oidtypeid,
-							   int32 typmod,
-							   int attdim);
+							   int32 typmod);
 
 extern void TupleDescInitBuiltinEntry(TupleDesc desc,
 									  AttrNumber attributeNumber,
 									  const char *attributeName,
 									  Oid oidtypeid,
-									  int32 typmod,
-									  int attdim);
-
+									  int32 typmod);
 extern void TupleDescInitEntryCollation(TupleDesc desc,
 										AttrNumber attributeNumber,
 										Oid collationid);

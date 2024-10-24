@@ -398,9 +398,9 @@ pg_walfile_name_offset(PG_FUNCTION_ARGS)
 	 */
 	resultTupleDesc = CreateTemplateTupleDesc(2);
 	TupleDescInitEntry(resultTupleDesc, (AttrNumber) 1, "file_name",
-					   TEXTOID, -1, 0);
+					   TEXTOID, -1);
 	TupleDescInitEntry(resultTupleDesc, (AttrNumber) 2, "file_offset",
-					   INT4OID, -1, 0);
+					   INT4OID, -1);
 
 	resultTupleDesc = BlessTupleDesc(resultTupleDesc);
 

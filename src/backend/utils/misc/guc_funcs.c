@@ -400,11 +400,11 @@ GetPGVariableResultDesc(const char *name)
 		/* need a tuple descriptor representing three TEXT columns */
 		tupdesc = CreateTemplateTupleDesc(3);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "name",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "setting",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "description",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 	}
 	else
 	{
@@ -416,7 +416,7 @@ GetPGVariableResultDesc(const char *name)
 		/* need a tuple descriptor representing a single TEXT column */
 		tupdesc = CreateTemplateTupleDesc(1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, varname,
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 	}
 	return tupdesc;
 }
@@ -438,7 +438,7 @@ ShowGUCConfigOption(const char *name, DestReceiver *dest)
 	/* need a tuple descriptor representing a single TEXT column */
 	tupdesc = CreateTemplateTupleDesc(1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, varname,
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 
 	/* prepare for projection of tuples */
 	tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);
@@ -468,11 +468,11 @@ ShowAllGUCConfig(DestReceiver *dest)
 	/* need a tuple descriptor representing three TEXT columns */
 	tupdesc = CreateTemplateTupleDesc(3);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 1, "name",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 2, "setting",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 	TupleDescInitBuiltinEntry(tupdesc, (AttrNumber) 3, "description",
-							  TEXTOID, -1, 0);
+							  TEXTOID, -1);
 
 	/* prepare for projection of tuples */
 	tstate = begin_tup_output_tupdesc(dest, tupdesc, &TTSOpsVirtual);
@@ -874,39 +874,39 @@ show_all_settings(PG_FUNCTION_ARGS)
 		 */
 		tupdesc = CreateTemplateTupleDesc(NUM_PG_SETTINGS_ATTS);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "name",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "setting",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "unit",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "category",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 5, "short_desc",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 6, "extra_desc",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 7, "context",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 8, "vartype",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 9, "source",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 10, "min_val",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 11, "max_val",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 12, "enumvals",
-						   TEXTARRAYOID, -1, 0);
+						   TEXTARRAYOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 13, "boot_val",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 14, "reset_val",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 15, "sourcefile",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 16, "sourceline",
-						   INT4OID, -1, 0);
+						   INT4OID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 17, "pending_restart",
-						   BOOLOID, -1, 0);
+						   BOOLOID, -1);
 
 		/*
 		 * Generate attribute metadata needed later to produce tuples from raw

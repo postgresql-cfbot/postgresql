@@ -230,8 +230,7 @@ ordered_set_startup(FunctionCallInfo fcinfo, bool use_tuples)
 								   (AttrNumber) ++natts,
 								   "flag",
 								   INT4OID,
-								   -1,
-								   0);
+								   -1);
 
 				FreeTupleDesc(qstate->tupdesc);
 				qstate->tupdesc = newdesc;

@@ -117,11 +117,10 @@ initGinState(GinState *state, Relation index)
 			state->tupdesc[i] = CreateTemplateTupleDesc(2);
 
 			TupleDescInitEntry(state->tupdesc[i], (AttrNumber) 1, NULL,
-							   INT2OID, -1, 0);
+							   INT2OID, -1);
 			TupleDescInitEntry(state->tupdesc[i], (AttrNumber) 2, NULL,
 							   attr->atttypid,
-							   attr->atttypmod,
-							   attr->attndims);
+							   attr->atttypmod);
 			TupleDescInitEntryCollation(state->tupdesc[i], (AttrNumber) 2,
 										attr->attcollation);
 		}

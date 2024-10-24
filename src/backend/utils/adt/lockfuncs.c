@@ -114,38 +114,37 @@ pg_lock_status(PG_FUNCTION_ARGS)
 		/* this had better match function's declaration in pg_proc.h */
 		tupdesc = CreateTemplateTupleDesc(NUM_LOCK_STATUS_COLUMNS);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 1, "locktype",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 2, "database",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 3, "relation",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 4, "page",
-						   INT4OID, -1, 0);
+						   INT4OID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 5, "tuple",
-						   INT2OID, -1, 0);
+						   INT2OID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 6, "virtualxid",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 7, "transactionid",
-						   XIDOID, -1, 0);
+						   XIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 8, "classid",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 9, "objid",
-						   OIDOID, -1, 0);
+						   OIDOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 10, "objsubid",
-						   INT2OID, -1, 0);
+						   INT2OID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 11, "virtualtransaction",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 12, "pid",
-						   INT4OID, -1, 0);
+						   INT4OID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 13, "mode",
-						   TEXTOID, -1, 0);
+						   TEXTOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 14, "granted",
-						   BOOLOID, -1, 0);
+						   BOOLOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 15, "fastpath",
-						   BOOLOID, -1, 0);
+						   BOOLOID, -1);
 		TupleDescInitEntry(tupdesc, (AttrNumber) 16, "waitstart",
-						   TIMESTAMPTZOID, -1, 0);
-
+						   TIMESTAMPTZOID, -1);
 		funcctx->tuple_desc = BlessTupleDesc(tupdesc);
 
 		/*

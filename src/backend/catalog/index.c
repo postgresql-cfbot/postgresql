@@ -351,7 +351,6 @@ ConstructTupleDescriptor(Relation heapRelation,
 
 			to->atttypid = from->atttypid;
 			to->attlen = from->attlen;
-			to->attndims = from->attndims;
 			to->atttypmod = from->atttypmod;
 			to->attbyval = from->attbyval;
 			to->attalign = from->attalign;

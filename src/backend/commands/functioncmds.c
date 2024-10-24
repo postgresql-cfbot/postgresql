@@ -2400,8 +2400,7 @@ CallStmtResultDesc(CallStmt *stmt)
 							   i + 1,
 							   NameStr(att->attname),
 							   exprType(outarg),
-							   -1,
-							   0);
+							   -1);
 		}
 	}
 

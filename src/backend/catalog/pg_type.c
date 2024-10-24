@@ -118,7 +118,6 @@ TypeShellMake(const char *typeName, Oid typeNamespace, Oid ownerId)
 	values[Anum_pg_type_typnotnull - 1] = BoolGetDatum(false);
 	values[Anum_pg_type_typbasetype - 1] = ObjectIdGetDatum(InvalidOid);
 	values[Anum_pg_type_typtypmod - 1] = Int32GetDatum(-1);
-	values[Anum_pg_type_typndims - 1] = Int32GetDatum(0);
 	values[Anum_pg_type_typcollation - 1] = ObjectIdGetDatum(InvalidOid);
 	nulls[Anum_pg_type_typdefaultbin - 1] = true;
 	nulls[Anum_pg_type_typdefault - 1] = true;
@@ -221,7 +220,6 @@ TypeCreate(Oid newTypeOid,
 		   char alignment,
 		   char storage,
 		   int32 typeMod,
-		   int32 typNDims,		/* Array dimensions for baseType */
 		   bool typeNotNull,
 		   Oid typeCollation)
 {
@@ -376,7 +374,6 @@ TypeCreate(Oid newTypeOid,
 	values[Anum_pg_type_typnotnull - 1] = BoolGetDatum(typeNotNull);
 	values[Anum_pg_type_typbasetype - 1] = ObjectIdGetDatum(baseType);
 	values[Anum_pg_type_typtypmod - 1] = Int32GetDatum(typeMod);
-	values[Anum_pg_type_typndims - 1] = Int32GetDatum(typNDims);
 	values[Anum_pg_type_typcollation - 1] = ObjectIdGetDatum(typeCollation);
 
 	/*

@@ -215,12 +215,6 @@ CATALOG(pg_type,1247,TypeRelationId) BKI_BOOTSTRAP BKI_ROWTYPE_OID(71,TypeRelati
 	int32		typtypmod BKI_DEFAULT(-1);
 
 	/*
-	 * typndims is the declared number of dimensions for an array domain type
-	 * (i.e., typbasetype is an array type).  Otherwise zero.
-	 */
-	int32		typndims BKI_DEFAULT(0);
-
-	/*
 	 * Collation: 0 if type cannot use collations, nonzero (typically
 	 * DEFAULT_COLLATION_OID) for collatable base types, possibly some other
 	 * OID for domains over collatable types
@@ -378,7 +372,6 @@ extern ObjectAddress TypeCreate(Oid newTypeOid,
 								char alignment,
 								char storage,
 								int32 typeMod,
-								int32 typNDims,
 								bool typeNotNull,
 								Oid typeCollation);
 

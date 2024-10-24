@@ -352,6 +352,29 @@ pg_dump -j <replaceable class="parameter">num</replaceable> -F d -f <replaceable
   <title>File System Level Backup</title>
 
   <para>
+   In constrast to the logical backup that pg_dump performs there is
+   also the option to perform a physical backup.
+   <productname>PostgreSQL</productname> provides a tool,
+   <literal>pg_basebackup</literal>, that can produce a similar standalone
+   backup to the one produced by pg_dump, though the restoration point
+   of the physical backup is as of when the backup ended instead of when
+   it began. You may also choose to roll your own solution using the tools
+   available in your operating system.  This section describes both options.
+  </para>
+
+  <sect2 id="backup-standalone-pgbasebackup">
+    <title>Built-In Standalone Backups</title>
+    <para>
+     If all you want is a simple standalone backup of your cluster at some point in time
+     (specifically at roughly the moment the backup ended) you can just save the archive
+     produced by the <xref linkend="app-pgbasebackup"/> command. It handles, by default,
+     saving the write-ahead log (WAL) files produced during the backup to the archive.
+    </para>
+  </sect2>
+
+  <sect2 id="backup-standalone-custom">
+  <title>Custom Physical Backups</title>
+  <para>
    An alternative backup strategy is to directly copy the files that
    <productname>PostgreSQL</productname> uses to store the data in the database;
    <xref linkend="creating-cluster"/> explains where these files
@@ -462,6 +485,7 @@ tar -cf backup.tar /usr/local/pgsql/data
    the contents of indexes for example, just the commands to recreate
    them.)  However, taking a file system backup might be faster.
   </para>
+  </sect2>
  </sect1>
 
  <sect1 id="continuous-archiving">
@@ -1457,29 +1481,6 @@ restore_command = 'cp /mnt/server/archivedir/%f %p'
    <para>
     Some tips for configuring continuous archiving are given here.
    </para>
-
-    <sect3 id="backup-standalone">
-     <title>Standalone Hot Backups</title>
-
-     <para>
-      It is possible to use <productname>PostgreSQL</productname>'s backup facilities to
-      produce standalone hot backups. These are backups that cannot be used
-      for point-in-time recovery, yet are typically much faster to backup and
-      restore than <application>pg_dump</application> dumps.  (They are also much larger
-      than <application>pg_dump</application> dumps, so in some cases the speed advantage
-      might be negated.)
-     </para>
-
-     <para>
-      As with base backups, the easiest way to produce a standalone
-      hot backup is to use the <xref linkend="app-pgbasebackup"/>
-      tool. If you include the <literal>-X</literal> parameter when calling
-      it, all the write-ahead log required to use the backup will be
-      included in the backup automatically, and no special action is
-      required to restore the backup.
-     </para>
-    </sect3>
-
     <sect3 id="compressed-archive-logs">
      <title>Compressed Archive Logs</title>
 

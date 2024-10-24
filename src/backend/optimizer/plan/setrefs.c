@@ -211,7 +211,6 @@ static List *set_windowagg_runcondition_references(PlannerInfo *root,
 												   List *runcondition,
 												   Plan *plan);
 
-
 /*****************************************************************************
  *
  *		SUBPLAN REFERENCES
@@ -2494,6 +2493,32 @@ set_upper_references(PlannerInfo *root, Plan *plan, int rtoffset)
 					   rtoffset,
 					   NRM_EQUAL,
 					   NUM_EXEC_QUAL(plan));
+
+	/*
+	 * Modifies an expression tree in each DEFINE clause so that all Var
+	 * nodes's varno refers to OUTER_VAR.
+	 */
+	if (IsA(plan, WindowAgg))
+	{
+		WindowAgg  *wplan = (WindowAgg *) plan;
+
+		if (wplan->defineClause != NIL)
+		{
+			foreach(l, wplan->defineClause)
+			{
+				TargetEntry *tle = (TargetEntry *) lfirst(l);
+
+				tle->expr = (Expr *)
+					fix_upper_expr(root,
+								   (Node *) tle->expr,
+								   subplan_itlist,
+								   OUTER_VAR,
+								   rtoffset,
+								   NRM_EQUAL,
+								   NUM_EXEC_QUAL(plan));
+			}
+		}
+	}
 
 	pfree(subplan_itlist);
 }

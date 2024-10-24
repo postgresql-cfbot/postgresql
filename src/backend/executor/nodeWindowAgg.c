@@ -36,6 +36,7 @@
 #include "access/htup_details.h"
 #include "catalog/objectaccess.h"
 #include "catalog/pg_aggregate.h"
+#include "catalog/pg_collation_d.h"
 #include "catalog/pg_proc.h"
 #include "executor/executor.h"
 #include "executor/nodeWindowAgg.h"
@@ -48,6 +49,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
+#include "utils/fmgroids.h"
 #include "utils/expandeddatum.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -159,6 +161,43 @@ typedef struct WindowStatePerAggData
 	bool		restart;		/* need to restart this agg in this cycle? */
 } WindowStatePerAggData;
 
+/*
+ * Set of StringInfo. Used in RPR.
+ */
+typedef struct StringSet
+{
+	StringInfo *str_set;
+	Size		set_size;		/* current array allocation size in number of
+								 * items */
+	int			set_index;		/* current used size */
+}			StringSet;
+
+/*
+ * Allowed subsequent PATTERN variables positions.
+ * Used in RPR.
+ *
+ * pos represents the pattern variable defined order in DEFINE caluase.  For
+ * example. "DEFINE START..., UP..., DOWN ..." and "PATTERN START UP DOWN UP"
+ * will create:
+ * VariablePos[0].pos[0] = 0;		START
+ * VariablePos[1].pos[0] = 1;		UP
+ * VariablePos[1].pos[1] = 3;		UP
+ * VariablePos[2].pos[0] = 2;		DOWN
+ *
+ * Note that UP has two pos because UP appears in PATTERN twice.
+ *
+ * By using this strucrture, we can know which pattern variable can be followed
+ * by which pattern variable(s). For example, START can be followed by UP and
+ * DOWN since START's pos is 0, and UP's pos is 1 or 3, DOWN's pos is 2.
+ * DOWN can be followed by UP since UP's pos is either 1 or 3.
+ *
+ */
+#define NUM_ALPHABETS	26		/* we allow [a-z] variable initials */
+typedef struct VariablePos
+{
+	int			pos[NUM_ALPHABETS]; /* postion(s) in PATTERN */
+}			VariablePos;
+
 static void initialize_windowaggregate(WindowAggState *winstate,
 									   WindowStatePerFunc perfuncstate,
 									   WindowStatePerAgg peraggstate);
@@ -184,6 +223,7 @@ static void release_partition(WindowAggState *winstate);
 
 static int	row_is_in_frame(WindowAggState *winstate, int64 pos,
 							TupleTableSlot *slot);
+
 static void update_frameheadpos(WindowAggState *winstate);
 static void update_frametailpos(WindowAggState *winstate);
 static void update_grouptailpos(WindowAggState *winstate);
@@ -195,9 +235,48 @@ static Datum GetAggInitVal(Datum textInitVal, Oid transtype);
 
 static bool are_peers(WindowAggState *winstate, TupleTableSlot *slot1,
 					  TupleTableSlot *slot2);
+
+static int	WinGetSlotInFrame(WindowObject winobj, TupleTableSlot *slot,
+							  int relpos, int seektype, bool set_mark,
+							  bool *isnull, bool *isout);
 static bool window_gettupleslot(WindowObject winobj, int64 pos,
 								TupleTableSlot *slot);
 
+static void attno_map(Node *node);
+static bool attno_map_walker(Node *node, void *context);
+static int	row_is_in_reduced_frame(WindowObject winobj, int64 pos);
+static bool rpr_is_defined(WindowAggState *winstate);
+
+static void create_reduced_frame_map(WindowAggState *winstate);
+static int	get_reduced_frame_map(WindowAggState *winstate, int64 pos);
+static void register_reduced_frame_map(WindowAggState *winstate, int64 pos,
+									   int val);
+static void clear_reduced_frame_map(WindowAggState *winstate);
+static void update_reduced_frame(WindowObject winobj, int64 pos);
+
+static int64 evaluate_pattern(WindowObject winobj, int64 current_pos,
+							  char *vname, StringInfo encoded_str, bool *result);
+
+static bool get_slots(WindowObject winobj, int64 current_pos);
+
+static int	search_str_set(char *pattern, StringSet * str_set,
+						   VariablePos * variable_pos);
+static char pattern_initial(WindowAggState *winstate, char *vname);
+static int	do_pattern_match(char *pattern, char *encoded_str);
+
+static StringSet * string_set_init(void);
+static void string_set_add(StringSet * string_set, StringInfo str);
+static StringInfo string_set_get(StringSet * string_set, int index);
+static int	string_set_get_size(StringSet * string_set);
+static void string_set_discard(StringSet * string_set);
+static VariablePos * variable_pos_init(void);
+static void variable_pos_register(VariablePos * variable_pos, char initial,
+								  int pos);
+static bool variable_pos_compare(VariablePos * variable_pos,
+								 char initial1, char initial2);
+static int	variable_pos_fetch(VariablePos * variable_pos, char initial,
+							   int index);
+static void variable_pos_discard(VariablePos * variable_pos);
 
 /*
  * initialize_windowaggregate
@@ -774,10 +853,12 @@ eval_windowaggregates(WindowAggState *winstate)
 	 *	   transition function, or
 	 *	 - we have an EXCLUSION clause, or
 	 *	 - if the new frame doesn't overlap the old one
+	 *   - if RPR is enabled
 	 *
 	 * Note that we don't strictly need to restart in the last case, but if
 	 * we're going to remove all rows from the aggregation anyway, a restart
 	 * surely is faster.
+	 *     we restart aggregation too.
 	 *----------
 	 */
 	numaggs_restart = 0;
@@ -788,7 +869,8 @@ eval_windowaggregates(WindowAggState *winstate)
 			(winstate->aggregatedbase != winstate->frameheadpos &&
 			 !OidIsValid(peraggstate->invtransfn_oid)) ||
 			(winstate->frameOptions & FRAMEOPTION_EXCLUSION) ||
-			winstate->aggregatedupto <= winstate->frameheadpos)
+			winstate->aggregatedupto <= winstate->frameheadpos ||
+			rpr_is_defined(winstate))
 		{
 			peraggstate->restart = true;
 			numaggs_restart++;
@@ -862,7 +944,22 @@ eval_windowaggregates(WindowAggState *winstate)
 	 * head, so that tuplestore can discard unnecessary rows.
 	 */
 	if (agg_winobj->markptr >= 0)
-		WinSetMarkPosition(agg_winobj, winstate->frameheadpos);
+	{
+		int64		markpos = winstate->frameheadpos;
+
+		if (rpr_is_defined(winstate))
+		{
+			/*
+			 * If RPR is used, it is possible PREV wants to look at the
+			 * previous row.  So the mark pos should be frameheadpos - 1
+			 * unless it is below 0.
+			 */
+			markpos -= 1;
+			if (markpos < 0)
+				markpos = 0;
+		}
+		WinSetMarkPosition(agg_winobj, markpos);
+	}
 
 	/*
 	 * Now restart the aggregates that require it.
@@ -917,6 +1014,14 @@ eval_windowaggregates(WindowAggState *winstate)
 	{
 		winstate->aggregatedupto = winstate->frameheadpos;
 		ExecClearTuple(agg_row_slot);
+
+		/*
+		 * If RPR is defined, we do not use aggregatedupto_nonrestarted.  To
+		 * avoid assertion failure below, we reset aggregatedupto_nonrestarted
+		 * to frameheadpos.
+		 */
+		if (rpr_is_defined(winstate))
+			aggregatedupto_nonrestarted = winstate->frameheadpos;
 	}
 
 	/*
@@ -929,6 +1034,12 @@ eval_windowaggregates(WindowAggState *winstate)
 	for (;;)
 	{
 		int			ret;
+
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "===== loop in frame starts: aggregatedupto: " INT64_FORMAT " aggregatedbase: " INT64_FORMAT,
+			 winstate->aggregatedupto,
+			 winstate->aggregatedbase);
+#endif
 
 		/* Fetch next row if we didn't already */
 		if (TupIsNull(agg_row_slot))
@@ -945,8 +1056,51 @@ eval_windowaggregates(WindowAggState *winstate)
 		ret = row_is_in_frame(winstate, winstate->aggregatedupto, agg_row_slot);
 		if (ret < 0)
 			break;
+
 		if (ret == 0)
 			goto next_tuple;
+
+		if (rpr_is_defined(winstate))
+		{
+#ifdef RPR_DEBUG
+			elog(DEBUG1, "reduced_frame_map: %d aggregatedupto: " INT64_FORMAT " aggregatedbase: " INT64_FORMAT,
+				 get_reduced_frame_map(winstate,
+									   winstate->aggregatedupto),
+				 winstate->aggregatedupto,
+				 winstate->aggregatedbase);
+#endif
+			/*
+			 * If the row status at currentpos is already decided and current
+			 * row status is not decided yet, it means we passed the last
+			 * reduced frame. Time to break the loop.
+			 */
+			if (get_reduced_frame_map(winstate,
+									  winstate->currentpos) != RF_NOT_DETERMINED &&
+				get_reduced_frame_map(winstate,
+									  winstate->aggregatedupto) == RF_NOT_DETERMINED)
+				break;
+
+			/*
+			 * Otherwise we need to calculate the reduced frame.
+			 */
+			ret = row_is_in_reduced_frame(winstate->agg_winobj,
+										  winstate->aggregatedupto);
+			if (ret == -1)		/* unmatched row */
+				break;
+
+			/*
+			 * Check if current row needs to be skipped due to no match.
+			 */
+			if (get_reduced_frame_map(winstate,
+									  winstate->aggregatedupto) == RF_SKIPPED &&
+				winstate->aggregatedupto == winstate->aggregatedbase)
+			{
+#ifdef RPR_DEBUG
+				elog(DEBUG1, "skip current row for aggregation");
+#endif
+				break;
+			}
+		}
 
 		/* Set tuple context for evaluation of aggregate arguments */
 		winstate->tmpcontext->ecxt_outertuple = agg_row_slot;
@@ -976,6 +1130,7 @@ next_tuple:
 		ExecClearTuple(agg_row_slot);
 	}
 
+
 	/* The frame's end is not supposed to move backwards, ever */
 	Assert(aggregatedupto_nonrestarted <= winstate->aggregatedupto);
 
@@ -995,7 +1150,6 @@ next_tuple:
 								 &winstate->perfunc[wfuncno],
 								 peraggstate,
 								 result, isnull);
-
 		/*
 		 * save the result in case next row shares the same frame.
 		 *
@@ -1199,6 +1353,7 @@ begin_partition(WindowAggState *winstate)
 	winstate->framehead_valid = false;
 	winstate->frametail_valid = false;
 	winstate->grouptail_valid = false;
+	create_reduced_frame_map(winstate);
 	winstate->spooled_rows = 0;
 	winstate->currentpos = 0;
 	winstate->frameheadpos = 0;
@@ -2170,6 +2325,11 @@ ExecWindowAgg(PlanState *pstate)
 
 	CHECK_FOR_INTERRUPTS();
 
+#ifdef RPR_DEBUG
+	elog(DEBUG1, "ExecWindowAgg called. pos: " INT64_FORMAT,
+		 winstate->currentpos);
+#endif
+
 	if (winstate->status == WINDOWAGG_DONE)
 		return NULL;
 
@@ -2278,6 +2438,17 @@ ExecWindowAgg(PlanState *pstate)
 		/* don't evaluate the window functions when we're in pass-through mode */
 		if (winstate->status == WINDOWAGG_RUN)
 		{
+			/*
+			 * If RPR is defined and skip mode is next row, we need to clear
+			 * existing reduced frame info so that we newly calculate the info
+			 * starting from current row.
+			 */
+			if (rpr_is_defined(winstate))
+			{
+				if (winstate->rpSkipTo == ST_NEXT_ROW)
+					clear_reduced_frame_map(winstate);
+			}
+
 			/*
 			 * Evaluate true window functions
 			 */
@@ -2445,6 +2616,9 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	TupleDesc	scanDesc;
 	ListCell   *l;
 
+	TargetEntry *te;
+	Expr	   *expr;
+
 	/* check for unsupported flags */
 	Assert(!(eflags & (EXEC_FLAG_BACKWARD | EXEC_FLAG_MARK)));
 
@@ -2542,6 +2716,16 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 												   &TTSOpsMinimalTuple);
 	winstate->temp_slot_2 = ExecInitExtraTupleSlot(estate, scanDesc,
 												   &TTSOpsMinimalTuple);
+
+	winstate->prev_slot = ExecInitExtraTupleSlot(estate, scanDesc,
+												 &TTSOpsMinimalTuple);
+
+	winstate->next_slot = ExecInitExtraTupleSlot(estate, scanDesc,
+												 &TTSOpsMinimalTuple);
+
+	winstate->null_slot = ExecInitExtraTupleSlot(estate, scanDesc,
+												 &TTSOpsMinimalTuple);
+	winstate->null_slot = ExecStoreAllNullTuple(winstate->null_slot);
 
 	/*
 	 * create frame head and tail slots only if needed (must create slots in
@@ -2724,12 +2908,107 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	winstate->inRangeAsc = node->inRangeAsc;
 	winstate->inRangeNullsFirst = node->inRangeNullsFirst;
 
+	/* Set up SKIP TO type */
+	winstate->rpSkipTo = node->rpSkipTo;
+	/* Set up row pattern recognition PATTERN clause */
+	winstate->patternVariableList = node->patternVariable;
+	winstate->patternRegexpList = node->patternRegexp;
+
+	/* Set up row pattern recognition DEFINE clause */
+	winstate->defineInitial = node->defineInitial;
+	winstate->defineVariableList = NIL;
+	winstate->defineClauseList = NIL;
+	if (node->defineClause != NIL)
+	{
+		/*
+		 * Tweak arg var of PREV/NEXT so that it refers to scan/inner slot.
+		 */
+		foreach(l, node->defineClause)
+		{
+			char	   *name;
+			ExprState  *exps;
+
+			te = lfirst(l);
+			name = te->resname;
+			expr = te->expr;
+
+#ifdef RPR_DEBUG
+			elog(DEBUG1, "defineVariable name: %s", name);
+#endif
+			winstate->defineVariableList =
+				lappend(winstate->defineVariableList,
+						makeString(pstrdup(name)));
+			attno_map((Node *) expr);
+			exps = ExecInitExpr(expr, (PlanState *) winstate);
+			winstate->defineClauseList =
+				lappend(winstate->defineClauseList, exps);
+		}
+	}
+
 	winstate->all_first = true;
 	winstate->partition_spooled = false;
 	winstate->more_partitions = false;
 	winstate->next_partition = true;
 
 	return winstate;
+}
+
+/*
+ * Rewrite varno of Var node that is the argument of PREV/NET so that it sees
+ * scan tuple (PREV) or inner tuple (NEXT).
+ */
+static void
+attno_map(Node *node)
+{
+	(void) expression_tree_walker(node, attno_map_walker, NULL);
+}
+
+static bool
+attno_map_walker(Node *node, void *context)
+{
+	FuncExpr   *func;
+	int			nargs;
+	Expr	   *expr;
+	Var		   *var;
+
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, FuncExpr))
+	{
+		func = (FuncExpr *) node;
+
+		if (func->funcid == F_PREV || func->funcid == F_NEXT)
+		{
+			/* sanity check */
+			nargs = list_length(func->args);
+			if (list_length(func->args) != 1)
+				elog(ERROR, "PREV/NEXT must have 1 argument but function %d has %d args",
+					 func->funcid, nargs);
+
+			expr = (Expr *) lfirst(list_head(func->args));
+			if (!IsA(expr, Var))
+				elog(ERROR, "PREV/NEXT's arg is not Var");	/* XXX: is it possible
+															 * that arg type is
+															 * Const? */
+			var = (Var *) expr;
+
+			if (func->funcid == F_PREV)
+
+				/*
+				 * Rewrite varno from OUTER_VAR to regular var no so that the
+				 * var references scan tuple.
+				 */
+				var->varno = var->varnosyn;
+			else
+				var->varno = INNER_VAR;
+
+#ifdef RPR_DEBUG
+			elog(DEBUG1, "PREV/NEXT's varno is rewritten to: %d", var->varno);
+#endif
+		}
+	}
+	return expression_tree_walker(node, attno_map_walker, NULL);
 }
 
 /* -----------------
@@ -2789,6 +3068,8 @@ ExecReScanWindowAgg(WindowAggState *node)
 	ExecClearTuple(node->agg_row_slot);
 	ExecClearTuple(node->temp_slot_1);
 	ExecClearTuple(node->temp_slot_2);
+	ExecClearTuple(node->prev_slot);
+	ExecClearTuple(node->next_slot);
 	if (node->framehead_slot)
 		ExecClearTuple(node->framehead_slot);
 	if (node->frametail_slot)
@@ -3149,7 +3430,8 @@ window_gettupleslot(WindowObject winobj, int64 pos, TupleTableSlot *slot)
 		return false;
 
 	if (pos < winobj->markpos)
-		elog(ERROR, "cannot fetch row before WindowObject's mark position");
+		elog(ERROR, "cannot fetch row: " INT64_FORMAT " before WindowObject's mark position: " INT64_FORMAT,
+			 pos, winobj->markpos);
 
 	oldcontext = MemoryContextSwitchTo(winstate->ss.ps.ps_ExprContext->ecxt_per_query_memory);
 
@@ -3469,13 +3751,53 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
 	WindowAggState *winstate;
 	ExprContext *econtext;
 	TupleTableSlot *slot;
-	int64		abs_pos;
-	int64		mark_pos;
 
 	Assert(WindowObjectIsValid(winobj));
 	winstate = winobj->winstate;
 	econtext = winstate->ss.ps.ps_ExprContext;
 	slot = winstate->temp_slot_1;
+
+	if (WinGetSlotInFrame(winobj, slot,
+						  relpos, seektype, set_mark,
+						  isnull, isout) == 0)
+	{
+		econtext->ecxt_outertuple = slot;
+		return ExecEvalExpr((ExprState *) list_nth(winobj->argstates, argno),
+							econtext, isnull);
+	}
+
+	if (isout)
+		*isout = true;
+	*isnull = true;
+	return (Datum) 0;
+}
+
+/*
+ * WinGetSlotInFrame
+ * slot: TupleTableSlot to store the result
+ * relpos: signed rowcount offset from the seek position
+ * seektype: WINDOW_SEEK_HEAD or WINDOW_SEEK_TAIL
+ * set_mark: If the row is found/in frame and set_mark is true, the mark is
+ *		moved to the row as a side-effect.
+ * isnull: output argument, receives isnull status of result
+ * isout: output argument, set to indicate whether target row position
+ *		is out of frame (can pass NULL if caller doesn't care about this)
+ *
+ * Returns 0 if we successfullt got the slot. false if out of frame.
+ * (also isout is set)
+ */
+static int
+WinGetSlotInFrame(WindowObject winobj, TupleTableSlot *slot,
+				  int relpos, int seektype, bool set_mark,
+				  bool *isnull, bool *isout)
+{
+	WindowAggState *winstate;
+	int64		abs_pos;
+	int64		mark_pos;
+	int			num_reduced_frame;
+
+	Assert(WindowObjectIsValid(winobj));
+	winstate = winobj->winstate;
 
 	switch (seektype)
 	{
@@ -3543,11 +3865,25 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
 						 winstate->frameOptions);
 					break;
 			}
+			num_reduced_frame = row_is_in_reduced_frame(winobj,
+														winstate->frameheadpos);
+			if (num_reduced_frame < 0)
+				goto out_of_frame;
+			else if (num_reduced_frame > 0)
+				if (relpos >= num_reduced_frame)
+					goto out_of_frame;
 			break;
 		case WINDOW_SEEK_TAIL:
 			/* rejecting relpos > 0 is easy and simplifies code below */
 			if (relpos > 0)
 				goto out_of_frame;
+
+			/*
+			 * RPR cares about frame head pos. Need to call
+			 * update_frameheadpos
+			 */
+			update_frameheadpos(winstate);
+
 			update_frametailpos(winstate);
 			abs_pos = winstate->frametailpos - 1 + relpos;
 
@@ -3614,6 +3950,14 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
 					mark_pos = 0;	/* keep compiler quiet */
 					break;
 			}
+
+			num_reduced_frame = row_is_in_reduced_frame(winobj,
+														winstate->frameheadpos + relpos);
+			if (num_reduced_frame < 0)
+				goto out_of_frame;
+			else if (num_reduced_frame > 0)
+				abs_pos = winstate->frameheadpos + relpos +
+					num_reduced_frame - 1;
 			break;
 		default:
 			elog(ERROR, "unrecognized window seek type: %d", seektype);
@@ -3632,15 +3976,13 @@ WinGetFuncArgInFrame(WindowObject winobj, int argno,
 		*isout = false;
 	if (set_mark)
 		WinSetMarkPosition(winobj, mark_pos);
-	econtext->ecxt_outertuple = slot;
-	return ExecEvalExpr((ExprState *) list_nth(winobj->argstates, argno),
-						econtext, isnull);
+	return 0;
 
 out_of_frame:
 	if (isout)
 		*isout = true;
 	*isnull = true;
-	return (Datum) 0;
+	return -1;
 }
 
 /*
@@ -3670,4 +4012,1252 @@ WinGetFuncArgCurrent(WindowObject winobj, int argno, bool *isnull)
 	econtext->ecxt_outertuple = winstate->ss.ss_ScanTupleSlot;
 	return ExecEvalExpr((ExprState *) list_nth(winobj->argstates, argno),
 						econtext, isnull);
+}
+
+/*
+ * rpr_is_defined
+ * return true if Row pattern recognition is defined.
+ */
+static
+bool
+rpr_is_defined(WindowAggState *winstate)
+{
+	return winstate->patternVariableList != NIL;
+}
+
+/*
+ * -----------------
+ * row_is_in_reduced_frame
+ * Determine whether a row is in the current row's reduced window frame
+ * according to row pattern matching
+ *
+ * The row must has been already determined that it is in a full window frame
+ * and fetched it into slot.
+ *
+ * Returns:
+ * = 0, RPR is not defined.
+ * >0, if the row is the first in the reduced frame. Return the number of rows
+ * in the reduced frame.
+ * -1, if the row is unmatched row
+ * -2, if the row is in the reduced frame but needed to be skipped because of
+ * AFTER MATCH SKIP PAST LAST ROW
+ * -----------------
+ */
+static
+int
+row_is_in_reduced_frame(WindowObject winobj, int64 pos)
+{
+	WindowAggState *winstate = winobj->winstate;
+	int			state;
+	int			rtn;
+
+	if (!rpr_is_defined(winstate))
+	{
+		/*
+		 * RPR is not defined. Assume that we are always in the the reduced
+		 * window frame.
+		 */
+		rtn = 0;
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "row_is_in_reduced_frame returns %d: pos: " INT64_FORMAT,
+			 rtn, pos);
+#endif
+		return rtn;
+	}
+
+	state = get_reduced_frame_map(winstate, pos);
+
+	if (state == RF_NOT_DETERMINED)
+	{
+		update_frameheadpos(winstate);
+		update_reduced_frame(winobj, pos);
+	}
+
+	state = get_reduced_frame_map(winstate, pos);
+
+	switch (state)
+	{
+			int64		i;
+			int			num_reduced_rows;
+
+		case RF_FRAME_HEAD:
+			num_reduced_rows = 1;
+			for (i = pos + 1;
+				 get_reduced_frame_map(winstate, i) == RF_SKIPPED; i++)
+				num_reduced_rows++;
+			rtn = num_reduced_rows;
+			break;
+
+		case RF_SKIPPED:
+			rtn = -2;
+			break;
+
+		case RF_UNMATCHED:
+			rtn = -1;
+			break;
+
+		default:
+			elog(ERROR, "Unrecognized state: %d at: " INT64_FORMAT,
+				 state, pos);
+			break;
+	}
+
+#ifdef RPR_DEBUG
+	elog(DEBUG1, "row_is_in_reduced_frame returns %d: pos: " INT64_FORMAT,
+		 rtn, pos);
+#endif
+	return rtn;
+}
+
+#define REDUCED_FRAME_MAP_INIT_SIZE	1024L
+
+/*
+ * create_reduced_frame_map
+ * Create reduced frame map
+ */
+static
+void
+create_reduced_frame_map(WindowAggState *winstate)
+{
+	winstate->reduced_frame_map =
+		MemoryContextAlloc(winstate->partcontext,
+						   REDUCED_FRAME_MAP_INIT_SIZE);
+	winstate->alloc_sz = REDUCED_FRAME_MAP_INIT_SIZE;
+	clear_reduced_frame_map(winstate);
+}
+
+/*
+ * clear_reduced_frame_map
+ * Clear reduced frame map
+ */
+static
+void
+clear_reduced_frame_map(WindowAggState *winstate)
+{
+	Assert(winstate->reduced_frame_map != NULL);
+	MemSet(winstate->reduced_frame_map, RF_NOT_DETERMINED,
+		   winstate->alloc_sz);
+}
+
+/*
+ * get_reduced_frame_map
+ * Get reduced frame map specified by pos
+ */
+static
+int
+get_reduced_frame_map(WindowAggState *winstate, int64 pos)
+{
+	Assert(winstate->reduced_frame_map != NULL);
+
+	if (pos < 0 || pos >= winstate->alloc_sz)
+		elog(ERROR, "wrong pos: " INT64_FORMAT, pos);
+
+	return winstate->reduced_frame_map[pos];
+}
+
+/*
+ * register_reduced_frame_map
+ * Add/replace reduced frame map member at pos.
+ * If there's no enough space, expand the map.
+ */
+static
+void
+register_reduced_frame_map(WindowAggState *winstate, int64 pos, int val)
+{
+	int64		realloc_sz;
+
+	Assert(winstate->reduced_frame_map != NULL);
+
+	if (pos < 0)
+		elog(ERROR, "wrong pos: " INT64_FORMAT, pos);
+
+	if (pos > winstate->alloc_sz - 1)
+	{
+		realloc_sz = winstate->alloc_sz * 2;
+
+		winstate->reduced_frame_map =
+			repalloc(winstate->reduced_frame_map, realloc_sz);
+
+		MemSet(winstate->reduced_frame_map + winstate->alloc_sz,
+			   RF_NOT_DETERMINED, realloc_sz - winstate->alloc_sz);
+
+		winstate->alloc_sz = realloc_sz;
+	}
+
+	winstate->reduced_frame_map[pos] = val;
+}
+
+/*
+ * update_reduced_frame
+ *		Update reduced frame info.
+ */
+static
+void
+update_reduced_frame(WindowObject winobj, int64 pos)
+{
+	WindowAggState *winstate = winobj->winstate;
+	ListCell   *lc1,
+			   *lc2;
+	bool		expression_result;
+	int			num_matched_rows;
+	int64		original_pos;
+	bool		anymatch;
+	StringInfo	encoded_str;
+	StringInfo	pattern_str = makeStringInfo();
+	StringSet  *str_set;
+	int			initial_index;
+	VariablePos *variable_pos;
+	bool		greedy = false;
+	int64		result_pos,
+				i;
+
+	/*
+	 * Set of pattern variables evaluated to true. Each character corresponds
+	 * to pattern variable. Example: str_set[0] = "AB"; str_set[1] = "AC"; In
+	 * this case at row 0 A and B are true, and A and C are true in row 1.
+	 */
+
+	/* initialize pattern variables set */
+	str_set = string_set_init();
+
+	/* save original pos */
+	original_pos = pos;
+
+	/*
+	 * Check if the pattern does not include any greedy quantifier. If it does
+	 * not, we can just apply the pattern to each row. If it succeeds, we are
+	 * done.
+	 */
+	foreach(lc1, winstate->patternRegexpList)
+	{
+		char	   *quantifier = strVal(lfirst(lc1));
+
+		if (*quantifier == '+' || *quantifier == '*')
+		{
+			greedy = true;
+			break;
+		}
+	}
+
+	/*
+	 * Non greedy case
+	 */
+	if (!greedy)
+	{
+		num_matched_rows = 0;
+
+		foreach(lc1, winstate->patternVariableList)
+		{
+			char	   *vname = strVal(lfirst(lc1));
+
+			encoded_str = makeStringInfo();
+
+#ifdef RPR_DEBUG
+			elog(DEBUG1, "pos: " INT64_FORMAT " pattern vname: %s",
+				 pos, vname);
+#endif
+			expression_result = false;
+
+			/* evaluate row pattern against current row */
+			result_pos = evaluate_pattern(winobj, pos, vname,
+										  encoded_str, &expression_result);
+			if (!expression_result || result_pos < 0)
+			{
+#ifdef RPR_DEBUG
+				elog(DEBUG1, "expression result is false or out of frame");
+#endif
+				register_reduced_frame_map(winstate, original_pos,
+										   RF_UNMATCHED);
+				return;
+			}
+			/* move to next row */
+			pos++;
+			num_matched_rows++;
+		}
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "pattern matched");
+#endif
+		register_reduced_frame_map(winstate, original_pos, RF_FRAME_HEAD);
+
+		for (i = original_pos + 1; i < original_pos + num_matched_rows; i++)
+		{
+			register_reduced_frame_map(winstate, i, RF_SKIPPED);
+		}
+		return;
+	}
+
+	/*
+	 * Greedy quantifiers included. Loop over until none of pattern matches or
+	 * encounters end of frame.
+	 */
+	for (;;)
+	{
+		result_pos = -1;
+
+		/*
+		 * Loop over each PATTERN variable.
+		 */
+		anymatch = false;
+		encoded_str = makeStringInfo();
+
+		forboth(lc1, winstate->patternVariableList, lc2,
+				winstate->patternRegexpList)
+		{
+			char	   *vname = strVal(lfirst(lc1));
+#ifdef RPR_DEBUG
+			char	   *quantifier = strVal(lfirst(lc2));
+
+			elog(DEBUG1, "pos: " INT64_FORMAT " pattern vname: %s quantifier: %s",
+				 pos, vname, quantifier);
+#endif
+			expression_result = false;
+
+			/* evaluate row pattern against current row */
+			result_pos = evaluate_pattern(winobj, pos, vname,
+										  encoded_str, &expression_result);
+			if (expression_result)
+			{
+#ifdef RPR_DEBUG
+				elog(DEBUG1, "expression result is true");
+#endif
+				anymatch = true;
+			}
+
+			/*
+			 * If out of frame, we are done.
+			 */
+			if (result_pos < 0)
+				break;
+		}
+
+		if (!anymatch)
+		{
+			/* none of patterns matched. */
+			break;
+		}
+
+		string_set_add(str_set, encoded_str);
+
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "pos: " INT64_FORMAT " encoded_str: %s",
+			 encoded_str->data);
+#endif
+
+		/* move to next row */
+		pos++;
+
+		if (result_pos < 0)
+		{
+			/* out of frame */
+			break;
+		}
+	}
+
+	if (string_set_get_size(str_set) == 0)
+	{
+		/* no match found in the first row */
+		register_reduced_frame_map(winstate, original_pos, RF_UNMATCHED);
+		return;
+	}
+
+#ifdef RPR_DEBUG
+	elog(DEBUG2, "pos: " INT64_FORMAT " encoded_str: %s",
+		 pos, encoded_str->data);
+#endif
+
+	/* build regular expression */
+	pattern_str = makeStringInfo();
+	appendStringInfoChar(pattern_str, '^');
+	initial_index = 0;
+
+	variable_pos = variable_pos_init();
+
+	forboth(lc1, winstate->patternVariableList,
+			lc2, winstate->patternRegexpList)
+	{
+		char	   *vname = strVal(lfirst(lc1));
+		char	   *quantifier = strVal(lfirst(lc2));
+		char		initial;
+
+		initial = pattern_initial(winstate, vname);
+		Assert(initial != 0);
+		appendStringInfoChar(pattern_str, initial);
+		if (quantifier[0])
+			appendStringInfoChar(pattern_str, quantifier[0]);
+
+		/*
+		 * Register the initial at initial_index. If the initial appears more
+		 * than once, all of it's initial_index will be recorded. This could
+		 * happen if a pattern variable appears in the PATTERN clause more
+		 * than once like "UP DOWN UP" "UP UP UP".
+		 */
+		variable_pos_register(variable_pos, initial, initial_index);
+
+		initial_index++;
+	}
+
+#ifdef RPR_DEBUG
+	elog(DEBUG2, "pos: " INT64_FORMAT " pattern: %s",
+		 pos, pattern_str->data);
+#endif
+
+	/* look for matching pattern variable sequence */
+#ifdef RPR_DEBUG
+	elog(DEBUG1, "search_str_set started");
+#endif
+	num_matched_rows = search_str_set(pattern_str->data,
+									  str_set, variable_pos);
+#ifdef RPR_DEBUG
+	elog(DEBUG1, "search_str_set returns: %d", num_matched_rows);
+#endif
+	variable_pos_discard(variable_pos);
+	string_set_discard(str_set);
+
+	/*
+	 * We are at the first row in the reduced frame.  Save the number of
+	 * matched rows as the number of rows in the reduced frame.
+	 */
+	if (num_matched_rows <= 0)
+	{
+		/* no match */
+		register_reduced_frame_map(winstate, original_pos, RF_UNMATCHED);
+	}
+	else
+	{
+		register_reduced_frame_map(winstate, original_pos, RF_FRAME_HEAD);
+
+		for (i = original_pos + 1; i < original_pos + num_matched_rows; i++)
+		{
+			register_reduced_frame_map(winstate, i, RF_SKIPPED);
+		}
+	}
+
+	return;
+}
+
+/*
+ * search_str_set
+ * Perform pattern matching using "pattern" against str_set. pattern is a
+ * regular expression derived from PATTERN clause. Note that the regular
+ * expression string is prefixed by '^' and followed by initials represented
+ * in a same way as str_set. str_set is a set of StringInfo. Each StringInfo
+ * has a string comprising initials of pattern variable strings being true in
+ * a row. The initials are one of [a-y], parallel to the order of variable
+ * names in DEFINE clause. Suppose DEFINE has variables START, UP and DOWN. If
+ * PATTERN has START, UP+ and DOWN, then the initials in PATTERN will be 'a',
+ * 'b' and 'c'. The "pattern" will be "^ab+c".
+ *
+ * variable_pos is an array representing the order of pattern variable string
+ * initials in PATTERN clause.  For example initial 'a' potion is in
+ * variable_pos[0].pos[0] = 0. Note that if the pattern is "START UP DOWN UP"
+ * (UP appears twice), then "UP" (initial is 'b') has two position 1 and
+ * 3. Thus variable_pos for b is variable_pos[1].pos[0] = 1 and
+ * variable_pos[1].pos[1] = 3.
+ *
+ * Returns the longest number of the matching rows (greedy matching) if
+ * quatifier '+' or '*' is included in "pattern".
+ */
+static
+int
+search_str_set(char *pattern, StringSet * str_set, VariablePos * variable_pos)
+{
+#define	MAX_CANDIDATE_NUM	10000	/* max pattern match candidate size */
+#define	FREEZED_CHAR	'Z'		/* a pattern is freezed if it ends with the
+								 * char */
+#define	DISCARD_CHAR	'z'		/* a pattern is not need to keep */
+
+	int			set_size;		/* number of rows in the set */
+	int			resultlen;
+	int			index;
+	StringSet  *old_str_set,
+			   *new_str_set;
+	int			new_str_size;
+	int			len;
+
+	set_size = string_set_get_size(str_set);
+	new_str_set = string_set_init();
+	len = 0;
+	resultlen = 0;
+
+	/*
+	 * Generate all possible pattern variable name initials as a set of
+	 * StringInfo named "new_str_set".  For example, if we have two rows
+	 * having "ab" (row 0) and "ac" (row 1) in the input str_set, new_str_set
+	 * will have set of StringInfo "aa", "ac", "ba" and "bc" in the end.
+	 */
+#ifdef RPR_DEBUG
+	elog(DEBUG1, "pattern: %s set_size: %d", pattern, set_size);
+#endif
+	for (index = 0; index < set_size; index++)
+	{
+		StringInfo	str;		/* search target row */
+		char	   *p;
+		int			old_set_size;
+		int			i;
+
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "index: %d", index);
+#endif
+		if (index == 0)
+		{
+			/* copy variables in row 0 */
+			str = string_set_get(str_set, index);
+			p = str->data;
+
+			/*
+			 * Loop over each new pattern variable char.
+			 */
+			while (*p)
+			{
+				StringInfo	new = makeStringInfo();
+
+				/* add pattern variable char */
+				appendStringInfoChar(new, *p);
+				/* add new one to string set */
+				string_set_add(new_str_set, new);
+#ifdef RPR_DEBUG
+				elog(DEBUG1, "old_str: NULL new_str: %s", new->data);
+#endif
+				p++;			/* next pattern variable */
+			}
+		}
+		else					/* index != 0 */
+		{
+			old_str_set = new_str_set;
+			new_str_set = string_set_init();
+			str = string_set_get(str_set, index);
+			old_set_size = string_set_get_size(old_str_set);
+
+			/*
+			 * Loop over each rows in the previous result set.
+			 */
+			for (i = 0; i < old_set_size; i++)
+			{
+				StringInfo	new;
+				char		last_old_char;
+				int			old_str_len;
+				StringInfo	old = string_set_get(old_str_set, i);
+
+				p = old->data;
+				old_str_len = strlen(p);
+				if (old_str_len > 0)
+					last_old_char = p[old_str_len - 1];
+				else
+					last_old_char = '\0';
+
+				/* Is this old set freezed? */
+				if (last_old_char == FREEZED_CHAR)
+				{
+					/* if shorter match. we can discard it */
+					if ((old_str_len - 1) < resultlen)
+					{
+#ifdef RPR_DEBUG
+						elog(DEBUG1, "discard this old set because shorter match: %s",
+							 old->data);
+#endif
+						continue;
+					}
+
+#ifdef RPR_DEBUG
+					elog(DEBUG1, "keep this old set: %s", old->data);
+#endif
+
+					/* move the old set to new_str_set */
+					string_set_add(new_str_set, old);
+					old_str_set->str_set[i] = NULL;
+					continue;
+				}
+				/* Can this old set be discarded? */
+				else if (last_old_char == DISCARD_CHAR)
+				{
+#ifdef RPR_DEBUG
+					elog(DEBUG1, "discard this old set: %s", old->data);
+#endif
+					continue;
+				}
+
+#ifdef RPR_DEBUG
+				elog(DEBUG1, "str->data: %s", str->data);
+#endif
+
+				/*
+				 * loop over each pattern variable initial char in the input
+				 * set.
+				 */
+				for (p = str->data; *p; p++)
+				{
+					/*
+					 * Optimization.  Check if the row's pattern variable
+					 * initial character position is greater than or equal to
+					 * the old set's last pattern variable initial character
+					 * position. For example, if the old set's last pattern
+					 * variable initials are "ab", then the new pattern
+					 * variable initial can be "b" or "c" but can not be "a",
+					 * if the initials in PATTERN is something like "a b c" or
+					 * "a b+ c+" etc.  This optimization is possible when we
+					 * only allow "+" quantifier.
+					 */
+					if (variable_pos_compare(variable_pos, last_old_char, *p))
+					{
+						/* copy source string */
+						new = makeStringInfo();
+						enlargeStringInfo(new, old->len + 1);
+						appendStringInfoString(new, old->data);
+						/* add pattern variable char */
+						appendStringInfoChar(new, *p);
+#ifdef RPR_DEBUG
+						elog(DEBUG1, "old_str: %s new_str: %s",
+							 old->data, new->data);
+#endif
+
+						/*
+						 * Adhoc optimization. If the first letter in the
+						 * input string is the first and second position one
+						 * and there's no associated quatifier '+', then we
+						 * can dicard the input because there's no chace to
+						 * expand the string further.
+						 *
+						 * For example, pattern "abc" cannot match "aa".
+						 */
+#ifdef RPR_DEBUG
+						elog(DEBUG1, "pattern[1]:%c pattern[2]:%c new[0]:%c new[1]:%c",
+							 pattern[1], pattern[2], new->data[0], new->data[1]);
+#endif
+						if (pattern[1] == new->data[0] &&
+							pattern[1] == new->data[1] &&
+							pattern[2] != '+' &&
+							pattern[1] != pattern[2])
+						{
+#ifdef RPR_DEBUG
+							elog(DEBUG1, "discard this new data: %s",
+								 new->data);
+#endif
+							pfree(new->data);
+							pfree(new);
+							continue;
+						}
+
+						/* add new one to string set */
+						string_set_add(new_str_set, new);
+					}
+					else
+					{
+						/*
+						 * We are freezing this pattern string.  Since there's
+						 * no chance to expand the string further, we perform
+						 * pattern matching against the string. If it does not
+						 * match, we can discard it.
+						 */
+						len = do_pattern_match(pattern, old->data);
+
+						if (len <= 0)
+						{
+							/* no match. we can discard it */
+							continue;
+						}
+
+						else if (len <= resultlen)
+						{
+							/* shorter match. we can discard it */
+							continue;
+						}
+						else
+						{
+							/* match length is the longest so far */
+
+							int			new_index;
+
+							/* remember the longest match */
+							resultlen = len;
+
+							/* freeze the pattern string */
+							new = makeStringInfo();
+							enlargeStringInfo(new, old->len + 1);
+							appendStringInfoString(new, old->data);
+							/* add freezed mark */
+							appendStringInfoChar(new, FREEZED_CHAR);
+#ifdef RPR_DEBUG
+							elog(DEBUG1, "old_str: %s new_str: %s", old->data, new->data);
+#endif
+							string_set_add(new_str_set, new);
+
+							/*
+							 * Search new_str_set to find out freezed entries
+							 * that have shorter match length. Mark them as
+							 * "discard" so that they are discarded in the
+							 * next round.
+							 */
+
+							/* new_index_size should be the one before */
+							new_str_size =
+								string_set_get_size(new_str_set) - 1;
+
+							/* loop over new_str_set */
+							for (new_index = 0; new_index < new_str_size;
+								 new_index++)
+							{
+								char		new_last_char;
+								int			new_str_len;
+
+								new = string_set_get(new_str_set, new_index);
+								new_str_len = strlen(new->data);
+								if (new_str_len > 0)
+								{
+									new_last_char =
+										new->data[new_str_len - 1];
+									if (new_last_char == FREEZED_CHAR &&
+										(new_str_len - 1) <= len)
+									{
+										/*
+										 * mark this set to discard in the
+										 * next round
+										 */
+										appendStringInfoChar(new, DISCARD_CHAR);
+#ifdef RPR_DEBUG
+										elog(DEBUG1, "add discard char: %s", new->data);
+#endif
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+			/* we no longer need old string set */
+			string_set_discard(old_str_set);
+		}
+	}
+
+	/*
+	 * Perform pattern matching to find out the longest match.
+	 */
+	new_str_size = string_set_get_size(new_str_set);
+#ifdef RPR_DEBUG
+	elog(DEBUG1, "new_str_size: %d", new_str_size);
+#endif
+	len = 0;
+	resultlen = 0;
+
+	for (index = 0; index < new_str_size; index++)
+	{
+		StringInfo	s;
+
+		s = string_set_get(new_str_set, index);
+		if (s == NULL)
+			continue;			/* no data */
+
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "target string: %s", s->data);
+#endif
+		len = do_pattern_match(pattern, s->data);
+		if (len > resultlen)
+		{
+			/* remember the longest match */
+			resultlen = len;
+
+			/*
+			 * If the size of result set is equal to the number of rows in the
+			 * set, we are done because it's not possible that the number of
+			 * matching rows exceeds the number of rows in the set.
+			 */
+			if (resultlen >= set_size)
+				break;
+		}
+	}
+
+	/* we no longer need new string set */
+	string_set_discard(new_str_set);
+
+	return resultlen;
+}
+
+/*
+ * do_pattern_match
+ * perform pattern match using pattern against encoded_str.
+ * returns matching number of rows if matching is succeeded.
+ * Otherwise returns 0.
+ */
+static
+int
+do_pattern_match(char *pattern, char *encoded_str)
+{
+	Datum		d;
+	text	   *res;
+	char	   *substr;
+	int			len = 0;
+	text	   *pattern_text,
+			   *encoded_str_text;
+
+	pattern_text = cstring_to_text(pattern);
+	encoded_str_text = cstring_to_text(encoded_str);
+
+	/*
+	 * We first perform pattern matching using regexp_instr, then call
+	 * textregexsubstr to get matched substring to know how long the matched
+	 * string is. That is the number of rows in the reduced window frame.  The
+	 * reason why we can't call textregexsubstr in the first place is, it
+	 * errors out if pattern does not match.
+	 */
+	if (DatumGetInt32(DirectFunctionCall2Coll(
+						  regexp_instr, DEFAULT_COLLATION_OID,
+						  PointerGetDatum(encoded_str_text),
+						  PointerGetDatum(pattern_text))))
+	{
+		d = DirectFunctionCall2Coll(textregexsubstr,
+									DEFAULT_COLLATION_OID,
+									PointerGetDatum(encoded_str_text),
+									PointerGetDatum(pattern_text));
+		if (d != 0)
+		{
+			res = DatumGetTextPP(d);
+			substr = text_to_cstring(res);
+			len = strlen(substr);
+			pfree(substr);
+		}
+	}
+	pfree(encoded_str_text);
+	pfree(pattern_text);
+
+	return len;
+}
+
+/*
+ * evaluate_pattern
+ * Evaluate expression associated with PATTERN variable vname.  current_pos is
+ * relative row position in a frame (starting from 0). If vname is evaluated
+ * to true, initial letters associated with vname is appended to
+ * encode_str. result is out paramater representing the expression evaluation
+ * result is true of false.
+ *---------
+ * Return values are:
+ * >=0: the last match absolute row position
+ * otherwise out of frame.
+ *---------
+ */
+static
+int64
+evaluate_pattern(WindowObject winobj, int64 current_pos,
+				 char *vname, StringInfo encoded_str, bool *result)
+{
+	WindowAggState *winstate = winobj->winstate;
+	ExprContext *econtext = winstate->ss.ps.ps_ExprContext;
+	ListCell   *lc1,
+			   *lc2,
+			   *lc3;
+	ExprState  *pat;
+	Datum		eval_result;
+	bool		out_of_frame = false;
+	bool		isnull;
+	TupleTableSlot *slot;
+
+	forthree(lc1, winstate->defineVariableList,
+			 lc2, winstate->defineClauseList,
+			 lc3, winstate->defineInitial)
+	{
+		char		initial;	/* initial letter associated with vname */
+		char	   *name = strVal(lfirst(lc1));
+
+		if (strcmp(vname, name))
+			continue;
+
+		initial = *(strVal(lfirst(lc3)));
+
+		/* set expression to evaluate */
+		pat = lfirst(lc2);
+
+		/* get current, previous and next tuples */
+		if (!get_slots(winobj, current_pos))
+		{
+			out_of_frame = true;
+		}
+		else
+		{
+			/* evaluate the expression */
+			eval_result = ExecEvalExpr(pat, econtext, &isnull);
+			if (isnull)
+			{
+				/* expression is NULL */
+#ifdef RPR_DEBUG
+				elog(DEBUG1, "expression for %s is NULL at row: " INT64_FORMAT,
+					 vname, current_pos);
+#endif
+				*result = false;
+			}
+			else
+			{
+				if (!DatumGetBool(eval_result))
+				{
+					/* expression is false */
+#ifdef RPR_DEBUG
+					elog(DEBUG1, "expression for %s is false at row: " INT64_FORMAT,
+						 vname, current_pos);
+#endif
+					*result = false;
+				}
+				else
+				{
+					/* expression is true */
+#ifdef RPR_DEBUG
+					elog(DEBUG1, "expression for %s is true at row: " INT64_FORMAT,
+						 vname, current_pos);
+#endif
+					appendStringInfoChar(encoded_str, initial);
+					*result = true;
+				}
+			}
+
+			slot = winstate->temp_slot_1;
+			if (slot != winstate->null_slot)
+				ExecClearTuple(slot);
+			slot = winstate->prev_slot;
+			if (slot != winstate->null_slot)
+				ExecClearTuple(slot);
+			slot = winstate->next_slot;
+			if (slot != winstate->null_slot)
+				ExecClearTuple(slot);
+
+			break;
+		}
+
+		if (out_of_frame)
+		{
+			*result = false;
+			return -1;
+		}
+	}
+	return current_pos;
+}
+
+/*
+ * get_slots
+ * Get current, previous and next tuples.
+ * Returns false if current row is out of partition/full frame.
+ */
+static
+bool
+get_slots(WindowObject winobj, int64 current_pos)
+{
+	WindowAggState *winstate = winobj->winstate;
+	TupleTableSlot *slot;
+	int			ret;
+	ExprContext *econtext;
+
+	econtext = winstate->ss.ps.ps_ExprContext;
+
+	/* set up current row tuple slot */
+	slot = winstate->temp_slot_1;
+	if (!window_gettupleslot(winobj, current_pos, slot))
+	{
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "current row is out of partition at:" INT64_FORMAT,
+			 current_pos);
+#endif
+		return false;
+	}
+	ret = row_is_in_frame(winstate, current_pos, slot);
+	if (ret <= 0)
+	{
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "current row is out of frame at: " INT64_FORMAT,
+			 current_pos);
+#endif
+		ExecClearTuple(slot);
+		return false;
+	}
+	econtext->ecxt_outertuple = slot;
+
+	/* for PREV */
+	if (current_pos > 0)
+	{
+		slot = winstate->prev_slot;
+		if (!window_gettupleslot(winobj, current_pos - 1, slot))
+		{
+#ifdef RPR_DEBUG
+			elog(DEBUG1, "previous row is out of partition at: " INT64_FORMAT,
+				 current_pos - 1);
+#endif
+			econtext->ecxt_scantuple = winstate->null_slot;
+		}
+		else
+		{
+			ret = row_is_in_frame(winstate, current_pos - 1, slot);
+			if (ret <= 0)
+			{
+#ifdef RPR_DEBUG
+				elog(DEBUG1, "previous row is out of frame at: " INT64_FORMAT,
+					 current_pos - 1);
+#endif
+				ExecClearTuple(slot);
+				econtext->ecxt_scantuple = winstate->null_slot;
+			}
+			else
+			{
+				econtext->ecxt_scantuple = slot;
+			}
+		}
+	}
+	else
+		econtext->ecxt_scantuple = winstate->null_slot;
+
+	/* for NEXT */
+	slot = winstate->next_slot;
+	if (!window_gettupleslot(winobj, current_pos + 1, slot))
+	{
+#ifdef RPR_DEBUG
+		elog(DEBUG1, "next row is out of partiton at: " INT64_FORMAT,
+			 current_pos + 1);
+#endif
+		econtext->ecxt_innertuple = winstate->null_slot;
+	}
+	else
+	{
+		ret = row_is_in_frame(winstate, current_pos + 1, slot);
+		if (ret <= 0)
+		{
+#ifdef RPR_DEBUG
+			elog(DEBUG1, "next row is out of frame at: " INT64_FORMAT,
+				 current_pos + 1);
+#endif
+			ExecClearTuple(slot);
+			econtext->ecxt_innertuple = winstate->null_slot;
+		}
+		else
+			econtext->ecxt_innertuple = slot;
+	}
+	return true;
+}
+
+/*
+ * pattern_initial
+ * Return pattern variable initial character
+ * matching with pattern variable name vname.
+ * If not found, return 0.
+ */
+static
+char
+pattern_initial(WindowAggState *winstate, char *vname)
+{
+	char		initial;
+	char	   *name;
+	ListCell   *lc1,
+			   *lc2;
+
+	forboth(lc1, winstate->defineVariableList,
+			lc2, winstate->defineInitial)
+	{
+		name = strVal(lfirst(lc1)); /* DEFINE variable name */
+		initial = *(strVal(lfirst(lc2)));	/* DEFINE variable initial */
+
+
+		if (!strcmp(name, vname))
+			return initial;		/* found */
+	}
+	return 0;
+}
+
+/*
+ * string_set_init
+ * Create dynamic set of StringInfo.
+ */
+static
+StringSet * string_set_init(void)
+{
+/* Initial allocation size of str_set */
+#define STRING_SET_ALLOC_SIZE	1024
+
+	StringSet  *string_set;
+	Size		set_size;
+
+	string_set = palloc0(sizeof(StringSet));
+	string_set->set_index = 0;
+	set_size = STRING_SET_ALLOC_SIZE;
+	string_set->str_set = palloc(set_size * sizeof(StringInfo));
+	string_set->set_size = set_size;
+
+	return string_set;
+}
+
+/*
+ * string_set_add
+ * Add StringInfo str to StringSet string_set.
+ */
+static
+void
+string_set_add(StringSet * string_set, StringInfo str)
+{
+	Size		set_size;
+
+	set_size = string_set->set_size;
+	if (string_set->set_index >= set_size)
+	{
+		set_size *= 2;
+		string_set->str_set = repalloc(string_set->str_set,
+									   set_size * sizeof(StringInfo));
+		string_set->set_size = set_size;
+	}
+
+	string_set->str_set[string_set->set_index++] = str;
+
+	return;
+}
+
+/*
+ * string_set_get
+ * Returns StringInfo specified by index.
+ * If there's no data yet, returns NULL.
+ */
+static
+StringInfo
+string_set_get(StringSet * string_set, int index)
+{
+	/* no data? */
+	if (index == 0 && string_set->set_index == 0)
+		return NULL;
+
+	if (index < 0 || index >= string_set->set_index)
+		elog(ERROR, "invalid index: %d", index);
+
+	return string_set->str_set[index];
+}
+
+/*
+ * string_set_get_size
+ * Returns the size of StringSet.
+ */
+static
+int
+string_set_get_size(StringSet * string_set)
+{
+	return string_set->set_index;
+}
+
+/*
+ * string_set_discard
+ * Discard StringSet.
+ * All memory including StringSet itself is freed.
+ */
+static
+void
+string_set_discard(StringSet * string_set)
+{
+	int			i;
+
+	for (i = 0; i < string_set->set_index; i++)
+	{
+		StringInfo	str = string_set->str_set[i];
+
+		if (str)
+		{
+			pfree(str->data);
+			pfree(str);
+		}
+	}
+	pfree(string_set->str_set);
+	pfree(string_set);
+}
+
+/*
+ * variable_pos_init
+ * Create and initialize variable postion structure
+ */
+static
+VariablePos * variable_pos_init(void)
+{
+	VariablePos *variable_pos;
+
+	variable_pos = palloc(sizeof(VariablePos) * NUM_ALPHABETS);
+	MemSet(variable_pos, -1, sizeof(VariablePos) * NUM_ALPHABETS);
+	return variable_pos;
+}
+
+/*
+ * variable_pos_register
+ * Register pattern variable whose initial is initial into postion index.
+ * pos is position of initial.
+ * If pos is already registered, register it at next empty slot.
+ */
+static
+void
+variable_pos_register(VariablePos * variable_pos, char initial, int pos)
+{
+	int			index = initial - 'a';
+	int			slot;
+	int			i;
+
+	if (pos < 0 || pos > NUM_ALPHABETS)
+		elog(ERROR, "initial is not valid char: %c", initial);
+
+	for (i = 0; i < NUM_ALPHABETS; i++)
+	{
+		slot = variable_pos[index].pos[i];
+		if (slot < 0)
+		{
+			/* empty slot found */
+			variable_pos[index].pos[i] = pos;
+			return;
+		}
+	}
+	elog(ERROR, "no empty slot for initial: %c", initial);
+}
+
+/*
+ * variable_pos_compare
+ * Returns true if initial1 can be followed by initial2
+ */
+static
+bool
+variable_pos_compare(VariablePos * variable_pos, char initial1, char initial2)
+{
+	int			index1,
+				index2;
+	int			pos1,
+				pos2;
+
+	for (index1 = 0;; index1++)
+	{
+		pos1 = variable_pos_fetch(variable_pos, initial1, index1);
+		if (pos1 < 0)
+			break;
+
+		for (index2 = 0;; index2++)
+		{
+			pos2 = variable_pos_fetch(variable_pos, initial2, index2);
+			if (pos2 < 0)
+				break;
+			if (pos1 <= pos2)
+				return true;
+		}
+	}
+	return false;
+}
+
+/*
+ * variable_pos_fetch
+ * Fetch position of pattern variable whose initial is initial, and whose index
+ * is index. If no postion was registered by initial, index, returns -1.
+ */
+static
+int
+variable_pos_fetch(VariablePos * variable_pos, char initial, int index)
+{
+	int			pos = initial - 'a';
+
+	if (pos < 0 || pos > NUM_ALPHABETS)
+		elog(ERROR, "initial is not valid char: %c", initial);
+
+	if (index < 0 || index > NUM_ALPHABETS)
+		elog(ERROR, "index is not valid: %d", index);
+
+	return variable_pos[pos].pos[index];
+}
+
+/*
+ * variable_pos_discard
+ * Discard VariablePos
+ */
+static
+void
+variable_pos_discard(VariablePos * variable_pos)
+{
+	pfree(variable_pos);
 }

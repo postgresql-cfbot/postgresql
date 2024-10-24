@@ -4474,7 +4474,7 @@ create table public.stuffs (stuff text);
 SAVEPOINT a;
 select error2('nonexistent.stuffs');
 ERROR:  schema "nonexistent" does not exist
-CONTEXT:  SQL function "error1" statement 1
+CONTEXT:  SQL function "error1" during startup
 PL/pgSQL function error2(text) line 3 at RETURN
 ROLLBACK TO a;
 select error2('public.stuffs');

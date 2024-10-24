@@ -53,4 +53,6 @@ extern bool check_sql_fn_retval(List *queryTreeLists,
 
 extern DestReceiver *CreateSQLFunctionDestReceiver(void);
 
+extern PGDLLIMPORT bool enable_sql_func_custom_plans;
+
 #endif							/* FUNCTIONS_H */

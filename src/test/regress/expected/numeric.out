@@ -3346,10 +3346,10 @@ select ln(9.342536355e34);
 -- invalid inputs
 select log(-12.34);
 ERROR:  cannot take logarithm of a negative number
-CONTEXT:  SQL function "log" statement 1
+CONTEXT:  SQL function "log" during startup
 select log(0.0);
 ERROR:  cannot take logarithm of zero
-CONTEXT:  SQL function "log" statement 1
+CONTEXT:  SQL function "log" during startup
 -- some random tests
 select log(1.234567e-89);
                                                  log                                                 

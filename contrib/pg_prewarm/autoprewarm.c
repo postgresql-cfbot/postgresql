@@ -44,6 +44,7 @@
 #include "storage/lwlock.h"
 #include "storage/proc.h"
 #include "storage/procsignal.h"
+#include "storage/read_stream.h"
 #include "storage/shmem.h"
 #include "storage/smgr.h"
 #include "tcop/tcopprot.h"
@@ -429,6 +430,58 @@ apw_load_buffers(void)
 						apw_state->prewarmed_blocks, num_elements)));
 }
 
+struct apw_read_stream_private
+{
+	bool		first_block;
+	int			max_pos;
+	int			pos;
+	BlockInfoRecord *block_info;
+	BlockNumber nblocks_in_fork;
+
+};
+
+static BlockNumber
+apw_read_stream_next_block(ReadStream *stream,
+						   void *callback_private_data,
+						   void *per_buffer_data)
+{
+	struct apw_read_stream_private *p = callback_private_data;
+	bool	   *rs_have_free_buffer = per_buffer_data;
+	BlockInfoRecord *old_blk;
+	BlockInfoRecord *cur_blk;
+
+	*rs_have_free_buffer = true;
+
+	if (!have_free_buffer())
+	{
+		*rs_have_free_buffer = false;
+		return InvalidBlockNumber;
+	}
+
+	if (p->pos == p->max_pos)
+		return InvalidBlockNumber;
+
+	if (p->first_block)
+	{
+		p->first_block = false;
+		return p->block_info[p->pos++].blocknum;
+	}
+
+	old_blk = &(p->block_info[p->pos - 1]);
+	cur_blk = &(p->block_info[p->pos]);
+
+	if (old_blk->database == cur_blk->database &&
+		old_blk->forknum == cur_blk->forknum &&
+		old_blk->filenumber == cur_blk->filenumber &&
+		cur_blk->blocknum < p->nblocks_in_fork)
+	{
+		p->pos++;
+		return cur_blk->blocknum;
+	}
+
+	return InvalidBlockNumber;
+}
+
 /*
  * Prewarm all blocks for one database (and possibly also global objects, if
  * those got grouped with this database).
@@ -442,6 +495,9 @@ autoprewarm_database_main(Datum main_arg)
 	BlockNumber nblocks = 0;
 	BlockInfoRecord *old_blk = NULL;
 	dsm_segment *seg;
+	ReadStream *stream = NULL;
+	struct apw_read_stream_private p;
+	bool	   *rs_have_free_buffer;
 
 	/* Establish signal handlers; once that's done, unblock signals. */
 	pqsignal(SIGTERM, die);
@@ -458,13 +514,16 @@ autoprewarm_database_main(Datum main_arg)
 	block_info = (BlockInfoRecord *) dsm_segment_address(seg);
 	pos = apw_state->prewarm_start_idx;
 
+	p.block_info = block_info;
+	p.max_pos = apw_state->prewarm_stop_idx;
+
 	/*
 	 * Loop until we run out of blocks to prewarm or until we run out of free
 	 * buffers.
 	 */
-	while (pos < apw_state->prewarm_stop_idx && have_free_buffer())
+	for (; pos < apw_state->prewarm_stop_idx; pos++)
 	{
-		BlockInfoRecord *blk = &block_info[pos++];
+		BlockInfoRecord *blk = &block_info[pos];
 		Buffer		buf;
 
 		CHECK_FOR_INTERRUPTS();
@@ -476,6 +535,18 @@ autoprewarm_database_main(Datum main_arg)
 		if (old_blk != NULL && old_blk->database != blk->database &&
 			old_blk->database != 0)
 			break;
+
+		/*
+		 * If stream needs to be created again, end it before closing the old
+		 * relation.
+		 */
+		if (stream && (old_blk == NULL ||
+					   old_blk->filenumber != blk->filenumber ||
+					   old_blk->forknum != blk->forknum))
+		{
+			Assert(read_stream_next_buffer(stream, (void **) &rs_have_free_buffer) == InvalidBuffer);
+			read_stream_end(stream);
+		}
 
 		/*
 		 * As soon as we encounter a block of a new relation, close the old
@@ -513,7 +584,10 @@ autoprewarm_database_main(Datum main_arg)
 			continue;
 		}
 
-		/* Once per fork, check for fork existence and size. */
+		/*
+		 * Once per fork, check for fork existence and size. Then create read
+		 * stream if it is suitable.
+		 */
 		if (old_blk == NULL ||
 			old_blk->filenumber != blk->filenumber ||
 			old_blk->forknum != blk->forknum)
@@ -525,7 +599,21 @@ autoprewarm_database_main(Datum main_arg)
 			if (blk->forknum > InvalidForkNumber &&
 				blk->forknum <= MAX_FORKNUM &&
 				smgrexists(RelationGetSmgr(rel), blk->forknum))
+			{
 				nblocks = RelationGetNumberOfBlocksInFork(rel, blk->forknum);
+
+				/* Create read stream. */
+				p.nblocks_in_fork = nblocks;
+				p.pos = pos;
+				p.first_block = true;
+				stream = read_stream_begin_relation(READ_STREAM_FULL,
+													NULL,
+													rel,
+													blk->forknum,
+													apw_read_stream_next_block,
+													&p,
+													sizeof(bool));
+			}
 			else
 				nblocks = 0;
 		}
@@ -539,16 +627,20 @@ autoprewarm_database_main(Datum main_arg)
 		}
 
 		/* Prewarm buffer. */
-		buf = ReadBufferExtended(rel, blk->forknum, blk->blocknum, RBM_NORMAL,
-								 NULL);
+		buf = read_stream_next_buffer(stream, (void **) &rs_have_free_buffer);
 		if (BufferIsValid(buf))
 		{
 			apw_state->prewarmed_blocks++;
 			ReleaseBuffer(buf);
 		}
+		/* There are no free buffers left in shared buffers, break the loop. */
+		else if (!(*rs_have_free_buffer))
+			break;
 
 		old_blk = blk;
 	}
+	Assert(read_stream_next_buffer(stream, (void **) &rs_have_free_buffer) == InvalidBuffer);
+	read_stream_end(stream);
 
 	dsm_detach(seg);
 

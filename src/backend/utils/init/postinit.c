@@ -58,6 +58,7 @@
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/guc_hooks.h"
+#include "utils/injection_point.h"
 #include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/portal.h"
@@ -714,6 +715,21 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	 */
 	InitProcessPhase2();
 
+	/* Initialize status reporting */
+	pgstat_beinit();
+
+	/*
+	 * This is a convenient time to sketch in a partial pgstat entry. That way,
+	 * if LWLocks or third-party authentication should happen to hang, the DBA
+	 * will still be able to see what's going on. (A later call to
+	 * pgstat_bestart() will fill in the rest of the status.)
+	 */
+	if (!bootstrap)
+	{
+		pgstat_bestart_pre_auth();
+		INJECTION_POINT("init-pre-auth");
+	}
+
 	/*
 	 * Initialize my entry in the shared-invalidation manager's array of
 	 * per-backend data.
@@ -781,9 +797,6 @@ InitPostgres(const char *in_dbname, Oid dboid,
 
 	/* Initialize portal manager */
 	EnablePortalManager();
-
-	/* Initialize status reporting */
-	pgstat_beinit();
 
 	/*
 	 * Load relcache entries for the shared system catalogs.  This must create
@@ -882,6 +895,7 @@ InitPostgres(const char *in_dbname, Oid dboid,
 	{
 		/* normal multiuser case */
 		Assert(MyProcPort != NULL);
+
 		PerformAuthentication(MyProcPort);
 		InitializeSessionUserId(username, useroid, false);
 		/* ensure that auth_method is actually valid, aka authn_id is not NULL */

@@ -633,8 +633,15 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 		/* Is it a convertible ANY or EXISTS clause? */
 		if (sublink->subLinkType == ANY_SUBLINK)
 		{
+			ScalarArrayOpExpr *saop;
+
+			if ((saop = convert_VALUES_to_ANY((Query *) sublink->subselect,
+											  sublink->testexpr)) != NULL)
+				/* VALUES sequence was simplified. Nothing more to do here, */
+				return (Node *) saop;
+
 			if ((j = convert_ANY_sublink_to_join(root, sublink,
-												 available_rels1)) != NULL)
+													  available_rels1)) != NULL)
 			{
 				/* Yes; insert the new join node into the join tree */
 				j->larg = *jtlink1;

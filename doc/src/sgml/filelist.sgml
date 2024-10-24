@@ -21,6 +21,7 @@
 <!ENTITY indices    SYSTEM "indices.sgml">
 <!ENTITY json       SYSTEM "json.sgml">
 <!ENTITY mvcc       SYSTEM "mvcc.sgml">
+<!ENTITY nullvalues SYSTEM "nullvalues.sgml">
 <!ENTITY parallel   SYSTEM "parallel.sgml">
 <!ENTITY perform    SYSTEM "perform.sgml">
 <!ENTITY queries    SYSTEM "queries.sgml">

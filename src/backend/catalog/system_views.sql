@@ -1171,6 +1171,13 @@ SELECT
 FROM pg_stat_get_io() b;
 
 CREATE VIEW pg_stat_wal AS
+    WITH pgsio_sum_write_fsync_time AS (
+        SELECT
+            sum(write_time) as sum_write_time,
+            sum(fsync_time) as sum_fsync_time
+        FROM pg_stat_io
+        WHERE context = 'normal' and object = 'wal'
+    )
     SELECT
         w.wal_records,
         w.wal_fpi,
@@ -1178,10 +1185,12 @@ CREATE VIEW pg_stat_wal AS
         w.wal_buffers_full,
         w.wal_write,
         w.wal_sync,
-        w.wal_write_time,
-        w.wal_sync_time,
+        p.sum_write_time as write_time,
+        p.sum_fsync_time as fsync_time,
         w.stats_reset
-    FROM pg_stat_get_wal() w;
+    FROM pg_stat_get_wal() w
+        CROSS JOIN pgsio_sum_write_fsync_time p;
+
 
 CREATE VIEW pg_stat_progress_analyze AS
     SELECT

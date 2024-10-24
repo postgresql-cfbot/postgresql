@@ -25,6 +25,7 @@
 #include "lib/stringinfo.h"
 #include "pgtime.h"
 #include "storage/block.h"
+#include "storage/checksum.h"
 #include "storage/relfilelocator.h"
 
 
@@ -288,6 +289,12 @@ typedef struct xl_restore_point
 	TimestampTz rp_time;
 	char		rp_name[MAXFNAMELEN];
 } xl_restore_point;
+
+/* Information logged when data checksum level is changed */
+typedef struct xl_checksum_state
+{
+	ChecksumType new_checksumtype;
+} xl_checksum_state;
 
 /* Overwrite of prior contrecord */
 typedef struct xl_overwrite_contrecord

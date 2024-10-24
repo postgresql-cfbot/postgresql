@@ -3496,8 +3496,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       </para>
       <para>
        Number of data page checksum failures detected in this
-       database (or on a shared object), or NULL if data checksums are not
-       enabled.
+       database. Detected failures are reported regardless of the
+       <xref linkend="guc-data-checksums"/> setting.
       </para></entry>
      </row>
 
@@ -3507,8 +3507,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       </para>
       <para>
        Time at which the last data page checksum failure was detected in
-       this database (or on a shared object), or NULL if data checksums are not
-       enabled.
+       this database (or on a shared object). Last failure is reported
+       regardless of the <xref linkend="guc-data-checksums"/> setting.
       </para></entry>
      </row>
 
@@ -6668,6 +6668,204 @@ FROM pg_stat_get_backend_idset() AS backendid;
    </tgroup>
   </table>
 
+ </sect2>
+
+ <sect2 id="data-checksum-progress-reporting">
+  <title>Data Checksum Progress Reporting</title>
+
+  <indexterm>
+   <primary>pg_stat_progress_data_checksums</primary>
+  </indexterm>
+
+  <para>
+   When data checksums are being enabled on a running cluster, the
+   <structname>pg_stat_progress_data_checksums</structname> view will contain
+   a row for each background worker which is currently calculating checksums
+   for the data pages.
+  </para>
+
+  <table id="pg-stat-progress-data-checksums-view" xreflabel="pg_stat_progress_data_checksums">
+   <title><structname>pg_stat_progress_data_checksums</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        Column Type
+       </para>
+       <para>
+        Description>
+       </para>
+      </entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>pid</structfield> <type>integer</type>
+       </para>
+       <para>
+        Process ID of a datachecksumworker process.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>phase</structfield> <type>text</type>
+       </para>
+       <para>
+        Current processing phase, see <xref linkend="datachecksum-phases"/>
+        for description of the phases.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>databases_total</structfield> <type>integer</type>
+       </para>
+       <para>
+        The total number of databases which will be processed.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>relations_total</structfield> <type>integer</type>
+       </para>
+       <para>
+        The total number of relations which will be processed, or
+        <literal>NULL</literal> if the data checksums worker process hasn't
+        calculated the number of relations yet.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>databases_processed</structfield> <type>integer</type>
+       </para>
+       <para>
+        The number of databases which have been processed.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>relations_processed</structfield> <type>integer</type>
+       </para>
+       <para>
+        The number of relations which have been processed.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>databases_current</structfield> <type>oid</type>
+       </para>
+       <para>
+        OID of the database currently being processed.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>relation_current</structfield> <type>oid</type>
+       </para>
+       <para>
+        OID of the relation currently being processed.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>relation_current_blocks</structfield> <type>integer</type>
+       </para>
+       <para>
+        The total number of blocks in the relation currently being processed.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>relation_current_blocks_processed</structfield> <type>integer</type>
+       </para>
+       <para>
+        The number of blocks which have been processed in the relation currently
+        being processed.
+       </para>
+      </entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+
+  <table id="datachecksum-phases">
+   <title>Data Checksum Phases</title>
+   <tgroup cols="2">
+    <colspec colname="col1" colwidth="1*"/>
+    <colspec colname="col2" colwidth="2*"/>
+    <thead>
+     <row>
+      <entry>Phase</entry>
+      <entry>Description</entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry><literal>enabling</literal></entry>
+      <entry>
+       The command is currently enabling data checksums on the cluster.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>disabling</literal></entry>
+      <entry>
+       The command is currently disabling data checksums on the cluster.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>waiting on backends</literal></entry>
+      <entry>
+       The command is currently waiting for backends to acknowledge the data
+       checksum operation.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>waiting on temporary tables</literal></entry>
+      <entry>
+       The command is currently waiting for all temporary tables which existed
+       at the time the command was started to be removed.
+      </entry>
+     </row>
+     <row>
+      <entry><literal>done</literal></entry>
+      <entry>
+       The command has finished processing and is exiting.
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
  </sect2>
 
  </sect1>

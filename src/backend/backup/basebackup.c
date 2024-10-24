@@ -1614,7 +1614,8 @@ sendFile(bbsink *sink, const char *readfilename, const char *tarfilename,
 	 * enabled for this cluster, and if this is a relation file, then verify
 	 * the checksum.
 	 */
-	if (!noverify_checksums && DataChecksumsEnabled() &&
+	if (!noverify_checksums &&
+		DataChecksumsNeedWrite() &&
 		RelFileNumberIsValid(relfilenumber))
 		verify_checksum = true;
 
@@ -2005,6 +2006,9 @@ verify_page_checksum(Page page, XLogRecPtr start_lsn, BlockNumber blkno,
 	 * pages, since they don't have a checksum yet.
 	 */
 	if (PageIsNew(page) || PageGetLSN(page) >= start_lsn)
+		return true;
+
+	if (!DataChecksumsNeedVerify())
 		return true;
 
 	/* Perform the actual checksum calculation. */

@@ -159,6 +159,8 @@
      (but not the autovacuum workers),
      the <glossterm linkend="glossary-background-writer">background writer</glossterm>,
      the <glossterm linkend="glossary-checkpointer">checkpointer</glossterm>,
+     the <glossterm linkend="glossary-data-checksums-worker">data checksums worker</glossterm>,
+     the <glossterm linkend="glossary-data-checksums-worker-launcher">data checksums worker launcher</glossterm>,
      the <glossterm linkend="glossary-logger">logger</glossterm>,
      the <glossterm linkend="glossary-startup-process">startup process</glossterm>,
      the <glossterm linkend="glossary-wal-archiver">WAL archiver</glossterm>,
@@ -544,6 +546,27 @@
     <para>
      For more information, see
      <xref linkend="manage-ag-overview"/>.
+    </para>
+   </glossdef>
+  </glossentry>
+
+  <glossentry id="glossary-data-checksums-worker">
+   <glossterm>Data Checksums Worker</glossterm>
+   <glossdef>
+    <para>
+     An <glossterm linkend="glossary-auxiliary-proc">auxiliary process</glossterm>
+     which enables or disables data checksums in a specific database.
+    </para>
+   </glossdef>
+  </glossentry>
+
+  <glossentry id="glossary-data-checksums-worker-launcher">
+   <glossterm>Data Checksums Worker Launcher</glossterm>
+   <glossdef>
+    <para>
+     An <glossterm linkend="glossary-auxiliary-proc">auxiliary process</glossterm>
+     which starts <glossterm linkend="glossary-data-checksums-worker"> processes</glossterm>
+     for each database.
     </para>
    </glossdef>
   </glossentry>

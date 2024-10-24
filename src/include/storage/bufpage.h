@@ -204,7 +204,17 @@ typedef PageHeaderData *PageHeader;
  * handling pages.
  */
 #define PG_PAGE_LAYOUT_VERSION		4
+
+/*
+ * Checksum version 0 is used for when data checksums are disabled.
+ * PG_DATA_CHECKSUM_VERSION defines that data checksums are enabled in the
+ * cluster and PG_DATA_CHECKSUM_INPROGRESS_{ON|OFF}_VERSION defines that data
+ * checksums are either currently being enabled or disabled.
+ */
 #define PG_DATA_CHECKSUM_VERSION	1
+#define PG_DATA_CHECKSUM_INPROGRESS_ON_VERSION	2
+#define PG_DATA_CHECKSUM_INPROGRESS_OFF_VERSION	3
+
 
 /* ----------------------------------------------------------------
  *						page support functions

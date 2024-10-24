@@ -72,7 +72,8 @@ static backslashResult exec_command_cd(PsqlScanState scan_state, bool active_bra
 									   const char *cmd);
 static backslashResult exec_command_close(PsqlScanState scan_state, bool active_branch,
 										  const char *cmd);
-static backslashResult exec_command_conninfo(PsqlScanState scan_state, bool active_branch);
+static backslashResult exec_command_conninfo(PsqlScanState scan_state, bool active_branch,
+											 const char *cmd);
 static backslashResult exec_command_copy(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_copyright(PsqlScanState scan_state, bool active_branch);
 static backslashResult exec_command_crosstabview(PsqlScanState scan_state, bool active_branch);
@@ -179,6 +180,7 @@ static int	count_lines_in_buf(PQExpBuffer buf);
 static void print_with_linenumbers(FILE *output, char *lines, bool is_func);
 static void minimal_error_message(PGresult *res);
 
+static void printVerboseConnInfo(char *db, char *host, char *hostaddr);
 static void printSSLInfo(void);
 static void printGSSInfo(void);
 static bool printPsetInfo(const char *param, printQueryOpt *popt);
@@ -328,8 +330,8 @@ exec_command(const char *cmd,
 		status = exec_command_cd(scan_state, active_branch, cmd);
 	else if (strcmp(cmd, "close") == 0)
 		status = exec_command_close(scan_state, active_branch, cmd);
-	else if (strcmp(cmd, "conninfo") == 0)
-		status = exec_command_conninfo(scan_state, active_branch);
+	else if (strcmp(cmd, "conninfo") == 0 || strcmp(cmd, "conninfo+") == 0)
+		status = exec_command_conninfo(scan_state, active_branch, cmd);
 	else if (pg_strcasecmp(cmd, "copy") == 0)
 		status = exec_command_copy(scan_state, active_branch);
 	else if (strcmp(cmd, "copyright") == 0)
@@ -738,11 +740,14 @@ exec_command_close(PsqlScanState scan_state, bool active_branch, const char *cmd
 }
 
 /*
- * \conninfo -- display information about the current connection
+ * \conninfo, \conninfo+ -- display information about the current connection
  */
 static backslashResult
-exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
+exec_command_conninfo(PsqlScanState scan_state, bool active_branch, const char *cmd)
 {
+	bool show_verbose;
+	show_verbose = strchr(cmd, '+') ? true : false;
+
 	if (active_branch)
 	{
 		char	   *db = PQdb(pset.db);
@@ -754,27 +759,35 @@ exec_command_conninfo(PsqlScanState scan_state, bool active_branch)
 			char	   *host = PQhost(pset.db);
 			char	   *hostaddr = PQhostaddr(pset.db);
 
-			if (is_unixsock_path(host))
+			if (!show_verbose)
 			{
-				/* hostaddr overrides host */
-				if (hostaddr && *hostaddr)
-					printf(_("You are connected to database \"%s\" as user \"%s\" on address \"%s\" at port \"%s\".\n"),
-						   db, PQuser(pset.db), hostaddr, PQport(pset.db));
+				if (is_unixsock_path(host))
+				{
+					/* hostaddr overrides host */
+					if (hostaddr && *hostaddr)
+						printf(_("You are connected to database \"%s\" as user \"%s\" on address \"%s\" at port \"%s\".\n"),
+							db, PQuser(pset.db), hostaddr, PQport(pset.db));
+					else
+						printf(_("You are connected to database \"%s\" as user \"%s\" via socket in \"%s\" at port \"%s\".\n"),
+							db, PQuser(pset.db), host, PQport(pset.db));
+				}
 				else
-					printf(_("You are connected to database \"%s\" as user \"%s\" via socket in \"%s\" at port \"%s\".\n"),
-						   db, PQuser(pset.db), host, PQport(pset.db));
+				{
+					if (hostaddr && *hostaddr && strcmp(host, hostaddr) != 0)
+						printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" (address \"%s\") at port \"%s\".\n"),
+							db, PQuser(pset.db), host, hostaddr, PQport(pset.db));
+					else
+						printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" at port \"%s\".\n"),
+							db, PQuser(pset.db), host, PQport(pset.db));
+				}
+				printSSLInfo();
+				printGSSInfo();
 			}
+			/* Print additional information about the connection in tabular format */
 			else
 			{
-				if (hostaddr && *hostaddr && strcmp(host, hostaddr) != 0)
-					printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" (address \"%s\") at port \"%s\".\n"),
-						   db, PQuser(pset.db), host, hostaddr, PQport(pset.db));
-				else
-					printf(_("You are connected to database \"%s\" as user \"%s\" on host \"%s\" at port \"%s\".\n"),
-						   db, PQuser(pset.db), host, PQport(pset.db));
+				printVerboseConnInfo(db, host, hostaddr);
 			}
-			printSSLInfo();
-			printGSSInfo();
 		}
 	}
 
@@ -3998,6 +4011,139 @@ connection_warnings(bool in_startup)
 	}
 }
 
+
+/*
+ * printVerboseConnInfo
+ *
+ * Prints extra information about the connection
+ * in tabular form.
+ */
+static void
+printVerboseConnInfo(char *db, char *host, char *hostaddr)
+{
+	printQueryOpt popt = pset.popt;
+	printTableContent cont;
+	char	protocol_version[10];
+	char	backend_pid[10];
+	int		cols,
+			rows;
+	int		ssl_in_use,
+			gssapi_used;
+	char	*session_user,
+			*client_encoding,
+			*server_encoding;
+	char	*protocol,
+			*cipher,
+			*compression,
+			*alpn;
+
+	/* Get values for the parameters */
+	sprintf(protocol_version, "%d", PQprotocolVersion(pset.db));
+	ssl_in_use = PQsslInUse(pset.db);
+	protocol = (char *) PQsslAttribute(pset.db, "protocol");
+	cipher = (char *) PQsslAttribute(pset.db, "cipher");
+	compression = (char *) PQsslAttribute(pset.db, "compression");
+	alpn = (char *) PQsslAttribute(pset.db, "alpn");
+	gssapi_used = PQconnectionUsedGSSAPI(pset.db);
+	session_user = (char *) PQparameterStatus(pset.db, "session_authorization");
+	client_encoding = (char *) PQparameterStatus(pset.db, "client_encoding");
+	server_encoding = (char *) PQparameterStatus(pset.db, "server_encoding");
+	sprintf(backend_pid, "%d", PQbackendPID(pset.db));
+
+	/* Fixed number of columns */
+	cols = 11;
+	rows = 1;
+	/* +1 column if hostaddr is different from host */
+	if (!is_unixsock_path(host) && hostaddr && *hostaddr && strcmp(host, hostaddr) != 0)
+		cols++;
+	/* +4 columns if SSL is in use */
+	if (ssl_in_use)
+		cols += 4;
+
+	/* Print the information in a table */
+	printTableInit(&cont, &popt.topt, _("Connection Information"), cols, rows);
+
+	/* Database */
+	printTableAddHeader(&cont, _("Database"), true, 'l');
+	printTableAddCell(&cont, db, false, false);
+
+	/* Current User */
+	printTableAddHeader(&cont, _("Authenticated User"), true, 'l');
+	printTableAddCell(&cont, PQuser(pset.db), false, false);
+
+	/* Session User */
+	printTableAddHeader(&cont, _("Session User"), true, 'l');
+	printTableAddCell(&cont, session_user ? session_user : _("none"), false, false);
+
+	/* Host/Socket Information */
+	if (is_unixsock_path(host))
+	{
+		if (hostaddr && *hostaddr)
+		{
+			printTableAddHeader(&cont, _("Host Address"), true, 'l');
+			printTableAddCell(&cont, hostaddr, false, false);
+		}
+		else
+		{
+			printTableAddHeader(&cont, _("Socket Directory"), true, 'l');
+			printTableAddCell(&cont, host, false, false);
+		}
+	}
+	else
+	{
+		printTableAddHeader(&cont, _("Host"), true, 'l');
+		printTableAddCell(&cont, host, false, false);
+		if (hostaddr && *hostaddr && strcmp(host, hostaddr) != 0)
+		{
+			printTableAddHeader(&cont, _("Host Address"), true, 'l');
+			printTableAddCell(&cont, hostaddr, false, false);
+		}
+	}
+
+	/* Port */
+	printTableAddHeader(&cont, _("Port"), true, 'l');
+	printTableAddCell(&cont, PQport(pset.db), false, false);
+
+	/* Protocol Version */
+	printTableAddHeader(&cont, _("Protocol Version"), true, 'l');
+	printTableAddCell(&cont, protocol_version, false, false);
+
+	/* SSL Connection */
+	printTableAddHeader(&cont, _("SSL Connection"), true, 'l');
+	printTableAddCell(&cont, ssl_in_use ? _("true") : _("false"), false, false);
+
+	/* SSL Information */
+	if (ssl_in_use)
+	{
+		printTableAddHeader(&cont, _("SSL Protocol"), true, 'l');
+		printTableAddCell(&cont, protocol ? protocol : _("unknown"), false, false);
+		printTableAddHeader(&cont, _("SSL Cipher"), true, 'l');
+		printTableAddCell(&cont, cipher ? cipher : _("unknown"), false, false);
+		printTableAddHeader(&cont, _("Compression"), true, 'l');
+		printTableAddCell(&cont, (compression && strcmp(compression, "off") != 0) ? _("on") : _("off"), false, false);
+		printTableAddHeader(&cont, _("ALPN"), true, 'l');
+		printTableAddCell(&cont, (alpn && alpn[0] != '\0') ? alpn : _("none"), false, false);
+	}
+
+	/* GSSAPI Authenticated */
+	printTableAddHeader(&cont, _("GSSAPI Authenticated"), true, 'l');
+	printTableAddCell(&cont, gssapi_used ? _("true") : _("false"), false, false);
+
+	/* Client Encoding */
+	printTableAddHeader(&cont, _("Client Encoding"), true, 'l');
+	printTableAddCell(&cont, client_encoding ? client_encoding : _("none"), false, false);
+
+	/* Server Encoding */
+	printTableAddHeader(&cont, _("Server Encoding"), true, 'l');
+	printTableAddCell(&cont, server_encoding ? server_encoding : _("none"), false, false);
+
+	/* Backend PID */
+	printTableAddHeader(&cont, _("Backend PID"), true, 'l');
+	printTableAddCell(&cont, backend_pid, false, false);
+
+	printTable(&cont, pset.queryFout, false, pset.logfile);
+	printTableCleanup(&cont);
+}
 
 /*
  * printSSLInfo

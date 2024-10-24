@@ -267,8 +267,10 @@ BackendInitialize(ClientSocket *client_sock, CAC_state cac)
 	RegisterTimeout(STARTUP_PACKET_TIMEOUT, StartupPacketTimeoutHandler);
 	enable_timeout_after(STARTUP_PACKET_TIMEOUT, AuthenticationTimeout * 1000);
 
+elog(LOG, "!!!BackendInitialize| before ProcessSSLStartup()", status);
 	/* Handle direct SSL handshake */
 	status = ProcessSSLStartup(port);
+elog(LOG, "!!!BackendInitialize| ProcessSSLStartup() returned %d", status);
 
 	/*
 	 * Receive the startup packet (which might turn out to be a cancel request

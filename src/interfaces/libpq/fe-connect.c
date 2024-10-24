@@ -3398,12 +3398,14 @@ keep_going:						/* We will come back to here until there is
 					cancelpacket.cancelRequestCode = (MsgType) pg_hton32(CANCEL_REQUEST_CODE);
 					cancelpacket.backendPID = pg_hton32(conn->be_pid);
 					cancelpacket.cancelAuthCode = pg_hton32(conn->be_key);
+fprintf(stderr, "!!!PQconnectPoll|%d| before pqPacketSend(..., &cancelpacket, ...)\n", getpid());
 					if (pqPacketSend(conn, 0, &cancelpacket, packetlen) != STATUS_OK)
 					{
 						libpq_append_conn_error(conn, "could not send cancel packet: %s",
 												SOCK_STRERROR(SOCK_ERRNO, sebuf, sizeof(sebuf)));
 						goto error_return;
 					}
+fprintf(stderr, "!!!PQconnectPoll|%d| after pqPacketSend, STATUS_OK\n", getpid());
 					conn->status = CONNECTION_AWAITING_RESPONSE;
 					return PGRES_POLLING_READING;
 				}
@@ -5013,9 +5015,13 @@ pqPacketSend(PGconn *conn, char pack_type,
 	if (pqPutMsgEnd(conn))
 		return STATUS_ERROR;
 
+if (buf_len == 12)
+fprintf(stderr, "!!!pqPacketSend|%d| before pqFlush\n", getpid());
 	/* Flush to ensure backend gets it. */
 	if (pqFlush(conn))
 		return STATUS_ERROR;
+if (buf_len == 12)
+fprintf(stderr, "!!!pqPacketSend|%d| after pqFlush, STATUS_OK\n", getpid());
 
 	return STATUS_OK;
 }

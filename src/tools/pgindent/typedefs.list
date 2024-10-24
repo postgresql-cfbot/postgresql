@@ -1821,7 +1821,6 @@ PGTargetServerType
 PGTernaryBool
 PGTransactionStatusType
 PGVerbosity
-PG_Locale_Strategy
 PG_Lock_Status
 PG_init_t
 PGcancel
@@ -3374,6 +3373,7 @@ cmpEntriesArg
 codes_t
 collation_cache_entry
 collation_cache_hash
+collation_version_hook_type
 color
 colormaprange
 compare_context
@@ -3390,6 +3390,7 @@ core_yyscan_t
 corrupt_items
 cost_qual_eval_context
 cp_hash_func
+create_pg_locale_hook_type
 create_upper_paths_hook_type
 createdb_failure_params
 crosstab_HashEnt
@@ -3401,6 +3402,7 @@ datetkn
 dce_uuid_t
 dclist_head
 decimal
+default_pg_locale_hook_type
 deparse_columns
 deparse_context
 deparse_expr_cxt

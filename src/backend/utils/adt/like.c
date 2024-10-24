@@ -96,7 +96,7 @@ SB_lower_char(unsigned char c, pg_locale_t locale)
 	if (locale->ctype_is_c)
 		return pg_ascii_tolower(c);
 	else
-		return tolower_l(c, locale->info.lt);
+		return char_tolower(c, locale);
 }
 
 
@@ -201,7 +201,17 @@ Generic_Text_IC_like(text *str, text *pat, Oid collation)
 	 * way.
 	 */
 
-	if (pg_database_encoding_max_length() > 1 || (locale->provider == COLLPROVIDER_ICU))
+	if (locale->ctype_is_c ||
+		(char_tolower_enabled(locale) &&
+		 pg_database_encoding_max_length() == 1))
+	{
+		p = VARDATA_ANY(pat);
+		plen = VARSIZE_ANY_EXHDR(pat);
+		s = VARDATA_ANY(str);
+		slen = VARSIZE_ANY_EXHDR(str);
+		return SB_IMatchText(s, slen, p, plen, locale);
+	}
+	else
 	{
 		pat = DatumGetTextPP(DirectFunctionCall1Coll(lower, collation,
 													 PointerGetDatum(pat)));
@@ -215,14 +225,6 @@ Generic_Text_IC_like(text *str, text *pat, Oid collation)
 			return UTF8_MatchText(s, slen, p, plen, 0);
 		else
 			return MB_MatchText(s, slen, p, plen, 0);
-	}
-	else
-	{
-		p = VARDATA_ANY(pat);
-		plen = VARSIZE_ANY_EXHDR(pat);
-		s = VARDATA_ANY(str);
-		slen = VARSIZE_ANY_EXHDR(str);
-		return SB_IMatchText(s, slen, p, plen, locale);
 	}
 }
 

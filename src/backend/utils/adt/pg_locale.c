@@ -54,11 +54,17 @@
 
 #include <time.h>
 
+#ifdef USE_ICU
+#include <unicode/ucol.h>
+#endif
+
 #include "access/htup_details.h"
 #include "catalog/pg_collation.h"
 #include "catalog/pg_database.h"
 #include "common/hashfn.h"
 #include "common/string.h"
+#include "common/unicode_case.h"
+#include "common/unicode_category.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
@@ -89,31 +95,16 @@
 
 #define		MAX_L10N_DATA		80
 
+extern pg_locale_t create_pg_locale_icu(Oid collid, MemoryContext context);
+extern pg_locale_t create_pg_locale_libc(Oid collid, MemoryContext context);
+
+create_pg_locale_hook_type create_pg_locale_hook = NULL;
+collation_version_hook_type collation_version_hook = NULL;
+
 /* pg_locale_icu.c */
 #ifdef USE_ICU
 extern UCollator *pg_ucol_open(const char *loc_str);
-extern UCollator *make_icu_collator(const char *iculocstr,
-									const char *icurules);
-extern int	strncoll_icu(const char *arg1, ssize_t len1,
-						 const char *arg2, ssize_t len2,
-						 pg_locale_t locale);
-extern size_t strnxfrm_icu(char *dest, size_t destsize,
-						   const char *src, ssize_t srclen,
-						   pg_locale_t locale);
-extern size_t strnxfrm_prefix_icu(char *dest, size_t destsize,
-								  const char *src, ssize_t srclen,
-								  pg_locale_t locale);
 #endif
-
-/* pg_locale_libc.c */
-extern locale_t make_libc_collator(const char *collate,
-								   const char *ctype);
-extern int	strncoll_libc(const char *arg1, ssize_t len1,
-						  const char *arg2, ssize_t len2,
-						  pg_locale_t locale);
-extern size_t strnxfrm_libc(char *dest, size_t destsize,
-							const char *src, ssize_t srclen,
-							pg_locale_t locale);
 
 /* GUC settings */
 char	   *locale_messages;
@@ -138,11 +129,16 @@ char	   *localized_full_months[12 + 1];
 /* is the databases's LC_CTYPE the C locale? */
 bool		database_ctype_is_c = false;
 
-static struct pg_locale_struct default_locale;
+static pg_locale_t default_locale = NULL;
 
 /* indicates whether locale information cache is valid */
 static bool CurrentLocaleConvValid = false;
 static bool CurrentLCTimeValid = false;
+
+struct builtin_provider
+{
+	const char *locale;
+};
 
 /* Cache for collation-related knowledge */
 
@@ -182,6 +178,135 @@ static pg_locale_t last_collation_cache_locale = NULL;
 #if defined(WIN32) && defined(LC_MESSAGES)
 static char *IsoLocaleName(const char *);
 #endif
+
+struct WordBoundaryState
+{
+	const char *str;
+	size_t		len;
+	size_t		offset;
+	bool		init;
+	bool		prev_alnum;
+};
+
+/*
+ * Simple word boundary iterator that draws boundaries each time the result of
+ * pg_u_isalnum() changes.
+ */
+static size_t
+initcap_wbnext(void *state)
+{
+	struct WordBoundaryState *wbstate = (struct WordBoundaryState *) state;
+
+	while (wbstate->offset < wbstate->len &&
+		   wbstate->str[wbstate->offset] != '\0')
+	{
+		pg_wchar	u = utf8_to_unicode((unsigned char *) wbstate->str +
+										wbstate->offset);
+		bool		curr_alnum = pg_u_isalnum(u, true);
+
+		if (!wbstate->init || curr_alnum != wbstate->prev_alnum)
+		{
+			size_t		prev_offset = wbstate->offset;
+
+			wbstate->init = true;
+			wbstate->offset += unicode_utf8len(u);
+			wbstate->prev_alnum = curr_alnum;
+			return prev_offset;
+		}
+
+		wbstate->offset += unicode_utf8len(u);
+	}
+
+	return wbstate->len;
+}
+
+static size_t
+strlower_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
+				 pg_locale_t locale)
+{
+	return unicode_strlower(dest, destsize, src, srclen);
+}
+
+static size_t
+strtitle_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
+				 pg_locale_t locale)
+{
+	struct WordBoundaryState wbstate = {
+		.str = src,
+		.len = srclen,
+		.offset = 0,
+		.init = false,
+		.prev_alnum = false,
+	};
+
+	return unicode_strtitle(dest, destsize, src, srclen,
+							initcap_wbnext, &wbstate);
+}
+
+static size_t
+strupper_builtin(char *dest, size_t destsize, const char *src, ssize_t srclen,
+				 pg_locale_t locale)
+{
+	return unicode_strupper(dest, destsize, src, srclen);
+}
+
+static const struct casemap_methods casemap_methods_builtin = {
+	.strlower = strlower_builtin,
+	.strtitle = strtitle_builtin,
+	.strupper = strupper_builtin,
+};
+
+static int
+char_properties_builtin(pg_wchar wc, int mask, pg_locale_t locale)
+{
+	int			result = 0;
+
+	if ((mask & PG_ISDIGIT) && pg_u_isdigit(wc, true))
+		result |= PG_ISDIGIT;
+	if ((mask & PG_ISALPHA) && pg_u_isalpha(wc))
+		result |= PG_ISALPHA;
+	if ((mask & PG_ISUPPER) && pg_u_isupper(wc))
+		result |= PG_ISUPPER;
+	if ((mask & PG_ISLOWER) && pg_u_islower(wc))
+		result |= PG_ISLOWER;
+	if ((mask & PG_ISGRAPH) && pg_u_isgraph(wc))
+		result |= PG_ISGRAPH;
+	if ((mask & PG_ISPRINT) && pg_u_isprint(wc))
+		result |= PG_ISPRINT;
+	if ((mask & PG_ISPUNCT) && pg_u_ispunct(wc, true))
+		result |= PG_ISPUNCT;
+	if ((mask & PG_ISSPACE) && pg_u_isspace(wc))
+		result |= PG_ISSPACE;
+
+	return result;
+}
+
+static bool
+char_is_cased_builtin(char ch, pg_locale_t locale)
+{
+	return IS_HIGHBIT_SET(ch) ||
+		(ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z');
+}
+
+static pg_wchar
+wc_toupper_builtin(pg_wchar wc, pg_locale_t locale)
+{
+	return unicode_uppercase_simple(wc);
+}
+
+static pg_wchar
+wc_tolower_builtin(pg_wchar wc, pg_locale_t locale)
+{
+	return unicode_lowercase_simple(wc);
+}
+
+static const struct ctype_methods ctype_methods_builtin = {
+	.char_properties = char_properties_builtin,
+	.char_is_cased = char_is_cased_builtin,
+	.wc_tolower = wc_tolower_builtin,
+	.wc_toupper = wc_toupper_builtin,
+};
+
 
 /*
  * pg_perm_setlocale
@@ -1213,44 +1338,136 @@ IsoLocaleName(const char *winlocname)
 
 #endif							/* WIN32 && LC_MESSAGES */
 
+static pg_locale_t
+create_pg_locale_builtin(Oid collid, MemoryContext context)
+{
+	const char *locstr;
+	pg_locale_t result;
+	struct builtin_provider *builtin;
+
+	if (collid == DEFAULT_COLLATION_OID)
+	{
+		HeapTuple	tp;
+		Datum		datum;
+
+		tp = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
+		if (!HeapTupleIsValid(tp))
+			elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
+		datum = SysCacheGetAttrNotNull(DATABASEOID, tp,
+									   Anum_pg_database_datlocale);
+		locstr = TextDatumGetCString(datum);
+		ReleaseSysCache(tp);
+	}
+	else
+	{
+		HeapTuple	tp;
+		Datum		datum;
+
+		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+		if (!HeapTupleIsValid(tp))
+			elog(ERROR, "cache lookup failed for collation %u", collid);
+		datum = SysCacheGetAttrNotNull(COLLOID, tp,
+									   Anum_pg_collation_colllocale);
+		locstr = TextDatumGetCString(datum);
+		ReleaseSysCache(tp);
+	}
+
+	builtin_validate_locale(GetDatabaseEncoding(), locstr);
+
+	result = MemoryContextAllocZero(context, sizeof(struct pg_locale_struct));
+	builtin = MemoryContextAlloc(context, sizeof(struct builtin_provider));
+	builtin->locale = MemoryContextStrdup(context, locstr);
+	result->provider_data = (void *) builtin;
+
+	result->deterministic = true;
+	result->collate_is_c = true;
+	result->ctype_is_c = (strcmp(locstr, "C") == 0);
+	result->casemap = &casemap_methods_builtin;
+	if (!result->ctype_is_c)
+		result->ctype = &ctype_methods_builtin;
+
+	return result;
+}
 
 /*
- * Cache mechanism for collation information.
- *
- * Note that we currently lack any way to flush the cache.  Since we don't
- * support ALTER COLLATION, this is OK.  The worst case is that someone
- * drops a collation, and a useless cache entry hangs around in existing
- * backends.
+ * Create a new pg_locale_t struct for the given collation oid.
  */
-static collation_cache_entry *
-lookup_collation_cache(Oid collation)
+static pg_locale_t
+create_pg_locale(Oid collid, MemoryContext context)
 {
-	collation_cache_entry *cache_entry;
-	bool		found;
+	/* We haven't computed this yet in this session, so do it */
+	HeapTuple	tp;
+	Form_pg_collation collform;
+	pg_locale_t result = NULL;
+	Datum		datum;
+	bool		isnull;
 
-	Assert(OidIsValid(collation));
-	Assert(collation != DEFAULT_COLLATION_OID);
+	tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
+	if (!HeapTupleIsValid(tp))
+		elog(ERROR, "cache lookup failed for collation %u", collid);
+	collform = (Form_pg_collation) GETSTRUCT(tp);
 
-	if (CollationCache == NULL)
+	if (create_pg_locale_hook != NULL)
+		result = create_pg_locale_hook(collid, context);
+
+	if (result == NULL)
 	{
-		CollationCacheContext = AllocSetContextCreate(TopMemoryContext,
-													  "collation cache",
-													  ALLOCSET_DEFAULT_SIZES);
-		CollationCache = collation_cache_create(CollationCacheContext,
-												16, NULL);
+		if (collform->collprovider == COLLPROVIDER_BUILTIN)
+			result = create_pg_locale_builtin(collid, context);
+		else if (collform->collprovider == COLLPROVIDER_ICU)
+			result = create_pg_locale_icu(collid, context);
+		else if (collform->collprovider == COLLPROVIDER_LIBC)
+			result = create_pg_locale_libc(collid, context);
+		else
+			/* shouldn't happen */
+			PGLOCALE_SUPPORT_ERROR(collform->collprovider);
 	}
 
-	cache_entry = collation_cache_insert(CollationCache, collation, &found);
-	if (!found)
+	datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collversion,
+							&isnull);
+	if (!isnull)
 	{
-		/*
-		 * Make sure cache entry is marked invalid, in case we fail before
-		 * setting things.
-		 */
-		cache_entry->locale = 0;
+		char	   *actual_versionstr;
+		char	   *collversionstr;
+
+		collversionstr = TextDatumGetCString(datum);
+
+		if (collform->collprovider == COLLPROVIDER_LIBC)
+			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
+		else
+			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
+
+		actual_versionstr = get_collation_actual_version(collform->collprovider,
+														 TextDatumGetCString(datum));
+		if (!actual_versionstr)
+		{
+			/*
+			 * This could happen when specifying a version in CREATE COLLATION
+			 * but the provider does not support versioning, or manually
+			 * creating a mess in the catalogs.
+			 */
+			ereport(ERROR,
+					(errmsg("collation \"%s\" has no actual version, but a version was recorded",
+							NameStr(collform->collname))));
+		}
+
+		if (strcmp(actual_versionstr, collversionstr) != 0)
+			ereport(WARNING,
+					(errmsg("collation \"%s\" has version mismatch",
+							NameStr(collform->collname)),
+					 errdetail("The collation in the database was created using version %s, "
+							   "but the operating system provides version %s.",
+							   collversionstr, actual_versionstr),
+					 errhint("Rebuild all objects affected by this collation and run "
+							 "ALTER COLLATION %s REFRESH VERSION, "
+							 "or build PostgreSQL with the right library version.",
+							 quote_qualified_identifier(get_namespace_name(collform->collnamespace),
+														NameStr(collform->collname)))));
 	}
 
-	return cache_entry;
+	ReleaseSysCache(tp);
+
+	return result;
 }
 
 /*
@@ -1261,7 +1478,9 @@ init_database_collation(void)
 {
 	HeapTuple	tup;
 	Form_pg_database dbform;
-	Datum		datum;
+	pg_locale_t result = NULL;
+
+	Assert(default_locale == NULL);
 
 	/* Fetch our pg_database row normally, via syscache */
 	tup = SearchSysCache1(DATABASEOID, ObjectIdGetDatum(MyDatabaseId));
@@ -1269,81 +1488,29 @@ init_database_collation(void)
 		elog(ERROR, "cache lookup failed for database %u", MyDatabaseId);
 	dbform = (Form_pg_database) GETSTRUCT(tup);
 
-	if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
+	if (create_pg_locale_hook != NULL)
+		result = create_pg_locale_hook(DEFAULT_COLLATION_OID,
+									   TopMemoryContext);
+
+	if (result == NULL)
 	{
-		char	   *datlocale;
-
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
-		datlocale = TextDatumGetCString(datum);
-
-		builtin_validate_locale(dbform->encoding, datlocale);
-
-		default_locale.collate_is_c = true;
-		default_locale.ctype_is_c = (strcmp(datlocale, "C") == 0);
-
-		default_locale.info.builtin.locale = MemoryContextStrdup(
-																 TopMemoryContext, datlocale);
-	}
-	else if (dbform->datlocprovider == COLLPROVIDER_ICU)
-	{
-#ifdef USE_ICU
-		char	   *datlocale;
-		char	   *icurules;
-		bool		isnull;
-
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datlocale);
-		datlocale = TextDatumGetCString(datum);
-
-		default_locale.collate_is_c = false;
-		default_locale.ctype_is_c = false;
-
-		datum = SysCacheGetAttr(DATABASEOID, tup, Anum_pg_database_daticurules, &isnull);
-		if (!isnull)
-			icurules = TextDatumGetCString(datum);
+		if (dbform->datlocprovider == COLLPROVIDER_BUILTIN)
+			result = create_pg_locale_builtin(DEFAULT_COLLATION_OID,
+											  TopMemoryContext);
+		else if (dbform->datlocprovider == COLLPROVIDER_ICU)
+			result = create_pg_locale_icu(DEFAULT_COLLATION_OID,
+										  TopMemoryContext);
+		else if (dbform->datlocprovider == COLLPROVIDER_LIBC)
+			result = create_pg_locale_libc(DEFAULT_COLLATION_OID,
+										   TopMemoryContext);
 		else
-			icurules = NULL;
-
-		default_locale.info.icu.locale = MemoryContextStrdup(TopMemoryContext, datlocale);
-		default_locale.info.icu.ucol = make_icu_collator(datlocale, icurules);
-#else
-		/* could get here if a collation was created by a build with ICU */
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("ICU is not supported in this build")));
-#endif
+			/* shouldn't happen */
+			PGLOCALE_SUPPORT_ERROR(dbform->datlocprovider);
 	}
-	else if (dbform->datlocprovider == COLLPROVIDER_LIBC)
-	{
-		const char *datcollate;
-		const char *datctype;
-
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datcollate);
-		datcollate = TextDatumGetCString(datum);
-		datum = SysCacheGetAttrNotNull(DATABASEOID, tup, Anum_pg_database_datctype);
-		datctype = TextDatumGetCString(datum);
-
-		default_locale.collate_is_c = (strcmp(datcollate, "C") == 0) ||
-			(strcmp(datcollate, "POSIX") == 0);
-		default_locale.ctype_is_c = (strcmp(datctype, "C") == 0) ||
-			(strcmp(datctype, "POSIX") == 0);
-
-		default_locale.info.lt = make_libc_collator(datcollate, datctype);
-	}
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(dbform->datlocprovider);
-
-
-	default_locale.provider = dbform->datlocprovider;
-
-	/*
-	 * Default locale is currently always deterministic.  Nondeterministic
-	 * locales currently don't support pattern matching, which would break a
-	 * lot of things if applied globally.
-	 */
-	default_locale.deterministic = true;
 
 	ReleaseSysCache(tup);
+
+	default_locale = result;
 }
 
 /*
@@ -1358,9 +1525,10 @@ pg_locale_t
 pg_newlocale_from_collation(Oid collid)
 {
 	collation_cache_entry *cache_entry;
+	bool		found;
 
 	if (collid == DEFAULT_COLLATION_OID)
-		return &default_locale;
+		return default_locale;
 
 	if (!OidIsValid(collid))
 		elog(ERROR, "cache lookup failed for collation %u", collid);
@@ -1368,140 +1536,28 @@ pg_newlocale_from_collation(Oid collid)
 	if (last_collation_cache_oid == collid)
 		return last_collation_cache_locale;
 
-	cache_entry = lookup_collation_cache(collid);
+	if (CollationCache == NULL)
+	{
+		CollationCacheContext = AllocSetContextCreate(TopMemoryContext,
+													  "collation cache",
+													  ALLOCSET_DEFAULT_SIZES);
+		CollationCache = collation_cache_create(CollationCacheContext,
+												16, NULL);
+	}
+
+	cache_entry = collation_cache_insert(CollationCache, collid, &found);
+	if (!found)
+	{
+		/*
+		 * Make sure cache entry is marked invalid, in case we fail before
+		 * setting things.
+		 */
+		cache_entry->locale = 0;
+	}
 
 	if (cache_entry->locale == 0)
 	{
-		/* We haven't computed this yet in this session, so do it */
-		HeapTuple	tp;
-		Form_pg_collation collform;
-		struct pg_locale_struct result;
-		pg_locale_t resultp;
-		Datum		datum;
-		bool		isnull;
-
-		tp = SearchSysCache1(COLLOID, ObjectIdGetDatum(collid));
-		if (!HeapTupleIsValid(tp))
-			elog(ERROR, "cache lookup failed for collation %u", collid);
-		collform = (Form_pg_collation) GETSTRUCT(tp);
-
-		/* We'll fill in the result struct locally before allocating memory */
-		memset(&result, 0, sizeof(result));
-		result.provider = collform->collprovider;
-		result.deterministic = collform->collisdeterministic;
-
-		if (collform->collprovider == COLLPROVIDER_BUILTIN)
-		{
-			const char *locstr;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-			locstr = TextDatumGetCString(datum);
-
-			result.collate_is_c = true;
-			result.ctype_is_c = (strcmp(locstr, "C") == 0);
-
-			builtin_validate_locale(GetDatabaseEncoding(), locstr);
-
-			result.info.builtin.locale = MemoryContextStrdup(TopMemoryContext,
-															 locstr);
-		}
-		else if (collform->collprovider == COLLPROVIDER_ICU)
-		{
-#ifdef USE_ICU
-			const char *iculocstr;
-			const char *icurules;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-			iculocstr = TextDatumGetCString(datum);
-
-			result.collate_is_c = false;
-			result.ctype_is_c = false;
-
-			datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collicurules, &isnull);
-			if (!isnull)
-				icurules = TextDatumGetCString(datum);
-			else
-				icurules = NULL;
-
-			result.info.icu.locale = MemoryContextStrdup(TopMemoryContext, iculocstr);
-			result.info.icu.ucol = make_icu_collator(iculocstr, icurules);
-#else
-			/* could get here if a collation was created by a build with ICU */
-			ereport(ERROR,
-					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-					 errmsg("ICU is not supported in this build")));
-#endif
-		}
-		else if (collform->collprovider == COLLPROVIDER_LIBC)
-		{
-			const char *collcollate;
-			const char *collctype;
-
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
-			collcollate = TextDatumGetCString(datum);
-			datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collctype);
-			collctype = TextDatumGetCString(datum);
-
-			result.collate_is_c = (strcmp(collcollate, "C") == 0) ||
-				(strcmp(collcollate, "POSIX") == 0);
-			result.ctype_is_c = (strcmp(collctype, "C") == 0) ||
-				(strcmp(collctype, "POSIX") == 0);
-
-			result.info.lt = make_libc_collator(collcollate, collctype);
-		}
-		else
-			/* shouldn't happen */
-			PGLOCALE_SUPPORT_ERROR(collform->collprovider);
-
-		datum = SysCacheGetAttr(COLLOID, tp, Anum_pg_collation_collversion,
-								&isnull);
-		if (!isnull)
-		{
-			char	   *actual_versionstr;
-			char	   *collversionstr;
-
-			collversionstr = TextDatumGetCString(datum);
-
-			if (collform->collprovider == COLLPROVIDER_LIBC)
-				datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_collcollate);
-			else
-				datum = SysCacheGetAttrNotNull(COLLOID, tp, Anum_pg_collation_colllocale);
-
-			actual_versionstr = get_collation_actual_version(collform->collprovider,
-															 TextDatumGetCString(datum));
-			if (!actual_versionstr)
-			{
-				/*
-				 * This could happen when specifying a version in CREATE
-				 * COLLATION but the provider does not support versioning, or
-				 * manually creating a mess in the catalogs.
-				 */
-				ereport(ERROR,
-						(errmsg("collation \"%s\" has no actual version, but a version was recorded",
-								NameStr(collform->collname))));
-			}
-
-			if (strcmp(actual_versionstr, collversionstr) != 0)
-				ereport(WARNING,
-						(errmsg("collation \"%s\" has version mismatch",
-								NameStr(collform->collname)),
-						 errdetail("The collation in the database was created using version %s, "
-								   "but the operating system provides version %s.",
-								   collversionstr, actual_versionstr),
-						 errhint("Rebuild all objects affected by this collation and run "
-								 "ALTER COLLATION %s REFRESH VERSION, "
-								 "or build PostgreSQL with the right library version.",
-								 quote_qualified_identifier(get_namespace_name(collform->collnamespace),
-															NameStr(collform->collname)))));
-		}
-
-		ReleaseSysCache(tp);
-
-		/* We'll keep the pg_locale_t structures in TopMemoryContext */
-		resultp = MemoryContextAlloc(TopMemoryContext, sizeof(*resultp));
-		*resultp = result;
-
-		cache_entry->locale = resultp;
+		cache_entry->locale = create_pg_locale(collid, CollationCacheContext);
 	}
 
 	last_collation_cache_oid = collid;
@@ -1518,6 +1574,14 @@ char *
 get_collation_actual_version(char collprovider, const char *collcollate)
 {
 	char	   *collversion = NULL;
+
+	if (collation_version_hook != NULL)
+	{
+		char	   *version;
+
+		if (collation_version_hook(collprovider, collcollate, &version))
+			return version;
+	}
 
 	/*
 	 * The only two supported locales (C and C.UTF-8) are both based on memcmp
@@ -1617,6 +1681,27 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 	return collversion;
 }
 
+size_t
+pg_strlower(char *dst, size_t dstsize, const char *src, ssize_t srclen,
+			pg_locale_t locale)
+{
+	return locale->casemap->strlower(dst, dstsize, src, srclen, locale);
+}
+
+size_t
+pg_strtitle(char *dst, size_t dstsize, const char *src, ssize_t srclen,
+			pg_locale_t locale)
+{
+	return locale->casemap->strtitle(dst, dstsize, src, srclen, locale);
+}
+
+size_t
+pg_strupper(char *dst, size_t dstsize, const char *src, ssize_t srclen,
+			pg_locale_t locale)
+{
+	return locale->casemap->strupper(dst, dstsize, src, srclen, locale);
+}
+
 /*
  * pg_strcoll
  *
@@ -1625,19 +1710,7 @@ get_collation_actual_version(char collprovider, const char *collcollate)
 int
 pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale)
 {
-	int			result;
-
-	if (locale->provider == COLLPROVIDER_LIBC)
-		result = strncoll_libc(arg1, -1, arg2, -1, locale);
-#ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
-		result = strncoll_icu(arg1, -1, arg2, -1, locale);
-#endif
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(locale->provider);
-
-	return result;
+	return locale->collate->strncoll(arg1, -1, arg2, -1, locale);
 }
 
 /*
@@ -1658,51 +1731,25 @@ int
 pg_strncoll(const char *arg1, ssize_t len1, const char *arg2, ssize_t len2,
 			pg_locale_t locale)
 {
-	int			result;
-
-	if (locale->provider == COLLPROVIDER_LIBC)
-		result = strncoll_libc(arg1, len1, arg2, len2, locale);
-#ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
-		result = strncoll_icu(arg1, len1, arg2, len2, locale);
-#endif
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(locale->provider);
-
-	return result;
+	return locale->collate->strncoll(arg1, len1, arg2, len2, locale);
 }
 
 /*
  * Return true if the collation provider supports pg_strxfrm() and
  * pg_strnxfrm(); otherwise false.
  *
- * Unfortunately, it seems that strxfrm() for non-C collations is broken on
- * many common platforms; testing of multiple versions of glibc reveals that,
- * for many locales, strcoll() and strxfrm() do not return consistent
- * results. While no other libc other than Cygwin has so far been shown to
- * have a problem, we take the conservative course of action for right now and
- * disable this categorically.  (Users who are certain this isn't a problem on
- * their system can define TRUST_STRXFRM.)
  *
  * No similar problem is known for the ICU provider.
  */
 bool
 pg_strxfrm_enabled(pg_locale_t locale)
 {
-	if (locale->provider == COLLPROVIDER_LIBC)
-#ifdef TRUST_STRXFRM
-		return true;
-#else
-		return false;
-#endif
-	else if (locale->provider == COLLPROVIDER_ICU)
-		return true;
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(locale->provider);
-
-	return false;				/* keep compiler quiet */
+	/*
+	 * locale->collate->strnxfrm is still a required method, even if it may
+	 * have the wrong behavior, because the planner uses it for estimates in
+	 * some cases.
+	 */
+	return locale->collate->strxfrm_is_safe;
 }
 
 /*
@@ -1713,19 +1760,7 @@ pg_strxfrm_enabled(pg_locale_t locale)
 size_t
 pg_strxfrm(char *dest, const char *src, size_t destsize, pg_locale_t locale)
 {
-	size_t		result = 0;		/* keep compiler quiet */
-
-	if (locale->provider == COLLPROVIDER_LIBC)
-		result = strnxfrm_libc(dest, destsize, src, -1, locale);
-#ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
-		result = strnxfrm_icu(dest, destsize, src, -1, locale);
-#endif
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(locale->provider);
-
-	return result;
+	return locale->collate->strnxfrm(dest, destsize, src, -1, locale);
 }
 
 /*
@@ -1751,19 +1786,7 @@ size_t
 pg_strnxfrm(char *dest, size_t destsize, const char *src, ssize_t srclen,
 			pg_locale_t locale)
 {
-	size_t		result = 0;		/* keep compiler quiet */
-
-	if (locale->provider == COLLPROVIDER_LIBC)
-		result = strnxfrm_libc(dest, destsize, src, srclen, locale);
-#ifdef USE_ICU
-	else if (locale->provider == COLLPROVIDER_ICU)
-		result = strnxfrm_icu(dest, destsize, src, srclen, locale);
-#endif
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(locale->provider);
-
-	return result;
+	return locale->collate->strnxfrm(dest, destsize, src, srclen, locale);
 }
 
 /*
@@ -1773,15 +1796,7 @@ pg_strnxfrm(char *dest, size_t destsize, const char *src, ssize_t srclen,
 bool
 pg_strxfrm_prefix_enabled(pg_locale_t locale)
 {
-	if (locale->provider == COLLPROVIDER_LIBC)
-		return false;
-	else if (locale->provider == COLLPROVIDER_ICU)
-		return true;
-	else
-		/* shouldn't happen */
-		PGLOCALE_SUPPORT_ERROR(locale->provider);
-
-	return false;				/* keep compiler quiet */
+	return (locale->collate->strnxfrm_prefix != NULL);
 }
 
 /*
@@ -1793,7 +1808,7 @@ size_t
 pg_strxfrm_prefix(char *dest, const char *src, size_t destsize,
 				  pg_locale_t locale)
 {
-	return pg_strnxfrm_prefix(dest, destsize, src, -1, locale);
+	return locale->collate->strnxfrm_prefix(dest, destsize, src, -1, locale);
 }
 
 /*
@@ -1818,16 +1833,54 @@ size_t
 pg_strnxfrm_prefix(char *dest, size_t destsize, const char *src,
 				   ssize_t srclen, pg_locale_t locale)
 {
-	size_t		result = 0;		/* keep compiler quiet */
+	return locale->collate->strnxfrm_prefix(dest, destsize, src, srclen, locale);
+}
 
-#ifdef USE_ICU
-	if (locale->provider == COLLPROVIDER_ICU)
-		result = strnxfrm_prefix_icu(dest, destsize, src, -1, locale);
-	else
-#endif
-		PGLOCALE_SUPPORT_ERROR(locale->provider);
+/*
+ * char_properties()
+ *
+ * Out of the properties specified in the given mask, return a new mask of the
+ * properties true for the given character.
+ */
+int
+char_properties(pg_wchar wc, int mask, pg_locale_t locale)
+{
+	return locale->ctype->char_properties(wc, mask, locale);
+}
 
-	return result;
+/*
+ * char_is_cased()
+ *
+ * Fuzzy test of whether the given char is case-varying or not. The argument
+ * is a single byte, so in a multibyte encoding, just assume any non-ASCII
+ * char is case-varying.
+ */
+bool
+char_is_cased(char ch, pg_locale_t locale)
+{
+	return locale->ctype->char_is_cased(ch, locale);
+}
+
+/*
+ * char_tolower_enabled()
+ *
+ * Does the provider support char_tolower()?
+ */
+bool
+char_tolower_enabled(pg_locale_t locale)
+{
+	return (locale->ctype->char_tolower != NULL);
+}
+
+/*
+ * char_tolower()
+ *
+ * Convert char (single-byte encoding) to lowercase.
+ */
+char
+char_tolower(unsigned char ch, pg_locale_t locale)
+{
+	return locale->ctype->char_tolower(ch, locale);
 }
 
 /*

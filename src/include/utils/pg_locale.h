@@ -12,22 +12,20 @@
 #ifndef _PG_LOCALE_
 #define _PG_LOCALE_
 
-#ifdef USE_ICU
-#include <unicode/ucol.h>
-#endif
+#include "mb/pg_wchar.h"
 
-#ifdef USE_ICU
 /*
- * ucol_strcollUTF8() was introduced in ICU 50, but it is buggy before ICU 53.
- * (see
- * <https://www.postgresql.org/message-id/flat/f1438ec6-22aa-4029-9a3b-26f79d330e72%40manitou-mail.org>)
+ * Character properties for regular expressions.
  */
-#if U_ICU_VERSION_MAJOR_NUM >= 53
-#define HAVE_UCOL_STRCOLLUTF8 1
-#else
-#undef HAVE_UCOL_STRCOLLUTF8
-#endif
-#endif
+#define PG_ISDIGIT     0x01
+#define PG_ISALPHA     0x02
+#define PG_ISALNUM     (PG_ISDIGIT | PG_ISALPHA)
+#define PG_ISUPPER     0x04
+#define PG_ISLOWER     0x08
+#define PG_ISGRAPH     0x10
+#define PG_ISPRINT     0x20
+#define PG_ISPUNCT     0x40
+#define PG_ISSPACE     0x80
 
 /* use for libc locale names */
 #define LOCALE_NAME_BUFLEN 128
@@ -60,6 +58,76 @@ extern struct lconv *PGLC_localeconv(void);
 extern void cache_locale_time(void);
 
 
+struct pg_locale_struct;
+typedef struct pg_locale_struct *pg_locale_t;
+
+/* methods that define collation behavior */
+struct collate_methods
+{
+	/* required */
+	int			(*strncoll) (const char *arg1, ssize_t len1,
+							 const char *arg2, ssize_t len2,
+							 pg_locale_t locale);
+
+	/* required */
+	size_t		(*strnxfrm) (char *dest, size_t destsize,
+							 const char *src, ssize_t srclen,
+							 pg_locale_t locale);
+
+	/* optional */
+	size_t		(*strnxfrm_prefix) (char *dest, size_t destsize,
+									const char *src, ssize_t srclen,
+									pg_locale_t locale);
+
+	/*
+	 * If the strnxfrm method is not trusted to return the correct results,
+	 * set strxfrm_is_safe to false. It set to false, the method will not be
+	 * used in most cases, but the planner still expects it to be there for
+	 * estimation purposes (where incorrect results are acceptable).
+	 */
+	bool		strxfrm_is_safe;
+};
+
+/* methods that define string case mapping behavior */
+struct casemap_methods
+{
+	size_t		(*strlower) (char *dest, size_t destsize,
+							 const char *src, ssize_t srclen,
+							 pg_locale_t locale);
+	size_t		(*strtitle) (char *dest, size_t destsize,
+							 const char *src, ssize_t srclen,
+							 pg_locale_t locale);
+	size_t		(*strupper) (char *dest, size_t destsize,
+							 const char *src, ssize_t srclen,
+							 pg_locale_t locale);
+};
+
+struct ctype_methods
+{
+	/* required */
+	int			(*char_properties) (pg_wchar wc, int mask, pg_locale_t locale);
+
+	/* required */
+	bool		(*char_is_cased) (char ch, pg_locale_t locale);
+
+	/*
+	 * Optional. If defined, will only be called for single-byte encodings. If
+	 * not defined, or if the encoding is multibyte, will fall back to
+	 * pg_strlower().
+	 */
+	char		(*char_tolower) (unsigned char ch, pg_locale_t locale);
+
+	/* required */
+	pg_wchar	(*wc_toupper) (pg_wchar wc, pg_locale_t locale);
+	pg_wchar	(*wc_tolower) (pg_wchar wc, pg_locale_t locale);
+
+	/*
+	 * For regex and pattern matching efficiency, the maximum char value
+	 * supported by the above methods. If zero, limit is set by regex code.
+	 */
+	pg_wchar	max_chr;
+};
+
 /*
  * We use a discriminated union to hold either a locale_t or an ICU collator.
  * pg_locale_t is occasionally checked for truth, so make it a pointer.
@@ -78,33 +146,60 @@ extern void cache_locale_time(void);
  */
 struct pg_locale_struct
 {
-	char		provider;
 	bool		deterministic;
 	bool		collate_is_c;
 	bool		ctype_is_c;
-	union
-	{
-		struct
-		{
-			const char *locale;
-		}			builtin;
-		locale_t	lt;
-#ifdef USE_ICU
-		struct
-		{
-			const char *locale;
-			UCollator  *ucol;
-		}			icu;
-#endif
-	}			info;
+
+	const struct collate_methods *collate;	/* NULL if collate_is_c */
+	const struct casemap_methods *casemap;	/* NULL if ctype_is_c */
+	const struct ctype_methods *ctype;	/* NULL if ctype_is_c */
+
+	void	   *provider_data;
 };
 
 typedef struct pg_locale_struct *pg_locale_t;
+
+/*
+ * Hooks to enable custom locale providers.
+ */
+
+/*
+ * Hook create_pg_locale(). Return result (allocated in the given context) to
+ * override; or return NULL to return control to create_pg_locale(). When
+ * creating the default database collation, collid is DEFAULT_COLLATION_OID.
+ */
+typedef pg_locale_t (*create_pg_locale_hook_type) (Oid collid,
+												   MemoryContext context);
+
+/*
+ * Hook get_collation_actual_version(). Set *version out parameter and return
+ * true to override; or return false to return control to
+ * get_collation_actual_version().
+ */
+typedef bool (*collation_version_hook_type) (char collprovider,
+											 const char *collcollate,
+											 char **version);
+
+extern PGDLLIMPORT create_pg_locale_hook_type create_pg_locale_hook;
+extern PGDLLIMPORT collation_version_hook_type collation_version_hook;
 
 extern void init_database_collation(void);
 extern pg_locale_t pg_newlocale_from_collation(Oid collid);
 
 extern char *get_collation_actual_version(char collprovider, const char *collcollate);
+extern int	char_properties(pg_wchar wc, int mask, pg_locale_t locale);
+extern bool char_is_cased(char ch, pg_locale_t locale);
+extern bool char_tolower_enabled(pg_locale_t locale);
+extern char char_tolower(unsigned char ch, pg_locale_t locale);
+extern size_t pg_strlower(char *dest, size_t destsize,
+						  const char *src, ssize_t srclen,
+						  pg_locale_t locale);
+extern size_t pg_strtitle(char *dest, size_t destsize,
+						  const char *src, ssize_t srclen,
+						  pg_locale_t locale);
+extern size_t pg_strupper(char *dest, size_t destsize,
+						  const char *src, ssize_t srclen,
+						  pg_locale_t locale);
 extern int	pg_strcoll(const char *arg1, const char *arg2, pg_locale_t locale);
 extern int	pg_strncoll(const char *arg1, ssize_t len1,
 						const char *arg2, ssize_t len2, pg_locale_t locale);
@@ -123,11 +218,6 @@ extern int	builtin_locale_encoding(const char *locale);
 extern const char *builtin_validate_locale(int encoding, const char *locale);
 extern void icu_validate_locale(const char *loc_str);
 extern char *icu_language_tag(const char *loc_str, int elevel);
-
-#ifdef USE_ICU
-extern int32_t icu_to_uchar(UChar **buff_uchar, const char *buff, size_t nbytes);
-extern int32_t icu_from_uchar(char **result, const UChar *buff_uchar, int32_t len_uchar);
-#endif
 
 /* These functions convert from/to libc's wchar_t, *not* pg_wchar_t */
 extern size_t wchar2char(char *to, const wchar_t *from, size_t tolen,

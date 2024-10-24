@@ -3310,7 +3310,7 @@ restart:
 	list_free(oids);
 
 	/* Now sort and de-duplicate the result list */
-	list_sort(result, list_oid_cmp);
+	list_oid_sort(result);
 	list_deduplicate_oid(result);
 
 	return result;

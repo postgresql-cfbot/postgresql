@@ -443,6 +443,8 @@ extern char *strsep(char **stringp, const char *delim);
 extern void pg_qsort(void *base, size_t nel, size_t elsize,
 					 int (*cmp) (const void *, const void *));
 extern int	pg_qsort_strcmp(const void *a, const void *b);
+extern void sort_int32_asc(int32 *base, size_t nel);
+extern void sort_int32_desc(int32 *base, size_t nel);
 
 #define qsort(a,b,c,d) pg_qsort(a,b,c,d)
 

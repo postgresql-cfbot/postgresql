@@ -58,6 +58,7 @@
 #include <libxml/xmlwriter.h>
 #include <libxml/xpath.h>
 #include <libxml/xpathInternals.h>
+#include <libxml/c14n.h>
 
 /*
  * We used to check for xmlStructuredErrorContext via a configure test; but
@@ -544,6 +545,45 @@ xmltext(PG_FUNCTION_ARGS)
 #endif							/* not USE_LIBXML */
 }
 
+
+Datum
+xmlcanonicalize(PG_FUNCTION_ARGS)
+{
+#ifdef USE_LIBXML
+	xmltype    *arg = PG_GETARG_XML_P(0);
+	bool		keep_comments = PG_GETARG_BOOL(1);
+	text	   *result;
+	int			nbytes;
+	xmlDocPtr	doc;
+	xmlChar    *xmlbuf = NULL;
+
+	doc = xml_parse(arg, XMLOPTION_DOCUMENT, false,
+					GetDatabaseEncoding(), NULL, NULL, NULL);
+
+	/*
+	 * This dumps the canonicalized XML doc into the xmlChar* buffer.
+	 * mode = 2 means the doc will be canonicalized using the C14N 1.1 standard.
+	 */
+	nbytes = xmlC14NDocDumpMemory(doc, NULL, 2, NULL, keep_comments, &xmlbuf);
+
+	if(doc)
+		xmlFreeDoc(doc);
+
+	if(nbytes < 0)
+		ereport(ERROR,
+			(errcode(ERRCODE_INTERNAL_ERROR),
+			errmsg("could not canonicalize the given XML document")));
+
+	result = cstring_to_text_with_len((const char *) xmlbuf, nbytes);
+
+	xmlFree(xmlbuf);
+
+	PG_RETURN_XML_P(result);
+#else
+	NO_XML_SUPPORT();
+	return 0;
+#endif							/* not USE_LIBXML */
+}
 
 /*
  * TODO: xmlconcat needs to merge the notations and unparsed entities

@@ -201,6 +201,16 @@
 #define DEFAULT_EVENT_SOURCE  "PostgreSQL"
 
 /*
+ * Default value for log_suppress_errcodes.  ERROR or FATAL messages with
+ * these error codes are never logged.  Error classes (error codes ending with
+ * three zeros) match all error codes in the class.   The idea is to suppress
+ * messages that usually don't indicate a serious problem but tend to pollute
+ * the log file.
+ */
+
+#define DEFAULT_LOG_SUPPRESS_ERRCODES ""
+
+/*
  * Assumed cache line size.  This doesn't affect correctness, but can be used
  * for low-level optimizations.  This is mostly used to pad various data
  * structures, to ensure that highly-contended fields are on different cache

@@ -226,6 +226,16 @@
       <entry>wait events</entry>
      </row>
 
+     <row>
+      <entry><link linkend="view-pg-system-versions"><structname>pg_system_versions</structname></link></entry>
+      <entry>system versions</entry>
+     </row>
+
+     <row>
+      <entry><link linkend="view-pg-system-libraries"><structname>pg_system_libraries</structname></link></entry>
+      <entry>linked libraries</entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>
@@ -5059,6 +5069,98 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
        Wait event description
       </para></entry>
      </row>
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+ <sect1 id="view-pg-system-versions">
+  <title><structname>pg_system_versions</structname></title>
+
+  <indexterm zone="view-pg-system-version">
+   <primary>pg_system_versions</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_system_versions</structname> provides description
+   about versions of various system components, e.g. PostgreSQL itself,
+   compiler used to build it, dependencies, etc.
+  </para>
+
+  <table>
+   <title><structname>pg_system_versions</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>name</structfield> <type>text</type>
+      </para>
+      <para>
+       Component name
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>version</structfield> <type>text</type>
+      </para>
+      <para>
+       Component version
+      </para></entry>
+     </row>
+
+    </tbody>
+   </tgroup>
+  </table>
+ </sect1>
+
+ <sect1 id="view-pg-system-libraries">
+  <title><structname>pg_system_libraries</structname></title>
+
+  <indexterm zone="view-pg-system-libraries">
+   <primary>pg_system_libraries</primary>
+  </indexterm>
+
+  <para>
+   The view <structname>pg_system_libraries</structname> provides description
+   about shared objects PostgreSQL is linked with.
+  </para>
+
+  <table>
+   <title><structname>pg_system_libraries</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>name</structfield> <type>text</type>
+      </para>
+      <para>
+       Shared object file path
+      </para></entry>
+     </row>
+
     </tbody>
    </tgroup>
   </table>

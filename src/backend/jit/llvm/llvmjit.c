@@ -149,6 +149,7 @@ _PG_jit_provider_init(JitProviderCallbacks *cb)
 	cb->reset_after_error = llvm_reset_after_error;
 	cb->release_context = llvm_release_context;
 	cb->compile_expr = llvm_compile_expr;
+	cb->get_version = llvm_version;
 }
 
 
@@ -1267,4 +1268,20 @@ ResOwnerReleaseJitContext(Datum res)
 
 	context->resowner = NULL;
 	jit_release_context(&context->base);
+}
+
+const char *
+llvm_version(bool *available)
+{
+#if LLVM_VERSION_MAJOR > 15
+	unsigned int major, minor, patch;
+
+	LLVMGetVersion(&major, &minor, &patch);
+
+	*available = true;
+	return (const char*) psprintf("%d.%d.%d", major, minor, patch);
+#else
+	*available = false;
+	return "";
+#endif
 }

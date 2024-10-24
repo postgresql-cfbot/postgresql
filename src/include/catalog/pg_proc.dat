@@ -12377,4 +12377,16 @@
   proargtypes => 'int2',
   prosrc => 'gist_stratnum_identity' },
 
+{ oid => '9432', descr => 'describe system verions',
+  proname => 'pg_get_system_versions', procost => '10', prorows => '10',
+  proretset => 't', provolatile => 'v', prorettype => 'record',
+  proargtypes => '', proallargtypes => '{text,text,int8}',
+  proargmodes => '{o,o,o}', proargnames => '{name,version,type}',
+  prosrc => 'pg_get_system_versions' },
+{ oid => '9433', descr => 'describe system libraries',
+  proname => 'pg_get_system_libraries', procost => '10', prorows => '30',
+  proretset => 't', provolatile => 'v', prorettype => 'record',
+  proargtypes => '', proallargtypes => '{text}',
+  proargmodes => '{o}', proargnames => '{name}',
+  prosrc => 'pg_get_system_libraries' },
 ]

@@ -98,3 +98,9 @@ set timezone_abbreviations = 'Australia';
 select count(distinct utc_offset) >= 24 as ok from pg_timezone_abbrevs;
 set timezone_abbreviations = 'India';
 select count(distinct utc_offset) >= 24 as ok from pg_timezone_abbrevs;
+
+-- At least 4 core versions should be present, architecture, ICU, core and
+-- compiler
+select count(*) >= 4 as ok FROM pg_system_versions;
+-- There is always some number of shared objects
+select count(*) > 0 as ok FROM pg_system_libraries;

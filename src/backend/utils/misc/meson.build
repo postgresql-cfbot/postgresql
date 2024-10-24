@@ -15,6 +15,7 @@ backend_sources += files(
   'rls.c',
   'sampling.c',
   'superuser.c',
+  'system_version.c',
   'timeout.c',
   'tzparser.c',
 )

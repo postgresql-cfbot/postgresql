@@ -163,7 +163,7 @@ ReceiveCopyBegin(CopyFromState cstate)
 {
 	StringInfoData buf;
 	int			natts = list_length(cstate->attnumlist);
-	int16		format = (cstate->opts.binary ? 1 : 0);
+	int16		format = (cstate->opts.format == COPY_FORMAT_BINARY ? 1 : 0);
 	int			i;
 
 	pq_beginmessage(&buf, PqMsg_CopyInResponse);
@@ -749,7 +749,7 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 	bool		done;
 
 	/* only available for text or csv input */
-	Assert(!cstate->opts.binary);
+	Assert(cstate->opts.format != COPY_FORMAT_BINARY);
 
 	/* on input check that the header line is correct if needed */
 	if (cstate->cur_lineno == 0 && cstate->opts.header_line)
@@ -766,7 +766,7 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 		{
 			int			fldnum;
 
-			if (cstate->opts.csv_mode)
+			if (cstate->opts.format == COPY_FORMAT_CSV)
 				fldct = CopyReadAttributesCSV(cstate);
 			else
 				fldct = CopyReadAttributesText(cstate);
@@ -821,7 +821,7 @@ NextCopyFromRawFields(CopyFromState cstate, char ***fields, int *nfields)
 		return false;
 
 	/* Parse the line into de-escaped field values */
-	if (cstate->opts.csv_mode)
+	if (cstate->opts.format == COPY_FORMAT_CSV)
 		fldct = CopyReadAttributesCSV(cstate);
 	else
 		fldct = CopyReadAttributesText(cstate);
@@ -865,7 +865,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 	MemSet(nulls, true, num_phys_attrs * sizeof(bool));
 	MemSet(cstate->defaults, false, num_phys_attrs * sizeof(bool));
 
-	if (!cstate->opts.binary)
+	if (cstate->opts.format != COPY_FORMAT_BINARY)
 	{
 		char	  **field_strings;
 		ListCell   *cur;
@@ -906,7 +906,7 @@ NextCopyFrom(CopyFromState cstate, ExprContext *econtext,
 				continue;
 			}
 
-			if (cstate->opts.csv_mode)
+			if (cstate->opts.format == COPY_FORMAT_CSV)
 			{
 				if (string == NULL &&
 					cstate->opts.force_notnull_flags[m])
@@ -1179,7 +1179,7 @@ CopyReadLineText(CopyFromState cstate)
 	char		quotec = '\0';
 	char		escapec = '\0';
 
-	if (cstate->opts.csv_mode)
+	if (cstate->opts.format == COPY_FORMAT_CSV)
 	{
 		quotec = cstate->opts.quote[0];
 		escapec = cstate->opts.escape[0];
@@ -1256,7 +1256,7 @@ CopyReadLineText(CopyFromState cstate)
 		prev_raw_ptr = input_buf_ptr;
 		c = copy_input_buf[input_buf_ptr++];
 
-		if (cstate->opts.csv_mode)
+		if (cstate->opts.format == COPY_FORMAT_CSV)
 		{
 			/*
 			 * If character is '\r', we may need to look ahead below.  Force
@@ -1295,7 +1295,7 @@ CopyReadLineText(CopyFromState cstate)
 		}
 
 		/* Process \r */
-		if (c == '\r' && (!cstate->opts.csv_mode || !in_quote))
+		if (c == '\r' && (cstate->opts.format != COPY_FORMAT_CSV || !in_quote))
 		{
 			/* Check for \r\n on first line, _and_ handle \r\n. */
 			if (cstate->eol_type == EOL_UNKNOWN ||
@@ -1323,10 +1323,10 @@ CopyReadLineText(CopyFromState cstate)
 					if (cstate->eol_type == EOL_CRNL)
 						ereport(ERROR,
 								(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-								 !cstate->opts.csv_mode ?
+								 cstate->opts.format != COPY_FORMAT_CSV ?
 								 errmsg("literal carriage return found in data") :
 								 errmsg("unquoted carriage return found in data"),
-								 !cstate->opts.csv_mode ?
+								 cstate->opts.format != COPY_FORMAT_CSV ?
 								 errhint("Use \"\\r\" to represent carriage return.") :
 								 errhint("Use quoted CSV field to represent carriage return.")));
 
@@ -1340,10 +1340,10 @@ CopyReadLineText(CopyFromState cstate)
 			else if (cstate->eol_type == EOL_NL)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errmsg("literal carriage return found in data") :
 						 errmsg("unquoted carriage return found in data"),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errhint("Use \"\\r\" to represent carriage return.") :
 						 errhint("Use quoted CSV field to represent carriage return.")));
 			/* If reach here, we have found the line terminator */
@@ -1351,15 +1351,15 @@ CopyReadLineText(CopyFromState cstate)
 		}
 
 		/* Process \n */
-		if (c == '\n' && (!cstate->opts.csv_mode || !in_quote))
+		if (c == '\n' && (cstate->opts.format != COPY_FORMAT_CSV || !in_quote))
 		{
 			if (cstate->eol_type == EOL_CR || cstate->eol_type == EOL_CRNL)
 				ereport(ERROR,
 						(errcode(ERRCODE_BAD_COPY_FILE_FORMAT),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errmsg("literal newline found in data") :
 						 errmsg("unquoted newline found in data"),
-						 !cstate->opts.csv_mode ?
+						 cstate->opts.format != COPY_FORMAT_CSV ?
 						 errhint("Use \"\\n\" to represent newline.") :
 						 errhint("Use quoted CSV field to represent newline.")));
 			cstate->eol_type = EOL_NL;	/* in case not set yet */
@@ -1371,7 +1371,7 @@ CopyReadLineText(CopyFromState cstate)
 		 * Process backslash, except in CSV mode where backslash is a normal
 		 * character.
 		 */
-		if (c == '\\' && !cstate->opts.csv_mode)
+		if (c == '\\' && cstate->opts.format != COPY_FORMAT_CSV)
 		{
 			char		c2;
 

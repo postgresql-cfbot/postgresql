@@ -122,7 +122,7 @@ CopyFromErrorCallback(void *arg)
 				   cstate->cur_relname);
 		return;
 	}
-	if (cstate->opts.binary)
+	if (cstate->opts.format == COPY_FORMAT_BINARY)
 	{
 		/* can't usefully display the data */
 		if (cstate->cur_attname)
@@ -1583,7 +1583,7 @@ BeginCopyFrom(ParseState *pstate,
 	cstate->raw_buf_index = cstate->raw_buf_len = 0;
 	cstate->raw_reached_eof = false;
 
-	if (!cstate->opts.binary)
+	if (cstate->opts.format != COPY_FORMAT_BINARY)
 	{
 		/*
 		 * If encoding conversion is needed, we need another buffer to hold
@@ -1634,7 +1634,7 @@ BeginCopyFrom(ParseState *pstate,
 			continue;
 
 		/* Fetch the input function and typioparam info */
-		if (cstate->opts.binary)
+		if (cstate->opts.format == COPY_FORMAT_BINARY)
 			getTypeBinaryInputInfo(att->atttypid,
 								   &in_func_oid, &typioparams[attnum - 1]);
 		else
@@ -1775,14 +1775,14 @@ BeginCopyFrom(ParseState *pstate,
 
 	pgstat_progress_update_multi_param(3, progress_cols, progress_vals);
 
-	if (cstate->opts.binary)
+	if (cstate->opts.format == COPY_FORMAT_BINARY)
 	{
 		/* Read and verify binary header */
 		ReceiveCopyBinaryHeader(cstate);
 	}
 
 	/* create workspace for CopyReadAttributes results */
-	if (!cstate->opts.binary)
+	if (cstate->opts.format != COPY_FORMAT_BINARY)
 	{
 		AttrNumber	attr_count = list_length(cstate->attnumlist);
 

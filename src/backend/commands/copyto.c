@@ -134,7 +134,7 @@ SendCopyBegin(CopyToState cstate)
 {
 	StringInfoData buf;
 	int			natts = list_length(cstate->attnumlist);
-	int16		format = (cstate->opts.binary ? 1 : 0);
+	int16		format = (cstate->opts.format == COPY_FORMAT_BINARY ? 1 : 0);
 	int			i;
 
 	pq_beginmessage(&buf, PqMsg_CopyOutResponse);
@@ -191,7 +191,7 @@ CopySendEndOfRow(CopyToState cstate)
 	switch (cstate->copy_dest)
 	{
 		case COPY_FILE:
-			if (!cstate->opts.binary)
+			if (cstate->opts.format != COPY_FORMAT_BINARY)
 			{
 				/* Default line termination depends on platform */
 #ifndef WIN32
@@ -236,7 +236,7 @@ CopySendEndOfRow(CopyToState cstate)
 			break;
 		case COPY_FRONTEND:
 			/* The FE/BE protocol uses \n as newline for all platforms */
-			if (!cstate->opts.binary)
+			if (cstate->opts.format != COPY_FORMAT_BINARY)
 				CopySendChar(cstate, '\n');
 
 			/* Dump the accumulated row as one CopyData message */
@@ -775,7 +775,7 @@ DoCopyTo(CopyToState cstate)
 		bool		isvarlena;
 		Form_pg_attribute attr = TupleDescAttr(tupDesc, attnum - 1);
 
-		if (cstate->opts.binary)
+		if (cstate->opts.format == COPY_FORMAT_BINARY)
 			getTypeBinaryOutputInfo(attr->atttypid,
 									&out_func_oid,
 									&isvarlena);
@@ -796,7 +796,7 @@ DoCopyTo(CopyToState cstate)
 											   "COPY TO",
 											   ALLOCSET_DEFAULT_SIZES);
 
-	if (cstate->opts.binary)
+	if (cstate->opts.format == COPY_FORMAT_BINARY)
 	{
 		/* Generate header for a binary copy */
 		int32		tmp;
@@ -837,7 +837,7 @@ DoCopyTo(CopyToState cstate)
 
 				colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
 
-				if (cstate->opts.csv_mode)
+				if (cstate->opts.format == COPY_FORMAT_CSV)
 					CopyAttributeOutCSV(cstate, colname, false);
 				else
 					CopyAttributeOutText(cstate, colname);
@@ -884,7 +884,7 @@ DoCopyTo(CopyToState cstate)
 		processed = ((DR_copy *) cstate->queryDesc->dest)->processed;
 	}
 
-	if (cstate->opts.binary)
+	if (cstate->opts.format == COPY_FORMAT_BINARY)
 	{
 		/* Generate trailer for a binary copy */
 		CopySendInt16(cstate, -1);
@@ -912,7 +912,7 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 	MemoryContextReset(cstate->rowcontext);
 	oldcontext = MemoryContextSwitchTo(cstate->rowcontext);
 
-	if (cstate->opts.binary)
+	if (cstate->opts.format == COPY_FORMAT_BINARY)
 	{
 		/* Binary per-tuple header */
 		CopySendInt16(cstate, list_length(cstate->attnumlist));
@@ -921,7 +921,7 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 	/* Make sure the tuple is fully deconstructed */
 	slot_getallattrs(slot);
 
-	if (!cstate->opts.binary)
+	if (cstate->opts.format != COPY_FORMAT_BINARY)
 	{
 		bool		need_delim = false;
 
@@ -941,7 +941,7 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 			{
 				string = OutputFunctionCall(&out_functions[attnum - 1],
 											value);
-				if (cstate->opts.csv_mode)
+				if (cstate->opts.format == COPY_FORMAT_CSV)
 					CopyAttributeOutCSV(cstate, string,
 										cstate->opts.force_quote_flags[attnum - 1]);
 				else

@@ -3228,7 +3228,11 @@ XLogFileInitInternal(XLogSegNo logsegno, TimeLineID logtli,
 					 errmsg("could not open file \"%s\": %m", path)));
 	}
 	else
+	{
+		fsync_fname_ext(path, false, false, ERROR);
+		fsync_parent_path(path, ERROR);
 		return fd;
+	}
 
 	/*
 	 * Initialize an empty (all zeroes) segment.  NOTE: it is possible that

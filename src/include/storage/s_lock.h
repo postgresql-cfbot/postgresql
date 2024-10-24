@@ -270,6 +270,12 @@ tas(volatile slock_t *lock)
  */
 #if defined(__aarch64__)
 
+/*
+ * On ARM64, it's a win to use a non-locking test before the TAS proper.  It
+ * may be a win on 32-bit ARM, too, but nobody's tested it yet.
+ */
+#define TAS_SPIN(lock)    (*(lock) ? 1 : TAS(lock))
+
 #define SPIN_DELAY() spin_delay()
 
 static __inline__ void

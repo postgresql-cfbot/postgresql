@@ -230,11 +230,11 @@ BTWriteState
 BUF_MEM
 BYTE
 BY_HANDLE_FILE_INFORMATION
-Backend
 BackendParameters
 BackendStartupData
 BackendState
 BackendType
+BackendTypeMask
 BackgroundWorker
 BackgroundWorkerArray
 BackgroundWorkerHandle
@@ -1930,6 +1930,8 @@ PLyTransformToOb
 PLyTupleToOb
 PLyUnicode_FromStringAndSize_t
 PLy_elog_impl_t
+PMChild
+PMChildPool
 PMINIDUMP_CALLBACK_INFORMATION
 PMINIDUMP_EXCEPTION_INFORMATION
 PMINIDUMP_USER_STREAM_INFORMATION

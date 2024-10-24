@@ -378,6 +378,9 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	ItemPointerSetInvalid(&scan->rs_ctup.t_self);
 	scan->rs_cbuf = InvalidBuffer;
 	scan->rs_cblock = InvalidBlockNumber;
+	scan->rs_cindex = 0;
+	scan->rs_ntuples = 0;
+
 
 	/*
 	 * Initialize to ForwardScanDirection because it is most common and
@@ -1029,7 +1032,8 @@ TableScanDesc
 heap_beginscan(Relation relation, Snapshot snapshot,
 			   int nkeys, ScanKey key,
 			   ParallelTableScanDesc parallel_scan,
-			   uint32 flags)
+			   uint32 flags,
+			   int prefetch_maximum)
 {
 	HeapScanDesc scan;
 
@@ -1045,7 +1049,25 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	/*
 	 * allocate and initialize scan descriptor
 	 */
-	scan = (HeapScanDesc) palloc(sizeof(HeapScanDescData));
+	if (flags & SO_TYPE_BITMAPSCAN)
+	{
+		BitmapHeapScanDesc bscan = palloc(sizeof(BitmapHeapScanDescData));
+
+		bscan->rs_prefetch_blockno = InvalidBlockNumber;
+		bscan->rs_vmbuffer = InvalidBuffer;
+		bscan->rs_pvmbuffer = InvalidBuffer;
+		bscan->rs_empty_tuples_pending = 0;
+
+		/* Only used for serial BHS */
+		bscan->rs_prefetch_pages = 0;
+		bscan->rs_prefetch_target = -1;
+
+		bscan->rs_prefetch_maximum = prefetch_maximum;
+
+		scan = (HeapScanDesc) bscan;
+	}
+	else
+		scan = (HeapScanDesc) palloc(sizeof(HeapScanDescData));
 
 	scan->rs_base.rs_rd = relation;
 	scan->rs_base.rs_snapshot = snapshot;
@@ -1053,8 +1075,7 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	scan->rs_base.rs_flags = flags;
 	scan->rs_base.rs_parallel = parallel_scan;
 	scan->rs_strategy = NULL;	/* set in initscan */
-	scan->rs_vmbuffer = InvalidBuffer;
-	scan->rs_empty_tuples_pending = 0;
+	scan->rs_cbuf = InvalidBuffer;
 
 	/*
 	 * Disable page-at-a-time mode if it's not a MVCC-safe snapshot.
@@ -1168,20 +1189,39 @@ heap_rescan(TableScanDesc sscan, ScanKey key, bool set_params,
 	 * unpin scan buffers
 	 */
 	if (BufferIsValid(scan->rs_cbuf))
-		ReleaseBuffer(scan->rs_cbuf);
-
-	if (BufferIsValid(scan->rs_vmbuffer))
 	{
-		ReleaseBuffer(scan->rs_vmbuffer);
-		scan->rs_vmbuffer = InvalidBuffer;
+		ReleaseBuffer(scan->rs_cbuf);
+		scan->rs_cbuf = InvalidBuffer;
 	}
 
-	/*
-	 * Reset rs_empty_tuples_pending, a field only used by bitmap heap scan,
-	 * to avoid incorrectly emitting NULL-filled tuples from a previous scan
-	 * on rescan.
-	 */
-	scan->rs_empty_tuples_pending = 0;
+	if (scan->rs_base.rs_flags & SO_TYPE_BITMAPSCAN)
+	{
+		BitmapHeapScanDesc bscan = (BitmapHeapScanDesc) scan;
+
+		bscan->rs_prefetch_blockno = InvalidBlockNumber;
+
+		/* Only used for serial BHS */
+		bscan->rs_prefetch_pages = 0;
+		bscan->rs_prefetch_target = -1;
+
+		/*
+		 * Reset empty_tuples_pending, a field only used by bitmap heap scan,
+		 * to avoid incorrectly emitting NULL-filled tuples from a previous
+		 * scan on rescan.
+		 */
+		bscan->rs_empty_tuples_pending = 0;
+
+		if (BufferIsValid(bscan->rs_vmbuffer))
+		{
+			ReleaseBuffer(bscan->rs_vmbuffer);
+			bscan->rs_vmbuffer = InvalidBuffer;
+		}
+		if (BufferIsValid(bscan->rs_pvmbuffer))
+		{
+			ReleaseBuffer(bscan->rs_pvmbuffer);
+			bscan->rs_pvmbuffer = InvalidBuffer;
+		}
+	}
 
 	/*
 	 * The read stream is reset on rescan. This must be done before
@@ -1210,9 +1250,6 @@ heap_endscan(TableScanDesc sscan)
 	if (BufferIsValid(scan->rs_cbuf))
 		ReleaseBuffer(scan->rs_cbuf);
 
-	if (BufferIsValid(scan->rs_vmbuffer))
-		ReleaseBuffer(scan->rs_vmbuffer);
-
 	/*
 	 * Must free the read stream before freeing the BufferAccessStrategy.
 	 */
@@ -1235,6 +1272,17 @@ heap_endscan(TableScanDesc sscan)
 
 	if (scan->rs_base.rs_flags & SO_TEMP_SNAPSHOT)
 		UnregisterSnapshot(scan->rs_base.rs_snapshot);
+
+	if (scan->rs_base.rs_flags & SO_TYPE_BITMAPSCAN)
+	{
+		BitmapHeapScanDesc bscan = (BitmapHeapScanDesc) sscan;
+
+		bscan->rs_empty_tuples_pending = 0;
+		if (BufferIsValid(bscan->rs_vmbuffer))
+			ReleaseBuffer(bscan->rs_vmbuffer);
+		if (BufferIsValid(bscan->rs_pvmbuffer))
+			ReleaseBuffer(bscan->rs_pvmbuffer);
+	}
 
 	pfree(scan);
 }
@@ -1387,8 +1435,8 @@ heap_set_tidrange(TableScanDesc sscan, ItemPointer mintid,
 	heap_setscanlimits(sscan, startBlk, numBlks);
 
 	/* Finally, set the TID range in sscan */
-	ItemPointerCopy(&lowestItem, &sscan->rs_mintid);
-	ItemPointerCopy(&highestItem, &sscan->rs_maxtid);
+	ItemPointerCopy(&lowestItem, &sscan->st.tidrange.rs_mintid);
+	ItemPointerCopy(&highestItem, &sscan->st.tidrange.rs_maxtid);
 }
 
 bool
@@ -1396,8 +1444,8 @@ heap_getnextslot_tidrange(TableScanDesc sscan, ScanDirection direction,
 						  TupleTableSlot *slot)
 {
 	HeapScanDesc scan = (HeapScanDesc) sscan;
-	ItemPointer mintid = &sscan->rs_mintid;
-	ItemPointer maxtid = &sscan->rs_maxtid;
+	ItemPointer mintid = &sscan->st.tidrange.rs_mintid;
+	ItemPointer maxtid = &sscan->st.tidrange.rs_maxtid;
 
 	/* Note: no locking manipulations needed */
 	for (;;)

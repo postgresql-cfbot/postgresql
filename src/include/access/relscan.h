@@ -16,6 +16,7 @@
 
 #include "access/htup_details.h"
 #include "access/itup.h"
+#include "nodes/tidbitmap.h"
 #include "port/atomics.h"
 #include "storage/buf.h"
 #include "storage/relfilelocator.h"
@@ -37,9 +38,29 @@ typedef struct TableScanDescData
 	int			rs_nkeys;		/* number of scan keys */
 	struct ScanKeyData *rs_key; /* array of scan key descriptors */
 
-	/* Range of ItemPointers for table_scan_getnextslot_tidrange() to scan. */
-	ItemPointerData rs_mintid;
-	ItemPointerData rs_maxtid;
+	/*
+	 * Scan type-specific members
+	 */
+	union
+	{
+		/* State for Bitmap Table Scans */
+		struct
+		{
+			struct ParallelBitmapHeapState *rs_pstate;
+			TBMIterator rs_iterator;
+			TBMIterator rs_prefetch_iterator;
+		}			bitmap;
+
+		/*
+		 * Range of ItemPointers for table_scan_getnextslot_tidrange() to
+		 * scan.
+		 */
+		struct
+		{
+			ItemPointerData rs_mintid;
+			ItemPointerData rs_maxtid;
+		}			tidrange;
+	}			st;
 
 	/*
 	 * Information about type and behaviour of the scan, a bitmask of members

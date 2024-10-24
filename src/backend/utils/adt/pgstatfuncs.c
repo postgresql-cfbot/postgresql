@@ -460,14 +460,31 @@ pg_stat_get_activity(PG_FUNCTION_ARGS)
 			 * Don't expose transaction time for walsenders; it confuses
 			 * monitoring, particularly because we don't keep the time up-to-
 			 * date.
+			 *
+			 * Also, don't show transaction time for backends in the "idle"
+			 * state. There are cases, like during "Describe" message
+			 * handling, removing temporary relations at exit, or processing
+			 * client read interrupts, where the backend remains "idle" but
+			 * still sets transaction time. This can lead to incorrect "idle"
+			 * entries with non-NULL transaction times in pg_stat_activity. To
+			 * prevent these misleading entries, avoid exposing transaction
+			 * time for idle backends.
 			 */
 			if (beentry->st_xact_start_timestamp != 0 &&
-				beentry->st_backendType != B_WAL_SENDER)
+				beentry->st_backendType != B_WAL_SENDER &&
+				(beentry->st_state != STATE_IDLE ||
+				 beentry->st_backendType != B_BACKEND))
 				values[8] = TimestampTzGetDatum(beentry->st_xact_start_timestamp);
 			else
 				nulls[8] = true;
 
-			if (beentry->st_activity_start_timestamp != 0)
+			/*
+			 * Don't expose query start time for idle backends for the same
+			 * reasons mentioned above regarding transaction time.
+			 */
+			if (beentry->st_activity_start_timestamp != 0 &&
+				(beentry->st_state != STATE_IDLE ||
+				 beentry->st_backendType != B_BACKEND))
 				values[9] = TimestampTzGetDatum(beentry->st_activity_start_timestamp);
 			else
 				nulls[9] = true;

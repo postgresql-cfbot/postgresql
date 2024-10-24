@@ -763,8 +763,9 @@ select * from onek2 where unique2 = 11 and stringu1 = 'ATAAAA';
 -----------------------------------------------------------------
  Index Scan using onek2_u2_prtl on onek2 (actual rows=1 loops=1)
    Index Cond: (unique2 = 11)
+   Index Searches: 1
    Filter: (stringu1 = 'ATAAAA'::name)
-(3 rows)
+(4 rows)
 
 explain (costs off)
 select unique2 from onek2 where unique2 = 11 and stringu1 = 'ATAAAA';

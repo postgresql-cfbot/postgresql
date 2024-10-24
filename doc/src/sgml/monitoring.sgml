@@ -4180,11 +4180,17 @@ description | Waiting for a newly initialized WAL file to reach durable storage
     Queries that use certain <acronym>SQL</acronym> constructs to search for
     rows matching any value out of a list or array of multiple scalar values
     (see <xref linkend="functions-comparisons"/>) perform multiple
-    <quote>primitive</quote> index scans (up to one primitive scan per scalar
-    value) during query execution.  Each internal primitive index scan
-    increments <structname>pg_stat_all_indexes</structname>.<structfield>idx_scan</structfield>,
+    index searches (up to one index search per scalar value) during query
+    execution.  Each internal index search increments
+    <structname>pg_stat_all_indexes</structname>.<structfield>idx_scan</structfield>,
     so it's possible for the count of index scans to significantly exceed the
     total number of index scan executor node executions.
+   </para>
+   <para>
+    <command>EXPLAIN ANALYZE</command> breaks down the total number of index
+    searches performed by each index scan node.  <literal>Index Searches: N</literal>
+    indicates the total number of searches across <emphasis>all</emphasis>
+    executor node executions/loops.
    </para>
   </note>
 

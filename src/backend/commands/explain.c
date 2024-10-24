@@ -13,6 +13,7 @@
  */
 #include "postgres.h"
 
+#include "access/relscan.h"
 #include "access/xact.h"
 #include "catalog/pg_type.h"
 #include "commands/createas.h"
@@ -89,6 +90,7 @@ static void show_plan_tlist(PlanState *planstate, List *ancestors,
 static void show_expression(Node *node, const char *qlabel,
 							PlanState *planstate, List *ancestors,
 							bool useprefix, ExplainState *es);
+static void show_indexscan_nsearches(PlanState *planstate, ExplainState *es);
 static void show_qual(List *qual, const char *qlabel,
 					  PlanState *planstate, List *ancestors,
 					  bool useprefix, ExplainState *es);
@@ -2087,6 +2089,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_IndexScan:
 			show_scan_qual(((IndexScan *) plan)->indexqualorig,
 						   "Index Cond", planstate, ancestors, es);
+			show_indexscan_nsearches(planstate, es);
 			if (((IndexScan *) plan)->indexqualorig)
 				show_instrumentation_count("Rows Removed by Index Recheck", 2,
 										   planstate, es);
@@ -2100,6 +2103,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_IndexOnlyScan:
 			show_scan_qual(((IndexOnlyScan *) plan)->indexqual,
 						   "Index Cond", planstate, ancestors, es);
+			show_indexscan_nsearches(planstate, es);
 			if (((IndexOnlyScan *) plan)->recheckqual)
 				show_instrumentation_count("Rows Removed by Index Recheck", 2,
 										   planstate, es);
@@ -2116,6 +2120,7 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		case T_BitmapIndexScan:
 			show_scan_qual(((BitmapIndexScan *) plan)->indexqualorig,
 						   "Index Cond", planstate, ancestors, es);
+			show_indexscan_nsearches(planstate, es);
 			break;
 		case T_BitmapHeapScan:
 			show_scan_qual(((BitmapHeapScan *) plan)->bitmapqualorig,
@@ -2632,6 +2637,47 @@ show_expression(Node *node, const char *qlabel,
 
 	/* And add to es->str */
 	ExplainPropertyText(qlabel, exprstr, es);
+}
+
+/*
+ * Show the number of index searches within an IndexScan node, IndexOnlyScan
+ * node, or BitmapIndexScan node
+ */
+static void
+show_indexscan_nsearches(PlanState *planstate, ExplainState *es)
+{
+	Plan	   *plan = planstate->plan;
+	struct IndexScanDescData *scanDesc = NULL;
+	uint64		nsearches = 0;
+	double		nloops;
+
+	if (!es->analyze)
+		return;
+
+	nloops = planstate->instrument->nloops;
+
+	switch (nodeTag(plan))
+	{
+		case T_IndexScan:
+			scanDesc = ((IndexScanState *) planstate)->iss_ScanDesc;
+			break;
+		case T_IndexOnlyScan:
+			scanDesc = ((IndexOnlyScanState *) planstate)->ioss_ScanDesc;
+			break;
+		case T_BitmapIndexScan:
+			scanDesc = ((BitmapIndexScanState *) planstate)->biss_ScanDesc;
+			break;
+		default:
+			break;
+	}
+
+	if (scanDesc)
+		nsearches = scanDesc->nsearches;
+
+	if (nloops > 0)
+		ExplainPropertyFloat("Index Searches", NULL, nsearches / nloops, 0, es);
+	else
+		ExplainPropertyFloat("Index Searches", NULL, 0.0, 0, es);
 }
 
 /*

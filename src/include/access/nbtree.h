@@ -24,6 +24,7 @@
 #include "lib/stringinfo.h"
 #include "storage/bufmgr.h"
 #include "storage/shm_toc.h"
+#include "utils/skipsupport.h"
 
 /* There's room for a 16-bit vacuum cycle ID in BTPageOpaqueData */
 typedef uint16 BTCycleId;
@@ -709,7 +710,8 @@ BTreeTupleGetMaxHeapTID(IndexTuple itup)
 #define BTINRANGE_PROC		3
 #define BTEQUALIMAGE_PROC	4
 #define BTOPTIONS_PROC		5
-#define BTNProcs			5
+#define BTSKIPSUPPORT_PROC	6
+#define BTNProcs			6
 
 /*
  *	We need to be able to tell the difference between read and write
@@ -1022,10 +1024,22 @@ typedef BTScanPosData *BTScanPos;
 /* We need one of these for each equality-type SK_SEARCHARRAY scan key */
 typedef struct BTArrayKeyInfo
 {
+	/* fields used by both kinds of array (standard arrays and skip arrays) */
 	int			scan_key;		/* index of associated key in keyData */
+	int			num_elems;		/* number of elems (-1 for skip array) */
+
+	/* fields for standard ScalarArrayOpExpr arrays */
 	int			cur_elem;		/* index of current element in elem_values */
-	int			num_elems;		/* number of elems in current array value */
 	Datum	   *elem_values;	/* array of num_elems Datums */
+
+	/* fields for skip arrays, which generate their elements procedurally */
+	bool		use_sksup;		/* sksup initialized/skip support in use? */
+	bool		null_elem;		/* lowest/highest element actually NULL? */
+	SkipSupportData sksup;		/* skip scan support (unless !use_sksup) */
+	ScanKey		low_compare;	/* array's > or >= lower bound */
+	ScanKey		high_compare;	/* array's < or <= upper bound */
+	FmgrInfo   *low_order;		/* low_compare's ORDER proc */
+	FmgrInfo   *high_order;		/* high_compare's ORDER proc */
 } BTArrayKeyInfo;
 
 typedef struct BTScanOpaqueData
@@ -1114,6 +1128,10 @@ typedef struct BTReadPageState
  */
 #define SK_BT_REQFWD	0x00010000	/* required to continue forward scan */
 #define SK_BT_REQBKWD	0x00020000	/* required to continue backward scan */
+#define SK_BT_SKIP		0x00040000	/* skip array on omitted prefix column */
+#define SK_BT_NEGPOSINF	0x00080000	/* -inf/+inf key (invalid sk_argument) */
+#define SK_BT_NEXT		0x00100000	/* positions scan > sk_argument */
+#define SK_BT_PRIOR		0x00200000	/* positions scan < sk_argument */
 #define SK_BT_INDOPTION_SHIFT  24	/* must clear the above bits */
 #define SK_BT_DESC			(INDOPTION_DESC << SK_BT_INDOPTION_SHIFT)
 #define SK_BT_NULLS_FIRST	(INDOPTION_NULLS_FIRST << SK_BT_INDOPTION_SHIFT)
@@ -1150,6 +1168,10 @@ typedef struct BTOptions
 #define PROGRESS_BTREE_PHASE_PERFORMSORT_2				4
 #define PROGRESS_BTREE_PHASE_LEAF_LOAD					5
 
+/* GUC parameters (just a temporary convenience for reviewers) */
+extern PGDLLIMPORT int skipscan_prefix_cols;
+extern PGDLLIMPORT bool skipscan_skipsupport_enabled;
+
 /*
  * external entry points for btree, in nbtree.c
  */
@@ -1160,7 +1182,7 @@ extern bool btinsert(Relation rel, Datum *values, bool *isnull,
 					 bool indexUnchanged,
 					 struct IndexInfo *indexInfo);
 extern IndexScanDesc btbeginscan(Relation rel, int nkeys, int norderbys);
-extern Size btestimateparallelscan(int nkeys, int norderbys);
+extern Size btestimateparallelscan(Relation rel, int nkeys, int norderbys);
 extern void btinitparallelscan(void *target);
 extern bool btgettuple(IndexScanDesc scan, ScanDirection dir);
 extern int64 btgetbitmap(IndexScanDesc scan, TIDBitmap *tbm);

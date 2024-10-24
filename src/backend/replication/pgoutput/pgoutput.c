@@ -84,9 +84,6 @@ static bool publications_valid;
 static List *LoadPublications(List *pubnames);
 static void publication_invalidation_cb(Datum arg, int cacheid,
 										uint32 hashvalue);
-static void send_relation_and_attrs(Relation relation, TransactionId xid,
-									LogicalDecodingContext *ctx,
-									Bitmapset *columns);
 static void send_repl_origin(LogicalDecodingContext *ctx,
 							 RepOriginId origin_id, XLogRecPtr origin_lsn,
 							 bool send_origin);
@@ -170,6 +167,9 @@ typedef struct RelationSyncEntry
 	 */
 	Bitmapset  *columns;
 
+	/* Include publishing generated columns */
+	bool		pubgencols;
+
 	/*
 	 * Private context to store additional data for this entry - state for the
 	 * row filter expressions, column list, etc.
@@ -213,6 +213,9 @@ static void init_rel_sync_cache(MemoryContext cachectx);
 static void cleanup_rel_sync_cache(TransactionId xid, bool is_commit);
 static RelationSyncEntry *get_rel_sync_entry(PGOutputData *data,
 											 Relation relation);
+static void send_relation_and_attrs(Relation relation, TransactionId xid,
+									LogicalDecodingContext *ctx,
+									RelationSyncEntry *relentry);
 static void rel_sync_cache_relation_cb(Datum arg, Oid relid);
 static void rel_sync_cache_publication_cb(Datum arg, int cacheid,
 										  uint32 hashvalue);
@@ -731,11 +734,11 @@ maybe_send_schema(LogicalDecodingContext *ctx,
 	{
 		Relation	ancestor = RelationIdGetRelation(relentry->publish_as_relid);
 
-		send_relation_and_attrs(ancestor, xid, ctx, relentry->columns);
+		send_relation_and_attrs(ancestor, xid, ctx, relentry);
 		RelationClose(ancestor);
 	}
 
-	send_relation_and_attrs(relation, xid, ctx, relentry->columns);
+	send_relation_and_attrs(relation, xid, ctx, relentry);
 
 	if (data->in_streaming)
 		set_schema_sent_in_streamed_txn(relentry, topxid);
@@ -749,9 +752,10 @@ maybe_send_schema(LogicalDecodingContext *ctx,
 static void
 send_relation_and_attrs(Relation relation, TransactionId xid,
 						LogicalDecodingContext *ctx,
-						Bitmapset *columns)
+						RelationSyncEntry *relentry)
 {
 	TupleDesc	desc = RelationGetDescr(relation);
+	Bitmapset *columns = relentry->columns;
 	int			i;
 
 	/*
@@ -766,10 +770,17 @@ send_relation_and_attrs(Relation relation, TransactionId xid,
 	{
 		Form_pg_attribute att = TupleDescAttr(desc, i);
 
-		if (att->attisdropped || att->attgenerated)
+		if (att->attisdropped)
 			continue;
 
 		if (att->atttypid < FirstGenbkiObjectId)
+			continue;
+
+		/*
+		 * Skip publishing generated columns if the option is not specified and
+		 * if they are not included in the column list.
+		 */
+		if (att->attgenerated && !relentry->pubgencols && !columns)
 			continue;
 
 		/* Skip this attribute if it's not present in the column list */
@@ -782,7 +793,7 @@ send_relation_and_attrs(Relation relation, TransactionId xid,
 	}
 
 	OutputPluginPrepareWrite(ctx, false);
-	logicalrep_write_rel(ctx->out, xid, relation, columns);
+	logicalrep_write_rel(ctx->out, xid, relation, columns, relentry->pubgencols);
 	OutputPluginWrite(ctx, false);
 }
 
@@ -1009,6 +1020,67 @@ pgoutput_row_filter_init(PGOutputData *data, List *publications,
 }
 
 /*
+ * If the table contains a generated column, check for any conflicting
+ * values of publish_generated_columns in the publications.
+ */
+static void
+pgoutput_pubgencol_init(PGOutputData *data, List *publications,
+						RelationSyncEntry *entry)
+{
+	Relation	relation = RelationIdGetRelation(entry->publish_as_relid);
+	TupleDesc	desc = RelationGetDescr(relation);
+	bool		gencolpresent = false;
+	ListCell   *lc;
+	bool		first = true;
+
+	/* Check if there is any generated column present */
+	for (int i = 0; i < desc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, i);
+		if (att->attgenerated)
+		{
+			gencolpresent = true;
+			break;
+		}
+	}
+
+	/* There is no generated columns to be published */
+	if (!gencolpresent)
+	{
+		entry->pubgencols = false;
+		return;
+	}
+
+	/*
+	 * There may be a conflicting value for publish_generated_columns in the
+	 * publications.
+	 */
+	foreach(lc, publications)
+	{
+		Publication *pub = lfirst(lc);
+
+		/*
+		 * The column list takes precedence over pubgencols, so skip checking
+		 * column list publications.
+		 */
+		if (is_column_list_publication(pub, entry->publish_as_relid))
+			continue;
+
+		if (first)
+		{
+			entry->pubgencols = pub->pubgencols;
+			first = false;
+		}
+		else if (entry->pubgencols != pub->pubgencols)
+			ereport(ERROR,
+					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("cannot use different values of publish_generated_columns for table \"%s.%s\" in different publications",
+						get_namespace_name(RelationGetNamespace(relation)),
+						RelationGetRelationName(relation)));
+	}
+}
+
+/*
  * Initialize the column list.
  */
 static void
@@ -1017,7 +1089,31 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 {
 	ListCell   *lc;
 	bool		first = true;
+	Bitmapset  *relcols = NULL;
 	Relation	relation = RelationIdGetRelation(entry->publish_as_relid);
+	TupleDesc	desc = RelationGetDescr(relation);
+	MemoryContext oldcxt = NULL;
+	bool		collistpubexist = false;
+
+	pgoutput_ensure_entry_cxt(data, entry);
+
+	oldcxt = MemoryContextSwitchTo(entry->entry_cxt);
+
+	/*
+	 * Prepare the columns that will be published for FOR ALL TABLES and
+	 * FOR TABLES IN SCHEMA publication.
+	 */
+	for (int i = 0; i < desc->natts; i++)
+	{
+		Form_pg_attribute att = TupleDescAttr(desc, i);
+
+		if (att->attisdropped || (att->attgenerated && !entry->pubgencols))
+			continue;
+
+		relcols = bms_add_member(relcols, att->attnum);
+	}
+
+	MemoryContextSwitchTo(oldcxt);
 
 	/*
 	 * Find if there are any column lists for this relation. If there are,
@@ -1032,14 +1128,15 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 	 * need to check all the given publication-table mappings and report an
 	 * error if any publications have a different column list.
 	 *
-	 * FOR ALL TABLES and FOR TABLES IN SCHEMA imply "don't use column list".
+	 * FOR ALL TABLES and FOR TABLES IN SCHEMA will use the relcols which is
+	 * prepared according to the pubgencols option.
 	 */
 	foreach(lc, publications)
 	{
 		Publication *pub = lfirst(lc);
 		HeapTuple	cftuple = NULL;
 		Datum		cfdatum = 0;
-		Bitmapset  *cols = NULL;
+		Bitmapset  *cols = relcols;
 
 		/*
 		 * If the publication is FOR ALL TABLES then it is treated the same as
@@ -1071,35 +1168,9 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 				/* Build the column list bitmap in the per-entry context. */
 				if (!pub_no_list)	/* when not null */
 				{
-					int			i;
-					int			nliveatts = 0;
-					TupleDesc	desc = RelationGetDescr(relation);
-
-					pgoutput_ensure_entry_cxt(data, entry);
-
-					cols = pub_collist_to_bitmapset(cols, cfdatum,
+					collistpubexist = true;
+					cols = pub_collist_to_bitmapset(NULL, cfdatum,
 													entry->entry_cxt);
-
-					/* Get the number of live attributes. */
-					for (i = 0; i < desc->natts; i++)
-					{
-						Form_pg_attribute att = TupleDescAttr(desc, i);
-
-						if (att->attisdropped || att->attgenerated)
-							continue;
-
-						nliveatts++;
-					}
-
-					/*
-					 * If column list includes all the columns of the table,
-					 * set it to NULL.
-					 */
-					if (bms_num_members(cols) == nliveatts)
-					{
-						bms_free(cols);
-						cols = NULL;
-					}
 				}
 
 				ReleaseSysCache(cftuple);
@@ -1115,9 +1186,16 @@ pgoutput_column_list_init(PGOutputData *data, List *publications,
 			ereport(ERROR,
 					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 					errmsg("cannot use different column lists for table \"%s.%s\" in different publications",
-						   get_namespace_name(RelationGetNamespace(relation)),
-						   RelationGetRelationName(relation)));
+						get_namespace_name(RelationGetNamespace(relation)),
+						RelationGetRelationName(relation)));
 	}							/* loop all subscribed publications */
+
+	/*
+	 * If no column list publications exist, columns will be selected later
+	 * based on the generated columns option.
+	 */
+	if (!collistpubexist)
+		entry->columns = NULL;
 
 	RelationClose(relation);
 }
@@ -1531,15 +1609,18 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 	{
 		case REORDER_BUFFER_CHANGE_INSERT:
 			logicalrep_write_insert(ctx->out, xid, targetrel, new_slot,
-									data->binary, relentry->columns);
+									data->binary, relentry->columns,
+									relentry->pubgencols);
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
 			logicalrep_write_update(ctx->out, xid, targetrel, old_slot,
-									new_slot, data->binary, relentry->columns);
+									new_slot, data->binary, relentry->columns,
+									relentry->pubgencols);
 			break;
 		case REORDER_BUFFER_CHANGE_DELETE:
 			logicalrep_write_delete(ctx->out, xid, targetrel, old_slot,
-									data->binary, relentry->columns);
+									data->binary, relentry->columns,
+									relentry->pubgencols);
 			break;
 		default:
 			Assert(false);
@@ -2212,6 +2293,9 @@ get_rel_sync_entry(PGOutputData *data, Relation relation)
 
 			/* Initialize the row filter */
 			pgoutput_row_filter_init(data, rel_publications, entry);
+
+			/* Initialize publish generated columns value */
+			pgoutput_pubgencol_init(data, rel_publications, entry);
 
 			/* Initialize the column list */
 			pgoutput_column_list_init(data, rel_publications, entry);

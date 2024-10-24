@@ -54,6 +54,9 @@ CATALOG(pg_publication,6104,PublicationRelationId)
 
 	/* true if partition changes are published using root schema */
 	bool		pubviaroot;
+
+	/* true if generated columns data should be published */
+	bool		pubgencols;
 } FormData_pg_publication;
 
 /* ----------------
@@ -103,6 +106,7 @@ typedef struct Publication
 	char	   *name;
 	bool		alltables;
 	bool		pubviaroot;
+	bool		pubgencols;
 	PublicationActions pubactions;
 } Publication;
 
@@ -150,6 +154,7 @@ extern Oid	GetTopMostAncestorInPublication(Oid puboid, List *ancestors,
 
 extern bool is_publishable_relation(Relation rel);
 extern bool is_schema_publication(Oid pubid);
+extern bool is_column_list_publication(Publication *pub, Oid relid);
 extern ObjectAddress publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 											  bool if_not_exists);
 extern Bitmapset *pub_collist_validate(Relation targetrel, List *columns);

@@ -108,6 +108,13 @@ typedef struct RelationData
 													 * any value */
 	SubTransactionId rd_droppedSubid;	/* dropped with another Subid set */
 
+	/*
+	 * rd_firstPersistenceChangeSubid is the ID of the highest subtransaction
+	 * ID the rel's persistence change has survived into.
+	 */
+	SubTransactionId rd_firstPersistenceChangeSubid; /* highest subxact chaging
+													  * persistence */
+
 	Form_pg_class rd_rel;		/* RELATION tuple */
 	TupleDesc	rd_att;			/* tuple descriptor */
 	Oid			rd_id;			/* relation's object id */

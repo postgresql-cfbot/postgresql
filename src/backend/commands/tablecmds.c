@@ -5709,6 +5709,151 @@ ATParseTransformCmd(List **wqueue, AlteredTableInfo *tab, Relation rel,
 }
 
 /*
+ * RelationChangePersistence: perform in-place persistence change of a relation
+ */
+static void
+RelationChangePersistence(AlteredTableInfo *tab, char persistence,
+						  LOCKMODE lockmode)
+{
+	Relation	rel;
+	Relation	classRel;
+	HeapTuple	tuple,
+				newtuple;
+	Datum		new_val[Natts_pg_class];
+	bool		new_null[Natts_pg_class],
+				new_repl[Natts_pg_class];
+	List	   *relids;
+	ListCell   *lc_oid;
+
+	Assert(tab->rewrite == AT_REWRITE_ALTER_PERSISTENCE);
+	Assert(lockmode == AccessExclusiveLock);
+
+	/*
+	 * Use ATRewriteTable instead of this function if the following condition
+	 * is not satisfied.
+	 */
+	Assert(tab->constraints == NULL && tab->partition_constraint == NULL &&
+		   tab->newvals == NULL && !tab->verify_new_notnull);
+
+	rel = table_open(tab->relid, lockmode);
+
+	Assert(rel->rd_rel->relpersistence != persistence);
+
+	elog(DEBUG1, "perform in-place persistence change");
+
+	/*
+	 * Initially, gather all relations that require a persistence change.
+	 */
+
+	/* Collect OIDs of indexes and toast relations */
+	relids = RelationGetIndexList(rel);
+	relids = lcons_oid(rel->rd_id, relids);
+
+	/* Add toast relation if any */
+	if (OidIsValid(rel->rd_rel->reltoastrelid))
+	{
+		List	   *toastidx;
+		Relation	toastrel = table_open(rel->rd_rel->reltoastrelid, lockmode);
+
+		relids = lappend_oid(relids, rel->rd_rel->reltoastrelid);
+		toastidx = RelationGetIndexList(toastrel);
+		relids = list_concat(relids, toastidx);
+		pfree(toastidx);
+		table_close(toastrel, NoLock);
+	}
+
+	table_close(rel, NoLock);
+
+	/* Make changes in storage */
+	classRel = table_open(RelationRelationId, RowExclusiveLock);
+
+	foreach(lc_oid, relids)
+	{
+		Oid			reloid = lfirst_oid(lc_oid);
+		Relation	r = relation_open(reloid, lockmode);
+		SMgrRelation srel;
+		bool		persistent = (persistence == RELPERSISTENCE_PERMANENT);
+		bool		is_index;
+
+		/*
+		 * Reconstruct the storage when permanent and unlogged storage types
+		 * are incompatible.
+		 */
+		if (r->rd_rel->relkind == RELKIND_INDEX &&
+			!r->rd_indam->amunloggedstoragecompatible)
+		{
+			int			reindex_flags;
+			ReindexParams params = {0};
+
+			/* reindex doesn't allow concurrent use of the index */
+			table_close(r, NoLock);
+
+			reindex_flags =
+				REINDEX_REL_SUPPRESS_INDEX_USE |
+				REINDEX_REL_CHECK_CONSTRAINTS;
+
+			/* Set the same persistence with the parent relation. */
+			if (persistent)
+				reindex_flags |= REINDEX_REL_FORCE_INDEXES_PERMANENT;
+			else
+				reindex_flags |= REINDEX_REL_FORCE_INDEXES_UNLOGGED;
+
+			/* this doesn't fire REINDEX event triegger */
+			reindex_index(NULL, reloid, reindex_flags, persistence, &params);
+
+			continue;
+		}
+
+		RelationAssumePersistenceChange(r);
+
+		/* switch buffer persistence */
+		srel = RelationGetSmgr(r);
+		log_smgrbufpersistence(srel->smgr_rlocator.locator, persistent);
+		SetRelationBuffersPersistence(srel, persistent);
+
+		/* then create or drop the init fork */
+		if (persistent)
+			RelationDropInitFork(srel);
+		else
+		{
+			is_index = (r->rd_rel->relkind == RELKIND_INDEX);
+
+			/*
+			 * If it is an index, have access methods initialize the file. In
+			 * that case, WAL-logging is expected to performed by the
+			 * ambuildempty() method.
+			 */
+			RelationCreateFork(srel, INIT_FORKNUM, !is_index, true);
+			if (is_index)
+				r->rd_indam->ambuildempty(r);
+		}
+
+		/* Update catalog */
+		tuple = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(reloid));
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for relation %u", reloid);
+
+		memset(new_val, 0, sizeof(new_val));
+		memset(new_null, false, sizeof(new_null));
+		memset(new_repl, false, sizeof(new_repl));
+
+		new_val[Anum_pg_class_relpersistence - 1] = CharGetDatum(persistence);
+		new_null[Anum_pg_class_relpersistence - 1] = false;
+		new_repl[Anum_pg_class_relpersistence - 1] = true;
+
+		newtuple = heap_modify_tuple(tuple, RelationGetDescr(classRel),
+									 new_val, new_null, new_repl);
+
+		CatalogTupleUpdate(classRel, &newtuple->t_self, newtuple);
+		heap_freetuple(newtuple);
+
+		table_close(r, NoLock);
+	}
+
+	table_close(classRel, NoLock);
+}
+
+/*
  * ATRewriteTables: ALTER TABLE phase 3
  */
 static void
@@ -5840,48 +5985,58 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 										 tab->relid,
 										 tab->rewrite);
 
-			/*
-			 * Create transient table that will receive the modified data.
-			 *
-			 * Ensure it is marked correctly as logged or unlogged.  We have
-			 * to do this here so that buffers for the new relfilenumber will
-			 * have the right persistence set, and at the same time ensure
-			 * that the original filenumbers's buffers will get read in with
-			 * the correct setting (i.e. the original one).  Otherwise a
-			 * rollback after the rewrite would possibly result with buffers
-			 * for the original filenumbers having the wrong persistence
-			 * setting.
-			 *
-			 * NB: This relies on swap_relation_files() also swapping the
-			 * persistence. That wouldn't work for pg_class, but that can't be
-			 * unlogged anyway.
-			 */
-			OIDNewHeap = make_new_heap(tab->relid, NewTableSpace, NewAccessMethod,
-									   persistence, lockmode);
+			if (tab->rewrite == AT_REWRITE_ALTER_PERSISTENCE)
+			{
+				/* Make in-place persistence change. */
+				RelationChangePersistence(tab, persistence, lockmode);
+			}
+			else
+			{
+				/*
+				 * Create transient table that will receive the modified data.
+				 *
+				 * Ensure it is marked correctly as logged or unlogged.  We
+				 * have to do this here so that buffers for the new
+				 * relfilenumber will have the right persistence set, and at
+				 * the same time ensure that the original filenumbers's buffers
+				 * will get read in with the correct setting (i.e. the original
+				 * one).  Otherwise a rollback after the rewrite would possibly
+				 * result with buffers for the original filenumbers having the
+				 * wrong persistence setting.
+				 *
+				 * NB: This relies on swap_relation_files() also swapping the
+				 * persistence. That wouldn't work for pg_class, but that can't
+				 * be unlogged anyway.
+				 */
+				OIDNewHeap = make_new_heap(tab->relid, NewTableSpace,
+										   NewAccessMethod,
+										   persistence, lockmode);
 
-			/*
-			 * Copy the heap data into the new table with the desired
-			 * modifications, and test the current data within the table
-			 * against new constraints generated by ALTER TABLE commands.
-			 */
-			ATRewriteTable(tab, OIDNewHeap, lockmode);
+				/*
+				 * Copy the heap data into the new table with the desired
+				 * modifications, and test the current data within the table
+				 * against new constraints generated by ALTER TABLE commands.
+				 */
+				ATRewriteTable(tab, OIDNewHeap, lockmode);
 
-			/*
-			 * Swap the physical files of the old and new heaps, then rebuild
-			 * indexes and discard the old heap.  We can use RecentXmin for
-			 * the table's new relfrozenxid because we rewrote all the tuples
-			 * in ATRewriteTable, so no older Xid remains in the table.  Also,
-			 * we never try to swap toast tables by content, since we have no
-			 * interest in letting this code work on system catalogs.
-			 */
-			finish_heap_swap(tab->relid, OIDNewHeap,
-							 false, false, true,
-							 !OidIsValid(tab->newTableSpace),
-							 RecentXmin,
-							 ReadNextMultiXactId(),
-							 persistence);
+				/*
+				 * Swap the physical files of the old and new heaps, then
+				 * rebuild indexes and discard the old heap.  We can use
+				 * RecentXmin for the table's new relfrozenxid because we
+				 * rewrote all the tuples in ATRewriteTable, so no older Xid
+				 * remains in the table.  Also, we never try to swap toast
+				 * tables by content, since we have no interest in letting this
+				 * code work on system catalogs.
+				 */
+				finish_heap_swap(tab->relid, OIDNewHeap,
+								 false, false, true,
+								 !OidIsValid(tab->newTableSpace),
+								 RecentXmin,
+								 ReadNextMultiXactId(),
+								 persistence);
 
-			InvokeObjectPostAlterHook(RelationRelationId, tab->relid, 0);
+				InvokeObjectPostAlterHook(RelationRelationId, tab->relid, 0);
+			}
 		}
 		else if (tab->rewrite > 0 && tab->relkind == RELKIND_SEQUENCE)
 		{
@@ -15654,16 +15809,17 @@ index_copy_data(Relation rel, RelFileLocator newrlocator)
 	{
 		if (smgrexists(RelationGetSmgr(rel), forkNum))
 		{
-			smgrcreate(dstrel, forkNum, false);
+			bool wal_log = RelationIsPermanent(rel) |
+				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
+				 forkNum == INIT_FORKNUM);
 
 			/*
-			 * WAL log creation if the relation is persistent, or this is the
-			 * init fork of an unlogged relation.
+			 * Usually, we don't use UNDO log for FSM or VM forks, as their
+			 * creation is not transactional. However, we're currently copying
+			 * the entire relation in a transactional manner, which requires
+			 * after-crash cleanup.
 			 */
-			if (RelationIsPermanent(rel) ||
-				(rel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED &&
-				 forkNum == INIT_FORKNUM))
-				log_smgrcreate(&newrlocator, forkNum);
+			RelationCreateFork(dstrel, forkNum, wal_log, true);
 			RelationCopyStorage(RelationGetSmgr(rel), dstrel, forkNum,
 								rel->rd_rel->relpersistence);
 		}

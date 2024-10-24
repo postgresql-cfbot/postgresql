@@ -1464,7 +1464,8 @@ ForgetDatabaseSyncRequests(Oid dbid)
  * DropRelationFiles -- drop files of all given relations
  */
 void
-DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
+DropRelationFiles(RelFileLocator *delrels, ForkBitmap *delforks, int ndelrels,
+				  bool isRedo)
 {
 	SMgrRelation *srels;
 	int			i;
@@ -1478,13 +1479,17 @@ DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo)
 		{
 			ForkNumber	fork;
 
+			/* Close the spacified forks at smgr level. */
 			for (fork = 0; fork <= MAX_FORKNUM; fork++)
-				XLogDropRelation(delrels[i], fork);
+			{
+				if (!delforks || FORKBITMAP_ISSET(delforks[i], fork))
+					XLogDropRelation(delrels[i], fork);
+			}
 		}
 		srels[i] = srel;
 	}
 
-	smgrdounlinkall(srels, ndelrels, isRedo);
+	smgrdounlinkall(srels, delforks, ndelrels, isRedo);
 
 	for (i = 0; i < ndelrels; i++)
 		smgrclose(srels[i]);

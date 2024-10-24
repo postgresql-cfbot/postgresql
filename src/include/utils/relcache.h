@@ -119,6 +119,7 @@ extern Relation RelationBuildLocalRelation(const char *relname,
  */
 extern void RelationSetNewRelfilenumber(Relation relation, char persistence);
 extern void RelationAssumeNewRelfilelocator(Relation relation);
+extern void RelationAssumePersistenceChange(Relation relation);
 
 /*
  * Routines for flushing/rebuilding relcache entries in various scenarios

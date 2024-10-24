@@ -25,6 +25,7 @@ AclResult
 AcquireSampleRowsFunc
 ActionList
 ActiveSnapshotElt
+ActiveULog
 AddForeignUpdateTargets_function
 AddrInfo
 AffixNode
@@ -329,6 +330,7 @@ BtreeLastVisibleEntry
 BtreeLevel
 Bucket
 BufFile
+BufMgrCleanup
 Buffer
 BufferAccessStrategy
 BufferAccessStrategyType
@@ -2659,6 +2661,7 @@ SimplePtrListCell
 SimpleStats
 SimpleStringList
 SimpleStringListCell
+SimpleUndoLogRecord
 SingleBoundSortItem
 Size
 SkipPages
@@ -3028,8 +3031,11 @@ UINT
 ULARGE_INTEGER
 ULONG
 ULONG_PTR
+ULogStateData
 UV
 UVersionInfo
+UndoDescData
+UndoLogFileHeader
 UnicodeNormalizationForm
 UnicodeNormalizationQC
 Unique
@@ -4015,6 +4021,7 @@ uint8
 uint8_t
 uint8x16_t
 uintptr_t
+ul_smgr_create
 unicodeStyleBorderFormat
 unicodeStyleColumnFormat
 unicodeStyleFormat
@@ -4125,6 +4132,7 @@ xl_replorigin_set
 xl_restore_point
 xl_running_xacts
 xl_seq_rec
+xl_smgr_bufpersistence
 xl_smgr_create
 xl_smgr_truncate
 xl_standby_lock

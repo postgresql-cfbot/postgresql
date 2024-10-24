@@ -261,6 +261,8 @@ typedef struct IndexAmRoutine
 	bool		amsummarizing;
 	/* OR of parallel vacuum flags.  See vacuum.h for flags. */
 	uint8		amparallelvacuumoptions;
+	/* is AM storage data compatible between LOGGED and UNLOGGED states? */
+	bool		amunloggedstoragecompatible;
 	/* type of data stored in index, or InvalidOid if variable */
 	Oid			amkeytype;
 

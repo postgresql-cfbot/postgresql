@@ -82,6 +82,12 @@ ParseCommitRecord(uint8 info, xl_xact_commit *xlrec, xl_xact_parsed_commit *pars
 
 		data += MinSizeOfXactRelfileLocators;
 		data += xl_rellocators->nrels * sizeof(RelFileLocator);
+
+		if (parsed->xinfo & XACT_XINFO_HAS_RELFILEFORKS)
+		{
+			parsed->xforks = (ForkBitmap *)data;
+			data += xl_rellocators->nrels * sizeof(ForkBitmap);
+		}
 	}
 
 	if (parsed->xinfo & XACT_XINFO_HAS_DROPPED_STATS)
@@ -188,6 +194,12 @@ ParseAbortRecord(uint8 info, xl_xact_abort *xlrec, xl_xact_parsed_abort *parsed)
 
 		data += MinSizeOfXactRelfileLocators;
 		data += xl_rellocator->nrels * sizeof(RelFileLocator);
+
+		if (parsed->xinfo & XACT_XINFO_HAS_RELFILEFORKS)
+		{
+			parsed->xforks = (ForkBitmap *)data;
+			data += xl_rellocator->nrels * sizeof(ForkBitmap);
+		}
 	}
 
 	if (parsed->xinfo & XACT_XINFO_HAS_DROPPED_STATS)
@@ -263,8 +275,20 @@ ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *p
 	parsed->xlocators = (RelFileLocator *) bufptr;
 	bufptr += MAXALIGN(xlrec->ncommitrels * sizeof(RelFileLocator));
 
+	if (xlrec->comhasforks)
+	{
+		parsed->xforks = (ForkBitmap *) bufptr;
+		bufptr += MAXALIGN(xlrec->ncommitrels * sizeof(ForkBitmap));
+	}
+
 	parsed->abortlocators = (RelFileLocator *) bufptr;
 	bufptr += MAXALIGN(xlrec->nabortrels * sizeof(RelFileLocator));
+
+	if (xlrec->abohasforks)
+	{
+		parsed->abortforks = (ForkBitmap *) bufptr;
+		bufptr += MAXALIGN(xlrec->nabortrels * sizeof(ForkBitmap));
+	}
 
 	parsed->stats = (xl_xact_stats_item *) bufptr;
 	bufptr += MAXALIGN(xlrec->ncommitstats * sizeof(xl_xact_stats_item));
@@ -278,7 +302,7 @@ ParsePrepareRecord(uint8 info, xl_xact_prepare *xlrec, xl_xact_parsed_prepare *p
 
 static void
 xact_desc_relations(StringInfo buf, char *label, int nrels,
-					RelFileLocator *xlocators)
+					RelFileLocator *xlocators, ForkBitmap *xforks)
 {
 	int			i;
 
@@ -291,6 +315,19 @@ xact_desc_relations(StringInfo buf, char *label, int nrels,
 
 			appendStringInfo(buf, " %s", path);
 			pfree(path);
+
+			if (xforks)
+			{
+				char delim = ':';
+				for (int j = 0 ; j <= MAX_FORKNUM ; j++)
+				{
+					if (FORKBITMAP_ISSET(xforks[i], j))
+					{
+						appendStringInfo(buf, "%c%d", delim, j);
+						delim = ',';
+					}
+				}
+			}
 		}
 	}
 }
@@ -343,7 +380,8 @@ xact_desc_commit(StringInfo buf, uint8 info, xl_xact_commit *xlrec, RepOriginId 
 
 	appendStringInfoString(buf, timestamptz_to_str(xlrec->xact_time));
 
-	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xlocators);
+	xact_desc_relations(buf, "rels",
+						parsed.nrels, parsed.xlocators, parsed.xforks);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
 	xact_desc_stats(buf, "", parsed.nstats, parsed.stats);
 
@@ -379,7 +417,8 @@ xact_desc_abort(StringInfo buf, uint8 info, xl_xact_abort *xlrec, RepOriginId or
 
 	appendStringInfoString(buf, timestamptz_to_str(xlrec->xact_time));
 
-	xact_desc_relations(buf, "rels", parsed.nrels, parsed.xlocators);
+	xact_desc_relations(buf, "rels",
+						parsed.nrels, parsed.xlocators, parsed.xforks);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);
 
 	if (parsed.xinfo & XACT_XINFO_HAS_ORIGIN)
@@ -403,9 +442,10 @@ xact_desc_prepare(StringInfo buf, uint8 info, xl_xact_prepare *xlrec, RepOriginI
 	appendStringInfo(buf, "gid %s: ", parsed.twophase_gid);
 	appendStringInfoString(buf, timestamptz_to_str(parsed.xact_time));
 
-	xact_desc_relations(buf, "rels(commit)", parsed.nrels, parsed.xlocators);
+	xact_desc_relations(buf, "rels(commit)", parsed.nrels,
+						parsed.xlocators, parsed.xforks);
 	xact_desc_relations(buf, "rels(abort)", parsed.nabortrels,
-						parsed.abortlocators);
+						parsed.abortlocators, parsed.abortforks);
 	xact_desc_stats(buf, "commit ", parsed.nstats, parsed.stats);
 	xact_desc_stats(buf, "abort ", parsed.nabortstats, parsed.abortstats);
 	xact_desc_subxacts(buf, parsed.nsubxacts, parsed.subxacts);

@@ -79,6 +79,7 @@ hashhandler(PG_FUNCTION_ARGS)
 	amroutine->amsummarizing = false;
 	amroutine->amparallelvacuumoptions =
 		VACUUM_OPTION_PARALLEL_BULKDEL;
+	amroutine->amunloggedstoragecompatible = true;
 	amroutine->amkeytype = INT4OID;
 
 	amroutine->ambuild = hashbuild;

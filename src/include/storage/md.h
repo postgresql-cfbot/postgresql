@@ -48,7 +48,8 @@ extern void mdimmedsync(SMgrRelation reln, ForkNumber forknum);
 extern void mdregistersync(SMgrRelation reln, ForkNumber forknum);
 
 extern void ForgetDatabaseSyncRequests(Oid dbid);
-extern void DropRelationFiles(RelFileLocator *delrels, int ndelrels, bool isRedo);
+extern void DropRelationFiles(RelFileLocator *delrels, ForkBitmap *delforks,
+							  int ndelrels, bool isRedo);
 
 /* md sync callbacks */
 extern int	mdsyncfiletag(const FileTag *ftag, char *path);

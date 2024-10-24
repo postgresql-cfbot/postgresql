@@ -19,21 +19,40 @@
 
 #include "postgres.h"
 
+#include "access/amapi.h"
+#include "access/simpleundolog.h"
 #include "access/visibilitymap.h"
 #include "access/xact.h"
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "access/xlogutils.h"
 #include "catalog/storage.h"
+#include "catalog/storage_ulog.h"
 #include "catalog/storage_xlog.h"
+#include "common/file_utils.h"
 #include "miscadmin.h"
 #include "storage/bulk_write.h"
+#include "storage/copydir.h"
+#include "storage/fd.h"
 #include "storage/freespace.h"
 #include "storage/proc.h"
+#include "storage/reinit.h"
 #include "storage/smgr.h"
 #include "utils/hsearch.h"
+#include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/rel.h"
+
+/* ULOG gives us high 4 bits (just following xlog) */
+#define ULOG_SMGR_CREATE			0x10
+
+/* undo log entry for storage file creation */
+typedef struct ul_smgr_create
+{
+	RelFileLocator	rlocator;
+	ProcNumber		backend;
+	ForkNumber		forknum;
+} ul_smgr_create;
 
 /* GUC variables */
 int			wal_skip_threshold = 2048;	/* in kilobytes */
@@ -61,6 +80,7 @@ int			wal_skip_threshold = 2048;	/* in kilobytes */
 typedef struct PendingRelDelete
 {
 	RelFileLocator rlocator;	/* relation that may need to be deleted */
+	ForkBitmap	forks;			/* fork bitmap */
 	ProcNumber	procNumber;		/* INVALID_PROC_NUMBER if not a temp rel */
 	bool		atCommit;		/* T=delete at commit; F=delete at abort */
 	int			nestLevel;		/* xact nesting level of request */
@@ -76,6 +96,10 @@ typedef struct PendingRelSync
 static PendingRelDelete *pendingDeletes = NULL; /* head of linked list */
 static HTAB *pendingSyncHash = NULL;
 
+/* local functions */
+static void ulog_smgrcreate(SMgrRelation srel, ForkNumber forkNum);
+static void ulog_smgrcreate_redo(SMgrRelation srel, ForkNumber forkNum,
+								 TransactionId xid);
 
 /*
  * AddPendingSync
@@ -147,28 +171,8 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 	}
 
 	srel = smgropen(rlocator, procNumber);
-	smgrcreate(srel, MAIN_FORKNUM, false);
 
-	if (needs_wal)
-		log_smgrcreate(&srel->smgr_rlocator.locator, MAIN_FORKNUM);
-
-	/*
-	 * Add the relation to the list of stuff to delete at abort, if we are
-	 * asked to do so.
-	 */
-	if (register_delete)
-	{
-		PendingRelDelete *pending;
-
-		pending = (PendingRelDelete *)
-			MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
-		pending->rlocator = rlocator;
-		pending->procNumber = procNumber;
-		pending->atCommit = false;	/* delete if abort */
-		pending->nestLevel = GetCurrentTransactionNestLevel();
-		pending->next = pendingDeletes;
-		pendingDeletes = pending;
-	}
+	RelationCreateFork(srel, MAIN_FORKNUM, needs_wal, register_delete);
 
 	if (relpersistence == RELPERSISTENCE_PERMANENT && !XLogIsNeeded())
 	{
@@ -178,6 +182,69 @@ RelationCreateStorage(RelFileLocator rlocator, char relpersistence,
 
 	return srel;
 }
+
+/*
+ * RelationCreateFork
+ *		Create physical storage for a fork of a relation.
+ *
+ * This function creates a relation fork in a transactional manner. When
+ * undo_log is true, the creation is UNDO-logged so that in case of transaction
+ * aborts or server crashes later on, the fork will be removed. If the caller
+ * plans to remove the fork in another way, it should pass false. Additionally,
+ * it is WAL-logged if wal_log is true.
+ *
+ * Returns true if the storage file was actually created. False means the file
+ * already existed.
+ */
+void
+RelationCreateFork(SMgrRelation srel, ForkNumber forkNum,
+				   bool wal_log, bool undo_log)
+{
+#ifdef USE_ASSERT_CHECKING
+	/* we must not have pending delete for the init fork. */
+	if (forkNum == INIT_FORKNUM)
+	{
+		for (PendingRelDelete *p = pendingDeletes ; p != NULL ; p = p->next)
+			Assert(!FORKBITMAP_ISSET(p->forks, INIT_FORKNUM) ||
+				   !RelFileLocatorEquals(srel->smgr_rlocator.locator,
+										 p->rlocator));
+	}
+#endif
+
+	/* Schedule the removal of this init fork at abort if requested. */
+	if (undo_log)
+		ulog_smgrcreate(srel, forkNum);
+
+	/* WAL-log this creation if requested. */
+	if (wal_log)
+		log_smgrcreate(&srel->smgr_rlocator.locator, forkNum);
+
+	smgrcreate(srel, forkNum, false);
+}
+
+/*
+ * RelationDropInitFork
+ *		Delete physical storage for the init fork of a relation.
+ */
+void
+RelationDropInitFork(SMgrRelation srel)
+{
+	int 			nestLevel = GetCurrentTransactionNestLevel();
+	RelFileLocator	rlocator = srel->smgr_rlocator.locator;
+	ProcNumber		procNumber = srel->smgr_rlocator.backend;
+	PendingRelDelete *pending;
+
+	/* Schedule the removal of this init fork at commit. */
+	pending = (PendingRelDelete *)
+		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
+	pending->rlocator = rlocator;
+	pending->procNumber = procNumber;
+	pending->forks = FORKBITMAP_BIT(INIT_FORKNUM);
+	pending->atCommit = true;
+	pending->nestLevel = nestLevel;
+	pending->next = pendingDeletes;
+	pendingDeletes = pending;
+ }
 
 /*
  * Perform XLogInsert of an XLOG_SMGR_CREATE record to WAL.
@@ -199,6 +266,61 @@ log_smgrcreate(const RelFileLocator *rlocator, ForkNumber forkNum)
 }
 
 /*
+ * Perform SimpleUndoLogWrite of an XLOG_SMGR_CREATE record to UNDO log.
+ */
+void
+ulog_smgrcreate(SMgrRelation srel, ForkNumber forkNum)
+{
+	ul_smgr_create ulrec;
+
+	ulrec.rlocator = srel->smgr_rlocator.locator;
+	ulrec.backend = srel->smgr_rlocator.backend;
+	ulrec.forknum = forkNum;
+	SimpleUndoLogWrite(RM_SMGR_ID, ULOG_SMGR_CREATE,
+					   &ulrec, sizeof(ulrec));
+}
+
+/*
+ * Perform SimpleUndoLogWrite of an XLOG_SMGR_CREATE record to UNDO log during
+ * recovery.
+ */
+void
+ulog_smgrcreate_redo(SMgrRelation srel, ForkNumber forkNum,
+					 TransactionId xid)
+{
+	ul_smgr_create ulrec;
+
+	ulrec.rlocator = srel->smgr_rlocator.locator;
+	ulrec.backend = srel->smgr_rlocator.backend;
+	ulrec.forknum = forkNum;
+	SimpleUndoLogWriteRedo(RM_SMGR_ID, ULOG_SMGR_CREATE,
+						   &ulrec, sizeof(ulrec), xid);
+}
+
+/*
+ * Perform XLogInsert of an XLOG_SMGR_BUFPERSISTENCE record to WAL.
+ *
+ * XXX: This function essentially belongs in bufmgr.c, but is placed here to
+ * avoid adding a new rmgr type solely for this record type.
+ */
+void
+log_smgrbufpersistence(const RelFileLocator rlocator, bool persistence)
+{
+	xl_smgr_bufpersistence xlrec;
+
+	/*
+	 * Make an XLOG entry reporting the change of buffer persistence.
+	 */
+	xlrec.rlocator = rlocator;
+	xlrec.persistence = persistence;
+	xlrec.topxid = GetTopTransactionId();
+
+	XLogBeginInsert();
+	XLogRegisterData((char *) &xlrec, sizeof(xlrec));
+	XLogInsert(RM_SMGR_ID, XLOG_SMGR_BUFPERSISTENCE | XLR_SPECIAL_REL_UPDATE);
+}
+
+/*
  * RelationDropStorage
  *		Schedule unlinking of physical storage at transaction commit.
  */
@@ -211,6 +333,7 @@ RelationDropStorage(Relation rel)
 	pending = (PendingRelDelete *)
 		MemoryContextAlloc(TopMemoryContext, sizeof(PendingRelDelete));
 	pending->rlocator = rel->rd_locator;
+	pending->forks	= FORKBITMAP_ALLFORKS();
 	pending->procNumber = rel->rd_backend;
 	pending->atCommit = true;	/* delete if commit */
 	pending->nestLevel = GetCurrentTransactionNestLevel();
@@ -218,13 +341,12 @@ RelationDropStorage(Relation rel)
 	pendingDeletes = pending;
 
 	/*
-	 * NOTE: if the relation was created in this transaction, it will now be
-	 * present in the pending-delete list twice, once with atCommit true and
-	 * once with atCommit false.  Hence, it will be physically deleted at end
-	 * of xact in either case (and the other entry will be ignored by
-	 * smgrDoPendingDeletes, so no error will occur).  We could instead remove
-	 * the existing list entry and delete the physical file immediately, but
-	 * for now I'll keep the logic simple.
+	 * NOTE: If the relation was created in this transaction, it will now be
+	 * present both in the pending-delete list for commit time and in a UNDO
+	 * log file for abort time. Hence, it will be physically deleted at the end
+	 * of the xact in either case. Although we could remove the existing UNDO
+	 * log record, the current UNDO log file format makes it difficult to
+	 * delete individual recoreds for now and maybe in the future.
 	 */
 
 	RelationCloseSmgr(rel);
@@ -254,6 +376,22 @@ RelationPreserveStorage(RelFileLocator rlocator, bool atCommit)
 	PendingRelDelete *prev;
 	PendingRelDelete *next;
 
+	/*
+	 * There is no caller that passes false for atCommit.
+	 *
+	 * The only caller that used to pass false for atCommit was
+	 * write_relmapper_file(), which intended to preserve committed storage
+	 * files for mapped relations if outer transactions aborted. However, this
+	 * has not occurred for more than ten years, and it is unlikely to be
+	 * needed in the future. The code to let storage files committed in
+	 * subtransactions survive after the top transaction aborts makes the UNDO
+	 * log system overly complex and inefficient. Therefore, this feature has
+	 * been removed.  The function signature is left unchanged to make this
+	 * change less invasive and to prevent the function from being mistakenly
+	 * called during transaction aborts.
+	 */
+	Assert (atCommit);
+
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
 	{
@@ -261,6 +399,8 @@ RelationPreserveStorage(RelFileLocator rlocator, bool atCommit)
 		if (RelFileLocatorEquals(rlocator, pending->rlocator)
 			&& pending->atCommit == atCommit)
 		{
+			Assert(pending->forks == FORKBITMAP_ALLFORKS());
+
 			/* unlink and delete list entry */
 			if (prev)
 				prev->next = next;
@@ -584,7 +724,7 @@ SerializePendingSyncs(Size maxSize, char *startAddress)
 
 	/* remove deleted rnodes */
 	for (delete = pendingDeletes; delete != NULL; delete = delete->next)
-		if (delete->atCommit)
+		if (delete->atCommit && delete->forks == FORKBITMAP_ALLFORKS())
 			(void) hash_search(tmphash, &delete->rlocator,
 							   HASH_REMOVE, NULL);
 
@@ -638,6 +778,7 @@ smgrDoPendingDeletes(bool isCommit)
 	int			nrels = 0,
 				maxrels = 0;
 	SMgrRelation *srels = NULL;
+	ForkBitmap	 *forks = NULL;
 
 	prev = NULL;
 	for (pending = pendingDeletes; pending != NULL; pending = next)
@@ -672,7 +813,25 @@ smgrDoPendingDeletes(bool isCommit)
 				{
 					maxrels *= 2;
 					srels = repalloc(srels, sizeof(SMgrRelation) * maxrels);
+
+					/* expand forks array if any */
+					if (forks)
+						forks = repalloc(forks, sizeof(ForkBitmap) * maxrels);
 				}
+
+				/* Create forks array on encountering partial forks. */
+				Assert((pending->forks & ~FORKBITMAP_ALLFORKS()) == 0);
+				if (!forks && pending->forks != FORKBITMAP_ALLFORKS())
+				{
+					forks = palloc(sizeof(ForkBitmap) * maxrels);
+
+					/* fill in the past elements */
+					for (int i = 0 ; i < nrels ; i++)
+						forks[i] = FORKBITMAP_ALLFORKS();
+				}
+
+				if (forks)
+					forks[nrels] = pending->forks;
 
 				srels[nrels++] = srel;
 			}
@@ -684,12 +843,15 @@ smgrDoPendingDeletes(bool isCommit)
 
 	if (nrels > 0)
 	{
-		smgrdounlinkall(srels, nrels, false);
+		smgrdounlinkall(srels, forks, nrels, false);
 
 		for (int i = 0; i < nrels; i++)
 			smgrclose(srels[i]);
 
 		pfree(srels);
+
+		if (forks)
+			pfree(forks);
 	}
 }
 
@@ -849,34 +1011,53 @@ smgrDoPendingSyncs(bool isCommit, bool isParallelWorker)
  * by upper-level transactions.
  */
 int
-smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr)
+smgrGetPendingDeletes(bool forCommit, RelFileLocator **ptr, ForkBitmap **fptr)
 {
 	int			nestLevel = GetCurrentTransactionNestLevel();
 	int			nrels;
+	bool		hasforks = false;
 	RelFileLocator *rptr;
+	ForkBitmap	   *rfptr = NULL;
 	PendingRelDelete *pending;
 
 	nrels = 0;
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
-		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit
-			&& pending->procNumber == INVALID_PROC_NUMBER)
+		Assert((pending->forks & ~FORKBITMAP_ALLFORKS()) == 0);
+
+		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit)
+		{
 			nrels++;
+
+			if (pending->forks != FORKBITMAP_ALLFORKS())
+				hasforks = true;
+		}
 	}
 	if (nrels == 0)
 	{
 		*ptr = NULL;
+		*fptr = NULL;
 		return 0;
 	}
 	rptr = (RelFileLocator *) palloc(nrels * sizeof(RelFileLocator));
 	*ptr = rptr;
+
+	if (hasforks)
+		rfptr = (ForkBitmap *) palloc(nrels * sizeof(ForkBitmap));
+	*fptr = rfptr;
+
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
-		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit
-			&& pending->procNumber == INVALID_PROC_NUMBER)
+		if (pending->nestLevel >= nestLevel && pending->atCommit == forCommit)
 		{
 			*rptr = pending->rlocator;
 			rptr++;
+
+			if (rfptr)
+			{
+				*rfptr = pending->forks;
+				rfptr++;
+			}
 		}
 	}
 	return nrels;
@@ -918,8 +1099,18 @@ AtSubCommit_smgr(void)
 
 	for (pending = pendingDeletes; pending != NULL; pending = pending->next)
 	{
-		if (pending->nestLevel >= nestLevel)
-			pending->nestLevel = nestLevel - 1;
+		if (pending->nestLevel < nestLevel)
+		{
+#ifdef USE_ASSERT_CHECKING
+			/* all the remaining entries must be of upper subtransactions */
+			for (; pending ; pending = pending->next)
+				Assert(pending->nestLevel < nestLevel);
+#endif
+			break;
+		}
+
+		/* move this entry to the immediately upper subtransaction */
+		pending->nestLevel = nestLevel - 1;
 	}
 }
 
@@ -951,6 +1142,7 @@ smgr_redo(XLogReaderState *record)
 		SMgrRelation reln;
 
 		reln = smgropen(xlrec->rlocator, INVALID_PROC_NUMBER);
+		ulog_smgrcreate_redo(reln, xlrec->forkNum, XLogRecGetXid(record));
 		smgrcreate(reln, xlrec->forkNum, true);
 	}
 	else if (info == XLOG_SMGR_TRUNCATE)
@@ -1041,6 +1233,78 @@ smgr_redo(XLogReaderState *record)
 
 		FreeFakeRelcacheEntry(rel);
 	}
+	else if (info == XLOG_SMGR_BUFPERSISTENCE)
+	{
+		xl_smgr_bufpersistence *xlrec =
+		(xl_smgr_bufpersistence *) XLogRecGetData(record);
+		SMgrRelation reln;
+
+		reln = smgropen(xlrec->rlocator, INVALID_PROC_NUMBER);
+		SetRelationBuffersPersistenceRedo(reln, xlrec->persistence,
+										  XLogRecGetXid(record));
+	}
 	else
 		elog(PANIC, "smgr_redo: unknown op code %u", info);
+}
+
+void
+smgr_undo(SimpleUndoLogRecord *record, UndoLogFileState state,
+		  bool isCommit, bool cleanup)
+{
+	uint8	info = record->ul_info & ~ULR_INFO_MASK;
+
+	if (info == ULOG_SMGR_CREATE)
+	{
+		ul_smgr_create *ulrec = (ul_smgr_create *) ULogRecGetData(record);
+
+		if (state != ULOG_FILE_DEFAULT && cleanup)
+		{
+			Assert (!isCommit);
+			/*
+			 * During post-crash cleanup, if the transaction that created the
+			 * fork was already prepared before the crash, the fate of the file
+			 * should be determined by whether the prepared transaction will be
+			 * committed or not. Tell reinit not to reset this relation.
+			 */
+			ResetUnloggedRelationIgnore(ulrec->rlocator,
+										ulrec->backend);
+		}
+		else if (!isCommit)
+		{
+			/* Otherwise, remove the file immediately. */
+			SMgrRelation reln;
+			ForkNumber	forks[3];
+			BlockNumber firstblocks[3] = {0};
+			int			nforks = 0;
+
+			forks[nforks++] = ulrec->forknum;
+
+			/*
+			 * If the MAIN fork was created in the transaction, the rollback
+			 * should remove all forks of this relation.  Although we could
+			 * register an undo record individually for each fork, this may be
+			 * more complex because VM and FSM can be created
+			 * non-transactionally outside the transaction that created the
+			 * MAIN fork.
+			 */
+			if (ulrec->forknum == MAIN_FORKNUM)
+			{
+				forks[nforks++] = VISIBILITYMAP_FORKNUM;
+				forks[nforks++] = FSM_FORKNUM;
+			}
+
+			/*
+			 * Drop buffers, then the files. This can be improved by using
+			 * smgrdounlinkall(), but currently I take the simpler way.
+			 */
+			reln = smgropen(ulrec->rlocator, ulrec->backend);
+			DropRelationBuffers(reln, forks, nforks, firstblocks);
+			for (int i = 0 ; i < nforks ; i++)
+				smgrunlink(reln, forks[i], true);
+
+			smgrclose(reln);
+		}
+	}
+	else
+		elog(PANIC, "smgr_undo: unknown op code %u", info);
 }

@@ -3073,8 +3073,10 @@ ninja install
       <listitem>
        <para>
         Enable test suites which require special software to run.  This option
-        accepts arguments via a whitespace-separated list.  See <xref
-        linkend="regress-additional"/> for details.
+        accepts arguments via a whitespace-separated list.  Please note that
+        this configure option is overridden by PG_TEST_EXTRA environment
+        variable if it is set.  See <xref linkend="regress-additional"/> for
+        details.
        </para>
       </listitem>
      </varlistentry>

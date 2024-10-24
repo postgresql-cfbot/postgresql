@@ -231,6 +231,10 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
           associated with the publication should be replicated.
           The default is <literal>false</literal>.
          </para>
+         <para>
+          See <xref linkend="logical-replication-gencols"/> for more details about
+          logical replication of generated columns.
+         </para>
         </listitem>
        </varlistentry>
 

@@ -517,7 +517,8 @@ CREATE TABLE people (
       Generated columns are allowed to be replicated during logical replication
       according to the <command>CREATE PUBLICATION</command> option
       <link linkend="sql-createpublication-params-with-publish-generated-columns">
-      <literal>include_generated_columns</literal></link>.
+      <literal>include_generated_columns</literal></link>. See
+      <xref linkend="logical-replication-gencols"/> for details.
      </para>
     </listitem>
    </itemizedlist>

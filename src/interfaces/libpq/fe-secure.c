@@ -406,6 +406,7 @@ retry_masked:
 									   sebuf, sizeof(sebuf)));
 				/* keep newline out of translated string */
 				strlcat(msgbuf, "\n", sizeof(msgbuf));
+fprintf(stderr, "!!!pqsecure_raw_write|%d| %s", getpid(), msgbuf);
 				conn->write_err_msg = strdup(msgbuf);
 				/* Now claim the write succeeded */
 				n = len;

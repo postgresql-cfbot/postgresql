@@ -213,7 +213,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 		 * XXX maybe the threshold should be less than maxDataLen?
 		 */
 		if (toast_attr[biggest_attno].tai_size > maxDataLen &&
-			rel->rd_rel->reltoastrelid != InvalidOid)
+			OidIsValid(RelationGetToastRelid(rel)))
 			toast_tuple_externalize(&ttc, biggest_attno, options);
 	}
 
@@ -224,7 +224,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 	 */
 	while (heap_compute_data_size(tupleDesc,
 								  toast_values, toast_isnull) > maxDataLen &&
-		   rel->rd_rel->reltoastrelid != InvalidOid)
+		   OidIsValid(RelationGetToastRelid(rel)))
 	{
 		int			biggest_attno;
 
@@ -259,7 +259,7 @@ heap_toast_insert_or_update(Relation rel, HeapTuple newtup, HeapTuple oldtup,
 
 	while (heap_compute_data_size(tupleDesc,
 								  toast_values, toast_isnull) > maxDataLen &&
-		   rel->rd_rel->reltoastrelid != InvalidOid)
+		   OidIsValid(RelationGetToastRelid(rel)))
 	{
 		int			biggest_attno;
 

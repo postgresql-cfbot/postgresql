@@ -4827,10 +4827,10 @@ ReorderBufferToastReplace(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 	desc = RelationGetDescr(relation);
 
-	toast_rel = RelationIdGetRelation(relation->rd_rel->reltoastrelid);
+	toast_rel = RelationIdGetRelation(RelationGetToastRelid(relation));
 	if (!RelationIsValid(toast_rel))
 		elog(ERROR, "could not open toast relation with OID %u (base relation \"%s\")",
-			 relation->rd_rel->reltoastrelid, RelationGetRelationName(relation));
+			 RelationGetToastRelid(relation), RelationGetRelationName(relation));
 
 	toast_desc = RelationGetDescr(toast_rel);
 

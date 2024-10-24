@@ -2157,7 +2157,7 @@ ExecuteTruncateGuts(List *explicit_rels,
 			/*
 			 * The same for the toast table, if any.
 			 */
-			toast_relid = rel->rd_rel->reltoastrelid;
+			toast_relid = RelationGetToastRelid(rel);
 			if (OidIsValid(toast_relid))
 			{
 				Relation	toastrel = relation_open(toast_relid,
@@ -15260,10 +15260,10 @@ ATExecSetRelOptions(Relation rel, List *defList, AlterTableType operation,
 	ReleaseSysCache(tuple);
 
 	/* repeat the whole exercise for the toast table, if there's one */
-	if (OidIsValid(rel->rd_rel->reltoastrelid))
+	if (OidIsValid(RelationGetToastRelid(rel)))
 	{
 		Relation	toastrel;
-		Oid			toastid = rel->rd_rel->reltoastrelid;
+		Oid			toastid = RelationGetToastRelid(rel);
 
 		toastrel = table_open(toastid, lockmode);
 
@@ -15352,7 +15352,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 		return;
 	}
 
-	reltoastrelid = rel->rd_rel->reltoastrelid;
+	reltoastrelid = RelationGetToastRelid(rel);
 	/* Fetch the list of indexes on toast relation if necessary */
 	if (OidIsValid(reltoastrelid))
 	{
@@ -19382,8 +19382,21 @@ ATExecDetachPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 		tab->rel = rel;
 	}
 
+	/*
+	 * Detaching the partition might involve TOAST table access, so ensure we
+	 * have a valid snapshot.  We only expect to get here without a snapshot
+	 * in the concurrent path.
+	 */
+	if (concurrent)
+		PushActiveSnapshot(GetTransactionSnapshot());
+	else
+		Assert(HaveRegisteredOrActiveSnapshot());
+
 	/* Do the final part of detaching */
 	DetachPartitionFinalize(rel, partRel, concurrent, defaultPartOid);
+
+	if (concurrent)
+		PopActiveSnapshot();
 
 	ObjectAddressSet(address, RelationRelationId, RelationGetRelid(partRel));
 

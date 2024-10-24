@@ -505,6 +505,12 @@ typedef struct ViewOptions
 #define RelationGetRelid(relation) ((relation)->rd_id)
 
 /*
+ * RelationGetToastRelid
+ *		Returns the OID of the relation's TOAST table (or InvalidOid if none)
+ */
+#define RelationGetToastRelid(relation) ((relation)->rd_rel->reltoastrelid)
+
+/*
  * RelationGetNumberOfAttributes
  *		Returns the total number of attributes in a relation.
  */

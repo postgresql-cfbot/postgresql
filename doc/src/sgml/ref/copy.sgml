@@ -218,8 +218,9 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
      <para>
       Selects the data format to be read or written:
       <literal>text</literal>,
-      <literal>csv</literal> (Comma Separated Values),
-      or <literal>binary</literal>.
+      <literal>CSV</literal> (Comma Separated Values),
+      <literal>binary</literal>,
+      or <literal>raw</literal>
       The default is <literal>text</literal>.
       See <xref linkend="sql-copy-file-formats"/> below for details.
      </para>
@@ -253,11 +254,27 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
     <term><literal>DELIMITER</literal></term>
     <listitem>
      <para>
-      Specifies the character that separates columns within each row
-      (line) of the file.  The default is a tab character in text format,
-      a comma in <literal>CSV</literal> format.
-      This must be a single one-byte character.
-      This option is not allowed when using <literal>binary</literal> format.
+      Specifies the delimiter used in the file. Its usage depends on the
+      <literal>FORMAT</literal> specified:
+      <simplelist>
+       <member>
+        In <literal>text</literal> and <literal>CSV</literal> formats,
+        the delimiter separates <emphasis>columns</emphasis> within each row
+        (line) of the file.
+        The default is a tab character in <literal>text</literal> format and
+        a comma in <literal>CSV</literal> format. This must be a single
+        one-byte character.
+       </member>
+       <member>
+        In <literal>raw</literal> format, the delimiter separates
+        <emphasis>rows</emphasis> in the file. The default is no delimiter,
+        which means that for <command>COPY FROM</command>, the entire input is
+        read as a single field, and for <command>COPY TO</command>, the output
+        is concatenated without any delimiter. If a delimiter is specified,
+        it can be a multi-byte string; for example, <literal>E'\r\n'</literal>
+        can be used when dealing with text files on Windows platforms.
+       </member>
+      </simplelist>
      </para>
     </listitem>
    </varlistentry>
@@ -271,7 +288,8 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       string in <literal>CSV</literal> format. You might prefer an
       empty string even in text format for cases where you don't want to
       distinguish nulls from empty strings.
-      This option is not allowed when using <literal>binary</literal> format.
+      This option is allowed only when using <literal>text</literal> or
+      <literal>CSV</literal> format.
      </para>
 
      <note>
@@ -294,7 +312,7 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       is found in the input file, the default value of the corresponding column
       will be used.
       This option is allowed only in <command>COPY FROM</command>, and only when
-      not using <literal>binary</literal> format.
+      using <literal>text</literal> or <literal>CSV</literal> format.
      </para>
     </listitem>
    </varlistentry>
@@ -310,7 +328,8 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       If this option is set to <literal>MATCH</literal>, the number and names
       of the columns in the header line must match the actual column names of
       the table, in order;  otherwise an error is raised.
-      This option is not allowed when using <literal>binary</literal> format.
+      This option is allowed only when using <literal>text</literal> or
+      <literal>CSV</literal> format.
       The <literal>MATCH</literal> option is only valid for <command>COPY
       FROM</command> commands.
      </para>
@@ -400,7 +419,8 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
      </para>
      <para>
       The <literal>ignore</literal> option is applicable only for <command>COPY FROM</command>
-      when the <literal>FORMAT</literal> is <literal>text</literal> or <literal>csv</literal>.
+      when the <literal>FORMAT</literal> is <literal>text</literal>,
+      <literal>CSV</literal> or <literal>raw</literal>.
      </para>
      <para>
       A <literal>NOTICE</literal> message containing the ignored row count is
@@ -892,6 +912,98 @@ COPY <replaceable class="parameter">count</replaceable>
    </note>
 
   </refsect2>
+
+  <refsect2 id="sql-copy-raw-format" xreflabel="Raw Format">
+   <title>Raw Format</title>
+
+   <para>
+    The <literal>raw</literal> format is designed for efficient bulk data
+    transfer of a single text column without any parsing, quoting, or
+    escaping. In this format, data is copied exactly as it appears in the file
+    or table, interpreted according to the specified <literal>ENCODING</literal>
+    option or the current client encoding.
+   </para>
+
+   <para>
+    When using the <literal>raw</literal> format, each data value corresponds
+    to a single field with no additional formatting or processing. The
+    <literal>DELIMITER</literal> option specifies the string that separates
+    data values. Unlike in other formats, the delimiter in
+    <literal>raw</literal> format can be any string, including multi-byte
+    characters. If no <literal>DELIMITER</literal> is specified, the entire
+    input or output is treated as a single data value.
+   </para>
+
+   <para>
+    The <literal>raw</literal> format requires that exactly one column be
+    specified in the column list. An error is raised if more than one column
+    is specified or if no column list is specified when the table has multiple
+    columns.
+   </para>
+
+   <para>
+    The <literal>raw</literal> format does not support any of the
+    format-specific options of other formats, such as <literal>NULL</literal>,
+    <literal>HEADER</literal>, <literal>QUOTE</literal>,
+    <literal>ESCAPE</literal>, <literal>FORCE_QUOTE</literal>,
+    <literal>FORCE_NOT_NULL</literal>, and <literal>FORCE_NULL</literal>.
+    Attempting to use these options with <literal>raw</literal> format will
+    result in an error.
+   </para>
+
+   <para>
+    Since the <literal>raw</literal> format deals with text, the data is
+    interpreted according to the specified <literal>ENCODING</literal> option
+    or the current client encoding for input, and encoded using the specified
+    <literal>ENCODING</literal> or the current client encoding for output.
+   </para>
+
+   <note>
+    <para>
+     Empty lines in the input are treated as empty strings, not as
+     <literal>NULL</literal> values. There is no way to represent a
+     <literal>NULL</literal> value in <literal>raw</literal> format.
+    </para>
+   </note>
+
+   <note>
+    <para>
+     The <literal>raw</literal> format is particularly useful when you need to
+     import or export data exactly as it appears. This can be
+     helpful when dealing with large text blobs, JSON files, or other
+     text-based formats.
+    </para>
+   </note>
+
+   <note>
+    <para>
+     The <literal>raw</literal> format can only be used when copying exactly
+     one column. If the table has multiple columns, you must specify the
+     column list containing only one column.
+    </para>
+   </note>
+
+   <note>
+    <para>
+     Unlike other formats, the delimiter in <literal>raw</literal> format can
+     be any string, and there are no restrictions on the characters used in
+     the delimiter, including newline or carriage return characters.
+    </para>
+   </note>
+
+   <note>
+    <para>
+     When using <literal>COPY TO</literal> with <literal>raw</literal> format
+     and a specified <literal>DELIMITER</literal>, there is no check to prevent
+     data values from containing the delimiter string, which could be
+     problematic if it would be needed to import the data preserved using
+     <literal>COPY FROM</literal>, since a data value containing the delimiter
+     would then be split into two values. If this is a concern, a different
+     format should be used instead.
+    </para>
+   </note>
+  </refsect2>
+
 
   <refsect2 id="sql-copy-binary-format" xreflabel="Binary Format">
    <title>Binary Format</title>

@@ -1438,6 +1438,13 @@ BeginCopyFrom(ParseState *pstate,
 	/* Generate or convert list of attributes to process */
 	cstate->attnumlist = CopyGetAttnums(tupDesc, cstate->rel, attnamelist);
 
+	/* Enforce single column requirement for RAW format */
+	if (cstate->opts.format == COPY_FORMAT_RAW &&
+		list_length(cstate->attnumlist) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				errmsg("COPY with format 'raw' must specify exactly one column")));
+
 	num_phys_attrs = tupDesc->natts;
 
 	/* Convert FORCE_NOT_NULL name list to per-column flags, check validity */

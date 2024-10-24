@@ -1619,6 +1619,19 @@ getinternalerrposition(void)
 	return edata->internalpos;
 }
 
+/*
+ * Return elevel of errors
+ */
+int
+geterrelevel(void)
+{
+	ErrorData  *edata = &errordata[errordata_stack_depth];
+
+	/* we don't bother incrementing recursion_depth */
+	CHECK_STACK_DEPTH();
+
+	return edata->elevel;
+}
 
 /*
  * Functions to allow construction of error message strings separately from

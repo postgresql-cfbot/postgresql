@@ -169,6 +169,85 @@ typedef struct PgStat_BackendSubEntry
 	PgStat_Counter conflict_count[CONFLICT_NUM_TYPES];
 } PgStat_BackendSubEntry;
 
+/* Type of ExtVacReport */
+typedef enum ExtVacReportType
+{
+	PGSTAT_EXTVAC_INVALID = 0,
+	PGSTAT_EXTVAC_HEAP = 1,
+	PGSTAT_EXTVAC_INDEX = 2,
+	PGSTAT_EXTVAC_DB = 3,
+} ExtVacReportType;
+
+/* ----------
+ *
+ * ExtVacReport
+ *
+ * Additional statistics of vacuum processing over a relation.
+ * pages_removed is the amount by which the physically shrank,
+ * if any (ie the change in its total size on disk)
+ * pages_deleted refer to free space within the index file
+ * ----------
+ */
+typedef struct ExtVacReport
+{
+	int64		total_blks_read; 	/* number of pages that were missed in shared buffers during a vacuum of specific relation */
+	int64		total_blks_hit; 	/* number of pages that were found in shared buffers during a vacuum of specific relation */
+	int64		total_blks_dirtied;	/* number of pages marked as 'Dirty' during a vacuum of specific relation. */
+	int64		total_blks_written;	/* number of pages written during a vacuum of specific relation. */
+
+	int64		blks_fetched; 		/* number of a relation blocks, fetched during the vacuum. */
+	int64		blks_hit;		/* number of a relation blocks, found in shared buffers during the vacuum. */
+
+	/* Vacuum WAL usage stats */
+	int64		wal_records;	/* wal usage: number of WAL records */
+	int64		wal_fpi;		/* wal usage: number of WAL full page images produced */
+	uint64		wal_bytes;		/* wal usage: size of WAL records produced */
+
+	/* Time stats. */
+	double		blk_read_time;	/* time spent reading pages, in msec */
+	double		blk_write_time; /* time spent writing pages, in msec */
+	double		delay_time;		/* how long vacuum slept in vacuum delay point, in msec */
+	double		system_time;	/* amount of time the CPU was busy executing vacuum code in kernel space, in msec */
+	double		user_time;		/* amount of time the CPU was busy executing vacuum code in user space, in msec */
+	double		total_time;		/* total time of a vacuum operation, in msec */
+
+	/* Interruptions on any errors. */
+	int32		interrupts;
+
+	ExtVacReportType type;		/* heap, index, etc. */
+
+	/* ----------
+	 *
+	 * There are separate metrics of statistic for tables and indexes,
+	 * which collect during vacuum.
+	 * The union operator allows to combine these statistics
+	 * so that each metric is assigned to a specific class of collected statistics.
+	 * Such a combined structure was called per_type_stats.
+	 * The name of the structure itself is not used anywhere,
+	 * it exists only for understanding the code.
+	 * ----------
+	*/
+	union
+	{
+		struct
+		{
+			int64		pages_scanned;		/* number of pages we examined */
+			int64		pages_removed;		/* number of pages removed by vacuum */
+			int64		pages_frozen;		/* number of pages marked in VM as frozen */
+			int64		pages_all_visible;	/* number of pages marked in VM as all-visible */
+			int64		tuples_deleted;		/* tuples deleted by vacuum */
+			int64		tuples_frozen;		/* tuples frozen up by vacuum */
+			int64		dead_tuples;		/* number of deleted tuples which vacuum cannot clean up by vacuum operation */
+			int64		index_vacuum_count;	/* number of index vacuumings */
+		}			heap;
+		struct
+		{
+			int64		pages_deleted;		/* number of pages deleted by vacuum */
+			int64		tuples_deleted;		/* tuples deleted by vacuum */
+		}			index;
+	} /* per_type_stats */;
+} ExtVacReport;
+
 /* ----------
  * PgStat_TableCounts			The actual per-table counts kept by a backend
  *
@@ -209,6 +288,16 @@ typedef struct PgStat_TableCounts
 
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
+
+	PgStat_Counter rev_all_visible_pages;
+	PgStat_Counter rev_all_frozen_pages;
+
+	/*
+	 * Additional cumulative stat on vacuum operations.
+	 * Use an expensive structure as an abstraction for different types of
+	 * relations.
+	 */
+	ExtVacReport	vacuum_ext;
 } PgStat_TableCounts;
 
 /* ----------
@@ -267,7 +356,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCAF
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCB1
 
 typedef struct PgStat_ArchiverStats
 {
@@ -388,6 +477,8 @@ typedef struct PgStat_StatDBEntry
 	PgStat_Counter sessions_killed;
 
 	TimestampTz stat_reset_timestamp;
+
+	ExtVacReport vacuum_ext;		/* extended vacuum statistics */
 } PgStat_StatDBEntry;
 
 typedef struct PgStat_StatFuncEntry
@@ -461,6 +552,11 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter analyze_count;
 	TimestampTz last_autoanalyze_time;	/* autovacuum initiated */
 	PgStat_Counter autoanalyze_count;
+
+	PgStat_Counter rev_all_visible_pages;
+	PgStat_Counter rev_all_frozen_pages;
+
+	ExtVacReport vacuum_ext;
 } PgStat_StatTabEntry;
 
 typedef struct PgStat_WalStats
@@ -626,10 +722,12 @@ extern void pgstat_assoc_relation(Relation rel);
 extern void pgstat_unlink_relation(Relation rel);
 
 extern void pgstat_report_vacuum(Oid tableoid, bool shared,
-								 PgStat_Counter livetuples, PgStat_Counter deadtuples);
+								 PgStat_Counter livetuples, PgStat_Counter deadtuples,
+								 ExtVacReport *params);
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter);
+extern void pgstat_report_vacuum_error(Oid tableoid, ExtVacReportType m_type);
 
 /*
  * If stats are enabled, but pending data hasn't been prepared yet, call
@@ -677,6 +775,17 @@ extern void pgstat_report_analyze(Relation rel,
 		if (pgstat_should_count_relation(rel))						\
 			(rel)->pgstat_info->counts.blocks_hit++;				\
 	} while (0)
+/* accumulate unfrozen all-visible and all-frozen pages */
+#define pgstat_count_vm_rev_all_visible(rel)						\
+	do {															\
+		if (pgstat_should_count_relation(rel))						\
+			(rel)->pgstat_info->counts.rev_all_visible_pages++;	\
+	} while (0)
+#define pgstat_count_vm_rev_all_frozen(rel)						\
+	do {															\
+		if (pgstat_should_count_relation(rel))						\
+			(rel)->pgstat_info->counts.rev_all_frozen_pages++;	\
+	} while (0)
 
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
 extern void pgstat_count_heap_update(Relation rel, bool hot, bool newpage);
@@ -693,7 +802,6 @@ extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(bool shared,
 														   Oid reloid);
 extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
-
 
 /*
  * Functions in pgstat_replslot.c

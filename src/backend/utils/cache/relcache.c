@@ -320,6 +320,9 @@ static OpClassCacheEnt *LookupOpclassInfo(Oid operatorClassOid,
 static void RelationCacheInitFileRemoveInDir(const char *tblspcpath);
 static void unlink_initfile(const char *initfilename, int elevel);
 
+/* Separate memory context for relcache */
+static MemoryContext RelCacheMemoryContext = NULL;
+static void CreateRelCacheMemoryContext(void);
 
 /*
  *		ScanPgRelation
@@ -412,8 +415,8 @@ AllocateRelationDesc(Form_pg_class relp)
 	MemoryContext oldcxt;
 	Form_pg_class relationForm;
 
-	/* Relcache entries must live in CacheMemoryContext */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	/* Relcache entries must live in RelCacheMemoryContext */
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 
 	/*
 	 * allocate and zero space for new relation descriptor
@@ -497,14 +500,14 @@ RelationParseRelOptions(Relation relation, HeapTuple tuple)
 	options = extractRelOptions(tuple, GetPgClassDescriptor(), amoptsfn);
 
 	/*
-	 * Copy parsed data into CacheMemoryContext.  To guard against the
+	 * Copy parsed data into RelCacheMemoryContext.  To guard against the
 	 * possibility of leaks in the reloptions code, we want to do the actual
 	 * parsing in the caller's memory context and copy the results into
-	 * CacheMemoryContext after the fact.
+	 * RelCacheMemoryContext after the fact.
 	 */
 	if (options)
 	{
-		relation->rd_options = MemoryContextAlloc(CacheMemoryContext,
+		relation->rd_options = MemoryContextAlloc(RelCacheMemoryContext,
 												  VARSIZE(options));
 		memcpy(relation->rd_options, options, VARSIZE(options));
 		pfree(options);
@@ -534,7 +537,7 @@ RelationBuildTupleDesc(Relation relation)
 		relation->rd_rel->reltype ? relation->rd_rel->reltype : RECORDOID;
 	relation->rd_att->tdtypmod = -1;	/* just to be sure */
 
-	constr = (TupleConstr *) MemoryContextAllocZero(CacheMemoryContext,
+	constr = (TupleConstr *) MemoryContextAllocZero(RelCacheMemoryContext,
 													sizeof(TupleConstr));
 
 	/*
@@ -613,7 +616,7 @@ RelationBuildTupleDesc(Relation relation)
 
 				if (attrmiss == NULL)
 					attrmiss = (AttrMissing *)
-						MemoryContextAllocZero(CacheMemoryContext,
+						MemoryContextAllocZero(RelCacheMemoryContext,
 											   relation->rd_rel->relnatts *
 											   sizeof(AttrMissing));
 
@@ -634,7 +637,7 @@ RelationBuildTupleDesc(Relation relation)
 				else
 				{
 					/* otherwise copy in the correct context */
-					oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+					oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 					attrmiss[attnum - 1].am_value = datumCopy(missval,
 															  attp->attbyval,
 															  attp->attlen);
@@ -745,7 +748,7 @@ RelationBuildRuleLock(Relation relation)
 	/*
 	 * Make the private context.  Assume it'll not contain much data.
 	 */
-	rulescxt = AllocSetContextCreate(CacheMemoryContext,
+	rulescxt = AllocSetContextCreate(RelCacheMemoryContext,
 									 "relation rules",
 									 ALLOCSET_SMALL_SIZES);
 	relation->rd_rulescxt = rulescxt;
@@ -1448,7 +1451,7 @@ RelationInitIndexAccessInfo(Relation relation)
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for index %u",
 			 RelationGetRelid(relation));
-	oldcontext = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcontext = MemoryContextSwitchTo(RelCacheMemoryContext);
 	relation->rd_indextuple = heap_copytuple(tuple);
 	relation->rd_index = (Form_pg_index) GETSTRUCT(relation->rd_indextuple);
 	MemoryContextSwitchTo(oldcontext);
@@ -1477,7 +1480,7 @@ RelationInitIndexAccessInfo(Relation relation)
 	 * a context, and not just a couple of pallocs, is so that we won't leak
 	 * any subsidiary info attached to fmgr lookup records.
 	 */
-	indexcxt = AllocSetContextCreate(CacheMemoryContext,
+	indexcxt = AllocSetContextCreate(RelCacheMemoryContext,
 									 "index info",
 									 ALLOCSET_SMALL_SIZES);
 	relation->rd_indexcxt = indexcxt;
@@ -1659,9 +1662,9 @@ LookupOpclassInfo(Oid operatorClassOid,
 		/* First time through: initialize the opclass cache */
 		HASHCTL		ctl;
 
-		/* Also make sure CacheMemoryContext exists */
-		if (!CacheMemoryContext)
-			CreateCacheMemoryContext();
+		/* Also make sure RelCacheMemoryContext exists */
+		if (!RelCacheMemoryContext)
+			CreateRelCacheMemoryContext();
 
 		ctl.keysize = sizeof(Oid);
 		ctl.entrysize = sizeof(OpClassCacheEnt);
@@ -1708,7 +1711,7 @@ LookupOpclassInfo(Oid operatorClassOid,
 	 */
 	if (opcentry->supportProcs == NULL && numSupport > 0)
 		opcentry->supportProcs = (RegProcedure *)
-			MemoryContextAllocZero(CacheMemoryContext,
+			MemoryContextAllocZero(RelCacheMemoryContext,
 								   numSupport * sizeof(RegProcedure));
 
 	/*
@@ -1867,7 +1870,7 @@ RelationInitTableAccessMethod(Relation relation)
  * during bootstrap or before RelationCacheInitializePhase3 runs, and none of
  * these properties matter then...)
  *
- * NOTE: we assume we are already switched into CacheMemoryContext.
+ * NOTE: we assume we are already switched into RelCacheMemoryContext.
  */
 static void
 formrdesc(const char *relationName, Oid relationReltype,
@@ -3116,7 +3119,7 @@ RememberToFreeTupleDescAtEOX(TupleDesc td)
 	{
 		MemoryContext oldcxt;
 
-		oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+		oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 
 		EOXactTupleDescArray = (TupleDesc *) palloc(16 * sizeof(TupleDesc));
 		EOXactTupleDescArrayLen = 16;
@@ -3580,10 +3583,10 @@ RelationBuildLocalRelation(const char *relname,
 	/*
 	 * switch to the cache context to create the relcache entry.
 	 */
-	if (!CacheMemoryContext)
-		CreateCacheMemoryContext();
+	if (!RelCacheMemoryContext)
+		CreateRelCacheMemoryContext();
 
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 
 	/*
 	 * allocate a new relation descriptor and fill in basic state fields.
@@ -3712,7 +3715,7 @@ RelationBuildLocalRelation(const char *relname,
 
 	/*
 	 * RelationInitTableAccessMethod will do syscache lookups, so we mustn't
-	 * run it in CacheMemoryContext.  Fortunately, the remaining steps don't
+	 * run it in RelCacheMemoryContext.  Fortunately, the remaining steps don't
 	 * require a long-lived current context.
 	 */
 	MemoryContextSwitchTo(oldcxt);
@@ -4000,8 +4003,8 @@ RelationCacheInitialize(void)
 	/*
 	 * make sure cache memory context exists
 	 */
-	if (!CacheMemoryContext)
-		CreateCacheMemoryContext();
+	if (!RelCacheMemoryContext)
+		CreateRelCacheMemoryContext();
 
 	/*
 	 * create hashtable that indexes the relcache
@@ -4016,7 +4019,7 @@ RelationCacheInitialize(void)
 	 */
 	allocsize = 4;
 	in_progress_list =
-		MemoryContextAlloc(CacheMemoryContext,
+		MemoryContextAlloc(RelCacheMemoryContext,
 						   allocsize * sizeof(*in_progress_list));
 	in_progress_list_maxlen = allocsize;
 
@@ -4054,10 +4057,7 @@ RelationCacheInitializePhase2(void)
 	if (IsBootstrapProcessingMode())
 		return;
 
-	/*
-	 * switch to cache memory context
-	 */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 
 	/*
 	 * Try to load the shared relcache cache file.  If unsuccessful, bootstrap
@@ -4109,10 +4109,7 @@ RelationCacheInitializePhase3(void)
 	 */
 	RelationMapInitializePhase3();
 
-	/*
-	 * switch to cache memory context
-	 */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 
 	/*
 	 * Try to load the local relcache cache file.  If unsuccessful, bootstrap
@@ -4426,7 +4423,7 @@ BuildHardcodedDescriptor(int natts, const FormData_pg_attribute *attrs)
 	MemoryContext oldcxt;
 	int			i;
 
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 
 	result = CreateTemplateTupleDesc(natts);
 	result->tdtypeid = RECORDOID;	/* not right, but we don't care */
@@ -4496,7 +4493,7 @@ AttrDefaultFetch(Relation relation, int ndef)
 
 	/* Allocate array with room for as many entries as expected */
 	attrdef = (AttrDefault *)
-		MemoryContextAllocZero(CacheMemoryContext,
+		MemoryContextAllocZero(RelCacheMemoryContext,
 							   ndef * sizeof(AttrDefault));
 
 	/* Search pg_attrdef for relevant entries */
@@ -4535,7 +4532,7 @@ AttrDefaultFetch(Relation relation, int ndef)
 			char	   *s = TextDatumGetCString(val);
 
 			attrdef[found].adnum = adform->adnum;
-			attrdef[found].adbin = MemoryContextStrdup(CacheMemoryContext, s);
+			attrdef[found].adbin = MemoryContextStrdup(RelCacheMemoryContext, s);
 			pfree(s);
 			found++;
 		}
@@ -4592,7 +4589,7 @@ CheckConstraintFetch(Relation relation)
 
 	/* Allocate array with room for as many entries as expected */
 	check = (ConstrCheck *)
-		MemoryContextAllocZero(CacheMemoryContext,
+		MemoryContextAllocZero(RelCacheMemoryContext,
 							   ncheck * sizeof(ConstrCheck));
 
 	/* Search pg_constraint for relevant entries */
@@ -4625,7 +4622,7 @@ CheckConstraintFetch(Relation relation)
 
 		check[found].ccvalid = conform->convalidated;
 		check[found].ccnoinherit = conform->connoinherit;
-		check[found].ccname = MemoryContextStrdup(CacheMemoryContext,
+		check[found].ccname = MemoryContextStrdup(RelCacheMemoryContext,
 												  NameStr(conform->conname));
 
 		/* Grab and test conbin is actually set */
@@ -4640,7 +4637,7 @@ CheckConstraintFetch(Relation relation)
 			/* detoast and convert to cstring in caller's context */
 			char	   *s = TextDatumGetCString(val);
 
-			check[found].ccbin = MemoryContextStrdup(CacheMemoryContext, s);
+			check[found].ccbin = MemoryContextStrdup(RelCacheMemoryContext, s);
 			pfree(s);
 			found++;
 		}
@@ -4757,7 +4754,7 @@ RelationGetFKeyList(Relation relation)
 	table_close(conrel, AccessShareLock);
 
 	/* Now save a copy of the completed list in the relcache entry. */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 	oldlist = relation->rd_fkeylist;
 	relation->rd_fkeylist = copyObject(result);
 	relation->rd_fkeyvalid = true;
@@ -4880,7 +4877,7 @@ RelationGetIndexList(Relation relation)
 	list_sort(result, list_oid_cmp);
 
 	/* Now save a copy of the completed list in the relcache entry. */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 	oldlist = relation->rd_indexlist;
 	relation->rd_indexlist = list_copy(result);
 	relation->rd_pkindex = pkeyIndex;
@@ -4972,7 +4969,7 @@ RelationGetStatExtList(Relation relation)
 	list_sort(result, list_oid_cmp);
 
 	/* Now save a copy of the completed list in the relcache entry. */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 	oldlist = relation->rd_statlist;
 	relation->rd_statlist = list_copy(result);
 
@@ -5473,7 +5470,7 @@ restart:
 	 * leave the relcache entry looking like the other ones are valid but
 	 * empty.
 	 */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 	relation->rd_keyattr = bms_copy(uindexattrs);
 	relation->rd_pkattr = bms_copy(pkindexattrs);
 	relation->rd_idattr = bms_copy(idindexattrs);
@@ -5573,7 +5570,7 @@ RelationGetIdentityKeyBitmap(Relation relation)
 	relation->rd_idattr = NULL;
 
 	/* Now save copy of the bitmap in the relcache entry */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 	relation->rd_idattr = bms_copy(idindexattrs);
 	MemoryContextSwitchTo(oldcxt);
 
@@ -5870,7 +5867,7 @@ RelationBuildPublicationDesc(Relation relation, PublicationDesc *pubdesc)
 	}
 
 	/* Now save copy of the descriptor in the relcache entry. */
-	oldcxt = MemoryContextSwitchTo(CacheMemoryContext);
+	oldcxt = MemoryContextSwitchTo(RelCacheMemoryContext);
 	relation->rd_pubdesc = palloc(sizeof(PublicationDesc));
 	memcpy(relation->rd_pubdesc, pubdesc, sizeof(PublicationDesc));
 	MemoryContextSwitchTo(oldcxt);
@@ -6073,7 +6070,7 @@ errtableconstraint(Relation rel, const char *conname)
  * criticalSharedRelcachesBuilt to true.
  * If not successful, return false.
  *
- * NOTE: we assume we are already switched into CacheMemoryContext.
+ * NOTE: we assume we are already switched into RelCacheMemoryContext.
  */
 static bool
 load_relcache_init_file(bool shared)
@@ -6242,7 +6239,7 @@ load_relcache_init_file(bool shared)
 			 * prepare index info context --- parameters should match
 			 * RelationInitIndexAccessInfo
 			 */
-			indexcxt = AllocSetContextCreate(CacheMemoryContext,
+			indexcxt = AllocSetContextCreate(RelCacheMemoryContext,
 											 "index info",
 											 ALLOCSET_SMALL_SIZES);
 			rel->rd_indexcxt = indexcxt;
@@ -6902,4 +6899,16 @@ ResOwnerReleaseRelation(Datum res)
 	rel->rd_refcnt -= 1;
 
 	RelationCloseCleanup((Relation) res);
+}
+
+static void
+CreateRelCacheMemoryContext(void)
+{
+	if (!CacheMemoryContext)
+		CreateCacheMemoryContext();
+
+	if (!RelCacheMemoryContext)
+		RelCacheMemoryContext = AllocSetContextCreate(CacheMemoryContext,
+													  "RelCacheMemoryContext",
+													  ALLOCSET_DEFAULT_SIZES);
 }

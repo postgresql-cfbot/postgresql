@@ -57,6 +57,21 @@ from booleans
 $$);
 
 select * from test_predtest($$
+select x is not unknown, x
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not unknown, x is not null
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not null, x is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
 select x is not null, x is null
 from integers
 $$);
@@ -77,12 +92,107 @@ from booleans
 $$);
 
 select * from test_predtest($$
+select x is not true, not x
+from booleans
+$$);
+
+select * from test_predtest($$
+select not x, x is not true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not true, x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, x is not true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not unknown, x is not true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not unknown, x is not false
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is true, x
+from booleans
+$$);
+
+select * from test_predtest($$
+select x, x is true
+from booleans
+$$);
+
+select * from test_predtest($$
+select not x, x is true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is true, not x
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not true, x is true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is false, x is true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, x is true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is false, not x
+from booleans
+$$);
+
+select * from test_predtest($$
+select not x, x is false
+from booleans
+$$);
+
+select * from test_predtest($$
 select x is false, x
 from booleans
 $$);
 
 select * from test_predtest($$
 select x, x is false
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not false, x
+from booleans
+$$);
+
+select * from test_predtest($$
+select x, x is not false
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not false, x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, x is not false
 from booleans
 $$);
 
@@ -96,6 +206,81 @@ select x, x is unknown
 from booleans
 $$);
 
+select * from test_predtest($$
+select x is not unknown, x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, x is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select strictf(x, y) is unknown, x is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select strictf(x, y) is unknown, strictf(x, y) is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, strictf(x, y) is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, (x is true) is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is null, x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select not strictf(x, y), x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select not strictf(x, y), x is null
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is null, not strictf(x, y)
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not null, not strictf(x, y)
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not unknown, not strictf(x, y)
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, not strictf(x, y)
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not null, x is true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not null, x is false
+from booleans
+$$);
+
 -- Assorted not-so-trivial refutation rules
 
 select * from test_predtest($$
@@ -105,6 +290,16 @@ $$);
 
 select * from test_predtest($$
 select x, x is null
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is null, x is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is not unknown, x is null
 from booleans
 $$);
 
@@ -439,4 +634,89 @@ $$);
 select * from test_predtest($$
 select x = all(opaque_array(array[1])), x is null
 from integers
+$$);
+
+-- More BooleanTest proofs
+-- I'm wondering if we should standardize a location for all of them, and
+-- potentially updated test_predtest to run both directions rather than
+-- needing to duplicate queries (with the two clauses swapped).
+
+select * from test_predtest($$
+select x is true, x = true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is false, x = false
+from booleans
+$$);
+
+select * from test_predtest($$
+select x, x is false
+from booleans
+$$);
+
+select * from test_predtest($$
+select strictf(x, y), x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select strictf(x, y), x is not unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select not x, x is true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x, x is not true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is true, x is not true
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is true, x is false
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is true, x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is true, x is null
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is false, x is unknown
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is false, x is null
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, x is false
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, x is null
+from booleans
+$$);
+
+select * from test_predtest($$
+select x is unknown, x is not null
+from booleans
 $$);

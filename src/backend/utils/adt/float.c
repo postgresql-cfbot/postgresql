@@ -2787,6 +2787,80 @@ derfc(PG_FUNCTION_ARGS)
 }
 
 
+/* ========== GAMMA FUNCTIONS ========== */
+
+
+/*
+ *		dgamma			- returns the gamma function of arg1
+ */
+Datum
+dgamma(PG_FUNCTION_ARGS)
+{
+	float8		arg1 = PG_GETARG_FLOAT8(0);
+	float8		result;
+
+	/* note: the POSIX/C99 gamma function is called "tgamma", not "gamma" */
+	errno = 0;
+	result = tgamma(arg1);
+
+	/*
+	 * If an ERANGE error occurs, it means there is an overflow. This may also
+	 * happen if the input is +/-0, which is not a genuine overflow, and the
+	 * result should be +/-infinity.
+	 *
+	 * On some platforms, tgamma() will not set errno but just return infinity
+	 * or zero to report overflow/underflow; therefore, test both cases (note
+	 * that, like the exponential function, the gamma function has no zeros).
+	 */
+	if (errno == ERANGE && arg1 != 0)
+	{
+		if (result != 0.0)
+			float_overflow_error();
+		else
+			float_underflow_error();
+	}
+	else if (isinf(result) && arg1 != 0 && !isinf(arg1))
+		float_overflow_error();
+	else if (result == 0.0)
+		float_underflow_error();
+
+	PG_RETURN_FLOAT8(result);
+}
+
+
+/*
+ *		dlgamma			- natural logarithm of absolute value of gamma of arg1
+ */
+Datum
+dlgamma(PG_FUNCTION_ARGS)
+{
+	float8		arg1 = PG_GETARG_FLOAT8(0);
+	float8		result;
+
+	/*
+	 * Note: lgamma may not be thread-safe because it may write to a global
+	 * variable signgam, which may not be thread-local. However, this doesn't
+	 * matter to us, since we don't use signgam.
+	 */
+	errno = 0;
+	result = lgamma(arg1);
+
+	/*
+	 * If an ERANGE error occurs, it means there is an overflow. This also
+	 * happens if the input is zero or a negative integer, which are not
+	 * genuine overflows, and the result should be infinity.
+	 *
+	 * On some platforms, lgamma() will not set errno but just return infinity
+	 * to report overflow, but it should never underflow.
+	 */
+	if ((errno == ERANGE || isinf(result)) && !isinf(arg1) &&
+		!(arg1 <= 0 && floor(arg1) == arg1))
+		float_overflow_error();
+
+	PG_RETURN_FLOAT8(result);
+}
+
+
 
 /*
  *		=========================

@@ -247,7 +247,7 @@ CheckIndexCompatible(Oid oldId,
 	indexInfo = makeIndexInfo(numberOfAttributes, numberOfAttributes,
 							  accessMethodId, NIL, NIL, false, false,
 							  false, false, amsummarizing,
-							  isWithoutOverlaps, isauxiliary);
+							  isWithoutOverlaps, isauxiliary, InvalidOid);
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);
 	opclassIds = palloc_array(Oid, numberOfAttributes);
@@ -947,7 +947,8 @@ DefineIndex(ParseState *pstate,
 							  concurrent,
 							  amissummarizing,
 							  stmt->iswithoutoverlaps,
-							  false);
+							  false,
+							  InvalidOid);
 
 	typeIds = palloc_array(Oid, numberOfAttributes);
 	collationIds = palloc_array(Oid, numberOfAttributes);
@@ -3711,6 +3712,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 	{
 		Oid			indexId;
 		Oid			auxIndexId;
+		Oid			junkAuxIndexId;
 		Oid			tableId;
 		Oid			amId;
 		bool		safe;		/* for set_indexsafe_procflags */
@@ -4060,6 +4062,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		ReindexIndexInfo *newidx;
 		Oid			newIndexId;
 		Oid			auxIndexId;
+		Oid			junkAuxIndexId;
 		Relation	indexRel;
 		Relation	heapRel;
 		Oid			save_userid;
@@ -4067,6 +4070,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		int			save_nestlevel;
 		Relation	newIndexRel;
 		Relation	auxIndexRel;
+		Relation	junkAuxIndexRel;
 		LockRelId  *lockrelid;
 		Oid			tablespaceid;
 
@@ -4144,12 +4148,17 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 												   tablespaceid,
 												   auxConcurrentName);
 
+		/* Search for auxiliary index for reindexed index, to drop it */
+		junkAuxIndexId = get_auxiliary_index(idx->indexId);
+
 		/*
 		 * Now open the relation of the new index, a session-level lock is
 		 * also needed on it.
 		 */
 		newIndexRel = index_open(newIndexId, ShareUpdateExclusiveLock);
 		auxIndexRel = index_open(auxIndexId, ShareUpdateExclusiveLock);
+		if (OidIsValid(junkAuxIndexId))
+			junkAuxIndexRel = index_open(junkAuxIndexId, ShareUpdateExclusiveLock);
 
 		/*
 		 * Save the list of OIDs and locks in private context
@@ -4159,6 +4168,7 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		newidx = palloc_object(ReindexIndexInfo);
 		newidx->indexId = newIndexId;
 		newidx->auxIndexId = auxIndexId;
+		newidx->junkAuxIndexId = junkAuxIndexId;
 		newidx->safe = idx->safe;
 		newidx->tableId = idx->tableId;
 		newidx->amId = idx->amId;
@@ -4180,10 +4190,18 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		lockrelid = palloc_object(LockRelId);
 		*lockrelid = auxIndexRel->rd_lockInfo.lockRelId;
 		relationLocks = lappend(relationLocks, lockrelid);
+		if (OidIsValid(junkAuxIndexId))
+		{
+			lockrelid = palloc_object(LockRelId);
+			*lockrelid = junkAuxIndexRel->rd_lockInfo.lockRelId;
+			relationLocks = lappend(relationLocks, lockrelid);
+		}
 
 		MemoryContextSwitchTo(oldcontext);
 
 		index_close(indexRel, NoLock);
+		if (OidIsValid(junkAuxIndexId))
+			index_close(junkAuxIndexRel, NoLock);
 		index_close(auxIndexRel, NoLock);
 		index_close(newIndexRel, NoLock);
 
@@ -4372,7 +4390,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 
 	/*
 	 * At this moment all target indexes are marked as "ready-to-insert". So,
-	 * we are free to start process of dropping auxiliary indexes.
+	 * we are free to start process of dropping auxiliary indexes - including
+	 * junk indexes detected earlier.
 	 */
 	foreach(lc, newIndexIds)
 	{
@@ -4395,6 +4414,9 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		 */
 		PushActiveSnapshot(GetTransactionSnapshot());
 		index_set_state_flags(newidx->auxIndexId, INDEX_DROP_CLEAR_READY);
+		/* Ensure the junk index is marked as non-ready */
+		if (OidIsValid(newidx->junkAuxIndexId))
+			index_set_state_flags(newidx->junkAuxIndexId, INDEX_DROP_CLEAR_READY);
 		PopActiveSnapshot();
 
 		CommitTransactionCommand();
@@ -4614,6 +4636,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 		PushActiveSnapshot(GetTransactionSnapshot());
 
 		index_concurrently_set_dead(newidx->tableId, newidx->auxIndexId);
+		if (OidIsValid(newidx->junkAuxIndexId))
+			index_concurrently_set_dead(newidx->tableId, newidx->junkAuxIndexId);
 
 		PopActiveSnapshot();
 	}
@@ -4665,6 +4689,13 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 			object.objectSubId = 0;
 
 			add_exact_object_address(&object, objects);
+
+			if (OidIsValid(idx->junkAuxIndexId))
+			{
+				object.objectId = idx->junkAuxIndexId;
+				object.objectSubId = 0;
+				add_exact_object_address(&object, objects);
+			}
 		}
 
 		/*

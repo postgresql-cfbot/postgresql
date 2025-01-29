@@ -499,6 +499,10 @@ standard_ExecutorEnd(QueryDesc *queryDesc)
 		pgstat_update_parallel_workers_stats((PgStat_Counter) estate->es_parallel_workers_to_launch,
 											 (PgStat_Counter) estate->es_parallel_workers_launched);
 
+	LogParallelWorkersIfNeeded(log_parallel_workers,
+							   estate->es_parallel_workers_to_launch,
+							   estate->es_parallel_workers_launched);
+
 	/*
 	 * Check that ExecutorFinish was called, unless in EXPLAIN-only mode. This
 	 * Assert is needed because ExecutorFinish is new as of 9.1, and callers

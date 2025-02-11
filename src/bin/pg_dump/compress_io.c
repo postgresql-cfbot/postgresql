@@ -191,20 +191,29 @@ free_keep_errno(void *p)
  * Initialize a compress file handle for the specified compression algorithm.
  */
 CompressFileHandle *
-InitCompressFileHandle(const pg_compress_specification compression_spec)
+InitCompressFileHandle(const pg_compress_specification compression_spec,
+					   bool path_is_pipe_command)
 {
 	CompressFileHandle *CFH;
 
 	CFH = pg_malloc0_object(CompressFileHandle);
 
-	if (compression_spec.algorithm == PG_COMPRESSION_NONE)
-		InitCompressFileHandleNone(CFH, compression_spec);
+	/*
+	 * Always set to non-compressed when path_is_pipe_command assuming that
+	 * external compressor as part of pipe is more efficient. Can review in
+	 * the future.
+	 */
+	if (path_is_pipe_command)
+		InitCompressFileHandleNone(CFH, compression_spec, path_is_pipe_command);
+
+	else if (compression_spec.algorithm == PG_COMPRESSION_NONE)
+		InitCompressFileHandleNone(CFH, compression_spec, path_is_pipe_command);
 	else if (compression_spec.algorithm == PG_COMPRESSION_GZIP)
-		InitCompressFileHandleGzip(CFH, compression_spec);
+		InitCompressFileHandleGzip(CFH, compression_spec, path_is_pipe_command);
 	else if (compression_spec.algorithm == PG_COMPRESSION_LZ4)
-		InitCompressFileHandleLZ4(CFH, compression_spec);
+		InitCompressFileHandleLZ4(CFH, compression_spec, path_is_pipe_command);
 	else if (compression_spec.algorithm == PG_COMPRESSION_ZSTD)
-		InitCompressFileHandleZstd(CFH, compression_spec);
+		InitCompressFileHandleZstd(CFH, compression_spec, path_is_pipe_command);
 
 	return CFH;
 }
@@ -237,7 +246,8 @@ check_compressed_file(const char *path, char **fname, char *ext)
  * On failure, return NULL with an error code in errno.
  */
 CompressFileHandle *
-InitDiscoverCompressFileHandle(const char *path, const char *mode)
+InitDiscoverCompressFileHandle(const char *path, const char *mode,
+							   bool path_is_pipe_command)
 {
 	CompressFileHandle *CFH = NULL;
 	struct stat st;
@@ -268,7 +278,7 @@ InitDiscoverCompressFileHandle(const char *path, const char *mode)
 			compression_spec.algorithm = PG_COMPRESSION_ZSTD;
 	}
 
-	CFH = InitCompressFileHandle(compression_spec);
+	CFH = InitCompressFileHandle(compression_spec, path_is_pipe_command);
 	errno = 0;
 	if (!CFH->open_func(fname, -1, mode, CFH))
 	{

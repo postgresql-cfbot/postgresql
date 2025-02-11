@@ -419,6 +419,7 @@ main(int argc, char **argv)
 {
 	int			c;
 	const char *filename = NULL;
+	bool		filename_is_pipe = false;
 	const char *format = "p";
 	TableInfo  *tblinfo;
 	int			numTables;
@@ -535,6 +536,7 @@ main(int argc, char **argv)
 		{"exclude-extension", required_argument, NULL, 17},
 		{"sequence-data", no_argument, &dopt.sequence_data, 1},
 		{"restrict-key", required_argument, NULL, 25},
+		{"pipe-command", required_argument, NULL, 26},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -606,7 +608,14 @@ main(int argc, char **argv)
 				break;
 
 			case 'f':
+				if (filename != NULL)
+				{
+					pg_log_error_hint("Only one of [--file, --pipe-command] allowed");
+					exit_nicely(1);
+				}
 				filename = pg_strdup(optarg);
+				filename_is_pipe = false;	/* it already is, setting again
+											 * here just for clarity */
 				break;
 
 			case 'F':
@@ -799,6 +808,16 @@ main(int argc, char **argv)
 				dopt.restrict_key = pg_strdup(optarg);
 				break;
 
+			case 26:			/* pipe command */
+				if (filename != NULL)
+				{
+					pg_log_error_hint("Only one of [--file, --pipe-command] allowed");
+					exit_nicely(1);
+				}
+				filename = pg_strdup(optarg);
+				filename_is_pipe = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -907,14 +926,26 @@ main(int argc, char **argv)
 	else if (dopt.restrict_key)
 		pg_fatal("option %s can only be used with %s",
 				 "--restrict-key", "--format=plain");
+	if (filename_is_pipe && archiveFormat != archDirectory)
+	{
+		pg_log_error_hint("Option --pipe-command is only supported with directory format.");
+		exit_nicely(1);
+	}
+
+	if (filename_is_pipe && strcmp(compression_algorithm_str, "none") != 0)
+	{
+		pg_log_error_hint("Option --pipe-command is not supported with any compression type.");
+		exit_nicely(1);
+	}
 
 	/*
 	 * Custom and directory formats are compressed by default with gzip when
 	 * available, not the others.  If gzip is not available, no compression is
-	 * done by default.
+	 * done by default. If directory format is being used with pipe-command,
+	 * no compression is done.
 	 */
 	if ((archiveFormat == archCustom || archiveFormat == archDirectory) &&
-		!user_compression_defined)
+		!filename_is_pipe && !user_compression_defined)
 	{
 #ifdef HAVE_LIBZ
 		compression_algorithm_str = "gzip";
@@ -964,7 +995,7 @@ main(int argc, char **argv)
 
 	/* Open the output file */
 	fout = CreateArchive(filename, archiveFormat, compression_spec,
-						 dosync, archiveMode, setupDumpWorker, sync_method);
+						 dosync, archiveMode, setupDumpWorker, sync_method, filename_is_pipe);
 
 	/* Make dump options accessible right away */
 	SetArchiveOptions(fout, &dopt, NULL);

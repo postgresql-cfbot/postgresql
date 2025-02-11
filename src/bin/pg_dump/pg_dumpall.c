@@ -678,7 +678,7 @@ main(int argc, char *argv[])
 
 		/* Open the output file */
 		fout = CreateArchive(global_path, archCustom, compression_spec,
-							 dosync, archModeWrite, NULL, DATA_DIR_SYNC_METHOD_FSYNC);
+							 dosync, archModeWrite, NULL, DATA_DIR_SYNC_METHOD_FSYNC, false);
 
 		/* Make dump options accessible right away */
 		SetArchiveOptions(fout, &dopt, NULL);

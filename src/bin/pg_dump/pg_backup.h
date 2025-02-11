@@ -316,14 +316,15 @@ extern void ProcessArchiveRestoreOptions(Archive *AHX);
 extern void RestoreArchive(Archive *AHX, bool append_data);
 
 /* Open an existing archive */
-extern Archive *OpenArchive(const char *FileSpec, const ArchiveFormat fmt);
+extern Archive *OpenArchive(const char *FileSpec, const ArchiveFormat fmt, bool FileSpecIsPipe);
 
 /* Create a new archive */
 extern Archive *CreateArchive(const char *FileSpec, const ArchiveFormat fmt,
 							  const pg_compress_specification compression_spec,
 							  bool dosync, ArchiveMode mode,
 							  SetupWorkerPtrType setupDumpWorker,
-							  DataDirSyncMethod sync_method);
+							  DataDirSyncMethod sync_method,
+							  bool FileSpecIsPipe);
 
 /* The --list option */
 extern void PrintTOCSummary(Archive *AHX);

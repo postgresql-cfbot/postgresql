@@ -19,6 +19,7 @@
 extern void InitCompressorGzip(CompressorState *cs,
 							   const pg_compress_specification compression_spec);
 extern void InitCompressFileHandleGzip(CompressFileHandle *CFH,
-									   const pg_compress_specification compression_spec);
+									   const pg_compress_specification compression_spec,
+									   bool path_is_pipe_command);
 
 #endif							/* _COMPRESS_GZIP_H_ */

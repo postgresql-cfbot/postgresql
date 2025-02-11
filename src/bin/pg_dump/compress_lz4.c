@@ -766,9 +766,13 @@ LZ4Stream_open_write(const char *path, const char *mode, CompressFileHandle *CFH
  */
 void
 InitCompressFileHandleLZ4(CompressFileHandle *CFH,
-						  const pg_compress_specification compression_spec)
+						  const pg_compress_specification compression_spec,
+						  bool path_is_pipe_command)
 {
 	LZ4State   *state;
+
+	if (path_is_pipe_command)
+		pg_fatal("Pipe command not supported for LZ4");
 
 	CFH->open_func = LZ4Stream_open;
 	CFH->open_write_func = LZ4Stream_open_write;
@@ -785,6 +789,8 @@ InitCompressFileHandleLZ4(CompressFileHandle *CFH,
 	if (CFH->compression_spec.level >= 0)
 		state->prefs.compressionLevel = CFH->compression_spec.level;
 
+	CFH->path_is_pipe_command = path_is_pipe_command;
+
 	CFH->private_data = state;
 }
 #else							/* USE_LZ4 */
@@ -797,7 +803,8 @@ InitCompressorLZ4(CompressorState *cs,
 
 void
 InitCompressFileHandleLZ4(CompressFileHandle *CFH,
-						  const pg_compress_specification compression_spec)
+						  const pg_compress_specification compression_spec,
+						  bool path_is_pipe_command)
 {
 	pg_fatal("this build does not support compression with %s", "LZ4");
 }

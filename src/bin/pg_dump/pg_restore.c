@@ -1,5 +1,5 @@
 /*-------------------------------------------------------------------------
- *
+*
  * pg_restore.c
  *	pg_restore is an utility extracting postgres database definitions
  *	from a backup archive created by pg_dump using the archiver
@@ -485,7 +485,7 @@ main(int argc, char **argv)
 					 opts->formatName);
 	}
 
-	AH = OpenArchive(inputFileSpec, opts->format);
+	AH = OpenArchive(inputFileSpec, opts->format, false);
 
 	SetArchiveOptions(AH, NULL, opts);
 

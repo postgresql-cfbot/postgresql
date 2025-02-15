@@ -66,6 +66,7 @@ main(int argc, char **argv)
 	char	   *inputFileSpec;
 	bool		data_only = false;
 	bool		schema_only = false;
+	bool		filespec_is_pipe = false;
 	static int	disable_triggers = 0;
 	static int	enable_row_security = 0;
 	static int	if_exists = 0;
@@ -142,6 +143,7 @@ main(int argc, char **argv)
 		{"statistics-only", no_argument, &statistics_only, 1},
 		{"filter", required_argument, NULL, 4},
 		{"restrict-key", required_argument, NULL, 6},
+		{"pipe-command", required_argument, NULL, 7},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -321,6 +323,11 @@ main(int argc, char **argv)
 				opts->restrict_key = pg_strdup(optarg);
 				break;
 
+			case 7:				/* pipe-command */
+				inputFileSpec = pg_strdup(optarg);
+				filespec_is_pipe = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -328,11 +335,29 @@ main(int argc, char **argv)
 		}
 	}
 
-	/* Get file name from command line */
+	/*
+	 * Get file name from command line. Note that filename argument and
+	 * pipe-command can't both be set.
+	 */
 	if (optind < argc)
+	{
+		if (filespec_is_pipe)
+		{
+			pg_log_error_hint("Only one of [filespec, --pipe-command] allowed");
+			exit_nicely(1);
+		}
 		inputFileSpec = argv[optind++];
-	else
+	}
+
+	/*
+	 * Even if the file argument is not provided, if the pipe-command is
+	 * specified, we need to use that as the file arg and not fallback to
+	 * stdio.
+	 */
+	else if (!filespec_is_pipe)
+	{
 		inputFileSpec = NULL;
+	}
 
 	/* Complain if any arguments remain */
 	if (optind < argc)
@@ -485,7 +510,7 @@ main(int argc, char **argv)
 					 opts->formatName);
 	}
 
-	AH = OpenArchive(inputFileSpec, opts->format, false);
+	AH = OpenArchive(inputFileSpec, opts->format, filespec_is_pipe);
 
 	SetArchiveOptions(AH, NULL, opts);
 

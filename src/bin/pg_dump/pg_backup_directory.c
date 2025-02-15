@@ -439,7 +439,21 @@ _LoadLOs(ArchiveHandle *AH, TocEntry *te)
 					 tocfname, line);
 
 		StartRestoreLO(AH, oid, AH->public.ropt->dropSchema);
-		snprintf(path, MAXPGPATH, "%s/%s", ctx->directory, lofname);
+
+		/*
+		 * XXX : Create a helper function for blob files naming common to
+		 * _LoadLOs an _StartLO.
+		 */
+		if (AH->fSpecIsPipe)
+		{
+			pipe = replace_percent_placeholders(ctx->directory, "pipe-command", "f", lofname);
+			strcpy(path, pipe);
+			pfree(pipe);
+		}
+		else
+		{
+			snprintf(path, MAXPGPATH, "%s/%s", ctx->directory, lofname);
+		}
 		_PrintFileData(AH, path);
 		EndRestoreLO(AH, oid);
 	}

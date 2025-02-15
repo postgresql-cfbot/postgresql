@@ -260,22 +260,28 @@ InitDiscoverCompressFileHandle(const char *path, const char *mode,
 
 	fname = pg_strdup(path);
 
-	if (hasSuffix(fname, ".gz"))
-		compression_spec.algorithm = PG_COMPRESSION_GZIP;
-	else if (hasSuffix(fname, ".lz4"))
-		compression_spec.algorithm = PG_COMPRESSION_LZ4;
-	else if (hasSuffix(fname, ".zst"))
-		compression_spec.algorithm = PG_COMPRESSION_ZSTD;
-	else
+	/*
+	 * If the path is a pipe command, the compression algorithm is none.
+	 */
+	if (!path_is_pipe_command)
 	{
-		if (stat(path, &st) == 0)
-			compression_spec.algorithm = PG_COMPRESSION_NONE;
-		else if (check_compressed_file(path, &fname, "gz"))
+		if (hasSuffix(fname, ".gz"))
 			compression_spec.algorithm = PG_COMPRESSION_GZIP;
-		else if (check_compressed_file(path, &fname, "lz4"))
+		else if (hasSuffix(fname, ".lz4"))
 			compression_spec.algorithm = PG_COMPRESSION_LZ4;
-		else if (check_compressed_file(path, &fname, "zst"))
+		else if (hasSuffix(fname, ".zst"))
 			compression_spec.algorithm = PG_COMPRESSION_ZSTD;
+		else
+		{
+			if (stat(path, &st) == 0)
+				compression_spec.algorithm = PG_COMPRESSION_NONE;
+			else if (check_compressed_file(path, &fname, "gz"))
+				compression_spec.algorithm = PG_COMPRESSION_GZIP;
+			else if (check_compressed_file(path, &fname, "lz4"))
+				compression_spec.algorithm = PG_COMPRESSION_LZ4;
+			else if (check_compressed_file(path, &fname, "zst"))
+				compression_spec.algorithm = PG_COMPRESSION_ZSTD;
+		}
 	}
 
 	CFH = InitCompressFileHandle(compression_spec, path_is_pipe_command);

@@ -60,11 +60,11 @@ static void usage(const char *progname);
 static void read_restore_filters(const char *filename, RestoreOptions *opts);
 static bool file_exists_in_directory(const char *dir, const char *filename);
 static int	restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
-								 int numWorkers, bool append_data);
-static int	restore_global_objects(const char *inputFileSpec, RestoreOptions *opts);
+								 int numWorkers, bool append_data, bool filespec_is_pipe);
+static int	restore_global_objects(const char *inputFileSpec, RestoreOptions *opts, bool filespec_is_pipe);
 
 static int	restore_all_databases(const char *inputFileSpec,
-								  SimpleStringList db_exclude_patterns, RestoreOptions *opts, int numWorkers);
+								  SimpleStringList db_exclude_patterns, RestoreOptions *opts, int numWorkers, bool filespec_is_pipe);
 static int	get_dbnames_list_to_restore(PGconn *conn,
 										SimplePtrList *dbname_oid_list,
 										SimpleStringList db_exclude_patterns);
@@ -93,6 +93,7 @@ main(int argc, char **argv)
 	int			n_errors = 0;
 	bool		globals_only = false;
 	SimpleStringList db_exclude_patterns = {NULL, NULL};
+	bool		filespec_is_pipe = false;
 	static int	disable_triggers = 0;
 	static int	enable_row_security = 0;
 	static int	if_exists = 0;
@@ -173,6 +174,7 @@ main(int argc, char **argv)
 		{"filter", required_argument, NULL, 4},
 		{"restrict-key", required_argument, NULL, 6},
 		{"exclude-database", required_argument, NULL, 7},
+		{"pipe-command", required_argument, NULL, 8},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -356,6 +358,11 @@ main(int argc, char **argv)
 				simple_string_list_append(&db_exclude_patterns, optarg);
 				break;
 
+			case 8:				/* pipe-command */
+				inputFileSpec = pg_strdup(optarg);
+				filespec_is_pipe = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -363,11 +370,29 @@ main(int argc, char **argv)
 		}
 	}
 
-	/* Get file name from command line */
+	/*
+	 * Get file name from command line. Note that filename argument and
+	 * pipe-command can't both be set.
+	 */
 	if (optind < argc)
+	{
+		if (filespec_is_pipe)
+		{
+			pg_log_error_hint("Only one of [filespec, --pipe-command] allowed");
+			exit_nicely(1);
+		}
 		inputFileSpec = argv[optind++];
-	else
+	}
+
+	/*
+	 * Even if the file argument is not provided, if the pipe-command is
+	 * specified, we need to use that as the file arg and not fallback to
+	 * stdio.
+	 */
+	else if (!filespec_is_pipe)
+	{
 		inputFileSpec = NULL;
+	}
 
 	/* Complain if any arguments remain */
 	if (optind < argc)
@@ -594,7 +619,7 @@ main(int argc, char **argv)
 		snprintf(global_path, MAXPGPATH, "%s/toc.glo", inputFileSpec);
 
 		if (!no_globals)
-			n_errors = restore_global_objects(global_path, tmpopts);
+			n_errors = restore_global_objects(global_path, tmpopts, filespec_is_pipe);
 		else
 			pg_log_info("skipping restore of global objects because %s was specified",
 						"--no-globals");
@@ -606,7 +631,7 @@ main(int argc, char **argv)
 		{
 			/* Now restore all the databases from map.dat */
 			n_errors = n_errors + restore_all_databases(inputFileSpec, db_exclude_patterns,
-														opts, numWorkers);
+														opts, numWorkers, filespec_is_pipe);
 		}
 
 		/* Free db pattern list. */
@@ -626,7 +651,7 @@ main(int argc, char **argv)
 					 "-g/--globals-only");
 
 		/* Process if toc.glo file does not exist. */
-		n_errors = restore_one_database(inputFileSpec, opts, numWorkers, false);
+		n_errors = restore_one_database(inputFileSpec, opts, numWorkers, false, filespec_is_pipe);
 	}
 
 	/* Done, print a summary of ignored errors during restore. */
@@ -645,7 +670,7 @@ main(int argc, char **argv)
  * This restore all global objects.
  */
 static int
-restore_global_objects(const char *inputFileSpec, RestoreOptions *opts)
+restore_global_objects(const char *inputFileSpec, RestoreOptions *opts, bool filespec_is_pipe)
 {
 	Archive    *AH;
 	int			nerror = 0;
@@ -654,7 +679,7 @@ restore_global_objects(const char *inputFileSpec, RestoreOptions *opts)
 	opts->format = archCustom;
 	opts->txn_size = 0;
 
-	AH = OpenArchive(inputFileSpec, opts->format, false);
+	AH = OpenArchive(inputFileSpec, opts->format, filespec_is_pipe);
 
 	SetArchiveOptions(AH, NULL, opts);
 
@@ -691,12 +716,12 @@ restore_global_objects(const char *inputFileSpec, RestoreOptions *opts)
  */
 static int
 restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
-					 int numWorkers, bool append_data)
+					 int numWorkers, bool append_data, bool filespec_is_pipe)
 {
 	Archive    *AH;
 	int			n_errors;
 
-	AH = OpenArchive(inputFileSpec, opts->format, false);
+	AH = OpenArchive(inputFileSpec, opts->format, filespec_is_pipe);
 
 	SetArchiveOptions(AH, NULL, opts);
 
@@ -1145,7 +1170,7 @@ get_dbname_oid_list_from_mfile(const char *dumpdirpath,
 static int
 restore_all_databases(const char *inputFileSpec,
 					  SimpleStringList db_exclude_patterns, RestoreOptions *opts,
-					  int numWorkers)
+					  int numWorkers, bool filespec_is_pipe)
 {
 	SimplePtrList dbname_oid_list = {NULL, NULL};
 	int			num_db_restore = 0;
@@ -1309,7 +1334,7 @@ restore_all_databases(const char *inputFileSpec,
 		}
 
 		/* Restore the single database. */
-		n_errors = restore_one_database(subdirpath, tmpopts, numWorkers, true);
+		n_errors = restore_one_database(subdirpath, tmpopts, numWorkers, true, filespec_is_pipe);
 
 		n_errors_total += n_errors;
 

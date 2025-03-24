@@ -9753,6 +9753,46 @@ ldap://ldap.acme.com/cn=dbserver,cn=hosts?pgconnectinfo?base?(objectclass=*)
 
  </sect1>
 
+ <sect1 id="libpq-http">
+  <title>HTTP Lookup of Connection Parameters</title>
+
+  <indexterm zone="libpq-http">
+   <primary>HTTPconnection parameter lookup</primary>
+  </indexterm>
+
+  <para>
+  If <application>libpq</application> has been compiled with libcurl support (option
+  <literal><option>--with-libcurl</option></literal>) for <command>configure</command>
+  it is possible to retrieve connection options like <literal>host</literal>
+   or <literal>dbname</literal> via HTTP from a central server.
+   The advantage is that if the connection parameters for a database change,
+   the connection information doesn't have to be updated on all client machines.
+  </para>
+
+  <para>
+   LDAP connection parameter lookup uses the connection service file
+   <filename>pg_service.conf</filename> (see <xref
+   linkend="libpq-pgservice"/>).  A line in a
+   <filename>pg_service.conf</filename> stanza that starts with
+   <literal>http://</literal> will be recognized as an HTTP URL and an
+   HTTP query will be performed. The result must be a list of
+   <literal>keyword = value</literal> pairs which will be used to set
+   connection options. The URL must be of the form
+<synopsis>
+http://[<replaceable>hostname</replaceable>[:<replaceable>port</replaceable>]]/<replaceable>path</replaceable>
+</synopsis>
+  </para>
+
+  <para>
+   Processing of <filename>pg_service.conf</filename> is terminated after
+   a successful HTTP lookup, but is continued if the HTTP server cannot
+   be contacted.  This is to provide a fallback with further HTTP URL
+   lines that point to different HTTP servers, classical <literal>keyword
+   = value</literal> pairs, or default connection options.  If you would
+   rather get an error message in this case, add a syntactically incorrect
+   line after the LDAP URL.
+  </para>
+ </sect1>
 
  <sect1 id="libpq-ssl">
   <title>SSL Support</title>

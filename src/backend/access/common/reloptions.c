@@ -22,6 +22,7 @@
 #include "access/heaptoast.h"
 #include "access/htup_details.h"
 #include "access/nbtree.h"
+#include "access/brin.h"
 #include "access/reloptions.h"
 #include "access/spgist_private.h"
 #include "catalog/pg_type.h"
@@ -375,7 +376,7 @@ static relopt_int intRelOpts[] =
 			"Number of pages that each page range covers in a BRIN index",
 			RELOPT_KIND_BRIN,
 			AccessExclusiveLock
-		}, 128, 1, 131072
+		}, 128, 1, BRIN_MAX_PAGES_PER_RANGE
 	},
 	{
 		{

@@ -57,8 +57,8 @@ static inline void brin_deconstruct_tuple(BrinDesc *brdesc,
 /*
  * Return a tuple descriptor used for on-disk storage of BRIN tuples.
  */
-static TupleDesc
-brtuple_disk_tupdesc(BrinDesc *brdesc)
+TupleDesc
+brin_tuple_tupdesc(BrinDesc *brdesc)
 {
 	/* We cache these in the BrinDesc */
 	if (brdesc->bd_disktdesc == NULL)
@@ -280,7 +280,7 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 
 	len = hoff = MAXALIGN(len);
 
-	data_len = heap_compute_data_size(brtuple_disk_tupdesc(brdesc),
+	data_len = heap_compute_data_size(brin_tuple_tupdesc(brdesc),
 									  values, nulls);
 	len += data_len;
 
@@ -299,7 +299,7 @@ brin_form_tuple(BrinDesc *brdesc, BlockNumber blkno, BrinMemTuple *tuple,
 	 * need to pass a valid null bitmap so that it will correctly skip
 	 * outputting null attributes in the data area.
 	 */
-	heap_fill_tuple(brtuple_disk_tupdesc(brdesc),
+	heap_fill_tuple(brin_tuple_tupdesc(brdesc),
 					values,
 					nulls,
 					(char *) rettuple + hoff,
@@ -682,7 +682,7 @@ brin_deconstruct_tuple(BrinDesc *brdesc,
 	 * may reuse attribute entries for more than one column, we cannot cache
 	 * offsets here.
 	 */
-	diskdsc = brtuple_disk_tupdesc(brdesc);
+	diskdsc = brin_tuple_tupdesc(brdesc);
 	stored = 0;
 	off = 0;
 	for (attnum = 0; attnum < brdesc->bd_tupdesc->natts; attnum++)

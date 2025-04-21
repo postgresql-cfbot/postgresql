@@ -640,6 +640,15 @@
   boot_val => 'DEFAULT_ASSERT_ENABLED',
 },
 
+{ name => 'debug_cic_validate_snapshot_pages', type => 'int', context => 'PGC_USERSET', group => 'DEVELOPER_OPTIONS',
+  short_desc => 'Refresh snapshot every N pages during CIC validation (0 to disable).',
+  flags => 'GUC_NOT_IN_SAMPLE',
+  variable => 'debug_cic_validate_snapshot_pages',
+  boot_val => '4096',
+  min => '0',
+  max => '1000000',
+},
+
 { name => 'debug_cic_validate_store_mem_pct', type => 'int', context => 'PGC_USERSET', group => 'DEVELOPER_OPTIONS',
   short_desc => 'Percentage of maintenance_work_mem used for CIC validation tuplestore.',
   flags => 'GUC_NOT_IN_SAMPLE',

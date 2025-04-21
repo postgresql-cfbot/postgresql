@@ -53,6 +53,9 @@
 /* GUC: percentage of maintenance_work_mem for CIC validation tuplestore */
 int			debug_cic_validate_store_mem_pct = 10;
 
+/* GUC: refresh snapshot every N pages during CIC validation (0 = disable) */
+int			debug_cic_validate_snapshot_pages = 4096;
+
 static void reform_and_rewrite_tuple(HeapTuple tuple,
 									 Relation OldHeap, Relation NewHeap,
 									 Datum *values, bool *isnull, RewriteState rwstate);
@@ -1971,24 +1974,35 @@ heapam_index_validate_scan_read_stream_next(
 	return result;
 }
 
-static void
+static TransactionId
 heapam_index_validate_scan(Relation heapRelation,
 						   Relation indexRelation,
 						   IndexInfo *indexInfo,
-						   Snapshot snapshot,
 						   ValidateIndexState *state,
 						   ValidateIndexState *auxState)
 {
+	TransactionId limitXmin;
+
 	Datum		values[INDEX_MAX_KEYS];
 	bool		isnull[INDEX_MAX_KEYS];
 
+	Snapshot		snapshot;
 	TupleTableSlot  *slot;
 	EState			*estate;
 	ExprContext		*econtext;
 	BufferAccessStrategy bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
 	int64			num_to_check;
+	int64			page_read_counter = 1; /* set to 1 to skip snapshot reset at start */
 	Tuplestorestate *tuples_for_check;
+
+	/*
+	 * Under REPEATABLE READ or SERIALIZABLE (possible via
+	 * default_transaction_isolation), GetLatestSnapshot() returns the
+	 * transaction-level snapshot and xmin stays pinned.  Periodic snapshot
+	 * refresh is pointless in that case, so skip it.
+	 */
+	bool		reset_snapshot = XactIsoLevel <= XACT_READ_COMMITTED;
 	ValidateIndexScanState callback_private_data;
 
 	Buffer buf;
@@ -1998,6 +2012,8 @@ heapam_index_validate_scan(Relation heapRelation,
 	/* Use a percentage of maintenance_work_mem for tuple store. */
 	int		store_work_mem_part = maintenance_work_mem * debug_cic_validate_store_mem_pct / 100;
 
+	PushActiveSnapshot(GetTransactionSnapshot());
+
 	/*
 	 * Encode TIDs as int8 values for the sort, rather than directly sorting
 	 * item pointers.  This can be significantly faster, primarily because TID
@@ -2005,6 +2021,12 @@ heapam_index_validate_scan(Relation heapRelation,
 	 * pass-by-value on most platforms.
 	 */
 	tuples_for_check = tuplestore_begin_datum(INT8OID, false, false, store_work_mem_part);
+
+	PopActiveSnapshot();
+	InvalidateCatalogSnapshot();
+
+	Assert(!reset_snapshot || !HaveRegisteredOrActiveSnapshot());
+	Assert(!reset_snapshot || !TransactionIdIsValid(MyProc->xmin));
 
 	/*
 	 * sanity checks
@@ -2020,6 +2042,29 @@ heapam_index_validate_scan(Relation heapRelation,
 	tuplesort_end(auxState->tuplesort);
 
 	state->tuplesort = auxState->tuplesort = NULL;
+
+	/*
+	 * Now take the first snapshot that will be used to filter candidate
+	 * tuples. We are going to replace it by newer snapshot every so often
+	 * to propagate horizon.
+	 *
+	 * Beware!  There might still be snapshots in use that treat some transaction
+	 * as in-progress that our temporary snapshot treats as committed.
+	 *
+	 * If such a recently-committed transaction deleted tuples in the table,
+	 * we will not include them in the index; yet those transactions which
+	 * see the deleting one as still-in-progress will expect such tuples to
+	 * be there once we mark the index as valid.
+	 *
+	 * We solve this by waiting for all endangered transactions to exit before
+	 * we mark the index as valid, for that reason limitXmin is supported.
+	 *
+	 * We also set ActiveSnapshot to this snap, since functions in indexes may
+	 * need a snapshot.
+	 */
+	snapshot = RegisterSnapshot(GetLatestSnapshot());
+	PushActiveSnapshot(snapshot);
+	limitXmin = snapshot->xmin;
 
 	estate = CreateExecutorState();
 	econtext = GetPerTupleExprContext(estate);
@@ -2054,6 +2099,7 @@ heapam_index_validate_scan(Relation heapRelation,
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		block_number = BufferGetBlockNumber(buf);
+		page_read_counter++;
 
 		i = 0;
 		while ((off = tuples[i]) != InvalidOffsetNumber)
@@ -2124,6 +2170,21 @@ heapam_index_validate_scan(Relation heapRelation,
 		}
 
 		ReleaseBuffer(buf);
+		if (reset_snapshot &&
+			debug_cic_validate_snapshot_pages > 0 &&
+			page_read_counter % debug_cic_validate_snapshot_pages == 0)
+		{
+			PopActiveSnapshot();
+			UnregisterSnapshot(snapshot);
+			/* to make sure we propagate xmin */
+			InvalidateCatalogSnapshot();
+			Assert(!TransactionIdIsValid(MyProc->xmin));
+
+			snapshot = RegisterSnapshot(GetLatestSnapshot());
+			PushActiveSnapshot(snapshot);
+			/* Advance limitXmin so we wait for all snapshots seen so far */
+			limitXmin = TransactionIdNewer(limitXmin, snapshot->xmin);
+		}
 	}
 
 	ExecDropSingleTupleTableSlot(slot);
@@ -2133,11 +2194,23 @@ heapam_index_validate_scan(Relation heapRelation,
 	read_stream_end(read_stream);
 	tuplestore_end(tuples_for_check);
 
+	/*
+	 * Drop the latest snapshot.  We must do this before waiting out other
+	 * snapshot holders, else we will deadlock against other processes also
+	 * doing CREATE INDEX CONCURRENTLY, which would see our snapshot as one
+	 * they must wait for.
+	 */
+	PopActiveSnapshot();
+	UnregisterSnapshot(snapshot);
+	InvalidateCatalogSnapshot();
+	Assert(!reset_snapshot || MyProc->xmin == InvalidTransactionId);
 	FreeAccessStrategy(bstrategy);
 
 	/* These may have been pointing to the now-gone estate */
 	indexInfo->ii_ExpressionsState = NIL;
 	indexInfo->ii_PredicateState = NULL;
+
+	return limitXmin;
 }
 
 /*

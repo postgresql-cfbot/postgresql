@@ -340,6 +340,13 @@ gistrescan(IndexScanDesc scan, ScanKey key, int nkeys,
 			pfree(fn_extras);
 	}
 
+	/* release resources used in index-only scans */
+	if (BufferIsValid(so->vmbuf))
+	{
+		ReleaseBuffer(so->vmbuf);
+		so->vmbuf = InvalidBuffer;
+	}
+
 	/* any previous xs_hitup will have been pfree'd in context resets above */
 	scan->xs_hitup = NULL;
 }
@@ -348,6 +355,13 @@ void
 gistendscan(IndexScanDesc scan)
 {
 	GISTScanOpaque so = (GISTScanOpaque) scan->opaque;
+
+	/* release resources used in index-only scans */
+	if (BufferIsValid(so->vmbuf))
+	{
+		ReleaseBuffer(so->vmbuf);
+		so->vmbuf = InvalidBuffer;
+	}
 
 	/*
 	 * freeGISTstate is enough to clean up everything made by gistbeginscan,

@@ -2784,6 +2784,7 @@ STRLEN
 SV
 SVariableData
 SVariable
+SVariableState
 SYNCHRONIZATION_BARRIER
 SYSTEM_INFO
 SampleScan

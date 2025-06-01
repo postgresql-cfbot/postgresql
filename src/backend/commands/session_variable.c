@@ -168,6 +168,56 @@ GetSessionVariableWithTypecheck(char *varname,
 }
 
 /*
+ * Store the given value in a session variable in the cache.
+ */
+void
+SetSessionVariableWithTypecheck(char *varname,
+								Oid typid, int32 typmod,
+								Datum value, bool isnull)
+{
+	SVariable	svar;
+
+	svar = search_variable(varname);
+
+	if (svar->vartype != typid || svar->vartypmod != typmod)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("session variable %s is not of a type %s but type %s",
+						varname,
+						format_type_with_typemod(typid, typmod),
+						format_type_with_typemod(svar->vartype, svar->vartypmod))));
+
+	/* only owner can set content of variable */
+	if (svar->varowner != GetUserId() && !superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied for session variable %s",
+						varname)));
+
+	if (!svar->typbyval)
+	{
+		if (!isnull)
+		{
+			MemoryContext oldcxt;
+
+			/*
+			 * Do copy of value in session variables context. This operation
+			 * can fail, so do it before releasing the old content.
+			 */
+			oldcxt = MemoryContextSwitchTo(SVariableMemoryContext);
+			value = datumCopy(value, svar->typbyval, svar->typlen);
+			MemoryContextSwitchTo(oldcxt);
+		}
+
+		if (!svar->isnull)
+			pfree(DatumGetPointer(svar->value));
+	}
+
+	svar->value = value;
+	svar->isnull = isnull;
+}
+
+/*
  * Creates a new variable - does new entry in sessionvars
  *
  * Used by CREATE VARIABLE command

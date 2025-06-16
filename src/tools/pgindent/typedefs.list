@@ -334,6 +334,7 @@ Boolean
 BooleanTest
 BpChar
 BrinBuildState
+BrinCheckState
 BrinDesc
 BrinInsertState
 BrinLeader

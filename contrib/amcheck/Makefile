@@ -6,11 +6,12 @@ OBJS = \
 	verify_common.o \
 	verify_gin.o \
 	verify_heapam.o \
-	verify_nbtree.o
+	verify_nbtree.o \
+	verify_brin.o
 
 EXTENSION = amcheck
 DATA = amcheck--1.2--1.3.sql amcheck--1.1--1.2.sql amcheck--1.0--1.1.sql amcheck--1.0.sql \
-		amcheck--1.3--1.4.sql amcheck--1.4--1.5.sql
+		amcheck--1.3--1.4.sql amcheck--1.4--1.5.sql amcheck--1.5--1.6.sql
 PGFILEDESC = "amcheck - function for verifying relation integrity"
 
 REGRESS = check check_btree check_gin check_heap

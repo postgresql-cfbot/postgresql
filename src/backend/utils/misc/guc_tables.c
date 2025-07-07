@@ -495,6 +495,13 @@ static const struct config_enum_entry wal_compression_options[] = {
 	{NULL, 0, false}
 };
 
+static const struct config_enum_entry wal_rcv_start_options[] = {
+	{"exhaust", WAL_RCV_START_AT_EXHAUST, false},
+	{"consistency", WAL_RCV_START_AT_CONSISTENCY, false},
+	{"startup", WAL_RCV_START_AT_STARTUP, false},
+	{NULL, 0, false}
+};
+
 static const struct config_enum_entry file_copy_method_options[] = {
 	{"copy", FILE_COPY_METHOD_COPY, false},
 #if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE) || defined(HAVE_COPY_FILE_RANGE)

@@ -3526,6 +3526,13 @@
   boot_val => 'false',
 },
 
+{ name => 'wal_receiver_start_at', type => 'enum', context => 'PGC_POSTMASTER', group => 'REPLICATION_STANDBY',
+  short_desc => 'When to start WAL receiver',
+  variable => 'wal_receiver_start_at',
+  boot_val => 'WAL_RCV_START_AT_EXHAUST',
+  options => 'wal_rcv_start_options',
+},
+
 { name => 'wal_receiver_status_interval', type => 'int', context => 'PGC_SIGHUP', group => 'REPLICATION_STANDBY',
   short_desc => 'Sets the maximum interval between WAL receiver status reports to the sending server.',
   flags => 'GUC_UNIT_S',

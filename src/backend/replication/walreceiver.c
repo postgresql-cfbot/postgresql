@@ -90,6 +90,7 @@
 int			wal_receiver_status_interval;
 int			wal_receiver_timeout;
 bool		hot_standby_feedback;
+int			wal_receiver_start_at = WAL_RCV_START_AT_EXHAUST;
 
 /* libpqwalreceiver connection */
 static WalReceiverConn *wrconn = NULL;

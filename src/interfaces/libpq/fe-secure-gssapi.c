@@ -471,6 +471,12 @@ gss_read(PGconn *conn, void *recv_buffer, size_t length, ssize_t *ret)
 	return PGRES_POLLING_OK;
 }
 
+bool
+pg_GSS_read_is_pending(PGconn *conn)
+{
+	return PqGSSResultLength > PqGSSResultNext;
+}
+
 /*
  * Negotiate GSSAPI transport for a connection.  When complete, returns
  * PGRES_POLLING_OK.  Will return PGRES_POLLING_READING or

@@ -827,6 +827,7 @@ extern int	pqWriteReady(PGconn *conn);
 extern PostgresPollingStatusType pqsecure_open_client(PGconn *);
 extern void pqsecure_close(PGconn *);
 extern ssize_t pqsecure_read(PGconn *, void *ptr, size_t len);
+extern bool pqsecure_read_is_pending(PGconn *);
 extern ssize_t pqsecure_write(PGconn *, const void *ptr, size_t len);
 extern ssize_t pqsecure_raw_read(PGconn *, void *ptr, size_t len);
 extern ssize_t pqsecure_raw_write(PGconn *, const void *ptr, size_t len);
@@ -865,7 +866,7 @@ extern ssize_t pgtls_read(PGconn *conn, void *ptr, size_t len);
 /*
  *	Is there unread data waiting in the SSL read buffer?
  */
-extern bool pgtls_read_pending(PGconn *conn);
+extern bool pgtls_read_is_pending(PGconn *conn);
 
 /*
  *	Write data to a secure connection.
@@ -913,6 +914,7 @@ extern PostgresPollingStatusType pqsecure_open_gss(PGconn *conn);
  */
 extern ssize_t pg_GSS_write(PGconn *conn, const void *ptr, size_t len);
 extern ssize_t pg_GSS_read(PGconn *conn, void *ptr, size_t len);
+extern bool pg_GSS_read_is_pending(PGconn *conn);
 #endif
 
 /* === in fe-trace.c === */

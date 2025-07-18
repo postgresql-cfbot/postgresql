@@ -231,7 +231,7 @@ rloop:
 }
 
 bool
-pgtls_read_pending(PGconn *conn)
+pgtls_read_is_pending(PGconn *conn)
 {
 	return SSL_pending(conn->ssl) > 0;
 }

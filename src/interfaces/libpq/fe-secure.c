@@ -244,6 +244,25 @@ pqsecure_raw_read(PGconn *conn, void *ptr, size_t len)
 }
 
 /*
+ * Returns true if there are any bytes available in the transport buffer.
+ */
+bool
+pqsecure_read_is_pending(PGconn *conn)
+{
+#ifdef USE_SSL
+	if (conn->ssl_in_use)
+		return pgtls_read_is_pending(conn);
+#endif
+#ifdef ENABLE_GSS
+	if (conn->gssenc)
+		return pg_GSS_read_is_pending(conn);
+#endif
+
+	/* Plaintext connections have no transport buffer. */
+	return 0;
+}
+
+/*
  *	Write data to a secure connection.
  *
  * Returns the number of bytes written, or a negative value (with errno

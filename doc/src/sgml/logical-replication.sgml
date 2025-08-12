@@ -972,6 +972,14 @@ HINT:  To initiate replication, you must manually create the replication slot, e
     row filter is used.
    </para>
 
+   <para>
+    When <literal>publish_via_partition_root</literal> is <literal>true</literal>, the relation OID and
+    the tuple layout in logical replication messages correspond to the <emphasis>root</emphasis>
+    partitioned table. However, for <literal>UPDATE</literal> and <literal>DELETE</literal>, the
+    old-tuple flag (<literal>O</literal> vs <literal>K</literal>) is determined by the replica identity of the
+    <emphasis>leaf</emphasis> partition that actually stored the old row.
+   </para>
+
   </sect2>
 
   <sect2 id="logical-replication-row-filter-initial-data-sync">

@@ -316,6 +316,151 @@ SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'main_table'
  CREATE TRIGGER modified_any BEFORE UPDATE OF a ON main_table FOR EACH ROW WHEN (old.* IS DISTINCT FROM new.*) EXECUTE FUNCTION trigger_func('modified_any')
 (1 row)
 
+-- Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function with WHEN clauses.
+SELECT pg_get_trigger_ddl('main_table', 'modified_a');
+                                                                 pg_get_trigger_ddl                                                                  
+-----------------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER modified_a BEFORE UPDATE OF a ON public.main_table FOR EACH ROW WHEN ((old.a <> new.a)) EXECUTE FUNCTION trigger_func('modified_a');
+(1 row)
+
+SELECT pg_get_trigger_ddl('main_table', 'modified_any');
+                                                                          pg_get_trigger_ddl                                                                           
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER modified_any BEFORE UPDATE OF a ON public.main_table FOR EACH ROW WHEN ((old.* IS DISTINCT FROM new.*)) EXECUTE FUNCTION trigger_func('modified_any');
+(1 row)
+
+SELECT pg_get_trigger_ddl('main_table', 'insert_a');
+                                                           pg_get_trigger_ddl                                                           
+----------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER insert_a AFTER INSERT ON public.main_table FOR EACH ROW WHEN ((new.a = 123)) EXECUTE FUNCTION trigger_func('insert_a');
+(1 row)
+
+SELECT pg_get_trigger_ddl('main_table', 'delete_a');
+                                                           pg_get_trigger_ddl                                                           
+----------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER delete_a AFTER DELETE ON public.main_table FOR EACH ROW WHEN ((old.a = 123)) EXECUTE FUNCTION trigger_func('delete_a');
+(1 row)
+
+SELECT pg_get_trigger_ddl('main_table', 'insert_when');
+                                                             pg_get_trigger_ddl                                                             
+--------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER insert_when BEFORE INSERT ON public.main_table FOR EACH STATEMENT WHEN (true) EXECUTE FUNCTION trigger_func('insert_when');
+(1 row)
+
+SELECT pg_get_trigger_ddl('main_table', 'delete_when');
+                                                            pg_get_trigger_ddl                                                             
+-------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER delete_when AFTER DELETE ON public.main_table FOR EACH STATEMENT WHEN (true) EXECUTE FUNCTION trigger_func('delete_when');
+(1 row)
+
+-- Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function for CONSTRAINT triggers.
+CREATE CONSTRAINT TRIGGER constraint_trig AFTER INSERT ON main_table
+  DEFERRABLE
+  FOR EACH ROW EXECUTE PROCEDURE trigger_func('modified_a');
+SELECT pg_get_trigger_ddl('main_table', 'constraint_trig');
+                                                                          pg_get_trigger_ddl                                                                          
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE CONSTRAINT TRIGGER constraint_trig AFTER INSERT ON public.main_table DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION trigger_func('modified_a');
+(1 row)
+
+DROP TRIGGER constraint_trig ON main_table;
+-- Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function with NULL cases.
+SELECT pg_get_trigger_ddl(NULL, 'delete_when');
+ pg_get_trigger_ddl 
+--------------------
+ 
+(1 row)
+
+SELECT pg_get_trigger_ddl('main_table', NULL);
+ pg_get_trigger_ddl 
+--------------------
+ 
+(1 row)
+
+SELECT pg_get_trigger_ddl(NULL, NULL);
+ pg_get_trigger_ddl 
+--------------------
+ 
+(1 row)
+
+-- Fail. Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function for ERROR cases.
+SELECT pg_get_trigger_ddl('main_table', 'no_such_trigger');
+ERROR:  trigger "no_such_trigger" for table "main_table" does not exist
+SELECT pg_get_trigger_ddl('no_such_table', 'modified_a');
+ERROR:  relation "no_such_table" does not exist
+LINE 1: SELECT pg_get_trigger_ddl('no_such_table', 'modified_a');
+                                  ^
+SELECT pg_get_trigger_ddl(-1, 'modified_a');
+ pg_get_trigger_ddl 
+--------------------
+ 
+(1 row)
+
+-- Test the output of a double quoted trigger name with pg_get_trigger_ddl(table_name, trigger_name).
+CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON main_table
+FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE trigger_func('"MODIFIED_CAP"');
+-- Fail.
+SELECT pg_get_trigger_ddl('main_table', 'MODIFIED_CAP');
+ERROR:  trigger "modified_cap" for table "main_table" does not exist
+-- Ok.
+SELECT pg_get_trigger_ddl('main_table', '"MODIFIED_CAP"');
+                                                                     pg_get_trigger_ddl                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON public.main_table FOR EACH ROW WHEN ((old.a <> new.a)) EXECUTE FUNCTION trigger_func('"MODIFIED_CAP"');
+(1 row)
+
+DROP TRIGGER "MODIFIED_CAP" ON main_table;
+-- Test the output of a double quoted table and trigger name with pg_get_trigger_ddl(table_name, trigger_name).
+CREATE TABLE "FooTable" (a int unique, b int);
+CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON "FooTable"
+FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE trigger_func('"MODIFIED_CAP"');
+-- Fail.
+SELECT pg_get_trigger_ddl('FooTable', '"MODIFIED_CAP"');
+ERROR:  relation "footable" does not exist
+LINE 1: SELECT pg_get_trigger_ddl('FooTable', '"MODIFIED_CAP"');
+                                  ^
+SELECT pg_get_trigger_ddl('"FooTable"', 'MODIFIED_CAP');
+ERROR:  trigger "modified_cap" for table "FooTable" does not exist
+-- Ok.
+SELECT pg_get_trigger_ddl('"FooTable"', '"MODIFIED_CAP"');
+                                                                     pg_get_trigger_ddl                                                                      
+-------------------------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON public."FooTable" FOR EACH ROW WHEN ((old.a <> new.a)) EXECUTE FUNCTION trigger_func('"MODIFIED_CAP"');
+(1 row)
+
+DROP TRIGGER "MODIFIED_CAP" ON "FooTable";
+DROP TABLE "FooTable";
+-- Test the output of a double quoted schema, table, and trigger name with double quotes.
+CREATE SCHEMA "TestSchema";
+SET search_path TO "TestSchema", public;
+CREATE TABLE "TestSchema"."TestTable" (a int unique, b int);
+CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON "TestSchema"."TestTable"
+FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE trigger_func('"MODIFIED_CAP"');
+-- Fail.
+SELECT pg_get_trigger_ddl('"TestSchema.TestTable"', '"MODIFIED_CAP"');
+ERROR:  relation "TestSchema.TestTable" does not exist
+LINE 1: SELECT pg_get_trigger_ddl('"TestSchema.TestTable"', '"MODIFI...
+                                  ^
+SELECT pg_get_trigger_ddl('"TestSchema"."TestTable"', 'MODIFIED_CAP');
+ERROR:  trigger "modified_cap" for table "TestTable" does not exist
+SELECT pg_get_trigger_ddl('TestSchema.TestTable', '"MODIFIED_CAP"');
+ERROR:  relation "testschema.testtable" does not exist
+LINE 1: SELECT pg_get_trigger_ddl('TestSchema.TestTable', '"MODIFIED...
+                                  ^
+-- Ok.
+SELECT pg_get_trigger_ddl('"TestSchema"."TestTable"', '"MODIFIED_CAP"');
+                                                                         pg_get_trigger_ddl                                                                         
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON "TestSchema"."TestTable" FOR EACH ROW WHEN ((old.a <> new.a)) EXECUTE FUNCTION trigger_func('"MODIFIED_CAP"');
+(1 row)
+
+-- Fail. Test the output of adding a schema name to the trigger name
+SELECT pg_get_trigger_ddl('"TestSchema"."TestTable"', '"TestSchema"."MODIFIED_CAP"');
+ERROR:  trigger name cannot be schema qualified
+SELECT pg_get_trigger_ddl('main_table', 'public.modified_a');
+ERROR:  trigger name cannot be schema qualified
+DROP SCHEMA "TestSchema" CASCADE;
+NOTICE:  drop cascades to table "TestTable"
 -- Test RENAME TRIGGER
 ALTER TRIGGER modified_a ON main_table RENAME TO modified_modified_a;
 SELECT count(*) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_a';

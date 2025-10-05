@@ -3966,4 +3966,50 @@ acl      | {postgres=arwdDxtm/postgres,foo=r/postgres}
 
   </sect2>
 
+  <sect2 id="functions-info-retail">
+   <title>DDL Retail Functions</title>
+
+   <para>
+    The functions described in <xref linkend="functions-info-retail-table"/>
+    return the Data Definition Language (DDL) statement for any given database object.
+    This feature is implemented as a set of distinct functions for each object type.
+   </para>
+
+   <table id="functions-info-retail-table">
+    <title>DDL Retail Functions</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        Function
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_get_trigger_ddl</primary>
+        </indexterm>
+        <function>pg_get_trigger_ddl</function>
+        ( <parameter>table</parameter> <type>regclass</type>, <parameter>trigger_name</parameter> <type>text</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Returns the canonical <command>CREATE TRIGGER</command> statement for the trigger named <parameter>trigger_name</parameter>
+        from its <parameter>table</parameter> or relation OID. If the trigger does not exist, an error is raised.
+        Note that optional, creation-time syntax such as OR REPLACE is not included because it is not
+        stored in the catalog.
+       </para></entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  </sect2>
+
   </sect1>

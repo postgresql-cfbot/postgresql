@@ -1174,6 +1174,53 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 }
 
 /* ----------
+ * pg_get_trigger_ddl - Get the DDL statement for a trigger
+ *
+ * This function retrieves the DDL statement for a specified trigger given a
+ * relation (or OID) and trigger name.
+ * ----------
+ */
+Datum
+pg_get_trigger_ddl(PG_FUNCTION_ARGS)
+{
+	Oid     relid = PG_GETARG_OID(0);
+	text    *trgName = PG_GETARG_TEXT_PP(1);
+	Oid     trgOid;
+	List   	*nameList;
+	char	*schemaName;
+	char	*objName;
+	char    *res;
+	StringInfoData buf;
+
+	/* Validate that the relation exists */
+	if (!OidIsValid(relid) || get_rel_name(relid) == NULL)
+		PG_RETURN_NULL();
+
+	/* Parse the trigger name to handle quoted identifiers */
+	nameList = textToQualifiedNameList(trgName);
+	if (list_length(nameList) != 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("trigger name cannot be schema qualified")));
+
+	DeconstructQualifiedName(nameList, &schemaName, &objName);
+
+	/* Resolve trigger OID */
+	trgOid = get_trigger_oid(relid, objName, false);
+
+	/* pg_get_triggerdef_worker retrieves the trigger definition */
+	res = pg_get_triggerdef_worker(trgOid, false);
+	if (res == NULL)
+		PG_RETURN_NULL();
+
+	initStringInfo(&buf);
+
+	appendStringInfo(&buf, "%s;", res);
+
+	PG_RETURN_TEXT_P(string_to_text(buf.data));
+}
+
+/* ----------
  * pg_get_indexdef			- Get the definition of an index
  *
  * In the extended version, there is a colno argument as well as pretty bool.

@@ -313,8 +313,9 @@ DROP TABLE prevstats;
 -----
 
 BEGIN;
-CREATE TEMPORARY TABLE test_last_scan(idx_col int primary key, noidx_col int);
-INSERT INTO test_last_scan(idx_col, noidx_col) VALUES(1, 1);
+CREATE TEMPORARY TABLE test_last_scan(idx_col int primary key, idx_col2 int, noidx_col int);
+CREATE index test_last_scan_idx2 on test_last_scan(idx_col2);
+INSERT INTO test_last_scan(idx_col, idx_col2, noidx_col) VALUES(1, 1, 1);
 SELECT pg_stat_force_next_flush();
 SELECT last_seq_scan, last_idx_scan FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
 COMMIT;
@@ -396,6 +397,87 @@ FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
 SELECT idx_scan, :'test_last_idx' < last_idx_scan AS idx_ok,
   stats_reset IS NOT NULL AS has_stats_reset
   FROM pg_stat_all_indexes WHERE indexrelid = 'test_last_scan_pkey'::regclass;
+
+-- check that an index rebuild preserves the stats
+ALTER TABLE test_last_scan ALTER COLUMN idx_col TYPE int;
+SELECT idx_scan FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
+-- same test but with a rewrite
+ALTER TABLE test_last_scan ALTER COLUMN idx_col TYPE bigint;
+SELECT idx_scan FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
+
+-- do the same on an indexed column not part of a constraint
+-- cause one index scan
+BEGIN;
+SET LOCAL enable_seqscan TO off;
+SET LOCAL enable_indexscan TO on;
+SET LOCAL enable_bitmapscan TO off;
+EXPLAIN (COSTS off) SELECT count(*) FROM test_last_scan WHERE idx_col2 = 1;
+SELECT count(*) FROM test_last_scan WHERE idx_col2 = 1;
+SELECT pg_stat_force_next_flush();
+COMMIT;
+SELECT idx_scan FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
+
+-- check that an index rebuild preserves the stats
+ALTER TABLE test_last_scan ALTER COLUMN idx_col2 TYPE int;
+SELECT idx_scan FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
+-- same test but with a rewrite
+ALTER TABLE test_last_scan ALTER COLUMN idx_col2 TYPE bigint;
+SELECT idx_scan FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
+
+-- check stats are preserved for partitions too
+CREATE TEMPORARY TABLE test_last_scan_part(idx_col int primary key, idx_col2 int, noidx_col int) partition by range (idx_col);
+CREATE TEMPORARY TABLE test_last_scan_part1 PARTITION OF test_last_scan_part FOR VALUES FROM (0) TO (1);
+CREATE TEMPORARY TABLE test_last_scan_part2 PARTITION OF test_last_scan_part FOR VALUES FROM (1) TO (2);
+CREATE index test_last_scan_part_idx2 on test_last_scan_part(idx_col2);
+INSERT INTO test_last_scan_part(idx_col, idx_col2, noidx_col) VALUES(0, 0, 0);
+INSERT INTO test_last_scan_part(idx_col, idx_col2, noidx_col) VALUES(1, 1, 1);
+
+-- on an indexed column not part of a constraint
+-- cause one index scan
+BEGIN;
+SET LOCAL enable_seqscan TO off;
+SET LOCAL enable_indexscan TO on;
+SET LOCAL enable_bitmapscan TO off;
+EXPLAIN (COSTS off) SELECT count(*) FROM test_last_scan_part WHERE idx_col2 = 1;
+SELECT count(*) FROM test_last_scan_part WHERE idx_col2 = 1;
+EXPLAIN (COSTS off) SELECT count(*) FROM test_last_scan_part2 WHERE idx_col2 = 1;
+SELECT count(*) FROM test_last_scan_part2 WHERE idx_col2 = 1;
+SELECT pg_stat_force_next_flush();
+COMMIT;
+SELECT idx_scan from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part1_idx_col2_idx';
+SELECT idx_scan from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part2_idx_col2_idx';
+
+-- check that an index rebuild preserves the stats
+ALTER TABLE test_last_scan_part ALTER COLUMN idx_col2 TYPE int;
+SELECT idx_scan from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part1_idx_col2_idx';
+SELECT idx_scan from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part2_idx_col2_idx';
+-- same test but with a rewrite
+ALTER TABLE test_last_scan_part ALTER COLUMN idx_col2 TYPE bigint;
+SELECT idx_scan from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part1_idx_col2_idx';
+SELECT idx_scan from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part2_idx_col2_idx';
+
+-- check when multiple indexes on the same set of columns
+CREATE index test_last_scan_part_idx2_bis on test_last_scan_part(idx_col2);
+BEGIN;
+SET LOCAL enable_seqscan TO off;
+SET LOCAL enable_indexscan TO on;
+SET LOCAL enable_bitmapscan TO off;
+SELECT count(*) FROM test_last_scan_part WHERE idx_col2 = 1;
+SELECT count(*) FROM test_last_scan_part2 WHERE idx_col2 = 1;
+SELECT pg_stat_force_next_flush();
+COMMIT;
+
+SELECT idx_scan AS idx_scan_part1_idx_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part1_idx_col2_idx' \gset
+SELECT idx_scan AS idx_scan_part2_idx_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part2_idx_col2_idx' \gset
+SELECT idx_scan AS idx_scan_part1_idx1_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part1_idx_col2_idx1' \gset
+SELECT idx_scan AS idx_scan_part2_idx1_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part2_idx_col2_idx1' \gset
+
+ALTER TABLE test_last_scan_part ALTER COLUMN idx_col2 TYPE int;
+
+SELECT idx_scan = :idx_scan_part1_idx_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part1_idx_col2_idx';
+SELECT idx_scan = :idx_scan_part2_idx_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part2_idx_col2_idx';
+SELECT idx_scan = :idx_scan_part1_idx1_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part1_idx_col2_idx1';
+SELECT idx_scan = :idx_scan_part2_idx1_before from pg_stat_all_indexes WHERE indexrelname = 'test_last_scan_part2_idx_col2_idx1';
 
 -- check that the stats in pg_stat_all_indexes are reset
 SELECT pg_stat_reset_single_table_counters('test_last_scan_pkey'::regclass);

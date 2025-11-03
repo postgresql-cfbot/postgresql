@@ -111,6 +111,12 @@ CREATE OR REPLACE FUNCTION age(timestamp)
  STABLE PARALLEL SAFE STRICT COST 1
 RETURN age(cast(current_date as timestamp), $1);
 
+CREATE OR REPLACE FUNCTION ago(interval)
+    RETURNS timestamptz
+    LANGUAGE sql
+    STABLE PARALLEL SAFE STRICT COST 1
+RETURN current_timestamp - $1;
+
 CREATE OR REPLACE FUNCTION date_part(text, date)
  RETURNS double precision
  LANGUAGE sql

@@ -360,6 +360,22 @@
        </row>
 
        <row>
+        <entry role="func_table_entry">
+         <para role="func_signature">
+          <function>ago</function> ( <type>interval</type> )
+          <returnvalue>timestamptz</returnvalue>
+         </para>
+         <para>
+          Returns the current timestamp minus the specified interval.
+         </para>
+         <para>
+          <literal>ago(interval '1 hour')</literal>
+          <returnvalue>2025-11-03 14:42:31.123456+01</returnvalue>
+         </para>
+        </entry>
+       </row>
+
+       <row>
         <entry role="func_table_entry"><para role="func_signature">
          <indexterm>
           <primary>clock_timestamp</primary>

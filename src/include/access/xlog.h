@@ -210,6 +210,10 @@ typedef enum WALAvailability
 struct XLogRecData;
 struct XLogReaderState;
 
+/* Hook for plugins to get control at the end of a CheckPoint */
+typedef void (*Checkpoint_hook_type)(XLogRecPtr checkPointRedo, int flags);
+extern PGDLLIMPORT Checkpoint_hook_type Checkpoint_hook;
+
 extern XLogRecPtr XLogInsertRecord(struct XLogRecData *rdata,
 								   XLogRecPtr fpw_lsn,
 								   uint8 flags,

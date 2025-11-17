@@ -966,6 +966,7 @@ typedef struct CustomScan
  * inner_unique each outer tuple can match to no more than one inner tuple
  * joinqual:	qual conditions that came from JOIN/ON or JOIN/USING
  *				(plan.qual contains conditions that came from WHERE)
+ * ojrelids:    outer joins completed at this level
  *
  * When jointype is INNER, joinqual and plan.qual are semantically
  * interchangeable.  For OUTER jointypes, the two are *not* interchangeable;
@@ -990,6 +991,7 @@ typedef struct Join
 	bool		inner_unique;
 	/* JOIN quals (in addition to plan.qual) */
 	List	   *joinqual;
+	Bitmapset  *ojrelids;
 } Join;
 
 /* ----------------

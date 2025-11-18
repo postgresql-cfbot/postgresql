@@ -3966,4 +3966,54 @@ acl      | {postgres=arwdDxtm/postgres,foo=r/postgres}
 
   </sect2>
 
+  <sect2 id="functions-get-object-ddl">
+   <title>Object DDL Functions</title>
+
+   <para>
+    The functions shown in <xref linkend="functions-get-object-ddl-table"/>
+    return the DDL statements for various database objects.
+    (This is a decompiled reconstruction, not the original text
+    of the command.)
+   </para>
+
+   <table id="functions-get-object-ddl-table">
+    <title>Object DDL Functions</title>
+    <tgroup cols="1">
+     <thead>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        Function
+       </para>
+       <para>
+        Description
+       </para></entry>
+      </row>
+     </thead>
+
+     <tbody>
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
+         <primary>pg_get_subscription_ddl</primary>
+        </indexterm>
+        <function>pg_get_subscription_ddl</function> ( <parameter>subscription</parameter> <type>name</type> or <type>oid</type> )
+        <returnvalue>text</returnvalue>
+       </para>
+       <para>
+        Returns the <command>CREATE SUBSCRIPTION</command> command that would
+        create this subscription. The <literal>connect</literal> option set to
+        <literal>false</literal>.
+       </para>
+       <para>
+        This function is restricted to users that have the
+        <literal>pg_read_all_data</literal> and/or
+        <literal>pg_create_subscription</literal> privilege.
+       </para></entry>
+      </row>
+     </tbody>
+    </tgroup>
+   </table>
+
+  </sect2>
+
   </sect1>

@@ -1779,6 +1779,21 @@
    </glossdef>
   </glossentry>
 
+  <glossentry id="glossary-session-variable">
+   <glossterm>Session variable</glossterm>
+   <glossdef>
+    <para>
+     A temporal database object that holds a value in session memory.  This
+     value is private to each session and is released when the session ends.
+     The default value of the session variable is null.  Read or write access
+     to session variables is allowed only to owner (creator).
+    </para>
+    <para>
+     For more information, see <xref linkend="ddl-session-variables"/>.
+    </para>
+   </glossdef>
+  </glossentry>
+
   <glossentry id="glossary-shared-memory">
    <glossterm>Shared memory</glossterm>
    <glossdef>

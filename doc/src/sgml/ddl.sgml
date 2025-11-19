@@ -5970,6 +5970,26 @@ SELECT ... FROM GRAPH_TABLE (myshop MATCH (IS person WHERE name = '...')-[]->...
   </para>
  </sect1>
 
+ <sect1 id="ddl-session-variables">
+   <title>Session Variables</title>
+
+   <indexterm zone="ddl-session-variables">
+    <primary>Session variables</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>session variable</primary>
+   </indexterm>
+
+   <para>
+    Session variables are temporary database objects that can hold a value.
+    A session variable can be created by the <command>CREATE VARIABLE</command>
+    command and can only be accessed by its owner. The value of a session
+    variable is stored in session memory and is private to each session. It is
+    automatically released when the session ends.
+   </para>
+ </sect1>
+
  <sect1 id="ddl-others">
   <title>Other Database Objects</title>
 

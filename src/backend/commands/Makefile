@@ -56,6 +56,7 @@ OBJS = \
 	seclabel.o \
 	sequence.o \
 	sequence_xlog.o \
+	session_variable.o \
 	statscmds.o \
 	subscriptioncmds.o \
 	tablecmds.o \

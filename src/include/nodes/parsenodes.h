@@ -3703,6 +3703,29 @@ typedef struct AlterStatsStmt
 	bool		missing_ok;		/* skip error if statistics object is missing */
 } AlterStatsStmt;
 
+
+/* ----------------------
+ *		Create Variable Statement
+ * ----------------------
+ */
+typedef struct CreateSessionVarStmt
+{
+	NodeTag		type;
+	char	   *name;		/* the variable to create */
+	TypeName   *typeName;		/* the type of variable */
+} CreateSessionVarStmt;
+
+/* ----------------------
+ *		DROP Variable Statement
+ * ----------------------
+ */
+typedef struct DropSessionVarStmt
+{
+	NodeTag		type;
+	char	   *name;
+} DropSessionVarStmt;
+
+
 /* ----------------------
  *		Create Function Statement
  * ----------------------

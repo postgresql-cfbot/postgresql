@@ -1,0 +1,84 @@
+<!--
+doc/src/sgml/ref/drop_variable.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-dropvariable">
+ <indexterm zone="sql-dropvariable">
+  <primary>DROP VARIABLE</primary>
+ </indexterm>
+
+ <indexterm>
+  <primary>session variable</primary>
+  <secondary>removing</secondary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>DROP VARIABLE</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>DROP VARIABLE</refname>
+  <refpurpose>remove a session variable</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+DROP VARIABLE <replaceable class="parameter">name</replaceable>
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1>
+  <title>Description</title>
+
+  <para>
+   <command>DROP VARIABLE</command> removes a session variable.
+   A session variable can only be removed by its owner or a superuser.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+  <variablelist>
+   <varlistentry>
+    <term><replaceable class="parameter">name</replaceable></term>
+    <listitem>
+     <para>
+      The name of a session variable.
+     </para>
+    </listitem>
+   </varlistentry>
+  </variablelist>
+ </refsect1>
+
+ <refsect1>
+  <title>Examples</title>
+
+  <para>
+   To remove the session variable <literal>var1</literal>:
+
+<programlisting>
+DROP VARIABLE var1;
+</programlisting></para>
+ </refsect1>
+
+ <refsect1>
+  <title>Compatibility</title>
+
+  <para>
+   The <command>DROP VARIABLE</command> command is a
+   <productname>PostgreSQL</productname> extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createvariable"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

@@ -291,14 +291,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		ConstraintsSetStmt CopyStmt CreateAsStmt CreateCastStmt
 		CreateDomainStmt CreateExtensionStmt CreateGroupStmt CreateOpClassStmt
 		CreateOpFamilyStmt AlterOpFamilyStmt CreatePLangStmt
-		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
-		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
+		CreateSchemaStmt CreateSeqStmt CreateSessionVarStmt CreateStmt CreateStatsStmt
+		CreateTableSpaceStmt CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
 		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
 		CreatePropGraphStmt AlterPropGraphStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
 		DropOpClassStmt DropOpFamilyStmt DropStmt
-		DropCastStmt DropRoleStmt
+		DropCastStmt DropRoleStmt DropSessionVarStmt
 		DropdbStmt DropTableSpaceStmt
 		DropTransformStmt
 		DropUserMappingStmt ExplainStmt FetchStmt
@@ -838,8 +838,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	UESCAPE UNBOUNDED UNCONDITIONAL UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN
 	UNLISTEN UNLOGGED UNTIL UPDATE USER USING
 
-	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
-	VERBOSE VERSION_P VERTEX VIEW VIEWS VIRTUAL VOLATILE
+	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARIABLE
+	VARYING VERBOSE VERSION_P VERTEX VIEW VIEWS VIRTUAL VOLATILE
 
 	WAIT WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
@@ -1109,6 +1109,7 @@ stmt:
 			| CreatePLangStmt
 			| CreatePropGraphStmt
 			| CreateSchemaStmt
+			| CreateSessionVarStmt
 			| CreateSeqStmt
 			| CreateStmt
 			| CreateSubscriptionStmt
@@ -1136,6 +1137,7 @@ stmt:
 			| DropTableSpaceStmt
 			| DropTransformStmt
 			| DropRoleStmt
+			| DropSessionVarStmt
 			| DropUserMappingStmt
 			| DropdbStmt
 			| ExecuteStmt
@@ -5452,6 +5454,47 @@ create_extension_opt_item:
 			| CASCADE
 				{
 					$$ = makeDefElem("cascade", (Node *) makeBoolean(true), @1);
+				}
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				CREATE { TEMP | TEMPORARY } VARIABLE varname [AS] type
+ *
+ *****************************************************************************/
+
+CreateSessionVarStmt:
+			CREATE OptTemp VARIABLE ColId opt_as Typename
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+
+					if ($2 != RELPERSISTENCE_TEMP)
+						ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("only temporal session variables are supported"),
+							 parser_errposition(@2)));
+
+					n->name = $4;
+					n->typeName = $6;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				DROP VARIABLE varname
+ *
+ *****************************************************************************/
+
+DropSessionVarStmt:
+			DROP VARIABLE ColId
+				{
+					DropSessionVarStmt *n = makeNode(DropSessionVarStmt);
+
+					n->name = $3;
+					$$ = (Node *) n;
 				}
 		;
 
@@ -19232,6 +19275,7 @@ unreserved_keyword:
 			| VALIDATE
 			| VALIDATOR
 			| VALUE_P
+			| VARIABLE
 			| VARYING
 			| VERSION_P
 			| VERTEX
@@ -19904,6 +19948,7 @@ bare_label_keyword:
 			| VALUE_P
 			| VALUES
 			| VARCHAR
+			| VARIABLE
 			| VARIADIC
 			| VERBOSE
 			| VERSION_P

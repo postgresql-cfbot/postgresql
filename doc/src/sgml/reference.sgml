@@ -129,6 +129,7 @@
    &createType;
    &createUser;
    &createUserMapping;
+   &createVariable;
    &createView;
    &deallocate;
    &declare;
@@ -178,6 +179,7 @@
    &dropType;
    &dropUser;
    &dropUserMapping;
+   &dropVariable;
    &dropView;
    &end;
    &execute;

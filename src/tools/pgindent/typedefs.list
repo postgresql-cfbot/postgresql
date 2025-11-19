@@ -589,6 +589,7 @@ CreateReplicationSlotCmd
 CreateRoleStmt
 CreateSchemaStmt
 CreateSeqStmt
+CreateSessionVarStmt
 CreateStatsStmt
 CreateStmt
 CreateStmtContext
@@ -702,6 +703,7 @@ DropBehavior
 DropOwnedStmt
 DropReplicationSlotCmd
 DropRoleStmt
+DropSessionVarStmt
 DropStmt
 DropSubscriptionStmt
 DropTableSpaceStmt
@@ -2780,6 +2782,8 @@ SSL_CTX
 STARTUPINFO
 STRLEN
 SV
+SVariableData
+SVariable
 SYNCHRONIZATION_BARRIER
 SYSTEM_INFO
 SampleScan

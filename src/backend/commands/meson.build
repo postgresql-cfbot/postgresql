@@ -44,6 +44,7 @@ backend_sources += files(
   'seclabel.c',
   'sequence.c',
   'sequence_xlog.c',
+  'session_variable.c',
   'statscmds.c',
   'subscriptioncmds.c',
   'tablecmds.c',

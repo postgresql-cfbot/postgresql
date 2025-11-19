@@ -1374,6 +1374,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"USER", Query_for_list_of_roles, NULL, NULL, Keywords_for_user_thing},
 	{"USER MAPPING FOR", NULL, NULL, NULL},
 	{"VIEW", NULL, NULL, &Query_for_list_of_views},
+	{"VARIABLE", NULL, NULL, NULL, NULL, THING_NO_CREATE},
 	{NULL}						/* end of list */
 };
 
@@ -3861,7 +3862,7 @@ match_previous_words(int pattern_id,
 /* CREATE TABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete "CREATE TEMP/TEMPORARY" with the possible temp objects */
 	else if (TailMatches("CREATE", "TEMP|TEMPORARY"))
-		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW");
+		COMPLETE_WITH("SEQUENCE", "TABLE", "VARIABLE", "VIEW");
 	/* Complete "CREATE UNLOGGED" with TABLE or SEQUENCE */
 	else if (TailMatches("CREATE", "UNLOGGED"))
 		COMPLETE_WITH("TABLE", "SEQUENCE");
@@ -4223,6 +4224,13 @@ match_previous_words(int pattern_id,
 		else if (TailMatches("=", MatchAnyExcept("*)")))
 			COMPLETE_WITH(",", ")");
 	}
+
+/* CREATE VARIABLE */
+	else if (Matches("CREATE", "TEMP|TEMPORARY", "VARIABLE", MatchAny))
+		COMPLETE_WITH("AS");
+	else if (TailMatches("VARIABLE", MatchAny, "AS"))
+		/* Complete CREATE VARIABLE <name> with AS types */
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes);
 
 /* CREATE VIEW --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete CREATE [ OR REPLACE ] VIEW <name> with AS or WITH */

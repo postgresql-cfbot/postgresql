@@ -172,6 +172,8 @@ typedef struct Query
 	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
 	/* parser has added an RTE_GROUP RTE */
 	bool		hasGroupRTE pg_node_attr(query_jumble_ignore);
+	/* uses session variables */
+	bool		hasSessionVariables pg_node_attr(query_jumble_ignore);
 	/* is a RETURN statement */
 	bool		isReturn pg_node_attr(query_jumble_ignore);
 
@@ -325,6 +327,16 @@ typedef struct ParamRef
 	int			number;			/* the number of the parameter */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } ParamRef;
+
+/*
+ * VariableFence - ensure so fields will be interpretted as a variable
+ */
+typedef struct VariableFence
+{
+	NodeTag		type;
+	char	   *varname;		/* variable name */
+	ParseLoc	location;		/* token location, or -1 if unknown */
+} VariableFence;
 
 /*
  * A_Expr - infix, prefix, and postfix expressions

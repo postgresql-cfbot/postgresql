@@ -388,6 +388,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->dependsOnRole = false;
 	glob->partition_directory = NULL;
 	glob->rel_notnullatts_hash = NULL;
+	glob->sessionVariables = NIL;
 
 	/*
 	 * Assess whether it's feasible to use parallel mode for this query. We
@@ -692,6 +693,9 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	/* utilityStmt should be null, but we might as well copy it */
 	result->utilityStmt = parse->utilityStmt;
 	result->elidedNodes = glob->elidedNodes;
+
+	result->sessionVariables = glob->sessionVariables;
+
 	result->stmt_location = parse->stmt_location;
 	result->stmt_len = parse->stmt_len;
 
@@ -914,6 +918,13 @@ subquery_planner(PlannerGlobal *glob, Query *parse, char *plan_name,
 	 * query.
 	 */
 	pull_up_subqueries(root);
+
+	/*
+	 * Check if some subquery uses a session variable.  The flag
+	 * hasSessionVariables should be true if the query or some subquery uses a
+	 * session variable.
+	 */
+	pull_up_has_session_variables(root);
 
 	/*
 	 * If this is a simple UNION ALL query, flatten it into an appendrel. We

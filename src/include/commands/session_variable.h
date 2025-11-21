@@ -22,6 +22,8 @@
 extern void CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt);
 extern void DropVariableByName(char *varname);
 
+extern Datum GetSessionVariableWithTypecheck(char *varname, Oid typid, int32 typmod, bool *isnull);
+
 extern void get_session_variable_type_typmod_collid(char *varname,
 													Oid *typid,
 													int32 *typmod,

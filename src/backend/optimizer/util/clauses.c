@@ -27,6 +27,7 @@
 #include "catalog/pg_operator.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_type.h"
+#include "commands/session_variable.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
 #include "funcapi.h"
@@ -963,6 +964,13 @@ max_parallel_hazard_walker(Node *node, max_parallel_hazard_context *context)
 
 		if (param->paramkind == PARAM_EXTERN)
 			return false;
+
+		/* we don't support passing session variables to workers */
+		if (param->paramkind == PARAM_VARIABLE)
+		{
+			if (max_parallel_hazard_test(PROPARALLEL_RESTRICTED, context))
+				return true;
+		}
 
 		if (param->paramkind != PARAM_EXEC ||
 			!list_member_int(context->safe_param_ids, param->paramid))
@@ -2654,6 +2662,7 @@ convert_saop_to_hashed_saop_walker(Node *node, void *context)
  *	  value of the Param.
  * 2. Fold stable, as well as immutable, functions to constants.
  * 3. Reduce PlaceHolderVar nodes to their contained expressions.
+ * 4. Current value of session variable can be used for estimation too.
  *--------------------
  */
 Node *
@@ -2779,6 +2788,29 @@ eval_const_expressions_mutator(Node *node,
 							return (Node *) con;
 						}
 					}
+				}
+				else if (param->paramkind == PARAM_VARIABLE &&
+						 context->estimate)
+				{
+					int16		typLen;
+					bool		typByVal;
+					Datum		pval;
+					bool		isnull;
+
+					get_typlenbyval(param->paramtype, &typLen, &typByVal);
+
+					pval = GetSessionVariableWithTypecheck(param->paramvarname,
+														   param->paramtype,
+														   param->paramtypmod,
+														   &isnull);
+
+					return (Node *) makeConst(param->paramtype,
+											  param->paramtypmod,
+											  param->paramcollid,
+											  (int) typLen,
+											  pval,
+											  isnull,
+											  typByVal);
 				}
 
 				/*
@@ -5489,7 +5521,8 @@ inline_function(Oid funcid, Oid result_type, Oid result_collid,
 		querytree->limitOffset ||
 		querytree->limitCount ||
 		querytree->setOperations ||
-		list_length(querytree->targetList) != 1)
+		(list_length(querytree->targetList) != 1) ||
+		querytree->hasSessionVariables)
 		goto fail;
 
 	/* If the function result is composite, resolve it */

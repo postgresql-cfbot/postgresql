@@ -2024,6 +2024,13 @@ FigureColnameInternal(Node *node, char **name)
 						 (int) ((JsonFuncExpr *) node)->op);
 			}
 			break;
+		case T_VariableFence:
+			{
+				/* return last field name */
+				*name = ((VariableFence *) node)->varname;
+				return 2;
+			}
+			break;
 		default:
 			break;
 	}

@@ -108,6 +108,27 @@ search_variable(char *varname)
 }
 
 /*
+ * Returns the type, typmod and collid of the given session variable.
+ *
+ * Raises an error when the variable doesn't exists and *error is null.
+ */
+void
+get_session_variable_type_typmod_collid(char *varname,
+										Oid *typid,
+										int32 *typmod,
+										Oid *collid)
+{
+	SVariable	svar;
+
+	svar = search_variable(varname);
+
+	/* only owner can set content of variable */
+	*typid = svar->vartype;
+	*typmod = svar->vartypmod;
+	*collid = svar->varcollation;
+}
+
+/*
  * Creates a new variable - does new entry in sessionvars
  *
  * Used by CREATE VARIABLE command

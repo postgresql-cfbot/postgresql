@@ -534,7 +534,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	def_arg columnElem where_clause where_or_current_clause
 				a_expr b_expr c_expr AexprConst indirection_el opt_slice_bound
 				columnref having_clause func_table xmltable array_expr
-				OptWhereClause operator_def_arg
+				OptWhereClause operator_def_arg variable_fence
 %type <list>	opt_column_and_period_list
 %type <list>	rowsfrom_item rowsfrom_list opt_col_def_list
 %type <boolean> opt_ordinality opt_without_overlaps
@@ -939,7 +939,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  */
 %nonassoc	UNBOUNDED NESTED /* ideally would have same precedence as IDENT */
 %nonassoc	IDENT PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
-			SET KEYS OBJECT_P SCALAR TO USING VALUE_P WITH WITHOUT PATH
+			SET KEYS OBJECT_P SCALAR TO USING VALUE_P WITH WITHOUT PATH VARIABLE
 %left		Op OPERATOR RIGHT_ARROW '|'	/* multi-character ops and user-defined operators */
 %left		'+' '-'
 %left		'*' '/' '%'
@@ -16577,6 +16577,8 @@ c_expr:		columnref								{ $$ = $1; }
 					else
 						$$ = $2;
 				}
+			| variable_fence
+				{ $$ = $1; }
 			| case_expr
 				{ $$ = $1; }
 			| func_expr
@@ -17979,6 +17981,17 @@ case_default:
 
 case_arg:	a_expr									{ $$ = $1; }
 			| /*EMPTY*/								{ $$ = NULL; }
+		;
+
+variable_fence:
+			VARIABLE '(' ColId ')'
+				{
+					VariableFence *vf = makeNode(VariableFence);
+
+					vf->varname = $3;
+					vf->location = @3;
+					$$ = (Node *) vf;
+				}
 		;
 
 columnref:	ColId

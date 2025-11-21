@@ -5988,6 +5988,16 @@ SELECT ... FROM GRAPH_TABLE (myshop MATCH (IS person WHERE name = '...')-[]->...
     variable is stored in session memory and is private to each session. It is
     automatically released when the session ends.
    </para>
+
+   <para>
+    In a query, a session variable can only be referenced using the special
+    <literal>VARIABLE(varname)</literal> syntax. This avoids any risk of
+    collision between variable names and column names.
+   </para>
+<programlisting>
+SELECT VARIABLE(current_user_id);
+</programlisting>
+   </para>
  </sect1>
 
  <sect1 id="ddl-others">

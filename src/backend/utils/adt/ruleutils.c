@@ -9368,6 +9368,14 @@ get_parameter(Param *param, deparse_context *context)
 		}
 	}
 
+	/* Note: can be be used by EXPLAIN */
+	if (param->paramkind == PARAM_VARIABLE)
+	{
+		appendStringInfo(context->buf, "VARIABLE(%s)",
+						 quote_identifier(param->paramvarname));
+		return;
+	}
+
 	/*
 	 * Not PARAM_EXEC, or couldn't find referent: just print $N.
 	 *

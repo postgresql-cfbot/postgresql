@@ -645,6 +645,7 @@ transformDeleteStmt(ParseState *pstate, DeleteStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -1084,6 +1085,7 @@ transformInsertStmt(ParseState *pstate, InsertStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -1870,6 +1872,7 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt,
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	foreach(l, stmt->lockingClause)
 	{
@@ -2096,6 +2099,7 @@ transformValuesClause(ParseState *pstate, SelectStmt *stmt)
 	qry->jointree = makeFromExpr(pstate->p_joinlist, NULL);
 
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -2347,6 +2351,7 @@ transformSetOperationStmt(ParseState *pstate, SelectStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	foreach(l, lockingClause)
 	{
@@ -2839,6 +2844,7 @@ transformReturnStmt(ParseState *pstate, ReturnStmt *stmt)
 	qry->hasWindowFuncs = pstate->p_hasWindowFuncs;
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasAggs = pstate->p_hasAggs;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 
@@ -2922,6 +2928,7 @@ transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt)
 
 	qry->hasTargetSRFs = pstate->p_hasTargetSRFs;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 

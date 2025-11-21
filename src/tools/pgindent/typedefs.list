@@ -3369,6 +3369,7 @@ ValidatorValidateCB
 ValuesScan
 ValuesScanState
 Var
+VariableFence
 VarBit
 VarChar
 VarParamState

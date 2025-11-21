@@ -207,6 +207,8 @@ static List *set_returning_clause_references(PlannerInfo *root,
 static List *set_windowagg_runcondition_references(PlannerInfo *root,
 												   List *runcondition,
 												   Plan *plan);
+static bool pull_up_has_session_variables_walker(Node *node,
+												 PlannerInfo *root);
 
 static void record_elided_node(PlannerGlobal *glob, int plan_node_id,
 							   NodeTag elided_type, Bitmapset *relids);
@@ -1363,6 +1365,50 @@ set_plan_refs(PlannerInfo *root, Plan *plan, int rtoffset)
 }
 
 /*
+ * Search usage of session variables in subqueries
+ */
+void
+pull_up_has_session_variables(PlannerInfo *root)
+{
+	Query	   *query = root->parse;
+
+	if (query->hasSessionVariables)
+	{
+		root->hasSessionVariables = true;
+	}
+	else
+	{
+		(void) query_tree_walker(query,
+								 pull_up_has_session_variables_walker,
+								 (void *) root, 0);
+	}
+}
+
+static bool
+pull_up_has_session_variables_walker(Node *node, PlannerInfo *root)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, Query))
+	{
+		Query	   *query = (Query *) node;
+
+		if (query->hasSessionVariables)
+		{
+			root->hasSessionVariables = true;
+			return false;
+		}
+
+		/* recurse into subselects */
+		return query_tree_walker((Query *) node,
+								 pull_up_has_session_variables_walker,
+								 (void *) root, 0);
+	}
+	return expression_tree_walker(node, pull_up_has_session_variables_walker,
+								  (void *) root);
+}
+
+/*
  * set_indexonlyscan_references
  *		Do set_plan_references processing on an IndexOnlyScan
  *
@@ -2172,6 +2218,10 @@ fix_expr_common(PlannerInfo *root, Node *node)
  * If it's a PARAM_MULTIEXPR, replace it with the appropriate Param from
  * root->multiexpr_params; otherwise no change is needed.
  * Just for paranoia's sake, we make a copy of the node in either case.
+ *
+ * If it's a PARAM_VARIABLE, then we collect used session variables in
+ * the list root->glob->sessionVariable.  Also, assign the parameter's
+ * "paramid" to the parameter's position in that list.
  */
 static Node *
 fix_param_node(PlannerInfo *root, Param *p)
@@ -2190,6 +2240,43 @@ fix_param_node(PlannerInfo *root, Param *p)
 			elog(ERROR, "unexpected PARAM_MULTIEXPR ID: %d", p->paramid);
 		return copyObject(list_nth(params, colno - 1));
 	}
+
+	if (p->paramkind == PARAM_VARIABLE)
+	{
+		int			n = 0;
+
+		/* we will modify object */
+		p = (Param *) copyObject(p);
+
+		/*
+		 * Now, we can actualize list of session variables, and we can
+		 * complete paramid parameter.
+		 */
+		foreach_node(Param, paramvar, root->glob->sessionVariables)
+		{
+			if (strcmp(paramvar->paramvarname, p->paramvarname) == 0)
+			{
+				p->paramid = paramvar->paramid;
+
+				return (Node *) p;
+			}
+
+			n += 1;
+		}
+
+		p->paramid = n;
+
+		/*
+		 * Because session variables are catalogless, we cannot to use plan
+		 * invalidation. Then we need to check type, typmod, collid any time,
+		 * when we load values of session variables to parameter's buffer.
+		 * For this purpose it is more easy to save complete Param node.
+		 */
+		root->glob->sessionVariables = lappend(root->glob->sessionVariables, p);
+
+		return (Node *) p;
+	}
+
 	return (Node *) copyObject(p);
 }
 
@@ -2257,7 +2344,9 @@ fix_alternative_subplan(PlannerInfo *root, AlternativeSubPlan *asplan,
  * replacing Aggref nodes that should be replaced by initplan output Params,
  * choosing the best implementation for AlternativeSubPlans,
  * looking up operator opcode info for OpExpr and related nodes,
- * and adding OIDs from regclass Const nodes into root->glob->relationOids.
+ * adding OIDs from regclass Const nodes into root->glob->relationOids,
+ * assigning paramvarid to PARAM_VARIABLE params, and collecting the
+ * of session variables in the root->glob->sessionVariables list.
  *
  * 'node': the expression to be modified
  * 'rtoffset': how much to increment varnos by
@@ -2279,7 +2368,8 @@ fix_scan_expr(PlannerInfo *root, Node *node, int rtoffset, double num_exec)
 		root->multiexpr_params != NIL ||
 		root->glob->lastPHId != 0 ||
 		root->minmax_aggs != NIL ||
-		root->hasAlternativeSubPlans)
+		root->hasAlternativeSubPlans ||
+		root->hasSessionVariables)
 	{
 		return fix_scan_expr_mutator(node, &context);
 	}

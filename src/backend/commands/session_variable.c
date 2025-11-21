@@ -129,6 +129,45 @@ get_session_variable_type_typmod_collid(char *varname,
 }
 
 /*
+ * Returns a copy of the value of the session variable (in the current memory
+ * context).
+ */
+Datum
+GetSessionVariableWithTypecheck(char *varname,
+								Oid typid, int32 typmod,
+								bool *isnull)
+{
+	SVariable	svar;
+	Datum		result;
+
+	svar = search_variable(varname);
+
+	if (svar->vartype != typid || svar->vartypmod != typmod)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("session variable %s is not of a type %s but type %s",
+						varname,
+						format_type_with_typemod(typid, typmod),
+						format_type_with_typemod(svar->vartype, svar->vartypmod))));
+
+	/* only owner can get content of variable */
+	if (svar->varowner != GetUserId() && !superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied for session variable %s",
+						varname)));
+
+	if (!svar->isnull)
+		result = datumCopy(svar->value, svar->typbyval, svar->typlen);
+	else
+		result = (Datum) 0;
+
+	*isnull = svar->isnull;
+
+	return result;
+}
+
+/*
  * Creates a new variable - does new entry in sessionvars
  *
  * Used by CREATE VARIABLE command

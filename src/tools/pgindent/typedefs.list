@@ -2849,6 +2849,7 @@ SerializedTransactionState
 Session
 SessionBackupState
 SessionEndType
+SessionVariableValue
 SetConstraintState
 SetConstraintStateData
 SetConstraintTriggerData

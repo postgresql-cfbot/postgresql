@@ -54,3 +54,13 @@ DROP VARIABLE x;
 SET ROLE TO DEFAULT;
 DROP ROLE regress_session_variable_test_role_01;
 DROP ROLE regress_session_variable_test_role_02;
+
+CREATE TEMP VARIABLE x AS int;
+
+-- should fail
+CREATE TEMP VARIABLE x AS int;
+
+DISCARD TEMP;
+
+-- should be ok
+CREATE TEMP VARIABLE x AS int;

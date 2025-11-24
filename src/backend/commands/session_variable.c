@@ -411,3 +411,23 @@ ExecuteLetStmt(ParseState *pstate,
 
 	PopActiveSnapshot();
 }
+
+/*
+ * Fast drop of the complete content of the session variables hash table, and
+ * cleanup of any list that wouldn't be relevant anymore.
+ * This is used by the DISCARD TEMP.
+ */
+void
+ResetSessionVariables(void)
+{
+	/* destroy hash table and reset related memory context */
+	if (sessionvars)
+	{
+		hash_destroy(sessionvars);
+		sessionvars = NULL;
+	}
+
+	/* release memory allocated by session variables */
+	if (SVariableMemoryContext != NULL)
+		MemoryContextReset(SVariableMemoryContext);
+}

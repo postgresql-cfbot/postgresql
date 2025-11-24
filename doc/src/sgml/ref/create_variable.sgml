@@ -108,6 +108,8 @@ CREATE { TEMP | TEMPORARY } VARIABLE <replaceable class="parameter">name</replac
    Create an date session variable <literal>var1</literal>:
 <programlisting>
 CREATE TEMPORARY VARIABLE var1 AS date;
+LET var1 = current_date;
+SELECT VARIABLE(var1);
 </programlisting>
   </para>
 
@@ -127,6 +129,7 @@ CREATE TEMPORARY VARIABLE var1 AS date;
 
   <simplelist type="inline">
    <member><xref linkend="sql-dropvariable"/></member>
+   <member><xref linkend="sql-let"/></member>
   </simplelist>
  </refsect1>
 

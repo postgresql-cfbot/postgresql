@@ -5994,9 +5994,31 @@ SELECT ... FROM GRAPH_TABLE (myshop MATCH (IS person WHERE name = '...')-[]->...
     <literal>VARIABLE(varname)</literal> syntax. This avoids any risk of
     collision between variable names and column names.
    </para>
+
+   <para>
+    You set the value of a session variable with the <command>LET</command>
+    statement and retrieve it with <command>SELECT</command>:
 <programlisting>
+CREATE TEMP VARIABLE var1 AS date;
+LET var1 = current_date;
+SELECT VARIABLE(var1);
+</programlisting>
+
+    or
+
+<programlisting>
+CREATE TEMP VARIABLE current_user_id AS integer;
+LET current_user_id = (SELECT id FROM users WHERE usename = session_user);
 SELECT VARIABLE(current_user_id);
 </programlisting>
+   </para>
+
+   <para>
+    By default, retrieving a session variable returns
+    <literal>NULL</literal> unless it has been set in the current session
+    using the <command>LET</command> command. Session variables are not
+    transactional: changes to their values persist even if the transaction
+    is rolled back, similar to variables in procedural languages
    </para>
  </sect1>
 

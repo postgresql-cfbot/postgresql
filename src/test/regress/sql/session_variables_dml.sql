@@ -118,3 +118,116 @@ RESET max_parallel_workers_per_gather;
 
 DROP TABLE testvar_testtab;
 DROP VARIABLE temp_var02;
+
+CREATE TEMP VARIABLE temp_var03 AS numeric;
+
+-- LET stmt is not allowed inside CTE
+WITH x AS (LET  temp_var03 = 3.14) SELECT * FROM x;
+
+-- LET stmt requires result with exactly one row
+LET temp_var03 = generate_series(1,1);
+SELECT VARIABLE(temp_var03);
+
+-- should fail
+LET temp_var03 = generate_series(1,2);
+LET temp_var03 = generate_series(1,0);
+
+CREATE OR REPLACE FUNCTION testvar_sql01(numeric)
+RETURNS void AS $$
+LET temp_var03 = $1;
+$$ LANGUAGE sql;
+
+CREATE OR REPLACE FUNCTION testvar_sql02()
+RETURNS numeric AS $$
+SELECT VARIABLE(temp_var03);
+$$ LANGUAGE sql;
+
+SELECT testvar_sql01(3.14);
+SELECT testvar_sql02(), VARIABLE(temp_var03);
+
+CREATE OR REPLACE FUNCTION testvar_pl(varchar)
+RETURNS varchar AS $$
+BEGIN
+  LET temp_var03 = $1::numeric;
+  RETURN VARIABLE(temp_var03);
+END
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+SELECT testvar_pl('3.14');
+
+DROP VARIABLE temp_var03;
+
+SET plan_cache_mode to force_generic_plan;
+
+-- should not crash
+SELECT testvar_sql01(3.14);
+SELECT testvar_sql02(), VARIABLE(temp_var03);
+SELECT testvar_pl('3.141592');
+
+-- can work again if we create variable
+CREATE TEMP VARIABLE temp_var03 AS numeric;
+SELECT testvar_sql01(3.14);
+SELECT testvar_sql02(), VARIABLE(temp_var03);
+SELECT testvar_pl('3.141592');
+
+CREATE ROLE regress_session_variable_test_role_04;
+
+SET ROLE regress_session_variable_test_role_04;
+
+-- should fail
+SELECT testvar_sql01(3.14);
+
+-- should be ok (security definer)
+SELECT testvar_pl('3.141592');
+
+SET ROLE TO DEFAULT;
+
+DROP FUNCTION testvar_sql01(numeric);
+DROP FUNCTION testvar_sql02();
+DROP FUNCTION testvar_pl(varchar);
+
+DROP ROLE regress_session_variable_test_role_04;
+
+DROP VARIABLE temp_var03;
+
+SET plan_cache_mode TO DEFAULT;
+
+-- test extended query protocol
+CREATE TEMP VARIABLE temp_var04 AS int;
+
+LET temp_var04 = $1 \bind 10 \g
+SELECT VARIABLE(temp_var04);
+
+LET temp_var04 = $1 \parse letps
+\bind_named letps 100 \g
+SELECT VARIABLE(temp_var04);
+
+\close_prepared letps
+
+DROP VARIABLE temp_var04;
+
+-- original value should not be changed when LET fails
+CREATE TEMP VARIABLE temp_var04 AS numeric;
+
+LET temp_var04 = 42;
+
+LET temp_var04 = generate_series(1,2); -- ERROR: too many row
+SELECT VARIABLE(temp_var04); -- expected 42
+
+DROP VARIABLE temp_var04;
+
+CREATE TEMP VARIABLE temp_var04 AS int;
+
+LET temp_var04 = 42;
+
+LET temp_var04 = generate_series(1,2); -- ERROR: too many row
+SELECT VARIABLE(temp_var04); -- expected 42
+
+DROP VARIABLE temp_var04;
+
+CREATE TEMP VARIABLE temp_var04 AS int;
+
+LET temp_var04 = generate_series(1,2); -- ERROR: too many row
+SELECT VARIABLE(temp_var04); -- expected NULL
+
+DROP VARIABLE temp_var04;

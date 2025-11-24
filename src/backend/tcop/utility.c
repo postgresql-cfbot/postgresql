@@ -240,6 +240,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 
 		case T_CallStmt:
 		case T_DoStmt:
+		case T_LetStmt:
 			{
 				/*
 				 * Commands inside the DO block or the called procedure might
@@ -1077,6 +1078,11 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 		case T_DropSessionVarStmt:
 			/* No event triggers for catalog less session variables */
 			DropVariableByName(((DropSessionVarStmt *) parsetree)->name);
+			break;
+
+		case T_LetStmt:
+			ExecuteLetStmt(pstate, (LetStmt *) parsetree, params,
+						   queryEnv, qc);
 			break;
 
 		default:
@@ -2233,6 +2239,10 @@ UtilityContainsQuery(Node *parsetree)
 				return UtilityContainsQuery(qry->utilityStmt);
 			return qry;
 
+		case T_LetStmt:
+			qry = castNode(Query, ((LetStmt *) parsetree)->query);
+			return qry;
+
 		default:
 			return NULL;
 	}
@@ -2429,6 +2439,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_PLAssignStmt:
 			tag = CMDTAG_SELECT;
+			break;
+
+		case T_LetStmt:
+			tag = CMDTAG_LET;
 			break;
 
 			/* utility statements --- same whether raw or cooked */
@@ -3335,6 +3349,7 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_PLAssignStmt:
+		case T_LetStmt:
 			lev = LOGSTMT_ALL;
 			break;
 

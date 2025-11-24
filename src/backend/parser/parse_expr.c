@@ -597,6 +597,9 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 		case EXPR_KIND_FOR_PORTION:
 			err = _("cannot use column reference in FOR PORTION OF expression");
 			break;
+		case EXPR_KIND_LET_TARGET:
+			err = _("cannot use column reference as target of LET command");
+			break;
 
 			/*
 			 * There is intentionally no default: case here, so that the
@@ -979,6 +982,7 @@ expr_kind_allows_session_variables(ParseExprKind p_expr_kind)
 		case EXPR_KIND_VALUES_SINGLE:
 		case EXPR_KIND_PROPGRAPH_PROPERTY:
 		case EXPR_KIND_FOR_PORTION:
+		case EXPR_KIND_LET_TARGET:
 			result = true;
 			break;
 
@@ -2012,6 +2016,9 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 			break;
 		case EXPR_KIND_FOR_PORTION:
 			err = _("cannot use subquery in FOR PORTION OF expression");
+			break;
+		case EXPR_KIND_LET_TARGET:
+			err = _("cannot use subquery as a target of LET command");
 			break;
 
 			/*
@@ -3376,6 +3383,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "property definition expression";
 		case EXPR_KIND_FOR_PORTION:
 			return "FOR PORTION OF";
+		case EXPR_KIND_LET_TARGET:
+			return "LET";
 
 			/*
 			 * There is intentionally no default: case here, so that the

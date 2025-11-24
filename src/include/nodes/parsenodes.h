@@ -152,6 +152,9 @@ typedef struct Query
 	/* FOR PORTION OF clause for UPDATE/DELETE */
 	ForPortionOfExpr *forPortionOf;
 
+	/* target variable of LET statement */
+	char	   *resultVariable;
+
 	/* has aggregates in tlist or havingQual */
 	bool		hasAggs pg_node_attr(query_jumble_ignore);
 	/* has window functions in tlist */
@@ -2315,6 +2318,18 @@ typedef struct MergeStmt
 	ReturningClause *returningClause;	/* RETURNING clause */
 	WithClause *withClause;		/* WITH clause */
 } MergeStmt;
+
+/* ----------------------
+ *		Let Statement
+ * ----------------------
+ */
+typedef struct LetStmt
+{
+	NodeTag		type;
+	char	   *target;			/* target variable */
+	Node	   *query;			/* source expression */
+	ParseLoc	location;
+} LetStmt;
 
 /* ----------------------
  *		Select Statement

@@ -59,15 +59,18 @@
 #include "utils/lsyscache.h"
 #include "utils/rangetypes.h"
 #include "utils/rel.h"
+#include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
 
-/* Passthrough data for transformPLAssignStmtTarget */
+/* Passthrough data for transformAssignTarget */
 typedef struct SelectStmtPassthrough
 {
-	PLAssignStmt *stmt;			/* the assignment statement */
+	Node	   *stmt;			/* the assignment statement */
 	Node	   *target;			/* node representing the target variable */
+	char	   *target_name;	/* the name used by err */
 	List	   *indirection;	/* indirection yet to be applied to target */
+	CoercionContext ccontext; 	/* context indicators to control coercions */
 } SelectStmtPassthrough;
 
 /* Hook for plugins to get control at end of parse analysis */
@@ -96,7 +99,7 @@ static Query *transformReturnStmt(ParseState *pstate, ReturnStmt *stmt);
 static Query *transformUpdateStmt(ParseState *pstate, UpdateStmt *stmt);
 static Query *transformPLAssignStmt(ParseState *pstate,
 									PLAssignStmt *stmt);
-static List *transformPLAssignStmtTarget(ParseState *pstate, List *tlist,
+static List *transformAssignTarget(ParseState *pstate, List *tlist,
 										 SelectStmtPassthrough *passthru);
 static Query *transformDeclareCursorStmt(ParseState *pstate,
 										 DeclareCursorStmt *stmt);
@@ -106,6 +109,8 @@ static Query *transformCreateTableAsStmt(ParseState *pstate,
 										 CreateTableAsStmt *stmt);
 static Query *transformCallStmt(ParseState *pstate,
 								CallStmt *stmt);
+static Query *transformLetStmt(ParseState *pstate,
+							   LetStmt *stmt);
 static void transformLockingClause(ParseState *pstate, Query *qry,
 								   LockingClause *lc, bool pushedDown);
 #ifdef DEBUG_NODE_TESTS_ENABLED
@@ -353,6 +358,7 @@ transformStmt(ParseState *pstate, Node *parseTree)
 			case T_UpdateStmt:
 			case T_DeleteStmt:
 			case T_MergeStmt:
+			case T_LetStmt:
 				(void) test_raw_expression_coverage(parseTree, NULL);
 				break;
 			default:
@@ -432,6 +438,11 @@ transformStmt(ParseState *pstate, Node *parseTree)
 									   (CallStmt *) parseTree);
 			break;
 
+		case T_LetStmt:
+			result = transformLetStmt(pstate,
+									  (LetStmt *) parseTree);
+			break;
+
 		default:
 
 			/*
@@ -493,6 +504,7 @@ stmt_requires_parse_analysis(RawStmt *parseTree)
 		case T_ExplainStmt:
 		case T_CreateTableAsStmt:
 		case T_CallStmt:
+		case T_LetStmt:
 			result = true;
 			break;
 
@@ -558,6 +570,7 @@ query_requires_rewrite_plan(Query *query)
 			case T_ExplainStmt:
 			case T_CreateTableAsStmt:
 			case T_CallStmt:
+			case T_LetStmt:
 				result = true;
 				break;
 			default:
@@ -1733,7 +1746,7 @@ count_rowexpr_columns(ParseState *pstate, Node *expr)
  *
  * This function is also used to transform the source expression of a
  * PLAssignStmt.  In that usage, passthru is non-NULL and we need to
- * call transformPLAssignStmtTarget after the initial transformation of the
+ * call transformAssignTarget after the initial transformation of the
  * SELECT's targetlist.  (We could generalize this into an arbitrary callback
  * function, but for now that would just be more notation with no benefit.)
  * All the rest is the same as a regular SelectStmt.
@@ -1786,8 +1799,8 @@ transformSelectStmt(ParseState *pstate, SelectStmt *stmt,
 	 * Otherwise, mark column origins (which are useless in a PLAssignStmt).
 	 */
 	if (passthru)
-		qry->targetList = transformPLAssignStmtTarget(pstate, qry->targetList,
-													  passthru);
+		qry->targetList = transformAssignTarget(pstate, qry->targetList,
+												passthru);
 	else
 		markTargetListOrigins(pstate, qry->targetList);
 
@@ -3232,9 +3245,11 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 						   EXPR_KIND_UPDATE_TARGET);
 
 	/* Set up passthrough data for transformPLAssignStmtTarget */
-	passthru.stmt = stmt;
+	passthru.stmt = (Node *) stmt;
 	passthru.target = target;
+	passthru.target_name = stmt->name;
 	passthru.indirection = indirection;
+	passthru.ccontext = COERCION_PLPGSQL;
 
 	/*
 	 * To avoid duplicating a lot of code, we use transformSelectStmt to do
@@ -3257,18 +3272,21 @@ transformPLAssignStmt(ParseState *pstate, PLAssignStmt *stmt)
 
 /*
  * Callback function to adjust a SELECT's tlist to make the output suitable
- * for assignment to a PLAssignStmt's target variable.
+ * for assignment to a PLAssignStmt's target variable pr LET's target
+ * session variable.
  *
  * Note: we actually modify the tle->expr in-place, but the function's API
  * is set up to not presume that.
  */
 static List *
-transformPLAssignStmtTarget(ParseState *pstate, List *tlist,
-							SelectStmtPassthrough *passthru)
+transformAssignTarget(ParseState *pstate, List *tlist,
+					  SelectStmtPassthrough *passthru)
 {
-	PLAssignStmt *stmt = passthru->stmt;
+	Node	   *stmt = passthru->stmt;
 	Node	   *target = passthru->target;
+	char	   *target_name = passthru->target_name;
 	List	   *indirection = passthru->indirection;
+	CoercionContext ccontext = passthru->ccontext;
 	Oid			targettype;
 	int32		targettypmod;
 	Oid			targetcollation;
@@ -3303,7 +3321,7 @@ transformPLAssignStmtTarget(ParseState *pstate, List *tlist,
 		tle->expr = (Expr *)
 			transformAssignmentIndirection(pstate,
 										   target,
-										   stmt->name,
+										   target_name,
 										   false,
 										   targettype,
 										   targettypmod,
@@ -3311,10 +3329,10 @@ transformPLAssignStmtTarget(ParseState *pstate, List *tlist,
 										   indirection,
 										   list_head(indirection),
 										   (Node *) tle->expr,
-										   COERCION_PLPGSQL,
+										   ccontext,
 										   exprLocation(target));
 	}
-	else if (targettype != type_id &&
+	else if (IsA(stmt, PLAssignStmt) && targettype != type_id &&
 			 (targettype == RECORDOID || ISCOMPLEX(targettype)) &&
 			 (type_id == RECORDOID || ISCOMPLEX(type_id)))
 	{
@@ -3337,7 +3355,7 @@ transformPLAssignStmtTarget(ParseState *pstate, List *tlist,
 			coerce_to_target_type(pstate,
 								  orig_expr, type_id,
 								  targettype, targettypmod,
-								  COERCION_PLPGSQL,
+								  ccontext,
 								  COERCE_IMPLICIT_CAST,
 								  -1);
 		/* With COERCION_PLPGSQL, this error is probably unreachable */
@@ -3346,7 +3364,7 @@ transformPLAssignStmtTarget(ParseState *pstate, List *tlist,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
 					 errmsg("variable \"%s\" is of type %s"
 							" but expression is of type %s",
-							stmt->name,
+							target_name,
 							format_type_be(targettype),
 							format_type_be(type_id)),
 					 errhint("You will need to rewrite or cast the expression."),
@@ -3705,6 +3723,59 @@ transformCallStmt(ParseState *pstate, CallStmt *stmt)
 	stmt->outargs = outargs;
 
 	ReleaseSysCache(proctup);
+
+	/* represent the command as a utility Query */
+	result = makeNode(Query);
+	result->commandType = CMD_UTILITY;
+	result->utilityStmt = (Node *) stmt;
+
+	return result;
+}
+
+/*
+ * transformLetStmt -
+ *	  transform an Let Statement
+ */
+static Query *
+transformLetStmt(ParseState *pstate, LetStmt *stmt)
+{
+	Query	   *qry;
+	Query	   *result;
+	Node	   *target;
+	VariableFence *vf;
+	SelectStmtPassthrough passthru;
+	Param	   *paramvar;
+
+	/* gram allows only SELECT */
+	Assert(IsA(stmt->query, SelectStmt));
+
+	/* Use implicit VariableFence for forcing session variables */
+	vf = makeNode(VariableFence);
+	vf->varname = stmt->target;
+	vf->location = stmt->location;
+
+	target = transformExpr(pstate, (Node *) vf, EXPR_KIND_LET_TARGET);
+
+	paramvar = castNode(Param, target);
+
+	Assert(paramvar->paramkind == PARAM_VARIABLE);
+
+	/* Set up passthrough data for transformAssignTarget */
+	passthru.stmt = (Node *) stmt;
+	passthru.target = (Node *) paramvar;
+	passthru.target_name = paramvar->paramvarname;
+	passthru.indirection = NIL;
+	passthru.ccontext = COERCION_ASSIGNMENT;
+
+	/* we need to postpone conversion of "unknown" to text */
+	pstate->p_resolve_unknowns = false;
+
+	qry = transformSelectStmt(pstate, (SelectStmt *) stmt->query, &passthru);
+
+	qry->resultVariable = paramvar->paramvarname;
+	qry->canSetTag = true;
+
+	stmt->query = (Node *) qry;
 
 	/* represent the command as a utility Query */
 	result = makeNode(Query);

@@ -84,6 +84,7 @@ typedef enum ParseExprKind
 	EXPR_KIND_GENERATED_COLUMN, /* generation expression for a column */
 	EXPR_KIND_CYCLE_MARK,		/* cycle mark value */
 	EXPR_KIND_PROPGRAPH_PROPERTY,	/* derived property expression */
+	EXPR_KIND_LET_TARGET,		/* only session variables */
 } ParseExprKind;
 
 

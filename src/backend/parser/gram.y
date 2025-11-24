@@ -303,7 +303,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		DropTransformStmt
 		DropUserMappingStmt ExplainStmt FetchStmt
 		GrantStmt GrantRoleStmt ImportForeignSchemaStmt IndexStmt InsertStmt
-		ListenStmt LoadStmt LockStmt MergeStmt NotifyStmt ExplainableStmt PreparableStmt
+		LetStmt ListenStmt LoadStmt LockStmt MergeStmt NotifyStmt ExplainableStmt PreparableStmt
 		CreateFunctionStmt AlterFunctionStmt ReindexStmt RemoveAggrStmt
 		RemoveFuncStmt RemoveOperStmt RenameStmt RepackStmt ReturnStmt RevokeStmt RevokeRoleStmt
 		RuleActionStmt RuleActionStmtOrEmpty RuleStmt
@@ -796,7 +796,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	KEEP KEY KEYS
 
 	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P
-	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
+	LEADING LEAKPROOF LEAST LET LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED LSN_P
 
 	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE MERGE_ACTION METHOD
@@ -1148,6 +1148,7 @@ stmt:
 			| ImportForeignSchemaStmt
 			| IndexStmt
 			| InsertStmt
+			| LetStmt
 			| ListenStmt
 			| RefreshMatViewStmt
 			| LoadStmt
@@ -13637,6 +13638,37 @@ opt_hold: /* EMPTY */						{ $$ = 0; }
 /*****************************************************************************
  *
  *		QUERY:
+ *				LET STATEMENT
+ *
+ *****************************************************************************/
+LetStmt:	LET ColId '=' a_expr
+				{
+					LetStmt	   *n = makeNode(LetStmt);
+					SelectStmt *select;
+					ResTarget  *res;
+
+					n->target = $2;
+
+					select = makeNode(SelectStmt);
+					res = makeNode(ResTarget);
+
+					/* create target list for implicit query */
+					res->name = NULL;
+					res->indirection = NIL;
+					res->val = (Node *) $4;
+					res->location = @4;
+
+					select->targetList = list_make1(res);
+					n->query = (Node *) select;
+
+					n->location = @2;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
  *				SELECT STATEMENTS
  *
  *****************************************************************************/
@@ -19107,6 +19139,7 @@ unreserved_keyword:
 			| LARGE_P
 			| LAST_P
 			| LEAKPROOF
+			| LET
 			| LEVEL
 			| LISTEN
 			| LOAD
@@ -19737,6 +19770,7 @@ bare_label_keyword:
 			| LEAKPROOF
 			| LEAST
 			| LEFT
+			| LET
 			| LEVEL
 			| LIKE
 			| LISTEN

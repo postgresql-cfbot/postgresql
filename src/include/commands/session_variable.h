@@ -16,8 +16,10 @@
 #define SESSIONVARIABLE_H
 
 #include "catalog/objectaddress.h"
+#include "nodes/params.h"
 #include "parser/parse_node.h"
 #include "nodes/parsenodes.h"
+#include "tcop/cmdtag.h"
 
 extern void CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt);
 extern void DropVariableByName(char *varname);
@@ -31,5 +33,8 @@ extern void get_session_variable_type_typmod_collid(char *varname,
 													Oid *typid,
 													int32 *typmod,
 													Oid *collid);
+
+extern void ExecuteLetStmt(ParseState *pstate, LetStmt *stmt, ParamListInfo params,
+						   QueryEnvironment *queryEnv, QueryCompletion *qc);
 
 #endif

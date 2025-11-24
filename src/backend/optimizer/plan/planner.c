@@ -389,6 +389,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->partition_directory = NULL;
 	glob->rel_notnullatts_hash = NULL;
 	glob->sessionVariables = NIL;
+	glob->resultVariable = parse->resultVariable;
 
 	/*
 	 * Assess whether it's feasible to use parallel mode for this query. We

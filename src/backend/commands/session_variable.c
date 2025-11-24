@@ -17,13 +17,18 @@
 #include "catalog/pg_language.h"
 #include "catalog/pg_type.h"
 #include "commands/session_variable.h"
+#include "executor/executor.h"
+#include "executor/svariableReceiver.h"
 #include "miscadmin.h"
 #include "parser/parse_type.h"
+#include "rewrite/rewriteHandler.h"
 #include "storage/proc.h"
+#include "tcop/tcopprot.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/snapmgr.h"
 
 /*
  * The session variables are stored in the backend's private memory (data,
@@ -323,4 +328,86 @@ DropVariableByName(char *varname)
 					   HASH_REMOVE,
 					   NULL) == NULL)
 		elog(ERROR, "hash table corrupted");
+}
+
+/*
+ * Assign the result of the evaluated expression to the session variable
+ */
+void
+ExecuteLetStmt(ParseState *pstate,
+			   LetStmt *stmt,
+			   ParamListInfo params,
+			   QueryEnvironment *queryEnv,
+			   QueryCompletion *qc)
+{
+	Query	   *query = castNode(Query, stmt->query);
+	List	   *rewritten;
+	DestReceiver *dest;
+	PlannedStmt *plan;
+	QueryDesc  *queryDesc;
+	char	   *varname = query->resultVariable;
+	SVariable	svar;
+
+	svar = search_variable(varname);
+
+	/* only owner can set content of variable */
+	if (svar->varowner != GetUserId() && !superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied for session variable %s",
+						varname)));
+
+	/* create a dest receiver for LET */
+	dest = CreateVariableDestReceiver(varname);
+
+	/* run the query rewriter */
+	query = copyObject(query);
+
+	rewritten = QueryRewrite(query);
+
+	Assert(list_length(rewritten) == 1);
+
+	query = linitial_node(Query, rewritten);
+	Assert(query->commandType == CMD_SELECT);
+
+	/* plan the query */
+	plan = pg_plan_query(query, pstate->p_sourcetext,
+						 CURSOR_OPT_PARALLEL_OK, params, NULL);
+
+	/*
+	 * Use a snapshot with an updated command ID to ensure this query sees the
+	 * results of any previously executed queries.  (This could only matter if
+	 * the planner executed an allegedly-stable function that changed the
+	 * database contents, but let's do it anyway to be parallel to the EXPLAIN
+	 * code path.)
+	 */
+	PushCopiedSnapshot(GetActiveSnapshot());
+	UpdateActiveSnapshotCommandId();
+
+	/* create a QueryDesc, redirecting output to our tuple receiver */
+	queryDesc = CreateQueryDesc(plan, pstate->p_sourcetext,
+								GetActiveSnapshot(), InvalidSnapshot,
+								dest, params, queryEnv, 0);
+
+	/* call ExecutorStart to prepare the plan for execution */
+	ExecutorStart(queryDesc, 0);
+
+	/*
+	 * Run the plan to completion.  The result should be only one row.  To
+	 * check if there are too many result rows, we try to fetch two.
+	 */
+	ExecutorRun(queryDesc, ForwardScanDirection, 2L);
+
+	/* save the rowcount if we're given a QueryCompletion to fill */
+	if (qc)
+		SetQueryCompletion(qc, CMDTAG_LET, queryDesc->estate->es_processed);
+
+	/* and clean up */
+	ExecutorFinish(queryDesc);
+	ExecutorEnd(queryDesc);
+
+	dest->rDestroy(dest);
+	FreeQueryDesc(queryDesc);
+
+	PopActiveSnapshot();
 }

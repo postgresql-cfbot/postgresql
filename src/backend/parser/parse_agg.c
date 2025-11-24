@@ -597,7 +597,10 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 				err = _("aggregate functions are not allowed in property definition expressions");
 			else
 				err = _("grouping operations are not allowed in property definition expressions");
+			break;
 
+		case EXPR_KIND_LET_TARGET:
+			errkind = true;
 			break;
 
 			/*
@@ -1044,6 +1047,9 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 			break;
 		case EXPR_KIND_FOR_PORTION:
 			err = _("window functions are not allowed in FOR PORTION OF expressions");
+			break;
+		case EXPR_KIND_LET_TARGET:
+			errkind = true;
 			break;
 
 			/*

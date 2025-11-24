@@ -274,6 +274,9 @@ typedef struct PlannerGlobal
 
 	/* list of used session variables */
 	List	   *sessionVariables;
+
+	/* name of session variable used like target of LET command */
+	char	   *resultVariable;
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */

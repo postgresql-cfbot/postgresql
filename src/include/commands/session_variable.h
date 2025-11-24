@@ -37,4 +37,6 @@ extern void get_session_variable_type_typmod_collid(char *varname,
 extern void ExecuteLetStmt(ParseState *pstate, LetStmt *stmt, ParamListInfo params,
 						   QueryEnvironment *queryEnv, QueryCompletion *qc);
 
+extern void ResetSessionVariables(void);
+
 #endif

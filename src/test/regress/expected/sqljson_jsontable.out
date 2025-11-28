@@ -309,7 +309,7 @@ CREATE OR REPLACE VIEW public.jsonb_table_view2 AS
     "numeric",
     domain
    FROM JSON_TABLE(
-            'null'::jsonb, '$[*]' AS json_table_path_0
+            'null'::jsonb, '$[*]'::jsonpath AS json_table_path_0
             PASSING
                 1 + 2 AS a,
                 '"foo"'::json AS "b c"
@@ -330,7 +330,7 @@ CREATE OR REPLACE VIEW public.jsonb_table_view3 AS
     jsc,
     jsv
    FROM JSON_TABLE(
-            'null'::jsonb, '$[*]' AS json_table_path_0
+            'null'::jsonb, '$[*]'::jsonpath AS json_table_path_0
             PASSING
                 1 + 2 AS a,
                 '"foo"'::json AS "b c"
@@ -349,7 +349,7 @@ CREATE OR REPLACE VIEW public.jsonb_table_view4 AS
     aaa,
     aaa1
    FROM JSON_TABLE(
-            'null'::jsonb, '$[*]' AS json_table_path_0
+            'null'::jsonb, '$[*]'::jsonpath AS json_table_path_0
             PASSING
                 1 + 2 AS a,
                 '"foo"'::json AS "b c"
@@ -366,7 +366,7 @@ CREATE OR REPLACE VIEW public.jsonb_table_view5 AS
     exists2,
     exists3
    FROM JSON_TABLE(
-            'null'::jsonb, '$[*]' AS json_table_path_0
+            'null'::jsonb, '$[*]'::jsonpath AS json_table_path_0
             PASSING
                 1 + 2 AS a,
                 '"foo"'::json AS "b c"
@@ -385,7 +385,7 @@ CREATE OR REPLACE VIEW public.jsonb_table_view6 AS
     ta,
     jba
    FROM JSON_TABLE(
-            'null'::jsonb, '$[*]' AS json_table_path_0
+            'null'::jsonb, '$[*]'::jsonpath AS json_table_path_0
             PASSING
                 1 + 2 AS a,
                 '"foo"'::json AS "b c"
@@ -399,43 +399,43 @@ CREATE OR REPLACE VIEW public.jsonb_table_view6 AS
             )
         )
 EXPLAIN (COSTS OFF, VERBOSE) SELECT * FROM jsonb_table_view2;
-                                                                                                                                            QUERY PLAN                                                                                                                                             
----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                                 QUERY PLAN                                                                                                                                                  
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Table Function Scan on "json_table"
    Output: "json_table"."int", "json_table".text, "json_table"."char(4)", "json_table".bool, "json_table"."numeric", "json_table".domain
-   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]' AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS ("int" integer PATH '$', text text PATH '$', "char(4)" character(4) PATH '$', bool boolean PATH '$', "numeric" numeric PATH '$', domain jsonb_test_domain PATH '$'))
+   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]'::jsonpath AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS ("int" integer PATH '$', text text PATH '$', "char(4)" character(4) PATH '$', bool boolean PATH '$', "numeric" numeric PATH '$', domain jsonb_test_domain PATH '$'))
 (3 rows)
 
 EXPLAIN (COSTS OFF, VERBOSE) SELECT * FROM jsonb_table_view3;
-                                                                                                                                                                                                              QUERY PLAN                                                                                                                                                                                                              
---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                                                                                                   QUERY PLAN                                                                                                                                                                                                                   
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Table Function Scan on "json_table"
    Output: "json_table".js, "json_table".jb, "json_table".jst, "json_table".jsc, "json_table".jsv
-   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]' AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (js json PATH '$' WITHOUT WRAPPER KEEP QUOTES, jb jsonb PATH '$' WITHOUT WRAPPER KEEP QUOTES, jst text FORMAT JSON PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsc character(4) FORMAT JSON PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsv character varying(4) FORMAT JSON PATH '$' WITHOUT WRAPPER KEEP QUOTES))
+   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]'::jsonpath AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (js json PATH '$' WITHOUT WRAPPER KEEP QUOTES, jb jsonb PATH '$' WITHOUT WRAPPER KEEP QUOTES, jst text FORMAT JSON PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsc character(4) FORMAT JSON PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsv character varying(4) FORMAT JSON PATH '$' WITHOUT WRAPPER KEEP QUOTES))
 (3 rows)
 
 EXPLAIN (COSTS OFF, VERBOSE) SELECT * FROM jsonb_table_view4;
-                                                                                                                                        QUERY PLAN                                                                                                                                        
-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                             QUERY PLAN                                                                                                                                             
+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Table Function Scan on "json_table"
    Output: "json_table".jsb, "json_table".jsbq, "json_table".aaa, "json_table".aaa1
-   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]' AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (jsb jsonb PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsbq jsonb PATH '$' WITHOUT WRAPPER OMIT QUOTES, aaa integer PATH '$."aaa"', aaa1 integer PATH '$."aaa"'))
+   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]'::jsonpath AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (jsb jsonb PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsbq jsonb PATH '$' WITHOUT WRAPPER OMIT QUOTES, aaa integer PATH '$."aaa"', aaa1 integer PATH '$."aaa"'))
 (3 rows)
 
 EXPLAIN (COSTS OFF, VERBOSE) SELECT * FROM jsonb_table_view5;
-                                                                                                                                       QUERY PLAN                                                                                                                                       
-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                            QUERY PLAN                                                                                                                                            
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Table Function Scan on "json_table"
    Output: "json_table".exists1, "json_table".exists2, "json_table".exists3
-   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]' AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (exists1 boolean EXISTS PATH '$."aaa"', exists2 integer EXISTS PATH '$."aaa"' TRUE ON ERROR, exists3 text EXISTS PATH 'strict $."aaa"' UNKNOWN ON ERROR))
+   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]'::jsonpath AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (exists1 boolean EXISTS PATH '$."aaa"', exists2 integer EXISTS PATH '$."aaa"' TRUE ON ERROR, exists3 text EXISTS PATH 'strict $."aaa"' UNKNOWN ON ERROR))
 (3 rows)
 
 EXPLAIN (COSTS OFF, VERBOSE) SELECT * FROM jsonb_table_view6;
-                                                                                                                                                                                                                    QUERY PLAN                                                                                                                                                                                                                     
----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                                                                                                                                                         QUERY PLAN                                                                                                                                                                                                                          
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Table Function Scan on "json_table"
    Output: "json_table".js2, "json_table".jsb2w, "json_table".jsb2q, "json_table".ia, "json_table".ta, "json_table".jba
-   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]' AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (js2 json PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsb2w jsonb PATH '$' WITH UNCONDITIONAL WRAPPER KEEP QUOTES, jsb2q jsonb PATH '$' WITHOUT WRAPPER OMIT QUOTES, ia integer[] PATH '$' WITHOUT WRAPPER KEEP QUOTES, ta text[] PATH '$' WITHOUT WRAPPER KEEP QUOTES, jba jsonb[] PATH '$' WITHOUT WRAPPER KEEP QUOTES))
+   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]'::jsonpath AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (js2 json PATH '$' WITHOUT WRAPPER KEEP QUOTES, jsb2w jsonb PATH '$' WITH UNCONDITIONAL WRAPPER KEEP QUOTES, jsb2q jsonb PATH '$' WITHOUT WRAPPER OMIT QUOTES, ia integer[] PATH '$' WITHOUT WRAPPER KEEP QUOTES, ta text[] PATH '$' WITHOUT WRAPPER KEEP QUOTES, jba jsonb[] PATH '$' WITHOUT WRAPPER KEEP QUOTES))
 (3 rows)
 
 -- JSON_TABLE() with alias
@@ -448,11 +448,11 @@ SELECT * FROM
 			"int" int PATH '$',
 			"text" text PATH '$'
 	)) json_table_func;
-                                                                                          QUERY PLAN                                                                                           
------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                                                                               QUERY PLAN                                                                                                
+---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Table Function Scan on "json_table" json_table_func
    Output: id, "int", text
-   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]' AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (id FOR ORDINALITY, "int" integer PATH '$', text text PATH '$'))
+   Table Function Call: JSON_TABLE('null'::jsonb, '$[*]'::jsonpath AS json_table_path_0 PASSING 3 AS a, '"foo"'::jsonb AS "b c" COLUMNS (id FOR ORDINALITY, "int" integer PATH '$', text text PATH '$'))
 (3 rows)
 
 EXPLAIN (COSTS OFF, FORMAT JSON, VERBOSE)
@@ -464,21 +464,21 @@ SELECT * FROM
 			"int" int PATH '$',
 			"text" text PATH '$'
 	)) json_table_func;
-                                                                                                 QUERY PLAN                                                                                                  
--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
- [                                                                                                                                                                                                          +
-   {                                                                                                                                                                                                        +
-     "Plan": {                                                                                                                                                                                              +
-       "Node Type": "Table Function Scan",                                                                                                                                                                  +
-       "Parallel Aware": false,                                                                                                                                                                             +
-       "Async Capable": false,                                                                                                                                                                              +
-       "Table Function Name": "json_table",                                                                                                                                                                 +
-       "Alias": "json_table_func",                                                                                                                                                                          +
-       "Disabled": false,                                                                                                                                                                                   +
-       "Output": ["id", "\"int\"", "text"],                                                                                                                                                                 +
-       "Table Function Call": "JSON_TABLE('null'::jsonb, '$[*]' AS json_table_path_0 PASSING 3 AS a, '\"foo\"'::jsonb AS \"b c\" COLUMNS (id FOR ORDINALITY, \"int\" integer PATH '$', text text PATH '$'))"+
-     }                                                                                                                                                                                                      +
-   }                                                                                                                                                                                                        +
+                                                                                                      QUERY PLAN                                                                                                       
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ [                                                                                                                                                                                                                    +
+   {                                                                                                                                                                                                                  +
+     "Plan": {                                                                                                                                                                                                        +
+       "Node Type": "Table Function Scan",                                                                                                                                                                            +
+       "Parallel Aware": false,                                                                                                                                                                                       +
+       "Async Capable": false,                                                                                                                                                                                        +
+       "Table Function Name": "json_table",                                                                                                                                                                           +
+       "Alias": "json_table_func",                                                                                                                                                                                    +
+       "Disabled": false,                                                                                                                                                                                             +
+       "Output": ["id", "\"int\"", "text"],                                                                                                                                                                           +
+       "Table Function Call": "JSON_TABLE('null'::jsonb, '$[*]'::jsonpath AS json_table_path_0 PASSING 3 AS a, '\"foo\"'::jsonb AS \"b c\" COLUMNS (id FOR ORDINALITY, \"int\" integer PATH '$', text text PATH '$'))"+
+     }                                                                                                                                                                                                                +
+   }                                                                                                                                                                                                                  +
  ]
 (1 row)
 
@@ -692,7 +692,7 @@ FROM JSON_TABLE(
 SELECT *
 FROM JSON_TABLE(
 	jsonb '[1,2,3]',
-	'$[*] ? (@ < $x)'
+	'$[*] ? (@ < $x)'::jsonpath
 		PASSING 10 AS x, 3 AS y
 		COLUMNS (a text FORMAT JSON PATH '$ ? (@ < $y)')
 	) jt;
@@ -703,11 +703,71 @@ FROM JSON_TABLE(
  
 (3 rows)
 
--- Should fail (not supported)
-SELECT * FROM JSON_TABLE(jsonb '{"a": 123}', '$' || '.' || 'a' COLUMNS (foo int));
-ERROR:  only string constants are supported in JSON_TABLE path specification
-LINE 1: SELECT * FROM JSON_TABLE(jsonb '{"a": 123}', '$' || '.' || '...
-                                                     ^
+-----extension of top level path_expression
+SELECT * FROM JSON_TABLE(jsonb '{"a": 123}', '$' || '.' || 'a' COLUMNS (foo int PATH '$'));
+ foo 
+-----
+ 123
+(1 row)
+
+CREATE TABLE jstable (a jsonb, b text, c jsonpath, d text, e int);
+INSERT INTO jstable VALUES ('123',  '$', '$', NULL, NULL), (NULL,  '$', '$', NULL, NULL), ('{"a":123}',  '$', '$.a', 'junk', NULL);
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, '$.a' COLUMNS (x int PATH '$')) bar;
+     a      |  x  
+------------+-----
+ {"a": 123} | 123
+(1 row)
+
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, NULL COLUMNS (item int PATH '$')) bar;
+ a | item 
+---+------
+(0 rows)
+
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, NULL::jsonb COLUMNS (item int PATH '$')) bar; --error
+ERROR:  JSON path expression must be of type jsonpath, not of type jsonb
+LINE 1: ...ECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, NULL::json...
+                                                             ^
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, b COLUMNS (item int PATH '$')) bar;
+     a      | item 
+------------+------
+ 123        |  123
+ {"a": 123} |     
+(2 rows)
+
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, c COLUMNS (item int PATH '$')) bar;
+     a      | item 
+------------+------
+ 123        |  123
+ {"a": 123} |  123
+(2 rows)
+
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, d COLUMNS (item int PATH '$')) bar WHERE d <> 'junk';
+ a | item 
+---+------
+(0 rows)
+
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, d COLUMNS (item int PATH '$')) bar; --error, 'junk' is not valid jsonpath expression
+ERROR:  syntax error at end of jsonpath input
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, e COLUMNS (item int PATH '$')) bar; --error
+ERROR:  JSON path expression must be of type jsonpath, not of type integer
+LINE 1: ...ECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, e COLUMNS ...
+                                                             ^
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, '$' COLUMNS (item int PATH b)) bar; --error
+ERROR:  syntax error at or near "b"
+LINE 1: ...ble t1, JSON_TABLE(t1.a, '$' COLUMNS (item int PATH b)) bar;
+                                                               ^
+CREATE VIEW jstable_v1 AS SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, d COLUMNS (item int PATH '$')) bar;
+\sv jstable_v1
+CREATE OR REPLACE VIEW public.jstable_v1 AS
+ SELECT t1.a,
+    bar.item
+   FROM jstable t1,
+    LATERAL JSON_TABLE(
+            t1.a, t1.d::jsonpath AS json_table_path_0
+            COLUMNS (
+                item integer PATH '$'
+            )
+        ) bar
 -- JsonPathQuery() error message mentioning column name
 SELECT * FROM JSON_TABLE('{"a": [{"b": "1"}, {"b": "2"}]}', '$' COLUMNS (b json path '$.a[*].b' ERROR ON ERROR));
 ERROR:  JSON path expression for column "b" must return single item when no wrapper is requested
@@ -814,13 +874,14 @@ from
 (11 rows)
 
 -- PASSING arguments are passed to nested paths and their columns' paths
-SELECT *
+SELECT x.*, y.*, jt.*
 FROM
 	generate_series(1, 3) x,
 	generate_series(1, 3) y,
+	(VALUES ('strict $[*] ? (@[*] <= $x)'::jsonpath)) zzz(zzz),
 	JSON_TABLE(jsonb
 		'[[1,2,3],[2,3,4,5],[3,4,5,6]]',
-		'strict $[*] ? (@[*] <= $x)'
+		zzz.zzz
 		PASSING x AS x, y AS y
 		COLUMNS (
 			y text FORMAT JSON PATH '$',
@@ -885,7 +946,7 @@ CREATE OR REPLACE VIEW public.jsonb_table_view_nested AS
     a21,
     a22
    FROM JSON_TABLE(
-            'null'::jsonb, '$[*]' AS json_table_path_0
+            'null'::jsonb, '$[*]'::jsonpath AS json_table_path_0
             PASSING
                 1 + 2 AS a,
                 '"foo"'::json AS "b c"
@@ -988,7 +1049,8 @@ SELECT sub.* FROM s,
 SELECT sub.* FROM s,
 	(VALUES (23)) x(x),
 	generate_series(13, 13) y,
-	JSON_TABLE(js, '$' AS c1 PASSING x AS x, y AS y
+	(VALUES ('$'::jsonpath)) z(z),
+	JSON_TABLE(js, z.z AS c1 PASSING x AS x, y AS y
 	COLUMNS (
 		xx1 int PATH '$.c',
 		NESTED PATH '$.a.za[1]'
@@ -1071,7 +1133,7 @@ CREATE OR REPLACE VIEW public.jsonb_table_view7 AS
     ( VALUES (23)) x(x),
     generate_series(13, 13) y(y),
     LATERAL JSON_TABLE(
-            s.js, '$' AS c1
+            s.js, '$'::jsonpath AS c1
             PASSING
                 x.x AS x,
                 y.y AS y
@@ -1140,7 +1202,7 @@ CREATE VIEW json_table_view8 AS SELECT * from JSON_TABLE('"a"', '$' COLUMNS (a t
 CREATE OR REPLACE VIEW public.json_table_view8 AS
  SELECT a
    FROM JSON_TABLE(
-            '"a"'::text, '$' AS json_table_path_0
+            '"a"'::text, '$'::jsonpath AS json_table_path_0
             COLUMNS (
                 a text PATH '$'
             )
@@ -1150,7 +1212,7 @@ CREATE VIEW json_table_view9 AS SELECT * from JSON_TABLE('"a"', '$' COLUMNS (a t
 CREATE OR REPLACE VIEW public.json_table_view9 AS
  SELECT a
    FROM JSON_TABLE(
-            '"a"'::text, '$' AS json_table_path_0
+            '"a"'::text, '$'::jsonpath AS json_table_path_0
             COLUMNS (
                 a text PATH '$'
             ) ERROR ON ERROR
@@ -1162,7 +1224,7 @@ CREATE VIEW json_table_view8 AS SELECT * from JSON_TABLE('"a"', '$' COLUMNS (a t
 CREATE OR REPLACE VIEW public.json_table_view8 AS
  SELECT a
    FROM JSON_TABLE(
-            '"a"'::text, '$' AS json_table_path_0
+            '"a"'::text, '$'::jsonpath AS json_table_path_0
             COLUMNS (
                 a text PATH '$'
             )
@@ -1172,7 +1234,7 @@ CREATE VIEW json_table_view9 AS SELECT * from JSON_TABLE('"a"', '$' COLUMNS (a t
 CREATE OR REPLACE VIEW public.json_table_view9 AS
  SELECT a
    FROM JSON_TABLE(
-            '"a"'::text, '$' AS json_table_path_0
+            '"a"'::text, '$'::jsonpath AS json_table_path_0
             COLUMNS (
                 a text PATH '$'
             )

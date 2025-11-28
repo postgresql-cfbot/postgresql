@@ -20,12 +20,14 @@
 #include "nodes/nodeFuncs.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_clause.h"
+#include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
 #include "parser/parse_relation.h"
 #include "parser/parse_type.h"
 #include "utils/fmgrprotos.h"
 #include "utils/json.h"
+#include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
 /* Context for transformJsonTableColumns() */
@@ -41,7 +43,8 @@ typedef struct JsonTableParseContext
 static JsonTablePlan *transformJsonTableColumns(JsonTableParseContext *cxt,
 												List *columns,
 												List *passingArgs,
-												JsonTablePathSpec *pathspec);
+												JsonTablePathSpec *pathspec,
+												bool isTopLevel);
 static JsonTablePlan *transformJsonTableNestedColumns(JsonTableParseContext *cxt,
 													  List *passingArgs,
 													  List *columns);
@@ -50,6 +53,7 @@ static JsonFuncExpr *transformJsonTableColumn(JsonTableColumn *jtc,
 											  List *passingArgs);
 static bool isCompositeType(Oid typid);
 static JsonTablePlan *makeJsonTablePathScan(JsonTablePathSpec *pathspec,
+											bool isTopLevel,
 											bool errorOnError,
 											int colMin, int colMax,
 											JsonTablePlan *childplan);
@@ -68,7 +72,8 @@ static JsonTablePlan *makeJsonTableSiblingJoin(JsonTablePlan *lplan,
  * (jt->context_item) and the column-generating expressions (jt->columns) to
  * populate TableFunc.docexpr and TableFunc.colvalexprs, respectively. Also,
  * the PASSING values (jt->passing) are transformed and added into
- * TableFunc.passingvalexprs.
+ * TableFunc.passingvalexprs. Top level path expression is being transformed and
+ * added into TableFunc.rowexpr too.
  */
 ParseNamespaceItem *
 transformJsonTable(ParseState *pstate, JsonTable *jt)
@@ -79,9 +84,6 @@ transformJsonTable(ParseState *pstate, JsonTable *jt)
 	JsonTablePathSpec *rootPathSpec = jt->pathspec;
 	bool		is_lateral;
 	JsonTableParseContext cxt = {pstate};
-
-	Assert(IsA(rootPathSpec->string, A_Const) &&
-		   castNode(A_Const, rootPathSpec->string)->val.node.type == T_String);
 
 	if (jt->on_error &&
 		jt->on_error->btype != JSON_BEHAVIOR_ERROR &&
@@ -121,7 +123,7 @@ transformJsonTable(ParseState *pstate, JsonTable *jt)
 	jfe = makeNode(JsonFuncExpr);
 	jfe->op = JSON_TABLE_OP;
 	jfe->context_item = jt->context_item;
-	jfe->pathspec = (Node *) rootPathSpec->string;
+	jfe->pathspec = rootPathSpec->expr;
 	jfe->passing = jt->passing;
 	jfe->on_empty = NULL;
 	jfe->on_error = jt->on_error;
@@ -137,15 +139,20 @@ transformJsonTable(ParseState *pstate, JsonTable *jt)
 	cxt.tf = tf;
 	tf->plan = (Node *) transformJsonTableColumns(&cxt, jt->columns,
 												  jt->passing,
-												  rootPathSpec);
+												  rootPathSpec,
+												  true);
 
 	/*
 	 * Copy the transformed PASSING arguments into the TableFunc node, because
 	 * they are evaluated separately from the JsonExpr that we just put in
 	 * TableFunc.docexpr.  JsonExpr.passing_values is still kept around for
 	 * get_json_table().
+	 *
+	 * Copy the transformed top level path expression into the TableFunc node
+	 * for the same reason as we copy the PASSING arguments.
 	 */
 	je = (JsonExpr *) tf->docexpr;
+	tf->rowexpr = copyObject(je->path_spec);
 	tf->passingvalexprs = copyObject(je->passing_values);
 
 	tf->ordinalitycol = -1;		/* undefine ordinality column number */
@@ -248,7 +255,8 @@ generateJsonTablePathName(JsonTableParseContext *cxt)
 static JsonTablePlan *
 transformJsonTableColumns(JsonTableParseContext *cxt, List *columns,
 						  List *passingArgs,
-						  JsonTablePathSpec *pathspec)
+						  JsonTablePathSpec *pathspec,
+						  bool	isTopLevel)
 {
 	ParseState *pstate = cxt->pstate;
 	JsonTable  *jt = cxt->jt;
@@ -363,7 +371,7 @@ transformJsonTableColumns(JsonTableParseContext *cxt, List *columns,
 	childplan = transformJsonTableNestedColumns(cxt, passingArgs, columns);
 
 	/* Create a "parent" scan responsible for all columns handled above. */
-	return makeJsonTablePathScan(pathspec, errorOnError, colMin, colMax,
+	return makeJsonTablePathScan(pathspec, isTopLevel, errorOnError, colMin, colMax,
 								 childplan);
 }
 
@@ -416,7 +424,7 @@ transformJsonTableColumn(JsonTableColumn *jtc, Node *contextItemExpr,
 															JS_ENC_DEFAULT,
 															-1));
 	if (jtc->pathspec)
-		pathspec = (Node *) jtc->pathspec->string;
+		pathspec = (Node *) jtc->pathspec->expr;
 	else
 	{
 		/* Construct default path as '$."column_name"' */
@@ -474,7 +482,7 @@ transformJsonTableNestedColumns(JsonTableParseContext *cxt,
 			jtc->pathspec->name = generateJsonTablePathName(cxt);
 
 		nested = transformJsonTableColumns(cxt, jtc->columns, passingArgs,
-										   jtc->pathspec);
+										   jtc->pathspec, false);
 
 		if (plan)
 			plan = makeJsonTableSiblingJoin(plan, nested);
@@ -494,23 +502,39 @@ transformJsonTableNestedColumns(JsonTableParseContext *cxt,
  * thus computed by 'childplan'.
  */
 static JsonTablePlan *
-makeJsonTablePathScan(JsonTablePathSpec *pathspec, bool errorOnError,
+makeJsonTablePathScan(JsonTablePathSpec *pathspec, bool isTopLevel, bool errorOnError,
 					  int colMin, int colMax,
 					  JsonTablePlan *childplan)
 {
 	JsonTablePathScan *scan = makeNode(JsonTablePathScan);
-	char	   *pathstring;
-	Const	   *value;
 
-	Assert(IsA(pathspec->string, A_Const));
-	pathstring = castNode(A_Const, pathspec->string)->val.sval.sval;
-	value = makeConst(JSONPATHOID, -1, InvalidOid, -1,
-					  DirectFunctionCall1(jsonpath_in,
-										  CStringGetDatum(pathstring)),
-					  false, false);
+	if (isTopLevel)
+	{
+		/*
+		 * The transformed top level path expression is stored in the TableFunc
+		 * node, but the original path name need preserved for deparsing
+		 */
+		scan->path = makeNode(JsonTablePath);
+		scan->path->value = NULL;
+		scan->path->name = pathspec->name;
+	}
+	else
+	{
+		char	   *pathstring;
+		Const	   *value;
+
+		Assert(IsA(pathspec->expr, A_Const));
+		pathstring = castNode(A_Const, pathspec->expr)->val.sval.sval;
+
+		value = makeConst(JSONPATHOID, -1, InvalidOid, -1,
+						  DirectFunctionCall1(jsonpath_in,
+											  CStringGetDatum(pathstring)),
+						  false, false);
+
+		scan->path = makeJsonTablePath(value, pathspec->name);
+	}
 
 	scan->plan.type = T_JsonTablePathScan;
-	scan->path = makeJsonTablePath(value, pathspec->name);
 	scan->errorOnError = errorOnError;
 
 	scan->child = childplan;

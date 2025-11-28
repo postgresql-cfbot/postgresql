@@ -15192,17 +15192,16 @@ json_table:
 			')'
 				{
 					JsonTable *n = makeNode(JsonTable);
-					char	  *pathstring;
+					JsonTablePathSpec *rootPathSpec = makeNode(JsonTablePathSpec);
 
 					n->context_item = (JsonValueExpr *) $3;
-					if (!IsA($5, A_Const) ||
-						castNode(A_Const, $5)->val.node.type != T_String)
-						ereport(ERROR,
-								errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-								errmsg("only string constants are supported in JSON_TABLE path specification"),
-								parser_errposition(@5));
-					pathstring = castNode(A_Const, $5)->val.sval.sval;
-					n->pathspec = makeJsonTablePathSpec(pathstring, $6, @5, @6);
+
+					rootPathSpec->expr = $5;
+					rootPathSpec->name = $6;
+					rootPathSpec->name_location = @6;
+					rootPathSpec->location = @5;
+					n->pathspec = rootPathSpec;
+
 					n->passing = $7;
 					n->columns = $10;
 					n->on_error = (JsonBehavior *) $12;

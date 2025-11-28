@@ -1011,7 +1011,7 @@ makeJsonTablePathSpec(char *string, char *name, int string_location,
 	JsonTablePathSpec *pathspec = makeNode(JsonTablePathSpec);
 
 	Assert(string != NULL);
-	pathspec->string = makeStringConst(string, string_location);
+	pathspec->expr = makeStringConst(string, string_location);
 	if (name != NULL)
 		pathspec->name = pstrdup(name);
 

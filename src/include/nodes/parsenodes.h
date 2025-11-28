@@ -1975,7 +1975,7 @@ typedef struct JsonTablePathSpec
 {
 	NodeTag		type;
 
-	Node	   *string;
+	Node	   *expr;
 	char	   *name;
 	ParseLoc	name_location;
 	ParseLoc	location;		/* location of 'string' */

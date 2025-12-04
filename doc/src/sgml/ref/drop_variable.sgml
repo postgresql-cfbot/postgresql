@@ -26,7 +26,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-DROP VARIABLE <replaceable class="parameter">name</replaceable>
+DROP VARIABLE [ IF EXISTS ] <replaceable class="parameter">name</replaceable>
 </synopsis>
  </refsynopsisdiv>
 
@@ -42,6 +42,16 @@ DROP VARIABLE <replaceable class="parameter">name</replaceable>
  <refsect1>
   <title>Parameters</title>
   <variablelist>
+   <varlistentry>
+    <term><literal>IF EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if the session variable does not exist. A notice is
+      issued in this case.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry>
     <term><replaceable class="parameter">name</replaceable></term>
     <listitem>

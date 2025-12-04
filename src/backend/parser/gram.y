@@ -5461,7 +5461,7 @@ create_extension_opt_item:
 /*****************************************************************************
  *
  *		QUERY :
- *				CREATE { TEMP | TEMPORARY } VARIABLE varname [AS] type
+ *				CREATE { TEMP | TEMPORARY } VARIABLE [IF NOT EXISTS ] varname [AS] type
  *
  *****************************************************************************/
 
@@ -5478,14 +5478,31 @@ CreateSessionVarStmt:
 
 					n->name = $4;
 					n->typeName = $6;
+					n->if_not_exists = false;
 					$$ = (Node *) n;
 				}
+		  | CREATE OptTemp VARIABLE IF_P NOT EXISTS ColId opt_as Typename
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+
+					if ($2 != RELPERSISTENCE_TEMP)
+						ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("only temporal session variables are supported"),
+							 parser_errposition(@2)));
+
+					n->name = $7;
+					n->typeName = $9;
+					n->if_not_exists = true;
+					$$ = (Node *) n;
+				}
+
 		;
 
 /*****************************************************************************
  *
  *		QUERY :
- *				DROP VARIABLE varname
+ *				DROP VARIABLE [ IF EXISTS ] varname
  *
  *****************************************************************************/
 
@@ -5495,8 +5512,18 @@ DropSessionVarStmt:
 					DropSessionVarStmt *n = makeNode(DropSessionVarStmt);
 
 					n->name = $3;
+					n->missing_ok = false;
 					$$ = (Node *) n;
 				}
+			| DROP VARIABLE IF_P EXISTS ColId
+				{
+					DropSessionVarStmt *n = makeNode(DropSessionVarStmt);
+
+					n->name = $5;
+					n->missing_ok = true;
+					$$ = (Node *) n;
+				}
+
 		;
 
 /*****************************************************************************

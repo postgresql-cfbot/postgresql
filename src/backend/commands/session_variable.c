@@ -19,6 +19,7 @@
 #include "commands/session_variable.h"
 #include "executor/executor.h"
 #include "executor/svariableReceiver.h"
+#include "funcapi.h"
 #include "miscadmin.h"
 #include "parser/parse_type.h"
 #include "rewrite/rewriteHandler.h"
@@ -29,6 +30,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/snapmgr.h"
+#include "utils/tuplestore.h"
 
 /*
  * The session variables are stored in the backend's private memory (data,
@@ -448,4 +450,39 @@ ResetSessionVariables(void)
 	/* release memory allocated by session variables */
 	if (SVariableMemoryContext != NULL)
 		MemoryContextReset(SVariableMemoryContext);
+}
+
+/*
+ * pg_get_temporary_session_variables_names
+ *
+ * Returns list of temporary session variables. It is used by psql's
+ * tab complete for DROP VARIABLE and LET commands.
+ */
+Datum
+pg_get_temporary_session_variables_names(PG_FUNCTION_ARGS)
+{
+	InitMaterializedSRF(fcinfo, MAT_SRF_USE_EXPECTED_DESC);
+
+	if (sessionvars)
+	{
+		ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+		HASH_SEQ_STATUS status;
+		SVariable	svar;
+
+		hash_seq_init(&status, sessionvars);
+
+		while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+		{
+			Datum		values[1];
+			bool		nulls[1];
+
+			values[0] = CStringGetTextDatum((NameStr(svar->varname)));
+			nulls[0] = false;
+
+			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+								 values, nulls);
+		}
+	}
+
+	return (Datum) 0;
 }

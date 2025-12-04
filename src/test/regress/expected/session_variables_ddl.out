@@ -48,3 +48,9 @@ ERROR:  session variable "x" already exists
 DISCARD TEMP;
 -- should be ok
 CREATE TEMP VARIABLE x AS int;
+-- should be ok
+CREATE TEMP VARIABLE IF NOT EXISTS x AS int;
+NOTICE:  session variable "x" already exists, skipping
+DROP VARIABLE x;
+DROP VARIABLE IF EXISTS x;
+NOTICE:  session variable "x" does not exists, skipping

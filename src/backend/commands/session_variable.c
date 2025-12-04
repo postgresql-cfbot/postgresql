@@ -93,7 +93,7 @@ create_sessionvars_hashtables(void)
  * Returns entry of session variable specified by name
  */
 static SVariable
-search_variable(char *varname)
+search_variable(char *varname, bool missing_ok)
 {
 	SVariable	svar;
 
@@ -103,7 +103,7 @@ search_variable(char *varname)
 	svar = (SVariable) hash_search(sessionvars, varname,
 								   HASH_FIND, NULL);
 
-	if (!svar)
+	if (!svar && !missing_ok)
 		ereport(ERROR,
 				(errcode(ERRCODE_UNDEFINED_OBJECT),
 				 errmsg("session variable \"%s\" doesn't exist",
@@ -125,7 +125,7 @@ get_session_variable_type_typmod_collid(char *varname,
 {
 	SVariable	svar;
 
-	svar = search_variable(varname);
+	svar = search_variable(varname, false);
 
 	/* only owner can set content of variable */
 	*typid = svar->vartype;
@@ -145,7 +145,7 @@ GetSessionVariableWithTypecheck(char *varname,
 	SVariable	svar;
 	Datum		result;
 
-	svar = search_variable(varname);
+	svar = search_variable(varname, false);
 
 	if (svar->vartype != typid || svar->vartypmod != typmod)
 		ereport(ERROR,
@@ -182,7 +182,7 @@ SetSessionVariableWithTypecheck(char *varname,
 {
 	SVariable	svar;
 
-	svar = search_variable(varname);
+	svar = search_variable(varname, false);
 
 	if (svar->vartype != typid || svar->vartypmod != typmod)
 		ereport(ERROR,
@@ -278,10 +278,21 @@ CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt)
 					   HASH_ENTER, &found);
 
 	if (found)
-		ereport(ERROR,
-				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("session variable \"%s\" already exists",
-						stmt->name)));
+	{
+		if (stmt->if_not_exists)
+		{
+			ereport(NOTICE,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("session variable \"%s\" already exists, skipping",
+							stmt->name)));
+			return;
+		}
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_DUPLICATE_OBJECT),
+					 errmsg("session variable \"%s\" already exists",
+							stmt->name)));
+	}
 
 	namestrcpy(&svar->varname, stmt->name);
 	svar->vartype = typeid;
@@ -299,7 +310,7 @@ CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt)
  * Drop variable by name
  */
 void
-DropVariableByName(char *varname)
+DropVariableByName(DropSessionVarStmt *stmt)
 {
 	SVariable	svar;
 
@@ -311,20 +322,27 @@ DropVariableByName(char *varname)
 	PreventCommandIfParallelMode("DROP VARIABLE");
 	PreventCommandDuringRecovery("DROP VARIABLE");
 
-	svar = search_variable(varname);
+	svar = search_variable(stmt->name, stmt->missing_ok);
+	if (!svar)
+	{
+		ereport(NOTICE,
+				(errmsg("session variable \"%s\" does not exists, skipping",
+						stmt->name)));
+		return;
+	}
 
 	/* only owner can get content of variable */
 	if (svar->varowner != GetUserId() && !superuser())
 		ereport(ERROR,
 				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				 errmsg("must be owner of session variable %s",
-						varname)));
+						stmt->name)));
 
 	if (!svar->typbyval && !svar->isnull)
 		pfree(DatumGetPointer(svar->value));
 
 	if (hash_search(sessionvars,
-					   varname,
+					   stmt->name,
 					   HASH_REMOVE,
 					   NULL) == NULL)
 		elog(ERROR, "hash table corrupted");
@@ -348,7 +366,7 @@ ExecuteLetStmt(ParseState *pstate,
 	char	   *varname = query->resultVariable;
 	SVariable	svar;
 
-	svar = search_variable(varname);
+	svar = search_variable(varname, false);
 
 	/* only owner can set content of variable */
 	if (svar->varowner != GetUserId() && !superuser())

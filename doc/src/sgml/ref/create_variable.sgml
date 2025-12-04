@@ -26,7 +26,7 @@ PostgreSQL documentation
 
  <refsynopsisdiv>
 <synopsis>
-CREATE { TEMP | TEMPORARY } VARIABLE <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable>
+CREATE { TEMP | TEMPORARY } VARIABLE [ IF NOT EXISTS ] <replaceable class="parameter">name</replaceable> [ AS ] <replaceable class="parameter">data_type</replaceable>
 </synopsis>
  </refsynopsisdiv>
  <refsect1>
@@ -68,6 +68,16 @@ CREATE { TEMP | TEMPORARY } VARIABLE <replaceable class="parameter">name</replac
   <title>Parameters</title>
 
   <variablelist>
+
+   <varlistentry  id="sql-createvariable-if-not-exists">
+    <term><literal>IF NOT EXISTS</literal></term>
+    <listitem>
+     <para>
+      Do not throw an error if the name already exists. A notice is issued in
+      this case.
+     </para>
+    </listitem>
+   </varlistentry>
 
    <varlistentry id="sql-createvariable-name">
     <term><replaceable class="parameter">name</replaceable></term>

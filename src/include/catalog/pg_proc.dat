@@ -12715,4 +12715,9 @@
   proname => 'hashoid8extended', prorettype => 'int8',
   proargtypes => 'oid8 int8', prosrc => 'hashoid8extended' },
 
+# Session variables support
+{ oid => '8068', descr => 'returns names of temporary session variables',
+  proname => 'pg_get_temporary_session_variables_names', prorows => '1000', proretset => 't',
+  provolatile => 'v', proparallel => 'r', prorettype => 'text', proargtypes => '',
+  prosrc => 'pg_get_temporary_session_variables_names' },
 ]

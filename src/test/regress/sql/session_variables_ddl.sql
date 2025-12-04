@@ -70,3 +70,11 @@ CREATE TEMP VARIABLE IF NOT EXISTS x AS int;
 
 DROP VARIABLE x;
 DROP VARIABLE IF EXISTS x;
+
+CREATE TEMP VARIABLE x AS int;
+CREATE TEMP VARIABLE y AS int;
+SELECT * FROM pg_get_temporary_session_variables_names();
+
+DROP VARIABLE x;
+DROP VARIABLE y;
+SELECT * FROM pg_get_temporary_session_variables_names();

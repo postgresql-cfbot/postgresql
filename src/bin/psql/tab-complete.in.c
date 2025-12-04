@@ -1221,6 +1221,11 @@ Keywords_for_list_of_owner_roles, "PUBLIC"
 "   AND d.datname = pg_catalog.current_database() "\
 "   AND s.subdbid = d.oid"
 
+#define Query_for_list_of_temporary_session_variables \
+"SELECT varname "\
+"   FROM pg_catalog.pg_get_temporary_session_variables_names() AS varname "\
+"  WHERE varname LIKE '%s'"
+
 /* Privilege options shared between GRANT and REVOKE */
 #define Privilege_options_of_grant_and_revoke \
 "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", \
@@ -4514,6 +4519,10 @@ match_previous_words(int pattern_id,
 	else if (Matches("DROP", "TRANSFORM", "FOR", MatchAny, "LANGUAGE", MatchAny))
 		COMPLETE_WITH("CASCADE", "RESTRICT");
 
+	/* DROP VARIABLE */
+	else if (Matches("DROP", "VARIABLE"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_temporary_session_variables);
+
 /* EXECUTE */
 	else if (Matches("EXECUTE"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_prepared_statements);
@@ -4963,6 +4972,8 @@ match_previous_words(int pattern_id,
 
 /* LET */
 	/* Complete LET <variable> with "=" */
+	else if (Matches("LET"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_temporary_session_variables);
 	else if (TailMatches("LET", MatchAny))
 		COMPLETE_WITH("=");
 
@@ -5583,6 +5594,12 @@ match_previous_words(int pattern_id,
 		else if (TailMatches("mode"))
 			COMPLETE_WITH("'standby_replay'", "'standby_write'", "'standby_flush'", "'primary_flush'");
 	}
+
+/*
+ * VARIABLE fence
+ */
+	else if (TailMatches("VARIABLE", "("))
+		COMPLETE_WITH_QUERY(Query_for_list_of_temporary_session_variables);
 
 /* WITH [RECURSIVE] */
 

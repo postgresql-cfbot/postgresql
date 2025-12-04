@@ -54,3 +54,19 @@ NOTICE:  session variable "x" already exists, skipping
 DROP VARIABLE x;
 DROP VARIABLE IF EXISTS x;
 NOTICE:  session variable "x" does not exists, skipping
+CREATE TEMP VARIABLE x AS int;
+CREATE TEMP VARIABLE y AS int;
+SELECT * FROM pg_get_temporary_session_variables_names();
+ pg_get_temporary_session_variables_names 
+------------------------------------------
+ y
+ x
+(2 rows)
+
+DROP VARIABLE x;
+DROP VARIABLE y;
+SELECT * FROM pg_get_temporary_session_variables_names();
+ pg_get_temporary_session_variables_names 
+------------------------------------------
+(0 rows)
+

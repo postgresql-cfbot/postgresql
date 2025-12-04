@@ -22,7 +22,7 @@
 #include "tcop/cmdtag.h"
 
 extern void CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt);
-extern void DropVariableByName(char *varname);
+extern void DropVariableByName(DropSessionVarStmt *stmt);
 
 extern Datum GetSessionVariableWithTypecheck(char *varname, Oid typid, int32 typmod, bool *isnull);
 extern void SetSessionVariableWithTypecheck(char *varname,

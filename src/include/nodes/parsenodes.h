@@ -3740,6 +3740,7 @@ typedef struct CreateSessionVarStmt
 	NodeTag		type;
 	char	   *name;		/* the variable to create */
 	TypeName   *typeName;		/* the type of variable */
+	bool		if_not_exists;	/* just do nothing if variable already exists? */
 } CreateSessionVarStmt;
 
 /* ----------------------
@@ -3749,7 +3750,8 @@ typedef struct CreateSessionVarStmt
 typedef struct DropSessionVarStmt
 {
 	NodeTag		type;
-	char	   *name;
+	char	   *name;			/* the variable name to drop */
+	bool		missing_ok;		/* skip error of variable is missing */
 } DropSessionVarStmt;
 
 

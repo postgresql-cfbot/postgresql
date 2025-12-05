@@ -244,18 +244,22 @@ pqsecure_raw_read(PGconn *conn, void *ptr, size_t len)
 }
 
 /*
- * Returns true if there are any bytes available in the transport buffer.
+ *  Return the number of bytes available in the transport buffer.
+ *
+ * If pqsecure_read() is called for this number of bytes, it's guaranteed to
+ * return successfully without reading from the underlying socket.  See
+ * pqDrainPending() for a more complete discussion of the concepts involved.
  */
-bool
-pqsecure_read_is_pending(PGconn *conn)
+ssize_t
+pqsecure_bytes_pending(PGconn *conn)
 {
 #ifdef USE_SSL
 	if (conn->ssl_in_use)
-		return pgtls_read_is_pending(conn);
+		return pgtls_bytes_pending(conn);
 #endif
 #ifdef ENABLE_GSS
 	if (conn->gssenc)
-		return pg_GSS_read_is_pending(conn);
+		return pg_GSS_bytes_pending(conn);
 #endif
 
 	/* Plaintext connections have no transport buffer. */

@@ -78,3 +78,24 @@ SELECT * FROM pg_get_temporary_session_variables_names();
 DROP VARIABLE x;
 DROP VARIABLE y;
 SELECT * FROM pg_get_temporary_session_variables_names();
+
+CREATE TEMP VARIABLE x AS varchar;
+LET x = 'Hi';
+BEGIN;
+DROP VARIABLE x;
+CREATE TEMP VARIABLE x AS varchar;
+LET x = 'Hello';
+SELECT VARIABLE(x);
+COMMIT;
+SELECT VARIABLE(x);
+
+LET x = 'Hi';
+BEGIN;
+DROP VARIABLE x;
+CREATE TEMP VARIABLE x AS varchar;
+LET x = 'Hello';
+SELECT VARIABLE(x);
+ROLLBACK;
+SELECT VARIABLE(x);
+
+DROP VARIABLE x;

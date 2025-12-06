@@ -56,6 +56,11 @@ typedef struct SVariableData
 
 	int16		typlen;
 	bool		typbyval;
+
+	struct SVariableData *prev;
+	bool		stacked;
+	LocalTransactionId created_lxid;
+	LocalTransactionId dropped_lxid;
 } SVariableData;
 
 typedef SVariableData *SVariable;
@@ -63,6 +68,14 @@ typedef SVariableData *SVariable;
 static HTAB *sessionvars = NULL;	/* hash table for session variables */
 
 static MemoryContext SVariableMemoryContext = NULL;
+
+/*
+ * When we to remove committed dropped variables or uncommitted
+ * created variables from sessionvars tab. created_or_dropped_lxid
+ * is transaction id of transaction when some of DROP or CREATE variable
+ * was executed.
+ */
+static LocalTransactionId created_or_dropped_lxid = InvalidLocalTransactionId;
 
 /*
  * Create the hash table for storing session variables.
@@ -104,6 +117,14 @@ search_variable(char *varname, bool missing_ok)
 
 	svar = (SVariable) hash_search(sessionvars, varname,
 								   HASH_FIND, NULL);
+
+	/* Session variable can be dropped inside current transaction */
+	if (svar && svar->dropped_lxid != InvalidLocalTransactionId)
+	{
+		Assert(created_or_dropped_lxid == MyProc->vxid.lxid);
+		Assert(svar->dropped_lxid == MyProc->vxid.lxid);
+		svar = NULL;
+	}
 
 	if (!svar && !missing_ok)
 		ereport(ERROR,
@@ -237,6 +258,7 @@ CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt)
 	Oid			typcollation;
 	Oid			varowner = GetUserId();
 	SVariable	svar;
+	SVariable	prev_svar = NULL;
 	bool		found;
 	int16		typlen;
 	bool		typbyval;
@@ -281,19 +303,37 @@ CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt)
 
 	if (found)
 	{
-		if (stmt->if_not_exists)
+		if (svar->dropped_lxid == InvalidLocalTransactionId)
 		{
-			ereport(NOTICE,
-					(errcode(ERRCODE_DUPLICATE_OBJECT),
-					 errmsg("session variable \"%s\" already exists, skipping",
-							stmt->name)));
-			return;
+			if (stmt->if_not_exists)
+			{
+				ereport(NOTICE,
+						(errcode(ERRCODE_DUPLICATE_OBJECT),
+						 errmsg("session variable \"%s\" already exists, skipping",
+								stmt->name)));
+				return;
+			}
+			else
+				ereport(ERROR,
+						(errcode(ERRCODE_DUPLICATE_OBJECT),
+						 errmsg("session variable \"%s\" already exists",
+								stmt->name)));
 		}
 		else
-			ereport(ERROR,
-					(errcode(ERRCODE_DUPLICATE_OBJECT),
-					 errmsg("session variable \"%s\" already exists",
-							stmt->name)));
+		{
+			MemoryContext oldcxt;
+
+			Assert(created_or_dropped_lxid == MyProc->vxid.lxid);
+			Assert(svar->dropped_lxid == MyProc->vxid.lxid);
+
+			oldcxt = MemoryContextSwitchTo(SVariableMemoryContext);
+			prev_svar = palloc_object(SVariableData);
+			memcpy(prev_svar, svar, sizeof(SVariableData));
+			prev_svar->stacked = true;
+			memset(svar, 0, sizeof(SVariableData));
+
+			MemoryContextSwitchTo(oldcxt);
+		}
 	}
 
 	namestrcpy(&svar->varname, stmt->name);
@@ -306,6 +346,12 @@ CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt)
 
 	svar->value = (Datum) 0;
 	svar->isnull = true;
+
+	svar->prev = prev_svar;
+	svar->stacked = false;
+	svar->dropped_lxid = InvalidLocalTransactionId;
+	svar->created_lxid = MyProc->vxid.lxid;
+	created_or_dropped_lxid = MyProc->vxid.lxid;
 }
 
 /*
@@ -340,14 +386,129 @@ DropVariableByName(DropSessionVarStmt *stmt)
 				 errmsg("must be owner of session variable %s",
 						stmt->name)));
 
-	if (!svar->typbyval && !svar->isnull)
-		pfree(DatumGetPointer(svar->value));
+	svar->dropped_lxid = MyProc->vxid.lxid;
+	created_or_dropped_lxid = MyProc->vxid.lxid;
+}
 
-	if (hash_search(sessionvars,
-					   stmt->name,
-					   HASH_REMOVE,
-					   NULL) == NULL)
-		elog(ERROR, "hash table corrupted");
+static void
+free_svar_value(SVariable svar)
+{
+	if (!svar->isnull && !svar->typbyval)
+		pfree(DatumGetPointer(svar->value));
+}
+
+static void
+free_stacked_svars(SVariable svar)
+{
+	while (svar)
+	{
+		SVariable	current = svar;
+
+		free_svar_value(current);
+		svar = current->prev;
+		pfree(current);
+	}
+}
+
+/*
+ * remove dropped committed entries or created uncommitted entries
+ * from hash table.
+ */
+void
+AtPreEOXact_SessionVariables(bool isCommit)
+{
+	if (created_or_dropped_lxid != InvalidLocalTransactionId)
+	{
+		HASH_SEQ_STATUS status;
+		SVariable	svar;
+
+		Assert(created_or_dropped_lxid == MyProc->vxid.lxid);
+		Assert(sessionvars);
+
+		hash_seq_init(&status, sessionvars);
+
+		while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+		{
+			if ((svar->dropped_lxid != InvalidLocalTransactionId) ||
+				(svar->created_lxid != InvalidLocalTransactionId))
+			{
+				Assert((svar->dropped_lxid == InvalidLocalTransactionId) ||
+						(svar->dropped_lxid == MyProc->vxid.lxid));
+
+				Assert((svar->created_lxid == InvalidLocalTransactionId) ||
+						(svar->created_lxid == MyProc->vxid.lxid));
+
+				if (isCommit)
+				{
+					if (svar->dropped_lxid == MyProc->vxid.lxid)
+					{
+						free_stacked_svars(svar->prev);
+						free_svar_value(svar);
+
+						(void) hash_search(sessionvars,
+										   NameStr(svar->varname),
+										   HASH_REMOVE,
+										   NULL);
+						svar = NULL;
+					}
+					else
+					{
+						free_stacked_svars(svar->prev);
+						svar->prev = NULL;
+						svar->created_lxid = InvalidLocalTransactionId;
+					}
+				}
+				else
+				{
+					SVariable	iter;
+
+					/*
+					 * We have to search value the oldest svar in the stack. If it is just dropped,
+					 * then we revert dropped flag. If it is created in current transaction, then
+					 * we remove this svar too.
+					 */
+					iter = svar;
+					while (iter->prev)
+					{
+						SVariable	current = iter;
+
+						free_svar_value(current);
+
+						iter = current->prev;
+
+						if (current->stacked)
+							pfree(current);
+					}
+
+					if (iter->created_lxid == MyProc->vxid.lxid)
+					{
+						free_svar_value(iter);
+						if (iter->stacked)
+							pfree(iter);
+
+						(void) hash_search(sessionvars,
+										   NameStr(svar->varname),
+										   HASH_REMOVE,
+										   NULL);
+					}
+					else
+					{
+						if (iter->stacked)
+						{
+							memcpy(svar, iter, sizeof(SVariableData));
+							svar->stacked = false;
+							pfree(iter);
+						}
+
+						/* revert dropped flag */
+						svar->dropped_lxid = InvalidLocalTransactionId;
+					}
+				}
+			}
+		}
+
+		created_or_dropped_lxid = InvalidLocalTransactionId;
+	}
 }
 
 /*
@@ -433,23 +594,29 @@ ExecuteLetStmt(ParseState *pstate,
 }
 
 /*
- * Fast drop of the complete content of the session variables hash table, and
- * cleanup of any list that wouldn't be relevant anymore.
  * This is used by the DISCARD TEMP.
  */
 void
 ResetSessionVariables(void)
 {
-	/* destroy hash table and reset related memory context */
+	/* mark all session variables as dropped */
 	if (sessionvars)
 	{
-		hash_destroy(sessionvars);
-		sessionvars = NULL;
-	}
+		HASH_SEQ_STATUS status;
+		SVariable	svar;
+		bool		found = false;
 
-	/* release memory allocated by session variables */
-	if (SVariableMemoryContext != NULL)
-		MemoryContextReset(SVariableMemoryContext);
+		hash_seq_init(&status, sessionvars);
+
+		while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+		{
+			svar->dropped_lxid = MyProc->vxid.lxid;
+			found = true;
+		}
+
+		if (found)
+			created_or_dropped_lxid = MyProc->vxid.lxid;
+	}
 }
 
 /*

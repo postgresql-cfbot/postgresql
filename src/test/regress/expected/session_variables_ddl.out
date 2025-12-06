@@ -70,3 +70,41 @@ SELECT * FROM pg_get_temporary_session_variables_names();
 ------------------------------------------
 (0 rows)
 
+CREATE TEMP VARIABLE x AS varchar;
+LET x = 'Hi';
+BEGIN;
+DROP VARIABLE x;
+CREATE TEMP VARIABLE x AS varchar;
+LET x = 'Hello';
+SELECT VARIABLE(x);
+   x   
+-------
+ Hello
+(1 row)
+
+COMMIT;
+SELECT VARIABLE(x);
+   x   
+-------
+ Hello
+(1 row)
+
+LET x = 'Hi';
+BEGIN;
+DROP VARIABLE x;
+CREATE TEMP VARIABLE x AS varchar;
+LET x = 'Hello';
+SELECT VARIABLE(x);
+   x   
+-------
+ Hello
+(1 row)
+
+ROLLBACK;
+SELECT VARIABLE(x);
+ x  
+----
+ Hi
+(1 row)
+
+DROP VARIABLE x;

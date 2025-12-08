@@ -5244,6 +5244,8 @@ CommitSubTransaction(void)
 	AtEOSubXact_SPI(true, s->subTransactionId);
 	AtEOSubXact_on_commit_actions(true, s->subTransactionId,
 								  s->parent->subTransactionId);
+	AtEOSubXact_SessionVariables(true, s->subTransactionId,
+								 s->parent->subTransactionId);
 	AtEOSubXact_Namespace(true, s->subTransactionId,
 						  s->parent->subTransactionId);
 	AtEOSubXact_Files(true, s->subTransactionId,
@@ -5418,6 +5420,8 @@ AbortSubTransaction(void)
 		AtEOSubXact_SPI(false, s->subTransactionId);
 		AtEOSubXact_on_commit_actions(false, s->subTransactionId,
 									  s->parent->subTransactionId);
+		AtEOSubXact_SessionVariables(false, s->subTransactionId,
+									 s->parent->subTransactionId);
 		AtEOSubXact_Namespace(false, s->subTransactionId,
 							  s->parent->subTransactionId);
 		AtEOSubXact_Files(false, s->subTransactionId,

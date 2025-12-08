@@ -14,6 +14,7 @@
  */
 #include "postgres.h"
 
+#include "access/xact.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_type.h"
 #include "commands/session_variable.h"
@@ -61,6 +62,8 @@ typedef struct SVariableData
 	bool		stacked;
 	LocalTransactionId created_lxid;
 	LocalTransactionId dropped_lxid;
+	SubTransactionId created_subid;
+	SubTransactionId dropped_subid;
 } SVariableData;
 
 typedef SVariableData *SVariable;
@@ -351,6 +354,8 @@ CreateVariable(ParseState *pstate, CreateSessionVarStmt *stmt)
 	svar->stacked = false;
 	svar->dropped_lxid = InvalidLocalTransactionId;
 	svar->created_lxid = MyProc->vxid.lxid;
+	svar->dropped_subid = InvalidSubTransactionId;
+	svar->created_subid = GetCurrentSubTransactionId();
 	created_or_dropped_lxid = MyProc->vxid.lxid;
 }
 
@@ -387,6 +392,7 @@ DropVariableByName(DropSessionVarStmt *stmt)
 						stmt->name)));
 
 	svar->dropped_lxid = MyProc->vxid.lxid;
+	svar->dropped_subid = GetCurrentSubTransactionId();
 	created_or_dropped_lxid = MyProc->vxid.lxid;
 }
 
@@ -456,6 +462,7 @@ AtPreEOXact_SessionVariables(bool isCommit)
 						free_stacked_svars(svar->prev);
 						svar->prev = NULL;
 						svar->created_lxid = InvalidLocalTransactionId;
+						svar->created_subid = InvalidSubTransactionId;
 					}
 				}
 				else
@@ -502,12 +509,114 @@ AtPreEOXact_SessionVariables(bool isCommit)
 
 						/* revert dropped flag */
 						svar->dropped_lxid = InvalidLocalTransactionId;
+						svar->dropped_subid = InvalidSubTransactionId;
 					}
 				}
 			}
 		}
 
 		created_or_dropped_lxid = InvalidLocalTransactionId;
+	}
+}
+
+/*
+ * Post-subcommit or post-subabort cleanup
+ *
+ * During subabort, we can immediately remove entries created during this
+ * subtransaction. During subcommit, just transfer entries marked during
+ * this subtransaction as being the parent's responsibility.
+ */
+void
+AtEOSubXact_SessionVariables(bool isCommit,
+							 SubTransactionId mySubid,
+							 SubTransactionId parentSubid)
+{
+	if (created_or_dropped_lxid != InvalidLocalTransactionId)
+	{
+		HASH_SEQ_STATUS status;
+		SVariable	svar;
+
+		Assert(created_or_dropped_lxid == MyProc->vxid.lxid);
+		Assert(sessionvars);
+
+		hash_seq_init(&status, sessionvars);
+
+		while ((svar = (SVariable) hash_seq_search(&status)) != NULL)
+		{
+			if ((svar->dropped_lxid != InvalidLocalTransactionId) ||
+				(svar->created_lxid != InvalidLocalTransactionId))
+			{
+				if (!isCommit)
+				{
+					SVariable iterator = svar;
+					SVariable last = NULL;
+					SVariable first = NULL;
+
+					/* remove entries or flags by current subtransactions */
+					while (iterator)
+					{
+						SVariable current = iterator;
+
+						iterator = current->prev;
+
+						if (current->dropped_subid == mySubid)
+						{
+							current->dropped_lxid = InvalidLocalTransactionId;
+							current->dropped_subid = InvalidSubTransactionId;
+						}
+
+						if (current->created_subid == mySubid)
+						{
+							free_svar_value(current);
+							if (current->stacked)
+								pfree(current);
+						}
+						else
+						{
+							/* remember first not deleted svar */
+							if (first == NULL)
+								first = current;
+
+							if (last)
+								last->prev = current;
+
+							last = current;
+						}
+					}
+
+					/* Some svars was removed - set hashtab entry or remove it */
+					if (!first)
+					{
+						/* we have to remove entry from hash table */
+						(void) hash_search(sessionvars,
+										   NameStr(svar->varname),
+										   HASH_REMOVE,
+										   NULL);
+					}
+					else if (first->stacked)
+					{
+						memcpy(svar, first, sizeof(SVariableData));
+						svar->stacked = false;
+						pfree(first);
+					}
+				}
+				else
+				{
+					SVariable iterator = svar;
+
+					/* transfer responsibility to parent */
+					while (iterator)
+					{
+						if (iterator->dropped_subid == mySubid)
+							iterator->dropped_subid = parentSubid;
+						if (iterator->created_subid == mySubid)
+							iterator->created_subid = parentSubid;
+
+						iterator = iterator->prev;
+					}
+				}
+			}
+		}
 	}
 }
 

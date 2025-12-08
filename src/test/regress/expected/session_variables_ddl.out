@@ -107,4 +107,25 @@ SELECT VARIABLE(x);
  Hi
 (1 row)
 
+BEGIN;
+SAVEPOINT s1;
+DROP VARIABLE x;
+CREATE TEMP VARIABLE x AS varchar;
+DROP VARIABLE x;
+CREATE TEMP VARIABLE x AS varchar;
+LET x = 'Hello';
+SELECT VARIABLE(x);
+   x   
+-------
+ Hello
+(1 row)
+
+ROLLBACK TO s1;
+SELECT VARIABLE(x);
+ x  
+----
+ Hi
+(1 row)
+
+COMMIT;
 DROP VARIABLE x;

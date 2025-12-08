@@ -40,5 +40,8 @@ extern void ExecuteLetStmt(ParseState *pstate, LetStmt *stmt, ParamListInfo para
 extern void ResetSessionVariables(void);
 
 extern void AtPreEOXact_SessionVariables(bool isCommit);
+extern void AtEOSubXact_SessionVariables(bool isCommit,
+										 SubTransactionId mySubid,
+										 SubTransactionId parentSubid);
 
 #endif

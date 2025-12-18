@@ -1653,6 +1653,7 @@ LocationLen
 LockAcquireResult
 LockClauseStrength
 LockData
+LockFile
 LockInfoData
 LockInstanceData
 LockMethod

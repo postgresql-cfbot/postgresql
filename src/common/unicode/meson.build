@@ -67,7 +67,7 @@ update_unicode_common_targets += \
 update_unicode_common_targets += \
   custom_target('unicode_norm_table.h',
     input: [unicode_data['UnicodeData.txt'], unicode_data['CompositionExclusions.txt']],
-    output: ['unicode_norm_table.h', 'unicode_norm_hashfunc.h'],
+    output: ['unicode_norm_table.h'],
     depend_files: perfect_hash_pm,
     command: [
       perl, files('generate-unicode_norm_table.pl'),

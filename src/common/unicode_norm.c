@@ -19,13 +19,11 @@
 #endif
 
 #include "common/unicode_norm.h"
+#include "common/unicode_norm_table.h"
 #ifndef FRONTEND
-#include "common/unicode_norm_hashfunc.h"
 #include "common/unicode_normprops_table.h"
 #include "port/pg_bswap.h"
 #include "utils/memutils.h"
-#else
-#include "common/unicode_norm_table.h"
 #endif
 
 #ifndef FRONTEND
@@ -47,21 +45,6 @@
 #define NCOUNT		VCOUNT * TCOUNT
 #define SCOUNT		LCOUNT * NCOUNT
 
-#ifdef FRONTEND
-/* comparison routine for bsearch() of decomposition lookup table. */
-static int
-conv_compare(const void *p1, const void *p2)
-{
-	uint32		v1,
-				v2;
-
-	v1 = *(const uint32 *) p1;
-	v2 = ((const pg_unicode_decomposition *) p2)->codepoint;
-	return (v1 > v2) ? 1 : ((v1 == v2) ? 0 : -1);
-}
-
-#endif
-
 /*
  * get_code_entry
  *
@@ -72,38 +55,9 @@ conv_compare(const void *p1, const void *p2)
 static const pg_unicode_decomposition *
 get_code_entry(char32_t code)
 {
-#ifndef FRONTEND
-	int			h;
-	uint32		hashkey;
-	pg_unicode_decompinfo decompinfo = UnicodeDecompInfo;
+	uint16 idx = normalization_index(code);
 
-	/*
-	 * Compute the hash function. The hash key is the codepoint with the bytes
-	 * in network order.
-	 */
-	hashkey = pg_hton32(code);
-	h = decompinfo.hash(&hashkey);
-
-	/* An out-of-range result implies no match */
-	if (h < 0 || h >= decompinfo.num_decomps)
-		return NULL;
-
-	/*
-	 * Since it's a perfect hash, we need only match to the specific codepoint
-	 * it identifies.
-	 */
-	if (code != decompinfo.decomps[h].codepoint)
-		return NULL;
-
-	/* Success! */
-	return &decompinfo.decomps[h];
-#else
-	return bsearch(&(code),
-				   UnicodeDecompMain,
-				   lengthof(UnicodeDecompMain),
-				   sizeof(pg_unicode_decomposition),
-				   conv_compare);
-#endif
+	return idx != 0 ? &UnicodeDecompMain[idx] : NULL;
 }
 
 /*
@@ -146,7 +100,7 @@ get_code_decomposition(const pg_unicode_decomposition *entry, int *dec_size)
 	else
 	{
 		*dec_size = DECOMPOSITION_SIZE(entry);
-		return &UnicodeDecomp_codepoints[entry->dec_index];
+		return &UnicodeDecompCodepoints[entry->dec_index];
 	}
 }
 
@@ -246,66 +200,9 @@ recompose_code(uint32 start, uint32 code, uint32 *result)
 	}
 	else
 	{
-		const pg_unicode_decomposition *entry;
+		*result = normalization_inverse(start, code);
 
-		/*
-		 * Do an inverse lookup of the decomposition tables to see if anything
-		 * matches. The comparison just needs to be a perfect match on the
-		 * sub-table of size two, because the start character has already been
-		 * recomposed partially.  This lookup uses a perfect hash function for
-		 * the backend code.
-		 */
-#ifndef FRONTEND
-
-		int			h,
-					inv_lookup_index;
-		uint64		hashkey;
-		pg_unicode_recompinfo recompinfo = UnicodeRecompInfo;
-
-		/*
-		 * Compute the hash function. The hash key is formed by concatenating
-		 * bytes of the two codepoints in network order. See also
-		 * src/common/unicode/generate-unicode_norm_table.pl.
-		 */
-		hashkey = pg_hton64(((uint64) start << 32) | (uint64) code);
-		h = recompinfo.hash(&hashkey);
-
-		/* An out-of-range result implies no match */
-		if (h < 0 || h >= recompinfo.num_recomps)
-			return false;
-
-		inv_lookup_index = recompinfo.inverse_lookup[h];
-		entry = &UnicodeDecompMain[inv_lookup_index];
-
-		if (start == UnicodeDecomp_codepoints[entry->dec_index] &&
-			code == UnicodeDecomp_codepoints[entry->dec_index + 1])
-		{
-			*result = entry->codepoint;
-			return true;
-		}
-
-#else
-
-		int			i;
-
-		for (i = 0; i < lengthof(UnicodeDecompMain); i++)
-		{
-			entry = &UnicodeDecompMain[i];
-
-			if (DECOMPOSITION_SIZE(entry) != 2)
-				continue;
-
-			if (DECOMPOSITION_NO_COMPOSE(entry))
-				continue;
-
-			if (start == UnicodeDecomp_codepoints[entry->dec_index] &&
-				code == UnicodeDecomp_codepoints[entry->dec_index + 1])
-			{
-				*result = entry->codepoint;
-				return true;
-			}
-		}
-#endif							/* !FRONTEND */
+		return *result != 0;
 	}
 
 	return false;

@@ -21,7 +21,7 @@ CPPFLAGS += $(ICU_CFLAGS)
 # By default, do nothing.
 all:
 
-update-unicode: unicode_case_table.h unicode_category_table.h unicode_east_asian_fw_table.h unicode_nonspacing_table.h unicode_norm_hashfunc.h unicode_norm_table.h unicode_normprops_table.h unicode_version.h
+update-unicode: unicode_case_table.h unicode_category_table.h unicode_east_asian_fw_table.h unicode_nonspacing_table.h unicode_norm_table.h unicode_normprops_table.h unicode_version.h
 	mv $^ $(top_srcdir)/src/include/common/
 	$(MAKE) case-check
 	$(MAKE) category-check
@@ -44,8 +44,6 @@ unicode_category_table.h: generate-unicode_category_table.pl DerivedCoreProperti
 
 # Generation of conversion tables used for string normalization with
 # UTF-8 strings.
-unicode_norm_hashfunc.h: unicode_norm_table.h
-
 unicode_norm_table.h: generate-unicode_norm_table.pl UnicodeData.txt CompositionExclusions.txt
 	$(PERL) $<
 

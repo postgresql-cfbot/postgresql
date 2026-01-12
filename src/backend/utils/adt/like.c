@@ -23,6 +23,7 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "utils/fmgrprotos.h"
+#include "utils/formatting.h"
 #include "utils/pg_locale.h"
 #include "varatt.h"
 
@@ -190,10 +191,8 @@ Generic_Text_IC_like(text *str, text *pat, Oid collation)
 				 errmsg("nondeterministic collations are not supported for ILIKE")));
 
 	/*
-	 * For efficiency reasons, in the C locale we don't call lower() on the
+	 * For efficiency reasons, in the C locale we don't call casefold() on the
 	 * pattern and text, but instead lowercase each character lazily.
-	 *
-	 * XXX: use casefolding instead?
 	 */
 
 	if (locale->ctype_is_c)
@@ -206,14 +205,10 @@ Generic_Text_IC_like(text *str, text *pat, Oid collation)
 	}
 	else
 	{
-		pat = DatumGetTextPP(DirectFunctionCall1Coll(lower, collation,
-													 PointerGetDatum(pat)));
-		p = VARDATA_ANY(pat);
-		plen = VARSIZE_ANY_EXHDR(pat);
-		str = DatumGetTextPP(DirectFunctionCall1Coll(lower, collation,
-													 PointerGetDatum(str)));
-		s = VARDATA_ANY(str);
-		slen = VARSIZE_ANY_EXHDR(str);
+		p = str_casefold(VARDATA_ANY(pat), VARSIZE_ANY_EXHDR(pat), collation);
+		plen = strlen(p);
+		s = str_casefold(VARDATA_ANY(str), VARSIZE_ANY_EXHDR(str), collation);
+		slen = strlen(s);
 
 		if (GetDatabaseEncoding() == PG_UTF8)
 			return UTF8_MatchText(s, slen, p, plen, 0);

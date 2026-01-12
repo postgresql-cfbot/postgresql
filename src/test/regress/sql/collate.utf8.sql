@@ -85,6 +85,9 @@ SELECT 'δ' ~* '[Γ-Λ]' COLLATE PG_C_UTF8; -- same as above with cases reversed
 -- case folding
 select casefold('AbCd 123 #$% ıiIİ ẞ ß Ǆǅǆ Σσς' collate PG_C_UTF8);
 
+SELECT U&'ς' ILIKE U&'σ' COLLATE PG_C_UTF8;
+SELECT U&'straße' ILIKE U&'STRASSE' COLLATE PG_C_UTF8;
+
 --
 -- Test PG_UNICODE_FAST
 --
@@ -148,3 +151,6 @@ SELECT 'δ' ~* '[Γ-Λ]' COLLATE PG_UNICODE_FAST; -- same as above with cases re
 
 -- case folding
 select casefold('AbCd 123 #$% ıiIİ ẞ ß Ǆǅǆ Σσς' collate PG_UNICODE_FAST);
+
+SELECT U&'ς' ILIKE U&'σ' COLLATE PG_UNICODE_FAST;
+SELECT U&'straße' ILIKE U&'STRASSE' COLLATE PG_UNICODE_FAST;

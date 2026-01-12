@@ -133,6 +133,11 @@ casefold(PG_FUNCTION_ARGS)
 	char	   *out_string;
 	text	   *result;
 
+	if (GetDatabaseEncoding() != PG_UTF8)
+		ereport(ERROR,
+				(errcode(ERRCODE_SYNTAX_ERROR),
+				 errmsg("Unicode case folding can only be performed if server encoding is UTF8")));
+
 	out_string = str_casefold(VARDATA_ANY(in_string),
 							  VARSIZE_ANY_EXHDR(in_string),
 							  PG_GET_COLLATION());

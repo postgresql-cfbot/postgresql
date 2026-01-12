@@ -1830,11 +1830,6 @@ str_casefold(const char *buff, size_t nbytes, Oid collid)
 				 errhint("Use the COLLATE clause to set the collation explicitly.")));
 	}
 
-	if (GetDatabaseEncoding() != PG_UTF8)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("Unicode case folding can only be performed if server encoding is UTF8")));
-
 	mylocale = pg_newlocale_from_collation(collid);
 
 	/* C/POSIX collations use this path regardless of database encoding */

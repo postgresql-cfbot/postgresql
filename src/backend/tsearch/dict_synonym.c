@@ -184,8 +184,8 @@ dsynonym_init(PG_FUNCTION_ARGS)
 		}
 		else
 		{
-			d->syn[cur].in = str_tolower(starti, strlen(starti), DEFAULT_COLLATION_OID);
-			d->syn[cur].out = str_tolower(starto, strlen(starto), DEFAULT_COLLATION_OID);
+			d->syn[cur].in = str_casefold(starti, strlen(starti), DEFAULT_COLLATION_OID);
+			d->syn[cur].out = str_casefold(starto, strlen(starto), DEFAULT_COLLATION_OID);
 		}
 
 		d->syn[cur].flags = flags;
@@ -224,7 +224,7 @@ dsynonym_lexize(PG_FUNCTION_ARGS)
 	if (d->case_sensitive)
 		key.in = pnstrdup(in, len);
 	else
-		key.in = str_tolower(in, len, DEFAULT_COLLATION_OID);
+		key.in = str_casefold(in, len, DEFAULT_COLLATION_OID);
 
 	key.out = NULL;
 

@@ -170,7 +170,7 @@ cpstrdup(IspellDict *Conf, const char *str)
 
 
 /*
- * Apply str_tolower(), producing a temporary result (in the buildCxt).
+ * Apply str_casefold(), producing a temporary result (in the buildCxt).
  */
 static char *
 lowerstr_ctx(IspellDict *Conf, const char *src)
@@ -179,7 +179,7 @@ lowerstr_ctx(IspellDict *Conf, const char *src)
 	char	   *dst;
 
 	saveCtx = MemoryContextSwitchTo(Conf->buildCxt);
-	dst = str_tolower(src, strlen(src), DEFAULT_COLLATION_OID);
+	dst = str_casefold(src, strlen(src), DEFAULT_COLLATION_OID);
 	MemoryContextSwitchTo(saveCtx);
 
 	return dst;
@@ -1461,7 +1461,7 @@ NIImportAffixes(IspellDict *Conf, const char *filename)
 
 	while ((recoded = tsearch_readline(&trst)) != NULL)
 	{
-		pstr = str_tolower(recoded, strlen(recoded), DEFAULT_COLLATION_OID);
+		pstr = str_casefold(recoded, strlen(recoded), DEFAULT_COLLATION_OID);
 
 		/* Skip comments and empty lines */
 		if (*pstr == '#' || *pstr == '\n')

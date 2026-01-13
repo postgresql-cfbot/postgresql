@@ -16,6 +16,26 @@ CREATE SCHEMA collate_tests;
 SET search_path = collate_tests;
 
 
+create function check_estimated_rows(text) returns table (estimated int, actual int)
+language plpgsql as
+$$
+declare
+    ln text;
+    tmp text[];
+    first_row bool := true;
+begin
+    for ln in
+        execute format('explain analyze %s', $1)
+    loop
+        if first_row then
+            first_row := false;
+            tmp := regexp_match(ln, 'rows=(\d*) .* rows=(\d*)');
+            return query select tmp[1]::int, tmp[2]::int;
+        end if;
+    end loop;
+end;
+$$;
+
 CREATE TABLE collate_test1 (
     a int,
     b text COLLATE "en-x-icu" NOT NULL
@@ -564,6 +584,18 @@ SELECT * FROM test6a WHERE b = ARRAY['äbc'] COLLATE ctest_nondet;
 
 CREATE COLLATION case_sensitive (provider = icu, locale = '');
 CREATE COLLATION case_insensitive (provider = icu, locale = '@colStrength=secondary', deterministic = false);
+
+CREATE TABLE test_stats_ext_coll (a text, b text, c int);
+INSERT INTO test_stats_ext_coll SELECT chr(65 + g % 52) FROM generate_series(1, 500) g;
+CREATE STATISTICS test_stats_ext_coll_stx ON (a COLLATE case_insensitive) FROM test_stats_ext_coll;
+ANALYZE test_stats_ext_coll;
+
+SELECT * FROM check_estimated_rows ($$ SELECT count(*) FROM test_stats_ext_coll GROUP BY a COLLATE "C" $$);
+SELECT * FROM check_estimated_rows ($$SELECT count(*) FROM test_stats_ext_coll GROUP BY a COLLATE "POSIX" $$);
+SELECT * FROM check_estimated_rows ($$SELECT count(*) FROM test_stats_ext_coll GROUP BY a COLLATE case_insensitive $$);
+SELECT * FROM check_estimated_rows ($$SELECT count(*) FROM test_stats_ext_coll GROUP BY a $$);
+DROP FUNCTION check_estimated_rows;
+DROP TABLE test_stats_ext_coll;
 
 SELECT 'abc' <= 'ABC' COLLATE case_sensitive, 'abc' >= 'ABC' COLLATE case_sensitive;
 SELECT 'abc' <= 'ABC' COLLATE case_insensitive, 'abc' >= 'ABC' COLLATE case_insensitive;

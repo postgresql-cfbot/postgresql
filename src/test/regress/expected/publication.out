@@ -856,6 +856,52 @@ ALTER TABLE testpub_rf_tbl7 ALTER COLUMN y SET EXPRESSION AS (x * testpub_rf_fun
 ERROR:  ALTER TABLE / SET EXPRESSION is not supported for virtual generated columns in tables that are part of a publication
 DETAIL:  Column "y" of relation "testpub_rf_tbl7" is a virtual generated column.
 RESET client_min_messages;
+-- test that ALTER COLUMN ALTER [ SET DATA ] TYPE is rejected when the column is in a row filter
+CREATE TABLE testpub_rf_tbl8 (id int PRIMARY KEY, x int, y int, z int);
+CREATE PUBLICATION testpub9 FOR TABLE testpub_rf_tbl8 WHERE (x > 100 AND y < 200);
+SET client_min_messages = 'ERROR';
+-- fail
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN x TYPE bigint;
+ERROR:  cannot alter type of a column used by a publication WHERE clause
+DETAIL:  publication of table testpub_rf_tbl8 in publication testpub9 depends on column "x"
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN y TYPE bigint;
+ERROR:  cannot alter type of a column used by a publication WHERE clause
+DETAIL:  publication of table testpub_rf_tbl8 in publication testpub9 depends on column "y"
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN y TYPE bigint, ALTER COLUMN z TYPE bigint;
+ERROR:  cannot alter type of a column used by a publication WHERE clause
+DETAIL:  publication of table testpub_rf_tbl8 in publication testpub9 depends on column "y"
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN z TYPE bigint, ALTER COLUMN x TYPE bigint;
+ERROR:  cannot alter type of a column used by a publication WHERE clause
+DETAIL:  publication of table testpub_rf_tbl8 in publication testpub9 depends on column "x"
+\d testpub_rf_tbl8
+          Table "public.testpub_rf_tbl8"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ id     | integer |           | not null | 
+ x      | integer |           |          | 
+ y      | integer |           |          | 
+ z      | integer |           |          | 
+Indexes:
+    "testpub_rf_tbl8_pkey" PRIMARY KEY, btree (id)
+Publications:
+    "testpub9" WHERE ((x > 100) AND (y < 200))
+
+-- ok
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN z TYPE bigint;
+\d testpub_rf_tbl8
+          Table "public.testpub_rf_tbl8"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ id     | integer |           | not null | 
+ x      | integer |           |          | 
+ y      | integer |           |          | 
+ z      | bigint  |           |          | 
+Indexes:
+    "testpub_rf_tbl8_pkey" PRIMARY KEY, btree (id)
+Publications:
+    "testpub9" WHERE ((x > 100) AND (y < 200))
+
+RESET client_min_messages;
 DROP TABLE testpub_rf_tbl1;
 DROP TABLE testpub_rf_tbl2;
 DROP TABLE testpub_rf_tbl3;
@@ -874,6 +920,8 @@ DROP OPERATOR =#>(integer, integer);
 DROP FUNCTION testpub_rf_func1(integer, integer);
 DROP FUNCTION testpub_rf_func2();
 DROP COLLATION user_collation;
+DROP PUBLICATION testpub9;
+DROP TABLE testpub_rf_tbl8;
 -- ======================================================
 -- More row filter tests for validating column references
 CREATE TABLE rf_tbl_abcd_nopk(a int, b int, c int, d int);
@@ -1338,6 +1386,26 @@ Not-null constraints:
     "testpub_tbl_both_filters_a_not_null" NOT NULL "a"
     "testpub_tbl_both_filters_c_not_null" NOT NULL "c"
 
+SET client_min_messages = 'ERROR';
+-- fail - ALTER TABLE ALTER COLUMN [ SET DATA ] TYPE affecting column in row filter and column list
+ALTER TABLE testpub_tbl_both_filters ALTER COLUMN c TYPE bigint;
+ERROR:  cannot alter type of a column used by a publication WHERE clause
+DETAIL:  publication of table testpub_tbl_both_filters in publication testpub_both_filters depends on column "c"
+-- ok - ALTER TABLE ALTER COLUMN ALTER [ SET DATA ] TYPE affecting column in column list and not in row filter
+ALTER TABLE testpub_tbl_both_filters ALTER COLUMN a TYPE text;
+\d testpub_tbl_both_filters
+      Table "public.testpub_tbl_both_filters"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | text    |           | not null | 
+ b      | integer |           |          | 
+ c      | integer |           | not null | 
+Indexes:
+    "testpub_tbl_both_filters_pkey" PRIMARY KEY, btree (a, c) REPLICA IDENTITY
+Publications:
+    "testpub_both_filters" (a, c) WHERE (c <> 1)
+
+RESET client_min_messages;
 DROP TABLE testpub_tbl_both_filters;
 DROP PUBLICATION testpub_both_filters;
 -- ======================================================

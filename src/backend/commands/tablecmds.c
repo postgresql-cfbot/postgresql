@@ -15768,19 +15768,64 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 				break;
 
 			case PublicationRelRelationId:
+				{
+					HeapTuple pubreloidtuple;
+					Form_pg_publication_rel pubrelform;
+					Oid publicationId;
+					HeapTuple pubreltuple;
+					bool isnull;
+					Datum rfdatum;
 
-				/*
-				 * Column reference in a PUBLICATION ... FOR TABLE ... WHERE
-				 * clause.  Same issues as above.  FIXME someday.
-				 */
-				if (subtype == AT_AlterColumnType)
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot alter type of a column used by a publication WHERE clause"),
-							 errdetail("%s depends on column \"%s\"",
-									   getObjectDescription(&foundObject, false),
-									   colName)));
-				break;
+					pubreloidtuple = SearchSysCache1(PUBLICATIONREL,
+												  ObjectIdGetDatum(foundObject.objectId));
+					if (!HeapTupleIsValid(pubreloidtuple))
+						elog(ERROR, "cache lookup failed for pg_publication_rel OID %u", foundObject.objectId);
+
+					pubrelform = (Form_pg_publication_rel) GETSTRUCT(pubreloidtuple);
+					publicationId = pubrelform->prpubid;
+					ReleaseSysCache(pubreloidtuple);
+
+					pubreltuple = SearchSysCache2(PUBLICATIONRELMAP,
+							ObjectIdGetDatum(RelationGetRelid(rel)),
+							ObjectIdGetDatum(publicationId));
+					if (!HeapTupleIsValid(pubreltuple))
+						elog(ERROR, "cache lookup failed for publication ID %u", publicationId);
+
+					/* Lookup the prqual to check row filter, if it is null dependency is a column list only. */
+					rfdatum = SysCacheGetAttr(PUBLICATIONRELMAP, pubreltuple,
+											Anum_pg_publication_rel_prqual, &isnull);
+
+					if (!isnull)
+					{
+						Node *rfnode;
+						Bitmapset *rfattrs = NULL;
+
+						/*
+						 * The column dependency could be from the column list, but there's
+						 * also a row filter present. Check if this specific column is used
+						 * in the row filter expression.
+						 */
+						rfnode = (Node *) stringToNode(TextDatumGetCString(rfdatum));
+						pull_varattnos(rfnode, 1, &rfattrs);
+						if (bms_is_member(attnum - FirstLowInvalidHeapAttributeNumber, rfattrs))
+						{
+							/*
+							 * Column reference in a PUBLICATION ... FOR TABLE ... WHERE
+							 * clause.  Same issues as above.  FIXME someday.
+							 */
+							if (subtype == AT_AlterColumnType)
+								ereport(ERROR,
+										(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+										errmsg("cannot alter type of a column used by a publication WHERE clause"),
+										errdetail("%s depends on column \"%s\"",
+												getObjectDescription(&foundObject, false),
+												colName)));
+						}
+					}
+
+					ReleaseSysCache(pubreltuple);
+					break;
+				}
 
 			default:
 

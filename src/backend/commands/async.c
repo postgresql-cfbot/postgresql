@@ -674,9 +674,9 @@ globalChannelTableHash(const void *key, size_t size, void *arg)
 	const GlobalChannelKey *k = (const GlobalChannelKey *) key;
 	dshash_hash h;
 
-	h = DatumGetUInt32(hash_uint32(k->dboid));
-	h ^= DatumGetUInt32(hash_any((const unsigned char *) k->channel,
-								 strnlen(k->channel, NAMEDATALEN)));
+	h = murmurhash32(k->dboid);
+	h ^= hash_any((const unsigned char *) k->channel,
+				  strnlen(k->channel, NAMEDATALEN));
 
 	return h;
 }

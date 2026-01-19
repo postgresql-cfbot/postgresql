@@ -378,7 +378,7 @@ SnapBuildBuildSnapshot(SnapBuild *builder)
 
 	/*
 	 * We misuse the original meaning of SnapshotData's xip and subxip fields
-	 * to make the more fitting for our needs.
+	 * to make them more fitting for our needs.
 	 *
 	 * In the 'xip' array we store transactions that have to be treated as
 	 * committed. Since we will only ever look at tuples from transactions
@@ -402,6 +402,31 @@ SnapBuildBuildSnapshot(SnapBuild *builder)
 
 	snapshot->xmin = builder->xmin;
 	snapshot->xmax = builder->xmax;
+
+	/*
+	 * Although it's very unlikely, it's possible that a commit WAL record was
+	 * decoded but CLOG is not aware of the commit yet. Should the CLOG update
+	 * be delayed even more, visibility checks that use this snapshot could
+	 * work incorrectly. Therefore we check the CLOG status here.
+	 */
+	for (int i = 0; i < builder->committed.xcnt; i++)
+	{
+		for (;;)
+		{
+			if (TransactionIdDidCommit(builder->committed.xip[i]))
+				break;
+			else
+			{
+				(void) WaitLatch(MyLatch,
+								 WL_LATCH_SET | WL_TIMEOUT |
+								 WL_EXIT_ON_PM_DEATH,
+								 10L,
+								 WAIT_EVENT_SNAPBUILD_CLOG);
+				ResetLatch(MyLatch);
+			}
+			CHECK_FOR_INTERRUPTS();
+		}
+	}
 
 	/* store all transactions to be treated as committed by this snapshot */
 	snapshot->xip =

@@ -785,8 +785,7 @@ InitLocalBuffers(void)
 		BufferDesc *buf = GetLocalBufferDescriptor(i);
 
 		/*
-		 * negative to indicate local buffer. This is tricky: shared buffers
-		 * start with 0. We have to start with -2. (Note that the routine
+		 * Negative to indicate local buffer. (Note that the routine
 		 * BufferDescriptorGetBuffer adds 1 to buf_id so our first buffer id
 		 * is -1.)
 		 */

@@ -211,6 +211,8 @@ typedef struct AlteredTableInfo
 	char	   *clusterOnIndex; /* index to use for CLUSTER */
 	List	   *changedStatisticsOids;	/* OIDs of statistics to rebuild */
 	List	   *changedStatisticsDefs;	/* string definitions of same */
+	List	   *changedTriggerOids; /* OIDs of trigger to rebuild */
+	List	   *changedTriggerDefs; /* string definitions of same */
 } AlteredTableInfo;
 
 /* Struct describing one new constraint to check in Phase 3 scan */
@@ -584,6 +586,8 @@ static ObjectAddress ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 									IndexStmt *stmt, bool is_rebuild, LOCKMODE lockmode);
 static ObjectAddress ATExecAddStatistics(AlteredTableInfo *tab, Relation rel,
 										 CreateStatsStmt *stmt, bool is_rebuild, LOCKMODE lockmode);
+static ObjectAddress ATExecAddTrigger(AlteredTableInfo *tab, Relation rel, CreateTrigStmt *stmt,
+									  bool is_rebuild, LOCKMODE lockmode);
 static ObjectAddress ATExecAddConstraint(List **wqueue,
 										 AlteredTableInfo *tab, Relation rel,
 										 Constraint *newConstraint, bool recurse, bool is_readd,
@@ -689,6 +693,7 @@ static void RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableT
 static void RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab);
 static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
+static void RememberTriggerForRebuilding(Oid trigoid, AlteredTableInfo *tab);
 static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
 								   LOCKMODE lockmode);
 static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
@@ -5524,6 +5529,10 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 			address = ATExecAddStatistics(tab, rel, (CreateStatsStmt *) cmd->def,
 										  true, lockmode);
 			break;
+		case AT_ReAddTrigger:	/* ADD TRIGGER */
+			address = ATExecAddTrigger(tab, rel, castNode(CreateTrigStmt, cmd->def),
+									   true, lockmode);
+			break;
 		case AT_AddConstraint:	/* ADD CONSTRAINT */
 			/* Transform the command only during initial examination */
 			if (cur_pass == AT_PASS_ADD_CONSTR)
@@ -6812,6 +6821,8 @@ alter_table_type_to_string(AlterTableType cmdtype)
 		case AT_DropIdentity:
 			return "ALTER COLUMN ... DROP IDENTITY";
 		case AT_ReAddStatistics:
+			return NULL;		/* not real grammar */
+		case AT_ReAddTrigger:
 			return NULL;		/* not real grammar */
 	}
 
@@ -9770,6 +9781,30 @@ ATExecAddStatistics(AlteredTableInfo *tab, Relation rel,
 
 	address = CreateStatistics(stmt, !is_rebuild);
 
+	return address;
+}
+
+/*
+ * ALTER TABLE ADD TRIGGER
+ *
+ * This is no such command in the grammar, but we use this internally to add
+ * AT_ReAddTrigger subcommands to rebuild trigger after a table
+ * column type change.
+ */
+static ObjectAddress
+ATExecAddTrigger(AlteredTableInfo *tab, Relation rel,
+				 CreateTrigStmt *stmt, bool is_rebuild, LOCKMODE lockmode)
+{
+	ObjectAddress address;
+
+	Assert(IsA(stmt, CreateTrigStmt));
+
+	/* The CreateTrigStmt has already been through transformTriggerStmt */
+	Assert(stmt->transformed);
+
+	address = CreateTrigger(castNode(CreateTrigStmt, stmt), NULL,
+							InvalidOid, InvalidOid, InvalidOid, InvalidOid,
+							InvalidOid, InvalidOid, NULL, false, false);
 	return address;
 }
 
@@ -14090,6 +14125,8 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 	fk_trigger->deferrable = fkconstraint->deferrable;
 	fk_trigger->initdeferred = fkconstraint->initdeferred;
 	fk_trigger->constrrel = NULL;
+	fk_trigger->transformed = true;
+	fk_trigger->trigcomment = NULL;
 
 	trigAddress = CreateTrigger(fk_trigger, NULL, myRelOid, refRelOid,
 								constraintOid, indexOid, InvalidOid,
@@ -14135,6 +14172,8 @@ createForeignKeyActionTriggers(Oid myRelOid, Oid refRelOid, Constraint *fkconstr
 	fk_trigger->whenClause = NULL;
 	fk_trigger->transitionRels = NIL;
 	fk_trigger->constrrel = NULL;
+	fk_trigger->transformed = true;
+	fk_trigger->trigcomment = NULL;
 
 	switch (fkconstraint->fk_del_action)
 	{
@@ -14195,6 +14234,8 @@ createForeignKeyActionTriggers(Oid myRelOid, Oid refRelOid, Constraint *fkconstr
 	fk_trigger->whenClause = NULL;
 	fk_trigger->transitionRels = NIL;
 	fk_trigger->constrrel = NULL;
+	fk_trigger->transformed = true;
+	fk_trigger->trigcomment = NULL;
 
 	switch (fkconstraint->fk_upd_action)
 	{
@@ -15406,21 +15447,13 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 			case TriggerRelationId:
 
 				/*
-				 * A trigger can depend on a column because the column is
-				 * specified as an update target, or because the column is
-				 * used in the trigger's WHEN condition.  The first case would
-				 * not require any extra work, but the second case would
-				 * require updating the WHEN expression, which has the same
-				 * issues as above.  Since we can't easily tell which case
-				 * applies, we punt for both.  FIXME someday.
+				 * Internally-generated trigger for a constraint will have
+				 * internal dependency of the constraint. It won't have direct
+				 * dependency with the relation. So no need to worry about
+				 * internal trigger here.
 				 */
 				if (subtype == AT_AlterColumnType)
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("cannot alter type of a column used in a trigger definition"),
-							 errdetail("%s depends on column \"%s\"",
-									   getObjectDescription(&foundObject, false),
-									   colName)));
+					RememberTriggerForRebuilding(foundObject.objectId, tab);
 				break;
 
 			case PolicyRelationId:
@@ -15682,6 +15715,33 @@ RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab)
 }
 
 /*
+ * Subroutine for ATExecAlterColumnType: remember that a trigger object
+ * needs to be rebuilt (which we might already know).
+ */
+static void
+RememberTriggerForRebuilding(Oid trigoid, AlteredTableInfo *tab)
+{
+	/*
+	 * This de-duplication check is critical for two independent reasons: we
+	 * mustn't try to recreate the same trigger object twice, and if the
+	 * trigger object depends on more than one column whose type is to be
+	 * altered, we must capture its definition string before applying any of
+	 * the type changes. ruleutils.c will get confused if we ask again later.
+	 */
+	if (!list_member_oid(tab->changedTriggerOids, trigoid))
+	{
+		/* OK, capture the trigger object's existing definition string */
+		char	   *defstring = pg_get_triggerobjdef_string(trigoid);
+
+		tab->changedTriggerOids = lappend_oid(tab->changedTriggerOids,
+											  trigoid);
+		tab->changedTriggerDefs = lappend(tab->changedTriggerDefs,
+										  defstring);
+	}
+}
+
+
+/*
  * Cleanup after we've finished all the ALTER TYPE or SET EXPRESSION
  * operations for a particular relation.  We have to drop and recreate all the
  * indexes and constraints that depend on the altered columns.  We do the
@@ -15825,6 +15885,47 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 		add_exact_object_address(&obj, objects);
 	}
 
+	/* add dependencies for new triggers */
+	forboth(oid_item, tab->changedTriggerOids,
+			def_item, tab->changedTriggerDefs)
+	{
+		Oid			refRelId = InvalidOid;
+		Oid			oldId = lfirst_oid(oid_item);
+		List	   *relids = TriggerGetRelations(oldId);
+
+		Assert(list_length(relids) == 1 || list_length(relids) == 2);
+
+		/*
+		 * As above, make sure we have lock on the trigger object's table if
+		 * it's not the same table.  However, we take ShareRowExclusiveLock
+		 * here, aligning with the lock level used in CreateTriggerFiringOn.
+		 *
+		 * CAUTION: this should be done after all cases that grab
+		 * AccessExclusiveLock, else we risk causing deadlock due to needing
+		 * to promote our table lock.
+		 */
+		foreach_oid(relid, relids)
+		{
+			if (relid != tab->relid)
+				LockRelationOid(relid, ShareRowExclusiveLock);
+		}
+
+		/*
+		 * refRelId is the RI trigger opposite relation OID.  It is passed to
+		 * function ATPostAlterTypeParse, where it will assigned to
+		 * CreateTrigStmt->constrrelOid.
+		 */
+		if (list_length(relids) == 2)
+			refRelId = lsecond_oid(relids);
+
+		ATPostAlterTypeParse(oldId, linitial_oid(relids), refRelId,
+							 (char *) lfirst(def_item),
+							 wqueue, lockmode, tab->rewrite);
+
+		ObjectAddressSet(obj, TriggerRelationId, oldId);
+		add_exact_object_address(&obj, objects);
+	}
+
 	/*
 	 * Queue up command to restore replica identity index marking
 	 */
@@ -15873,9 +15974,9 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 }
 
 /*
- * Parse the previously-saved definition string for a constraint, index or
- * statistics object against the newly-established column data type(s), and
- * queue up the resulting command parsetrees for execution.
+ * Parse the previously-saved definition string for a constraint, index,
+ * statistics object or trigger against the newly-established column data
+ * type(s), and queue up the resulting command parsetrees for execution.
  *
  * This might fail if, for example, you have a WHERE clause that uses an
  * operator that's not available for the new column type.
@@ -15926,6 +16027,11 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 									 transformStatsStmt(oldRelId,
 														(CreateStatsStmt *) stmt,
 														cmd));
+		else if (IsA(stmt, CreateTrigStmt))
+			querytree_list = lappend(querytree_list,
+									 transformTriggerStmt(oldRelId,
+														  (CreateTrigStmt *) stmt,
+														  cmd));
 		else
 			querytree_list = lappend(querytree_list, stmt);
 	}
@@ -16072,6 +16178,20 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 
 			newcmd = makeNode(AlterTableCmd);
 			newcmd->subtype = AT_ReAddStatistics;
+			newcmd->def = (Node *) stmt;
+			tab->subcmds[AT_PASS_MISC] =
+				lappend(tab->subcmds[AT_PASS_MISC], newcmd);
+		}
+		else if (IsA(stm, CreateTrigStmt))
+		{
+			CreateTrigStmt *stmt = (CreateTrigStmt *) stm;
+			AlterTableCmd *newcmd;
+
+			/* keep the trigger object's comment */
+			stmt->trigcomment = GetComment(oldId, TriggerRelationId, 0);
+
+			newcmd = makeNode(AlterTableCmd);
+			newcmd->subtype = AT_ReAddTrigger;
 			newcmd->def = (Node *) stmt;
 			tab->subcmds[AT_PASS_MISC] =
 				lappend(tab->subcmds[AT_PASS_MISC], newcmd);
@@ -21182,6 +21302,8 @@ CloneRowTriggersToPartition(Relation parent, Relation partition)
 		trigStmt->deferrable = trigForm->tgdeferrable;
 		trigStmt->initdeferred = trigForm->tginitdeferred;
 		trigStmt->constrrel = NULL; /* passed separately */
+		trigStmt->transformed = true;
+		trigStmt->trigcomment = NULL;
 
 		CreateTriggerFiringOn(trigStmt, NULL, RelationGetRelid(partition),
 							  trigForm->tgconstrrelid, InvalidOid, InvalidOid,

@@ -31,6 +31,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
+#include "commands/comment.h"
 #include "commands/trigger.h"
 #include "executor/executor.h"
 #include "executor/instrument.h"
@@ -214,6 +215,9 @@ CreateTriggerFiringOn(const CreateTrigStmt *stmt, const char *queryString,
 		rel = table_open(relOid, ShareRowExclusiveLock);
 	else
 		rel = table_openrv(stmt->relation, ShareRowExclusiveLock);
+
+	/* Do parse analysis on the WHEN clause if not already done */
+	stmt = transformTriggerStmt(RelationGetRelid(rel), stmt, NULL);
 
 	/*
 	 * Triggers must be on tables or views, and there are additional
@@ -557,10 +561,10 @@ CreateTriggerFiringOn(const CreateTrigStmt *stmt, const char *queryString,
 	}
 
 	/*
-	 * Parse the WHEN clause, if any and we weren't passed an already
-	 * transformed one.
+	 * We already parsed the WHEN clause in transformTriggerStmt, but in some
+	 * cases, we disallowed references to OLD/NEW.
 	 *
-	 * Note that as a side effect, we fill whenRtable when parsing.  If we got
+	 * Note that as a side effect, we fill whenRtable when checking. If we got
 	 * an already parsed clause, this does not occur, which is what we want --
 	 * no point in adding redundant dependencies below.
 	 */
@@ -570,6 +574,12 @@ CreateTriggerFiringOn(const CreateTrigStmt *stmt, const char *queryString,
 		ParseNamespaceItem *nsitem;
 		List	   *varList;
 		ListCell   *lc;
+
+		/*
+		 * transformTriggerStmt has already performed parse analysis on a
+		 * non-NULL whenClause, no need do it again.
+		 */
+		whenClause = stmt->whenClause;
 
 		/* Set up a pstate to parse with */
 		pstate = make_parsestate(NULL);
@@ -590,14 +600,6 @@ CreateTriggerFiringOn(const CreateTrigStmt *stmt, const char *queryString,
 											   makeAlias("new", NIL),
 											   false, false);
 		addNSItemToQuery(pstate, nsitem, false, true, true);
-
-		/* Transform expression.  Copy to be sure we don't modify original */
-		whenClause = transformWhereClause(pstate,
-										  copyObject(stmt->whenClause),
-										  EXPR_KIND_TRIGGER_WHEN,
-										  "WHEN");
-		/* we have to fix its collations too */
-		assign_expr_collations(pstate, whenClause);
 
 		/*
 		 * Check for disallowed references to OLD/NEW.
@@ -1206,6 +1208,11 @@ CreateTriggerFiringOn(const CreateTrigStmt *stmt, const char *queryString,
 	/* Keep lock on target rel until end of xact */
 	table_close(rel, NoLock);
 
+	/* Add any requested comment */
+	if (stmt->trigcomment != NULL)
+		CreateComments(trigoid, TriggerRelationId, 0,
+					   stmt->trigcomment);
+
 	return myself;
 }
 
@@ -1413,6 +1420,54 @@ get_trigger_oid(Oid relid, const char *trigname, bool missing_ok)
 	systable_endscan(tgscan);
 	table_close(tgrel, AccessShareLock);
 	return oid;
+}
+
+ /*
+  * TriggerGetRelations
+  *
+  * Collect all relations this trigger depends on.  The constraint trigger may
+  * reference another relation, we include it as well.
+  */
+List *
+TriggerGetRelations(Oid trigId)
+{
+	HeapTuple	ht_trig;
+	ScanKeyData skey[1];
+	SysScanDesc tgscan;
+	List	   *result = NIL;
+
+	/*
+	 * find the pg_trigger tuple by the Oid of the trigger
+	 */
+	Relation	tgrel = table_open(TriggerRelationId,
+								   AccessShareLock);
+
+	ScanKeyInit(&skey[0],
+				Anum_pg_trigger_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(trigId));
+	tgscan = systable_beginscan(tgrel, TriggerOidIndexId, true,
+								NULL, 1, skey);
+	ht_trig = systable_getnext(tgscan);
+
+	if (HeapTupleIsValid(ht_trig))
+	{
+		Form_pg_trigger trigrec = (Form_pg_trigger) GETSTRUCT(ht_trig);
+
+		Assert(trigrec->oid = trigId);
+
+		result = lappend_oid(result, trigrec->tgrelid);
+
+		if (OidIsValid(trigrec->tgconstrrelid))
+			result = lappend_oid(result, trigrec->tgconstrrelid);
+	}
+
+	/* Clean up */
+	systable_endscan(tgscan);
+
+	table_close(tgrel, AccessShareLock);
+
+	return result;
 }
 
 /*
@@ -6903,4 +6958,73 @@ bool
 AfterTriggerIsActive(void)
 {
 	return afterTriggers.firing_depth > 0;
+}
+
+/*
+ * transformTriggerStmt - parse analysis for CREATE TRIGGER
+ *
+ * To avoid race conditions, it's important that this function relies only on
+ * the passed-in relid (and not on stmt->relation) to determine the target
+ * relation.
+ */
+CreateTrigStmt *
+transformTriggerStmt(Oid relid, CreateTrigStmt *stmt, const char *queryString)
+{
+	ParseState *pstate;
+	ParseNamespaceItem *nsitem;
+	Relation	rel;
+
+	/*
+	 * Nothing to do if statement already transformed. transformed is set to
+	 * true if CreateTrigStmt has no whenClause.
+	 */
+	if (stmt->transformed)
+		return stmt;
+	else if (!stmt->whenClause)
+	{
+		stmt->transformed = true;
+
+		return stmt;
+	}
+
+	rel = relation_open(relid, NoLock);
+
+	/* Set up a pstate to parse with */
+	pstate = make_parsestate(NULL);
+	pstate->p_sourcetext = queryString;
+
+	/*
+	 * Set up nsitems for OLD and NEW references.
+	 *
+	 * 'OLD' must always have varno equal to 1 and 'NEW' equal to 2.
+	 */
+	nsitem = addRangeTableEntryForRelation(pstate, rel,
+										   AccessShareLock,
+										   makeAlias("old", NIL),
+										   false, false);
+	addNSItemToQuery(pstate, nsitem, false, true, true);
+
+	nsitem = addRangeTableEntryForRelation(pstate, rel,
+										   AccessShareLock,
+										   makeAlias("new", NIL),
+										   false, false);
+	addNSItemToQuery(pstate, nsitem, false, true, true);
+
+	/* Transform expression.  Copy to be sure we don't modify original */
+	stmt->whenClause = transformWhereClause(pstate,
+											copyObject(stmt->whenClause),
+											EXPR_KIND_TRIGGER_WHEN,
+											"WHEN");
+	/* we have to fix its collations too */
+	assign_expr_collations(pstate, stmt->whenClause);
+
+	free_parsestate(pstate);
+
+	/* Close relation */
+	table_close(rel, NoLock);
+
+	/* Mark statement as successfully transformed */
+	stmt->transformed = true;
+
+	return stmt;
 }

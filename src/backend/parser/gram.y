@@ -6209,6 +6209,8 @@ CreateTrigStmt:
 					n->deferrable = false;
 					n->initdeferred = false;
 					n->constrrel = NULL;
+					n->transformed = false;
+					n->trigcomment = NULL;
 					$$ = (Node *) n;
 				}
 		  | CREATE opt_or_replace CONSTRAINT TRIGGER name AFTER TriggerEvents ON
@@ -6259,6 +6261,8 @@ CreateTrigStmt:
 								   &n->deferrable, &n->initdeferred, &dummy,
 								   NULL, NULL, yyscanner);
 					n->constrrel = $10;
+					n->transformed = false;
+					n->trigcomment = NULL;
 					$$ = (Node *) n;
 				}
 		;

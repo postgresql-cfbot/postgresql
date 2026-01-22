@@ -892,6 +892,16 @@ pg_get_triggerdef(PG_FUNCTION_ARGS)
 	PG_RETURN_TEXT_P(string_to_text(res));
 }
 
+/*
+ * Internal version for use by ALTER TABLE.
+ * Returns a palloc'd C string with pretty-printing.
+ */
+char *
+pg_get_triggerobjdef_string(Oid trigid)
+{
+	return pg_get_triggerdef_worker(trigid, true);
+}
+
 Datum
 pg_get_triggerdef_ext(PG_FUNCTION_ARGS)
 {

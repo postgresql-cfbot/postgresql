@@ -644,6 +644,21 @@ ALTER FOREIGN TABLE foreign_schema.foreign_table_1
 ALTER FOREIGN TABLE foreign_schema.foreign_table_1
 	ENABLE TRIGGER trigtest_before_stmt;
 
+CREATE TRIGGER trigtest_before_rowwhen BEFORE UPDATE
+ON foreign_schema.foreign_table_1
+FOR EACH ROW
+WHEN (NEW.c7 = 1 OR OLD.c7 = 1)
+EXECUTE PROCEDURE dummy_trigger();
+ALTER FOREIGN TABLE foreign_schema.foreign_table_1 ALTER COLUMN c7 SET DATA TYPE text; --error
+ALTER FOREIGN TABLE foreign_schema.foreign_table_1 ALTER COLUMN c7 SET DATA TYPE numeric;
+
+SELECT 	pg_get_triggerdef(oid, true)
+FROM 	pg_trigger
+WHERE 	tgrelid = 'foreign_schema.foreign_table_1'::regclass
+AND		tgname = 'trigtest_before_rowwhen';
+ALTER FOREIGN TABLE foreign_schema.foreign_table_1 ALTER COLUMN c7 SET DATA TYPE int;
+
+DROP TRIGGER trigtest_before_rowwhen ON foreign_schema.foreign_table_1;
 DROP TRIGGER trigtest_before_stmt ON foreign_schema.foreign_table_1;
 DROP TRIGGER trigtest_before_row ON foreign_schema.foreign_table_1;
 DROP TRIGGER trigtest_after_stmt ON foreign_schema.foreign_table_1;

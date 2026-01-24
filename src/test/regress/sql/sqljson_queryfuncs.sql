@@ -511,3 +511,143 @@ SELECT JSON_VALUE(jsonb '1234', '$' RETURNING bit(3)  DEFAULT 1 ON ERROR);
 SELECT JSON_VALUE(jsonb '1234', '$' RETURNING bit(3)  DEFAULT 1::bit(3) ON ERROR);
 SELECT JSON_VALUE(jsonb '"111"', '$.a'  RETURNING bit(3) DEFAULT '1111' ON EMPTY);
 DROP DOMAIN queryfuncs_d_varbit3;
+
+--
+-- JSON_VALUE: ON MISMATCH
+--
+
+-- Setup test data
+SELECT '{"str": "not_a_number", "num": 123, "overflow": 9999999999, "arr": [1,2], "obj": {"k": "v"}, "date": "bad_date"}'::jsonb AS js \gset
+
+SELECT JSON_VALUE(:'js', '$.str' RETURNING int ERROR ON MISMATCH); -- Expected: ERROR: JSON item could not be cast to the target type
+SELECT JSON_VALUE(:'js', '$.str' RETURNING int DEFAULT -100 ON MISMATCH); -- Expected: -100
+SELECT JSON_VALUE(:'js', '$.str' RETURNING int NULL ON MISMATCH); -- Expected: NULL (empty row)
+SELECT JSON_VALUE(:'js', '$.str' RETURNING date DEFAULT '1970-01-01'::date ON MISMATCH); -- Expected: 01-01-1970
+SELECT JSON_VALUE(:'js', '$.overflow' RETURNING int DEFAULT -200 ON MISMATCH); -- Expected: -200
+
+SELECT JSON_VALUE(:'js', '$.overflow' RETURNING int NULL ON MISMATCH); -- Expected: NULL (empty row)
+
+-- Array -> Scalar (Should hit ON ERROR default, which is NULL)
+SELECT JSON_VALUE(:'js', '$.arr' RETURNING int DEFAULT -300 ON MISMATCH); -- Expected: NULL (empty row)
+
+-- 2. Object -> Scalar (Should hit ON ERROR default, which is NULL)
+SELECT JSON_VALUE(:'js', '$.obj' RETURNING int DEFAULT -300 ON MISMATCH); -- Expected: NULL (empty row)
+
+-- Verify it hits explicit ON ERROR
+SELECT JSON_VALUE(:'js', '$.arr' RETURNING int
+    DEFAULT -300 ON MISMATCH
+    DEFAULT -400 ON ERROR); -- Expected: -400
+
+-- Should trigger ON EMPTY, ignoring Mismatch/Error
+SELECT JSON_VALUE(:'js', '$.missing' RETURNING int
+    DEFAULT -1 ON EMPTY
+    DEFAULT -2 ON MISMATCH
+    DEFAULT -3 ON ERROR); -- Expected: -1
+
+-- Should trigger ON MISMATCH, ignoring Error
+SELECT JSON_VALUE(:'js', '$.str' RETURNING int
+    DEFAULT -1 ON EMPTY
+    DEFAULT -2 ON MISMATCH
+    DEFAULT -3 ON ERROR); -- Expected: -2
+
+-- Should trigger ON ERROR
+SELECT JSON_VALUE(:'js', '$.arr' RETURNING int
+    DEFAULT -1 ON EMPTY
+    DEFAULT -2 ON MISMATCH
+    DEFAULT -3 ON ERROR); -- Expected: -3
+
+-- If ON MISMATCH is missing, coercion errors fall through to ON ERROR
+SELECT JSON_VALUE(:'js', '$.str' RETURNING int
+    DEFAULT -1 ON EMPTY
+    DEFAULT -500 ON ERROR); -- Expected: -500
+
+SELECT JSON_VALUE(:'js', '$.str' RETURNING int ERROR ON MISMATCH ERROR ON ERROR); -- Expected: ERROR: JSON item could not be cast to the target type (with Hint)
+
+
+SELECT JSON_VALUE(:'js', '$.arr' RETURNING int ERROR ON MISMATCH ERROR ON ERROR); -- Expected: ERROR: JSON path expression in JSON_VALUE must return single scalar item
+
+-- 1. Valid Integer
+SELECT JSON_VALUE(:'js', '$.num' RETURNING int DEFAULT -100 ON MISMATCH); -- Expected: 123
+
+-- 2. Valid String-to-Integer Cast
+SELECT JSON_VALUE('{"num": "123"}'::jsonb, '$.num' RETURNING int DEFAULT -100 ON MISMATCH); -- Expected: 123
+
+--
+-- JSON_QUERY: ON MISMATCH TEST SUITE
+--
+-- Note: JSON_QUERY is distinct because it *can* return Arrays/Objects.
+-- Mismatches here occur when we force a RETURNING type (like int/date)
+-- that cannot represent the found JSON value.
+--
+
+-- 1. String -> Int Coercion Failure
+-- "str" is "not_a_number". Cannot cast to int.
+SELECT JSON_QUERY(:'js', '$.str'
+    RETURNING int
+       OMIT QUOTES
+       DEFAULT -1 ON MISMATCH) AS str_to_int; -- Expected: -1
+
+
+-- 2. Date Format Failure
+-- "date" is "bad_date". Cannot cast to date.
+SELECT JSON_QUERY(:'js', '$.date'
+    RETURNING date
+       OMIT QUOTES
+       DEFAULT '1900-01-01'::date ON MISMATCH) AS bad_date; -- Expected: 01-01-1900
+
+
+-- 3. Numeric Overflow
+-- "overflow" is 9999999999. Too big for standard integer (int4).
+SELECT JSON_QUERY(:'js', '$.overflow'
+    RETURNING int
+       OMIT QUOTES
+       DEFAULT -999 ON MISMATCH) AS overflow_check; -- Expected: -999
+
+
+-- 4. Structure -> Scalar Mismatch (Unique to JSON_QUERY vs VALUE)
+-- "arr" is [1, 2].
+-- JSON_QUERY finds it successfully (unlike JSON_VALUE which might error on cardinality).
+-- However, we ask for RETURNING int. [1,2] cannot be cast to int.
+SELECT JSON_QUERY(:'js', '$.arr'
+    RETURNING int
+       OMIT QUOTES
+       DEFAULT -10 ON MISMATCH) AS array_to_int; -- Expected: -10
+
+-- 5. Object -> Scalar Mismatch
+-- "obj" is {"k": "v"}. Cannot cast object to int.
+SELECT JSON_QUERY(:'js', '$.obj'
+    RETURNING int
+       OMIT QUOTES
+       DEFAULT -20 ON MISMATCH) AS obj_to_int; -- Expected: -20
+
+-- 6. Precedence Check: EMPTY vs MISMATCH
+-- "missing" does not exist. Should trigger ON EMPTY, not ON MISMATCH.
+SELECT JSON_QUERY(:'js', '$.missing'
+    RETURNING int
+       OMIT QUOTES
+       DEFAULT -1 ON EMPTY
+       DEFAULT -2 ON MISMATCH
+       DEFAULT -3 ON ERROR) AS precedence_empty; -- Expected: -1
+
+-- 7. Precedence Check: MISMATCH vs ERROR
+-- "str" exists but is "not_a_number". Should trigger ON MISMATCH.
+SELECT JSON_QUERY(:'js', '$.str'
+    RETURNING int
+       OMIT QUOTES
+       DEFAULT -1 ON EMPTY
+       DEFAULT -2 ON MISMATCH
+       DEFAULT -3 ON ERROR) AS precedence_mismatch; -- Expected: -2
+
+-- 8. "Clean" Pass-through (Control Test)
+-- "num" is 123. Valid int. Should return 123.
+SELECT JSON_QUERY(:'js', '$.num'
+    RETURNING int
+       OMIT QUOTES
+       DEFAULT -1 ON MISMATCH) AS valid_int; -- Expected: 123
+
+-- 9. ERROR ON MISMATCH (Explicit)
+-- Should fail with the specific hint message
+SELECT JSON_QUERY(:'js', '$.str'
+    RETURNING int
+       OMIT QUOTES
+       ERROR ON MISMATCH); -- Expected: ERROR: JSON item could not be cast to the target type -- Hint: Use ON MISMATCH to handle this specific coercion failure.

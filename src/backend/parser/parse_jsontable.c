@@ -436,6 +436,7 @@ transformJsonTableColumn(JsonTableColumn *jtc, Node *contextItemExpr,
 	jfexpr->output->returning = makeNode(JsonReturning);
 	jfexpr->output->returning->format = jtc->format;
 	jfexpr->on_empty = jtc->on_empty;
+	jfexpr->on_mismatch = jtc->on_mismatch;
 	jfexpr->on_error = jtc->on_error;
 	jfexpr->quotes = jtc->quotes;
 	jfexpr->wrapper = jtc->wrapper;

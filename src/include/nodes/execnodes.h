@@ -1129,12 +1129,15 @@ typedef struct JsonExprState
 	/* Set to true if the jsonpath evaluation returned 0 items. */
 	NullableDatum empty;
 
+	NullableDatum mismatch;
+
 	/*
 	 * Addresses of steps that implement the non-ERROR variant of ON EMPTY and
 	 * ON ERROR behaviors, respectively.
 	 */
 	int			jump_empty;
 	int			jump_error;
+	int			jump_mismatch;
 
 	/*
 	 * Address of the step to coerce the result value of jsonpath evaluation

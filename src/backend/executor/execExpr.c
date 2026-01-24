@@ -4750,6 +4750,7 @@ ExecInitJsonExpr(JsonExpr *jsexpr, ExprState *state,
 	ListCell   *argnamelc;
 	List	   *jumps_return_null = NIL;
 	List	   *jumps_to_end = NIL;
+	List	   *jumps_to_mismatch = NIL;
 	ListCell   *lc;
 	ErrorSaveContext *escontext;
 	bool		returning_domain =
@@ -4833,7 +4834,7 @@ ExecInitJsonExpr(JsonExpr *jsexpr, ExprState *state,
 	scratch->d.constval.isnull = true;
 	ExprEvalPushStep(state, scratch);
 
-	escontext = jsexpr->on_error->btype != JSON_BEHAVIOR_ERROR ?
+	escontext = (jsexpr->on_error->btype != JSON_BEHAVIOR_ERROR || jsexpr->on_mismatch != NULL) ?
 		&jsestate->escontext : NULL;
 
 	/*
@@ -4899,9 +4900,38 @@ ExecInitJsonExpr(JsonExpr *jsexpr, ExprState *state,
 		scratch->opcode = EEOP_JSONEXPR_COERCION_FINISH;
 		scratch->d.jsonexpr.jsestate = jsestate;
 		ExprEvalPushStep(state, scratch);
+
+		/* If a mismatch occurred, jump directly to the mismatch handler */
+		if (jsexpr->on_mismatch)
+		{
+			/*
+			 * Step 1: If Mismatch is FALSE, skip the next instruction (the
+			 * unconditional jump). Target: The instruction AFTER the next one
+			 * (Current + 2).
+			 */
+			scratch->opcode = EEOP_JUMP_IF_NOT_TRUE;
+			scratch->resvalue = &jsestate->mismatch.value;
+			scratch->resnull = &jsestate->mismatch.isnull;
+			scratch->d.jump.jumpdone = state->steps_len + 2;
+			ExprEvalPushStep(state, scratch);
+
+			/*
+			 * Step 2: If we are here, Mismatch is TRUE. Jump unconditionally
+			 * to the handler.
+			 */
+			scratch->opcode = EEOP_JUMP;
+			scratch->d.jump.jumpdone = -1;	/* Patched later in the loop */
+			ExprEvalPushStep(state, scratch);
+
+			/*
+			 * Track the UNCONDITIONAL jump (Step 2) so we can resolve it to
+			 * the handler
+			 */
+			jumps_to_mismatch = lappend_int(jumps_to_mismatch, state->steps_len - 1);
+		}
 	}
 
-	jsestate->jump_empty = jsestate->jump_error = -1;
+	jsestate->jump_empty = jsestate->jump_error = jsestate->jump_mismatch = -1;
 
 	/*
 	 * Step to check jsestate->error and return the ON ERROR expression if
@@ -4969,6 +4999,72 @@ ExecInitJsonExpr(JsonExpr *jsexpr, ExprState *state,
 		scratch->d.jump.jumpdone = -1;
 		ExprEvalPushStep(state, scratch);
 	}
+
+	/*
+	 * Step to check jsestate->mismatch and return the ON MISMATCH expression
+	 * if there is one.
+	 */
+	if (jsexpr->on_mismatch != NULL &&
+		jsexpr->on_mismatch->btype != JSON_BEHAVIOR_ERROR &&
+		(!(IsA(jsexpr->on_mismatch->expr, Const) &&
+		   ((Const *) jsexpr->on_mismatch->expr)->constisnull) ||
+		 returning_domain))
+	{
+		ErrorSaveContext *saved_escontext;
+
+		jsestate->jump_mismatch = state->steps_len;
+
+		/* JUMP to end if mismatch flag is false (skip this handler) */
+		jumps_to_end = lappend_int(jumps_to_end, state->steps_len);
+		scratch->opcode = EEOP_JUMP_IF_NOT_TRUE;
+		scratch->resvalue = &jsestate->mismatch.value;
+		scratch->resnull = &jsestate->mismatch.isnull;
+		scratch->d.jump.jumpdone = -1;	/* set below */
+		ExprEvalPushStep(state, scratch);
+
+		/*
+		 * Evaluate the ON MISMATCH expression (e.g. DEFAULT -1). Use soft
+		 * error handling so we can re-throw safely if needed.
+		 */
+		saved_escontext = state->escontext;
+		state->escontext = escontext;
+		ExecInitExprRec((Expr *) jsexpr->on_mismatch->expr,
+						state, resv, resnull);
+		state->escontext = saved_escontext;
+
+		/* Coerce the result if the DEFAULT value needs casting */
+		if (jsexpr->on_mismatch->coerce)
+			ExecInitJsonCoercion(state, jsexpr->returning, escontext,
+								 jsexpr->omit_quotes, false,
+								 resv, resnull);
+
+		/* Add COERCION_FINISH step to verify the DEFAULT value's validity */
+		if (jsexpr->on_mismatch->coerce ||
+			IsA(jsexpr->on_mismatch->expr, CoerceViaIO) ||
+			IsA(jsexpr->on_mismatch->expr, CoerceToDomain))
+		{
+			scratch->opcode = EEOP_JSONEXPR_COERCION_FINISH;
+			scratch->resvalue = resv;
+			scratch->resnull = resnull;
+			scratch->d.jsonexpr.jsestate = jsestate;
+			ExprEvalPushStep(state, scratch);
+		}
+
+		/* Resolve jumps from CoercionFinish to here */
+		foreach(lc, jumps_to_mismatch)
+		{
+			ExprEvalStep *as = &state->steps[lfirst_int(lc)];
+
+			as->d.jump.jumpdone = jsestate->jump_mismatch;
+		}
+
+		/* JUMP to end (skip subsequent ON EMPTY checks if we matched here) */
+		jumps_to_end = lappend_int(jumps_to_end, state->steps_len);
+		scratch->opcode = EEOP_JUMP;
+		scratch->d.jump.jumpdone = -1;
+		ExprEvalPushStep(state, scratch);
+	}
+
 
 	/*
 	 * Step to check jsestate->empty and return the ON EMPTY expression if

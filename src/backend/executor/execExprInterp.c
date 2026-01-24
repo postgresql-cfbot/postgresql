@@ -4922,9 +4922,10 @@ ExecEvalJsonExprPath(ExprState *state, ExprEvalStep *op,
 	item = jsestate->formatted_expr.value;
 	path = DatumGetJsonPathP(jsestate->pathspec.value);
 
-	/* Set error/empty to false. */
+	/* Set error/empty/mismatch to false. */
 	memset(&jsestate->error, 0, sizeof(NullableDatum));
 	memset(&jsestate->empty, 0, sizeof(NullableDatum));
+	memset(&jsestate->mismatch, 0, sizeof(NullableDatum));
 
 	/* Also reset ErrorSaveContext contents for the next row. */
 	if (jsestate->escontext.details_wanted)
@@ -5009,6 +5010,10 @@ ExecEvalJsonExprPath(ExprState *state, ExprEvalStep *op,
 			return false;
 	}
 
+	/* Request Error Details so we can see the error code */
+	if (jsexpr->on_mismatch)
+		jsestate->escontext.details_wanted = true;
+
 	/*
 	 * Coerce the result value to the RETURNING type by calling its input
 	 * function.
@@ -5032,7 +5037,40 @@ ExecEvalJsonExprPath(ExprState *state, ExprEvalStep *op,
 		fcinfo->isnull = false;
 		*op->resvalue = FunctionCallInvoke(fcinfo);
 		if (SOFT_ERROR_OCCURRED(&jsestate->escontext))
-			error = true;
+		{
+			/* Check for Type Mismatch codes */
+			/*
+			 * * We capture: 1. INVALID_TEXT_REPRESENTATION (e.g. "abc" ->
+			 * int) 2. NUMERIC_VALUE_OUT_OF_RANGE (e.g. 10000000000 -> int4)
+			 * 3. INVALID_DATETIME_FORMAT (if casting to date/timestamp)
+			 */
+			if (jsexpr->on_mismatch &&
+				jsestate->escontext.error_data &&
+				(jsestate->escontext.error_data->sqlerrcode == ERRCODE_INVALID_TEXT_REPRESENTATION ||
+				 jsestate->escontext.error_data->sqlerrcode == ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE ||
+				 jsestate->escontext.error_data->sqlerrcode == ERRCODE_INVALID_DATETIME_FORMAT))
+			{
+				/*
+				 * We must suppress the generic error so ON ERROR does not
+				 * catch it. We will handle the "ON MISMATCH ERROR" case
+				 * manually later.
+				 */
+				jsestate->escontext.error_occurred = false;
+
+				pfree(jsestate->escontext.error_data);
+				jsestate->escontext.error_data = NULL;
+
+				jsestate->mismatch.value = BoolGetDatum(true);
+				jsestate->mismatch.isnull = false;
+
+				*op->resvalue = (Datum) 0;
+				*op->resnull = true;
+			}
+			else
+			{
+				error = true;
+			}
+		}
 	}
 
 	/*
@@ -5097,6 +5135,32 @@ ExecEvalJsonExprPath(ExprState *state, ExprEvalStep *op,
 		jsestate->escontext.details_wanted = true;
 		/* Jump to end if the ON ERROR behavior is to return NULL */
 		return jsestate->jump_error >= 0 ? jsestate->jump_error : jsestate->jump_end;
+	}
+
+	if (DatumGetBool(jsestate->mismatch.value))
+	{
+		if (jsexpr->on_mismatch->btype == JSON_BEHAVIOR_ERROR)
+		{
+			/*
+			 * If the user asked for ERROR ON MISMATCH, we explicitly throw
+			 * here. We cannot let this fall through, or it will return NULL.
+			 */
+			ereport(ERROR,
+					(errcode(ERRCODE_SQL_JSON_ITEM_CANNOT_BE_CAST_TO_TARGET_TYPE),
+					 errmsg("JSON item could not be cast to the target type"),
+					 errhint("Use ON MISMATCH to handle this specific coercion failure.")));
+		}
+		else
+		{
+			*op->resvalue = (Datum) 0;
+			*op->resnull = true;
+
+			/* Reset context for the DEFAULT expression evaluation */
+			jsestate->escontext.error_occurred = false;
+			jsestate->escontext.details_wanted = true;
+
+			return jsestate->jump_mismatch >= 0 ? jsestate->jump_mismatch : jsestate->jump_end;
+		}
 	}
 
 	return jump_eval_coercion >= 0 ? jump_eval_coercion : jsestate->jump_end;
@@ -5269,6 +5333,50 @@ ExecEvalJsonCoercionFinish(ExprState *state, ExprEvalStep *op)
 
 	if (SOFT_ERROR_OCCURRED(&jsestate->escontext))
 	{
+		ErrorData  *errdata = jsestate->escontext.error_data;
+
+		/*
+		 * Check for Mismatch codes (Text, Numeric, Date) Check
+		 * jsexpr->on_mismatch, not jump_mismatch, to handle ERROR behavior
+		 * too
+		 */
+		if (jsestate->jsexpr->on_mismatch &&
+			errdata != NULL &&
+			(jsestate->jsexpr->op == JSON_VALUE_OP || jsestate->jsexpr->op == JSON_QUERY_OP) &&
+			(errdata->sqlerrcode == ERRCODE_INVALID_TEXT_REPRESENTATION ||
+			 errdata->sqlerrcode == ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE ||
+			 errdata->sqlerrcode == ERRCODE_INVALID_DATETIME_FORMAT))
+		{
+			/*
+			 * * CASE 1: ERROR ON MISMATCH If the user wants an error, we MUST
+			 * throw it here. We cannot rely on the interpreter loop because
+			 * ExecInitJsonExpr does not generate handler steps for ERROR
+			 * behavior.
+			 */
+			if (jsestate->jsexpr->on_mismatch->btype == JSON_BEHAVIOR_ERROR)
+			{
+				ereport(ERROR,
+						(errcode(ERRCODE_SQL_JSON_ITEM_CANNOT_BE_CAST_TO_TARGET_TYPE),
+						 errmsg("JSON item could not be cast to the target type"),
+						 errhint("Use ON MISMATCH to handle this specific coercion failure.")));
+			}
+
+			/*
+			 * * CASE 2: DEFAULT ... ON MISMATCH Mark mismatch as active. The
+			 * interpreter loop will see this flag and jump to the DEFAULT
+			 * expression we generated in ExecInitJsonExpr.
+			 */
+			jsestate->mismatch.value = BoolGetDatum(true);
+			jsestate->mismatch.isnull = false;
+
+			/* Suppress the generic error so we don't trigger ON ERROR */
+			jsestate->escontext.error_occurred = false;
+			jsestate->escontext.details_wanted = true;
+
+			/* Return immediately to let the interpreter handle the Jump */
+			return;
+		}
+
 		/*
 		 * jsestate->error or jsestate->empty being set means that the error
 		 * occurred when coercing the JsonBehavior value.  Throw the error in

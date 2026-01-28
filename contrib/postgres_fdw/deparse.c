@@ -2198,6 +2198,62 @@ deparseInsertSql(StringInfo buf, RangeTblEntry *rte,
 }
 
 /*
+ *  Build a COPY FROM STDIN statement using the TEXT format
+ */
+void
+deparseCopySql(StringInfo buf, Relation rel, List *target_attrs)
+{
+	Oid			relid = RelationGetRelid(rel);
+	TupleDesc	tupdesc = RelationGetDescr(rel);
+	bool		first = true;
+	int			nattrs = list_length(target_attrs);
+
+	appendStringInfo(buf, "COPY ");
+	deparseRelation(buf, rel);
+	if (nattrs > 0)
+		appendStringInfoChar(buf, '(');
+
+	foreach_int(attnum, target_attrs)
+	{
+		Form_pg_attribute attr = TupleDescAttr(tupdesc, attnum - 1);
+		char	   *colname;
+		List	   *options;
+		ListCell   *lc;
+
+		if (attr->attgenerated)
+			continue;
+
+		if (!first)
+			appendStringInfoString(buf, ", ");
+
+		first = false;
+
+		/* Use attribute name or column_name option. */
+		colname = NameStr(attr->attname);
+		options = GetForeignColumnOptions(relid, attnum);
+		foreach(lc, options)
+		{
+			DefElem    *def = (DefElem *) lfirst(lc);
+
+			if (strcmp(def->defname, "column_name") == 0)
+			{
+				colname = defGetString(def);
+				break;
+			}
+		}
+
+		appendStringInfoString(buf, quote_identifier(colname));
+	}
+	if (nattrs > 0)
+		appendStringInfoString(buf, ") FROM STDIN");
+	else
+		appendStringInfoString(buf, " FROM STDIN");
+
+	appendStringInfoString(buf, " (FORMAT TEXT)");
+}
+
+
+/*
  * rebuild remote INSERT statement
  *
  * Provided a number of rows in a batch, builds INSERT statement with the

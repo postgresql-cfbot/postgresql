@@ -2063,6 +2063,37 @@ select * from gloc1;
 select * from grem1;
 delete from grem1;
 
+-- test that fdw also use COPY FROM as a remote sql
+set client_min_messages to 'log';
+
+create function insert_or_copy() returns trigger as $$
+declare query text;
+begin
+    query := current_query();
+    raise notice '%', query;
+return new;
+end;
+$$ language plpgsql;
+
+CREATE TRIGGER trig_row_before
+BEFORE INSERT OR UPDATE OR DELETE ON gloc1
+FOR EACH ROW EXECUTE PROCEDURE insert_or_copy();
+
+copy grem1 from stdin;
+3
+\.
+
+drop trigger trig_row_before on gloc1;
+reset client_min_messages;
+
+-- test that copy does not fail with column_name alias
+create table gloc2(xxx int);
+create foreign table grem2(a int) server loopback options(table_name 'gloc2');
+alter foreign table grem2 alter column a options (column_name 'xxx');
+copy grem2 from stdin;
+1
+\.
+
 -- test batch insert
 alter server loopback options (add batch_size '10');
 explain (verbose, costs off)
@@ -2088,6 +2119,24 @@ select count(*) from tab_batch_sharded;
 drop table tab_batch_local;
 drop table tab_batch_sharded;
 drop table tab_batch_sharded_p1_remote;
+
+-- test batch insert using copy
+set client_min_messages to 'debug1';
+copy grem1 from stdin;
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+\.
+reset client_min_messages;
 
 alter server loopback options (drop batch_size);
 
@@ -3152,6 +3201,39 @@ select * from rem2;
 drop trigger trig_null on loc2;
 
 delete from rem2;
+
+-- Test COPY FROM with column list and special characters
+copy rem2 (f1, f2) from stdin;
+1	hello\nworld
+\.
+select * from rem2;
+
+delete from rem2;
+
+-- Test COPY with NULL and special characters
+copy rem2 from stdin;
+1	\N
+\N	bar
+3	a"b
+\.
+select * from rem2;
+
+delete from rem2;
+
+-- Test that float numbers do not loose precision when sending to the foreign
+-- server
+create table f(a float);
+create foreign table f_fdw(a float) server loopback options(table_name 'f');
+
+set extra_float_digits = 0;
+copy f_fdw from stdin;
+1.0000000000000002
+\.
+
+reset extra_float_digits;
+select * from f;
+
+drop table f;
 
 -- Check with zero-column foreign table; batch insert will be disabled
 alter table loc2 drop column f1;

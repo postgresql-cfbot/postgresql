@@ -5175,12 +5175,6 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* Recursion occurs during execution phase */
 			pass = AT_PASS_DROP;
 			break;
-		case AT_AddIndex:		/* ADD INDEX */
-			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_PARTITIONED_TABLE);
-			/* This command never recurses */
-			/* No command-specific prep needed */
-			pass = AT_PASS_ADD_INDEX;
-			break;
 		case AT_AddConstraint:	/* ADD CONSTRAINT */
 			ATSimplePermissions(cmd->subtype, rel,
 								ATT_TABLE | ATT_PARTITIONED_TABLE | ATT_FOREIGN_TABLE);
@@ -5193,11 +5187,21 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			}
 			pass = AT_PASS_ADD_CONSTR;
 			break;
+		case AT_AddIndex:		/* ADD INDEX */
 		case AT_AddIndexConstraint: /* ADD CONSTRAINT USING INDEX */
-			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_PARTITIONED_TABLE);
-			/* This command never recurses */
-			/* No command-specific prep needed */
-			pass = AT_PASS_ADD_INDEXCONSTR;
+
+			/*
+			 * These subtypes should never reach ATPrepCmd().
+			 *
+			 * ADD INDEX and ADD CONSTRAINT USING INDEX are initially parsed
+			 * as AT_AddConstraint. During execution, ATParseTransformCmd()
+			 * transforms them into AT_AddIndex or AT_AddIndexConstraint and
+			 * appends them directly to the subcommand list, bypassing
+			 * ATPrepCmd().
+			 *
+			 * See ATParseTransformCmd() and transformAlterTableStmt().
+			 */
+			Assert(false);
 			break;
 		case AT_DropConstraint: /* DROP CONSTRAINT */
 			ATSimplePermissions(cmd->subtype, rel,

@@ -483,15 +483,25 @@ static void IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
 static void setPath(JsonbIterator **it, const Datum *path_elems,
 					const bool *path_nulls, int path_len,
 					JsonbInState *st, int level, JsonbValue *newval,
-					int op_type);
+					int op_type, const Oid *index_oid);
 static void setPathObject(JsonbIterator **it, const Datum *path_elems,
 						  const bool *path_nulls, int path_len, JsonbInState *st,
 						  int level,
-						  JsonbValue *newval, uint32 npairs, int op_type);
+						  JsonbValue *newval, uint32 npairs, int op_type,
+						  const Oid *index_oid);
 static void setPathArray(JsonbIterator **it, const Datum *path_elems,
 						 const bool *path_nulls, int path_len, JsonbInState *st,
 						 int level,
-						 JsonbValue *newval, uint32 nelems, int op_type);
+						 JsonbValue *newval, uint32 nelems, int op_type,
+						 const Oid *index_oid);
+static Jsonb *wrap_container_in_array(JsonbContainer *container);
+static Jsonb *wrap_scalar_in_array(JsonbValue *scalar);
+static bool is_lax_subscript_in_bounds(Datum subscript, long *index_out);
+static void setPath_lax_assignment(Datum subscript, int level, int path_len,
+								   JsonbInState *st, JsonbValue *newval, int op_type,
+								   Jsonb *value, bool is_scalar,
+								   const Datum *path_elems, const bool *path_nulls,
+								   const Oid *index_oid);
 
 /* function supporting iterate_json_values */
 static JsonParseErrorType iterate_values_scalar(void *state, char *token, JsonTokenType tokentype);
@@ -1522,7 +1532,7 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 
 	deconstruct_array_builtin(path, TEXTOID, &pathtext, &pathnulls, &npath);
 
-	res = jsonb_get_element(jb, pathtext, npath, &isnull, as_text);
+	res = jsonb_get_element(jb, pathtext, npath, &isnull, as_text, NULL);
 
 	if (isnull)
 		PG_RETURN_NULL();
@@ -1530,8 +1540,142 @@ get_jsonb_path_all(FunctionCallInfo fcinfo, bool as_text)
 		PG_RETURN_DATUM(res);
 }
 
+/*
+ * Check whether the subscript at the given level is a lax array access
+ * (integer or numeric index, as opposed to a text key for field access).
+ */
+static inline bool
+is_lax_array_access(const Oid *index_oid, int level)
+{
+	return index_oid != NULL &&
+		(index_oid[level] == INT4OID || index_oid[level] == NUMERICOID);
+}
+
+/*
+ * Wrap a jsonb object in a single-element array.
+ * Used for out-of-bounds lax-mode assignment (reads return NULL instead).
+ */
+static Jsonb *
+wrap_container_in_array(JsonbContainer *container)
+{
+	JsonbInState wrapState = {0};
+	JsonbIterator *it = JsonbIteratorInit(container);
+	JsonbIteratorToken tok;
+	JsonbValue	v;
+
+	pushJsonbValue(&wrapState, WJB_BEGIN_ARRAY, NULL);
+	while ((tok = JsonbIteratorNext(&it, &v, false)) != WJB_DONE)
+		pushJsonbValue(&wrapState, tok, tok < WJB_BEGIN_ARRAY ? &v : NULL);
+	pushJsonbValue(&wrapState, WJB_END_ARRAY, NULL);
+
+	return JsonbValueToJsonb(wrapState.result);
+}
+
+/*
+ * Wrap a scalar JsonbValue in a single-element, non-raw array.
+ * Used for out-of-bounds lax-mode assignment (reads return NULL instead).
+ */
+static Jsonb *
+wrap_scalar_in_array(JsonbValue *scalar)
+{
+	JsonbValue	wrapper;
+
+	wrapper.type = jbvArray;
+	wrapper.val.array.nElems = 1;
+	wrapper.val.array.elems = scalar;
+	wrapper.val.array.rawScalar = false;
+	return JsonbValueToJsonb(&wrapper);
+}
+
+/*
+ * Parse an integer subscript and check if it's in-bounds for a
+ * single-element array (index 0 or -1).
+ */
+static bool
+is_lax_subscript_in_bounds(Datum subscript, long *index_out)
+{
+	char	   *indextext = TextDatumGetCString(subscript);
+	char	   *endptr;
+	long		index;
+
+	index = strtol(indextext, &endptr, 10);
+	if (index_out)
+		*index_out = index;
+	return (index == 0 || index == -1);
+}
+
+/*
+ * Handle lax array access on a non-array value during assignment.
+ * The value must already be materialized as a Jsonb.
+ *
+ * For in-bounds (0/-1): virtual wrap - either push newval (terminal) or
+ * recurse at level+1 (intermediate).
+ * For out-of-bounds: actual wrap and recurse at same level.
+ */
+static void
+setPath_lax_assignment(Datum subscript, int level, int path_len,
+					   JsonbInState *st, JsonbValue *newval, int op_type,
+					   Jsonb *value, bool is_scalar,
+					   const Datum *path_elems, const bool *path_nulls,
+					   const Oid *index_oid)
+{
+	long		index;
+	JsonbIterator *newit;
+
+	if (is_lax_subscript_in_bounds(subscript, &index))
+	{
+		/* In-bounds: virtual wrap */
+		if (level == path_len - 1)
+		{
+			/* Terminal: replace with newval directly */
+			if (newval != NULL && !(op_type & JB_PATH_DELETE))
+				pushJsonbValue(st, WJB_VALUE, newval);
+		}
+		else
+		{
+			/* Intermediate: skip this level, recurse at level+1 */
+			newit = JsonbIteratorInit(&value->root);
+			setPath(&newit, path_elems, path_nulls, path_len,
+					st, level + 1, newval, op_type, index_oid);
+		}
+	}
+	else
+	{
+		/* Out-of-bounds: actual wrap */
+		Jsonb	   *wrapped;
+
+		if (is_scalar)
+		{
+			/*
+			 * Scalar is stored as rawScalar array in Jsonb.  Extract it by
+			 * iterating: WJB_BEGIN_ARRAY, WJB_ELEM (the scalar), ...
+			 */
+			JsonbIterator *extract_it = JsonbIteratorInit(&value->root);
+			JsonbValue	scalar;
+
+			JsonbIteratorNext(&extract_it, &scalar, false); /* WJB_BEGIN_ARRAY */
+			JsonbIteratorNext(&extract_it, &scalar, false); /* WJB_ELEM */
+			wrapped = wrap_scalar_in_array(&scalar);
+		}
+		else
+			wrapped = wrap_container_in_array(&value->root);
+
+		newit = JsonbIteratorInit(&wrapped->root);
+		setPath(&newit, path_elems, path_nulls, path_len,
+				st, level, newval, op_type, index_oid);
+	}
+}
+
+/*
+ * Fetch an element from a jsonb value using a path of subscripts.
+ *
+ * If index_oid is non-NULL, it provides the type OID of each subscript
+ * to enable SQL/JSON lax mode: integer subscripts on non-array values
+ * treat the value as a single-element array.  If NULL, lax mode is disabled.
+ */
 Datum
-jsonb_get_element(Jsonb *jb, const Datum *path, int npath, bool *isnull, bool as_text)
+jsonb_get_element(Jsonb *jb, const Datum *path, int npath, bool *isnull,
+				  bool as_text, const Oid *index_oid)
 {
 	JsonbContainer *container = &jb->root;
 	JsonbValue *jbvp = NULL;
@@ -1549,9 +1693,13 @@ jsonb_get_element(Jsonb *jb, const Datum *path, int npath, bool *isnull, bool as
 	else
 	{
 		Assert(JB_ROOT_IS_ARRAY(jb) && JB_ROOT_IS_SCALAR(jb));
-		/* Extract the scalar value, if it is what we'll return */
-		if (npath <= 0)
-			jbvp = getIthJsonbValueFromContainer(container, 0);
+
+		/*
+		 * Extract the scalar value.  We need this both when returning the
+		 * scalar directly (npath <= 0) and for lax mode in-bounds access
+		 * which also returns the scalar (npath > 0, index 0 or -1).
+		 */
+		jbvp = getIthJsonbValueFromContainer(container, 0);
 	}
 
 	/*
@@ -1579,6 +1727,48 @@ jsonb_get_element(Jsonb *jb, const Datum *path, int npath, bool *isnull, bool as
 
 	for (i = 0; i < npath; i++)
 	{
+		if (is_lax_array_access(index_oid, i) && !have_array)
+		{
+			/*
+			 * SQL/JSON lax mode: integer subscript on a non-array value
+			 * (scalar or object).  Virtual wrap: treat as single-element
+			 * array.  Index 0 or -1 returns the value; other indices return
+			 * NULL.
+			 */
+			if (is_lax_subscript_in_bounds(path[i], NULL))
+			{
+				/*
+				 * In-bounds for virtual single-element array.
+				 */
+				if (i == npath - 1)
+				{
+					/*
+					 * Terminal: return current value.  For nested objects,
+					 * jbvp is already set from previous iteration.  For root
+					 * level object, create jbvp from jb.  For scalars, jbvp
+					 * is already set.
+					 */
+					if (have_object && jbvp == NULL)
+					{
+						/* Root level object */
+						jbvp = palloc(sizeof(JsonbValue));
+						jbvp->type = jbvBinary;
+						jbvp->val.binary.data = container;
+						jbvp->val.binary.len = VARSIZE(jb) - VARHDRSZ;
+					}
+					break;
+				}
+				/* Intermediate: continue to next path element */
+				continue;
+			}
+			else
+			{
+				/* Out-of-bounds: return NULL */
+				*isnull = true;
+				return PointerGetDatum(NULL);
+			}
+		}
+
 		if (have_object)
 		{
 			text	   *subscr = DatumGetTextPP(path[i]);
@@ -1678,9 +1868,16 @@ jsonb_get_element(Jsonb *jb, const Datum *path, int npath, bool *isnull, bool as
 	}
 }
 
+/*
+ * Assign a value to a jsonb element at a path of subscripts.
+ *
+ * If index_oid is non-NULL, it provides the type OID of each subscript
+ * to enable SQL/JSON lax mode: integer subscripts on non-array values
+ * treat the value as a single-element array.  If NULL, lax mode is disabled.
+ */
 Datum
 jsonb_set_element(Jsonb *jb, const Datum *path, int path_len,
-				  JsonbValue *newval)
+				  JsonbValue *newval, const Oid *index_oid)
 {
 	JsonbInState state = {0};
 	JsonbIterator *it;
@@ -1693,7 +1890,7 @@ jsonb_set_element(Jsonb *jb, const Datum *path, int path_len,
 
 	setPath(&it, path, path_nulls, path_len, &state, 0, newval,
 			JB_PATH_CREATE | JB_PATH_FILL_GAPS |
-			JB_PATH_CONSISTENT_POSITION);
+			JB_PATH_CONSISTENT_POSITION, index_oid);
 
 	pfree(path_nulls);
 
@@ -4889,7 +5086,7 @@ jsonb_set(PG_FUNCTION_ARGS)
 	it = JsonbIteratorInit(&in->root);
 
 	setPath(&it, path_elems, path_nulls, path_len, &st,
-			0, &newval, create ? JB_PATH_CREATE : JB_PATH_REPLACE);
+			0, &newval, create ? JB_PATH_CREATE : JB_PATH_REPLACE, NULL);
 
 	PG_RETURN_JSONB_P(JsonbValueToJsonb(st.result));
 }
@@ -4993,7 +5190,7 @@ jsonb_delete_path(PG_FUNCTION_ARGS)
 	it = JsonbIteratorInit(&in->root);
 
 	setPath(&it, path_elems, path_nulls, path_len, &st,
-			0, NULL, JB_PATH_DELETE);
+			0, NULL, JB_PATH_DELETE, NULL);
 
 	PG_RETURN_JSONB_P(JsonbValueToJsonb(st.result));
 }
@@ -5035,7 +5232,7 @@ jsonb_insert(PG_FUNCTION_ARGS)
 	it = JsonbIteratorInit(&in->root);
 
 	setPath(&it, path_elems, path_nulls, path_len, &st, 0, &newval,
-			after ? JB_PATH_INSERT_AFTER : JB_PATH_INSERT_BEFORE);
+			after ? JB_PATH_INSERT_AFTER : JB_PATH_INSERT_BEFORE, NULL);
 
 	PG_RETURN_JSONB_P(JsonbValueToJsonb(st.result));
 }
@@ -5169,13 +5366,18 @@ IteratorConcat(JsonbIterator **it1, JsonbIterator **it2,
  * and a negative index out of the range, so this behavior will be prevented
  * and return an error.
  *
+ * If index_oid is non-NULL, it provides the type OID of each subscript
+ * to enable SQL/JSON lax mode: integer subscripts on non-array values
+ * treat the value as a single-element array.  If NULL, lax mode is disabled.
+ *
  * All path elements before the last must already exist
  * whatever bits in op_type are set, or nothing is done.
  */
 static void
 setPath(JsonbIterator **it, const Datum *path_elems,
 		const bool *path_nulls, int path_len,
-		JsonbInState *st, int level, JsonbValue *newval, int op_type)
+		JsonbInState *st, int level, JsonbValue *newval, int op_type,
+		const Oid *index_oid)
 {
 	JsonbValue	v;
 	JsonbIteratorToken r;
@@ -5195,6 +5397,26 @@ setPath(JsonbIterator **it, const Datum *path_elems,
 		case WJB_BEGIN_ARRAY:
 
 			/*
+			 * SQL/JSON lax mode: if this subscript is an element access
+			 * (integer) and the value is a raw scalar, handle lax assignment.
+			 */
+			if (is_lax_array_access(index_oid, level) && v.val.array.rawScalar)
+			{
+				JsonbValue	scalar_v;
+				Jsonb	   *scalar_jb;
+
+				/* Consume scalar + end_array from original iterator */
+				JsonbIteratorNext(it, &scalar_v, false);	/* WJB_ELEM */
+				JsonbIteratorNext(it, &v, false);	/* WJB_END_ARRAY */
+
+				scalar_jb = JsonbValueToJsonb(&scalar_v);
+				setPath_lax_assignment(path_elems[level], level, path_len,
+									   st, newval, op_type, scalar_jb, true,
+									   path_elems, path_nulls, index_oid);
+				break;
+			}
+
+			/*
 			 * If instructed complain about attempts to replace within a raw
 			 * scalar value. This happens even when current level is equal to
 			 * path_len, because the last path key should also correspond to
@@ -5210,21 +5432,78 @@ setPath(JsonbIterator **it, const Datum *path_elems,
 
 			pushJsonbValue(st, r, NULL);
 			setPathArray(it, path_elems, path_nulls, path_len, st, level,
-						 newval, v.val.array.nElems, op_type);
+						 newval, v.val.array.nElems, op_type,
+						 index_oid);
 			r = JsonbIteratorNext(it, &v, false);
 			Assert(r == WJB_END_ARRAY);
 			pushJsonbValue(st, r, NULL);
 			break;
 		case WJB_BEGIN_OBJECT:
+
+			/*
+			 * SQL/JSON lax mode: if this subscript is an element access
+			 * (integer) on an object, handle according to the index value and
+			 * whether this is an intermediate or terminal subscript.
+			 */
+			if (is_lax_array_access(index_oid, level))
+			{
+				JsonbInState objState = {0};
+				JsonbIteratorToken tok;
+				JsonbValue	objv;
+				Jsonb	   *obj;
+				int			depth = 1;
+
+				/*
+				 * Materialize the object by consuming from the iterator
+				 * (tracking depth to handle nested objects/arrays).
+				 */
+				pushJsonbValue(&objState, WJB_BEGIN_OBJECT, NULL);
+				while ((tok = JsonbIteratorNext(it, &objv, false)) != WJB_DONE)
+				{
+					if (tok == WJB_BEGIN_OBJECT || tok == WJB_BEGIN_ARRAY)
+						depth++;
+					else if (tok == WJB_END_OBJECT || tok == WJB_END_ARRAY)
+						depth--;
+
+					pushJsonbValue(&objState, tok,
+								   tok < WJB_BEGIN_ARRAY ? &objv : NULL);
+
+					if (depth == 0)
+						break;
+				}
+				obj = JsonbValueToJsonb(objState.result);
+
+				setPath_lax_assignment(path_elems[level], level, path_len,
+									   st, newval, op_type, obj, false,
+									   path_elems, path_nulls, index_oid);
+				break;
+			}
+
 			pushJsonbValue(st, r, NULL);
 			setPathObject(it, path_elems, path_nulls, path_len, st, level,
-						  newval, v.val.object.nPairs, op_type);
+						  newval, v.val.object.nPairs, op_type,
+						  index_oid);
 			r = JsonbIteratorNext(it, &v, true);
 			Assert(r == WJB_END_OBJECT);
 			pushJsonbValue(st, r, NULL);
 			break;
 		case WJB_ELEM:
 		case WJB_VALUE:
+
+			/*
+			 * SQL/JSON lax mode: if this subscript is an element access
+			 * (integer) on a scalar value, handle lax assignment.
+			 */
+			if (is_lax_array_access(index_oid, level) &&
+				(level <= path_len - 1))
+			{
+				Jsonb	   *scalar_jb = JsonbValueToJsonb(&v);
+
+				setPath_lax_assignment(path_elems[level], level, path_len,
+									   st, newval, op_type, scalar_jb, true,
+									   path_elems, path_nulls, index_oid);
+				break;
+			}
 
 			/*
 			 * If instructed complain about attempts to replace within a
@@ -5253,7 +5532,8 @@ setPath(JsonbIterator **it, const Datum *path_elems,
 static void
 setPathObject(JsonbIterator **it, const Datum *path_elems, const bool *path_nulls,
 			  int path_len, JsonbInState *st, int level,
-			  JsonbValue *newval, uint32 npairs, int op_type)
+			  JsonbValue *newval, uint32 npairs, int op_type,
+			  const Oid *index_oid)
 {
 	text	   *pathelem = NULL;
 	int			i;
@@ -5320,7 +5600,8 @@ setPathObject(JsonbIterator **it, const Datum *path_elems, const bool *path_null
 			{
 				pushJsonbValue(st, r, &k);
 				setPath(it, path_elems, path_nulls, path_len,
-						st, level + 1, newval, op_type);
+						st, level + 1, newval, op_type,
+						index_oid);
 			}
 		}
 		else
@@ -5391,7 +5672,8 @@ setPathObject(JsonbIterator **it, const Datum *path_elems, const bool *path_null
 static void
 setPathArray(JsonbIterator **it, const Datum *path_elems, const bool *path_nulls,
 			 int path_len, JsonbInState *st, int level,
-			 JsonbValue *newval, uint32 nelems, int op_type)
+			 JsonbValue *newval, uint32 nelems, int op_type,
+			 const Oid *index_oid)
 {
 	JsonbValue	v;
 	int			idx,
@@ -5492,7 +5774,8 @@ setPathArray(JsonbIterator **it, const Datum *path_elems, const bool *path_nulls
 			}
 			else
 				setPath(it, path_elems, path_nulls, path_len,
-						st, level + 1, newval, op_type);
+						st, level + 1, newval, op_type,
+						index_oid);
 		}
 		else
 		{

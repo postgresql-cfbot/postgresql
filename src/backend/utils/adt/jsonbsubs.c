@@ -262,7 +262,8 @@ jsonb_subscript_fetch(ExprState *state,
 									  workspace->index,
 									  sbsrefstate->numupper,
 									  op->resnull,
-									  false);
+									  false,
+									  workspace->indexOid);
 }
 
 /*
@@ -321,7 +322,8 @@ jsonb_subscript_assign(ExprState *state,
 	*op->resvalue = jsonb_set_element(jsonbSource,
 									  workspace->index,
 									  sbsrefstate->numupper,
-									  &replacevalue);
+									  &replacevalue,
+									  workspace->indexOid);
 	/* The result is never NULL, so no need to change *op->resnull */
 }
 
@@ -354,7 +356,8 @@ jsonb_subscript_fetch_old(ExprState *state,
 												   sbsrefstate->upperindex,
 												   sbsrefstate->numupper,
 												   &sbsrefstate->prevnull,
-												   false);
+												   false,
+												   NULL);
 	}
 }
 

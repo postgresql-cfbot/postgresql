@@ -5077,10 +5077,11 @@ select ('[1, "2", null]'::jsonb)['1'];
 (1 row)
 
 select ('[1, "2", null]'::jsonb)[1.0];
-ERROR:  subscript type numeric is not supported
-LINE 1: select ('[1, "2", null]'::jsonb)[1.0];
-                                         ^
-HINT:  jsonb subscript must be coercible to either integer or text.
+ jsonb 
+-------
+ "2"
+(1 row)
+
 select ('[1, "2", null]'::jsonb)[2];
  jsonb 
 -------
@@ -5952,3 +5953,63 @@ select ('{"text": "hello"}'::jsonb).text;
  {"text": "hello"}
 (1 row)
 
+-- non-integer numeric subscripts
+select ('[1, "2", null]'::jsonb)[0.0];
+ jsonb 
+-------
+ 1
+(1 row)
+
+select ('[1, "2", null]'::jsonb)[0.9];
+ jsonb 
+-------
+ 1
+(1 row)
+
+select ('[1, "2", null]'::jsonb)[1.9];
+ jsonb 
+-------
+ "2"
+(1 row)
+
+select ('[1, "2", null]'::jsonb)[-1.0];
+ jsonb 
+-------
+ null
+(1 row)
+
+select ('[1, "2", null]'::jsonb)[-1.9];
+ jsonb 
+-------
+ null
+(1 row)
+
+select ('[1, "2", null]'::jsonb)[1::numeric];
+ jsonb 
+-------
+ "2"
+(1 row)
+
+select ('[1, "2", null]'::jsonb)[1.5::float8]; -- errors
+ERROR:  subscript type double precision is not supported
+LINE 1: select ('[1, "2", null]'::jsonb)[1.5::float8];
+                                         ^
+HINT:  jsonb subscript must be coercible to either numeric or text.
+-- non-integer numeric subscript assignment
+create temp table test_jsonb_numeric_subscript(id int, val jsonb);
+insert into test_jsonb_numeric_subscript values (1, '[1, 2, 3]');
+update test_jsonb_numeric_subscript set val[1.0] = '"x"';
+select * from test_jsonb_numeric_subscript;
+ id |     val     
+----+-------------
+  1 | [1, "x", 3]
+(1 row)
+
+update test_jsonb_numeric_subscript set val[1.9] = '"y"';
+select * from test_jsonb_numeric_subscript;
+ id |     val     
+----+-------------
+  1 | [1, "y", 3]
+(1 row)
+
+drop table test_jsonb_numeric_subscript;

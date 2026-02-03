@@ -22,6 +22,7 @@
 #include "parser/parse_expr.h"
 #include "utils/builtins.h"
 #include "utils/jsonb.h"
+#include "utils/numeric.h"
 
 
 /* SubscriptingRefState.workspace for jsonb subscripting execution */
@@ -79,41 +80,34 @@ jsonb_subscript_transform(SubscriptingRef *sbsref,
 
 			if (subExprType != UNKNOWNOID)
 			{
-				Oid			targets[2] = {INT4OID, TEXTOID};
+				Oid			int4Oid = INT4OID;
+				Oid			numericOid = NUMERICOID;
+				Oid			textOid = TEXTOID;
+				bool		can_int;
+				bool		can_numeric;
+				bool		can_text;
 
 				/*
-				 * Jsonb can handle multiple subscript types, but cases when a
-				 * subscript could be coerced to multiple target types must be
-				 * avoided, similar to overloaded functions. It could be
-				 * possibly extend with jsonpath in the future.
+				 * Check which types the subscript can be coerced to.  We
+				 * prefer INT4 for integer types (fast path), NUMERIC for
+				 * numeric types (allows truncation toward zero per SQL/JSON
+				 * spec), and TEXT for text types (field access).
 				 */
-				for (int i = 0; i < 2; i++)
-				{
-					if (can_coerce_type(1, &subExprType, &targets[i], COERCION_IMPLICIT))
-					{
-						/*
-						 * One type has already succeeded, it means there are
-						 * two coercion targets possible, failure.
-						 */
-						if (targetType != UNKNOWNOID)
-							ereport(ERROR,
-									(errcode(ERRCODE_DATATYPE_MISMATCH),
-									 errmsg("subscript type %s is not supported", format_type_be(subExprType)),
-									 errhint("jsonb subscript must be coercible to only one type, integer or text."),
-									 parser_errposition(pstate, exprLocation(subExpr))));
+				can_int = can_coerce_type(1, &subExprType, &int4Oid, COERCION_IMPLICIT);
+				can_numeric = can_coerce_type(1, &subExprType, &numericOid, COERCION_IMPLICIT);
+				can_text = can_coerce_type(1, &subExprType, &textOid, COERCION_IMPLICIT);
 
-						targetType = targets[i];
-					}
-				}
-
-				/*
-				 * No suitable types were found, failure.
-				 */
-				if (targetType == UNKNOWNOID)
+				if (can_int && !can_text)
+					targetType = INT4OID;
+				else if (can_text && !can_int)
+					targetType = TEXTOID;
+				else if (can_numeric)
+					targetType = NUMERICOID;
+				else
 					ereport(ERROR,
 							(errcode(ERRCODE_DATATYPE_MISMATCH),
 							 errmsg("subscript type %s is not supported", format_type_be(subExprType)),
-							 errhint("jsonb subscript must be coercible to either integer or text."),
+							 errhint("jsonb subscript must be coercible to either numeric or text."),
 							 parser_errposition(pstate, exprLocation(subExpr))));
 			}
 			else
@@ -188,7 +182,9 @@ jsonb_subscript_check_subscripts(ExprState *state,
 	 * an empty source.
 	 */
 	if (sbsrefstate->numupper > 0 && sbsrefstate->upperprovided[0] &&
-		!sbsrefstate->upperindexnull[0] && workspace->indexOid[0] == INT4OID)
+		!sbsrefstate->upperindexnull[0] &&
+		(workspace->indexOid[0] == INT4OID ||
+		 workspace->indexOid[0] == NUMERICOID))
 		workspace->expectArray = true;
 
 	/* Process upper subscripts */
@@ -216,6 +212,23 @@ jsonb_subscript_check_subscripts(ExprState *state,
 				Datum		datum = sbsrefstate->upperindex[i];
 				char	   *cs = DatumGetCString(DirectFunctionCall1(int4out, datum));
 
+				workspace->index[i] = CStringGetTextDatum(cs);
+			}
+			else if (workspace->indexOid[i] == NUMERICOID)
+			{
+				/*
+				 * Truncate numeric toward zero per SQL/JSON spec, then
+				 * convert to int4 text for element access.
+				 */
+				Datum		truncated;
+				Datum		int_val;
+				char	   *cs;
+
+				truncated = DirectFunctionCall2(numeric_trunc,
+												sbsrefstate->upperindex[i],
+												Int32GetDatum(0));
+				int_val = DirectFunctionCall1(numeric_int4, truncated);
+				cs = DatumGetCString(DirectFunctionCall1(int4out, int_val));
 				workspace->index[i] = CStringGetTextDatum(cs);
 			}
 			else

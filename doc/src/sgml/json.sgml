@@ -621,7 +621,8 @@ SELECT jdoc->'guid', jdoc->'name' FROM api WHERE jdoc @@ '$.tags[*] == "qui"';
    subscripting expressions, following the same rules as the <literal>path</literal>
    argument in the <literal>jsonb_set</literal> function. If a <type>jsonb</type>
    value is an array, numeric subscripts start at zero, and negative integers count
-   backwards from the last element of the array. Slice expressions are not supported.
+   backwards from the last element of the array. Non-integer numeric subscripts are
+   truncated toward zero. Slice expressions are not supported.
    The result of a subscripting expression is always of the jsonb data type.
   </para>
 
@@ -667,6 +668,10 @@ UPDATE table_name SET jsonb_field['a']['b']['c'] = '1';
 -- subscripting is jsonb, the value we compare it against must also be jsonb.
 -- The double quotes make "value" also a valid jsonb string.
 SELECT * FROM table_name WHERE jsonb_field['key'] = '"value"';
+
+-- Numeric subscripts are truncated toward zero
+SELECT ('[1, 2, 3]'::jsonb)[1.7];  -- returns 2
+
 </programlisting>
 
    <type>jsonb</type> assignment via subscripting handles a few edge cases

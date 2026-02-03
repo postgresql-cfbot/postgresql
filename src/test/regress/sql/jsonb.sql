@@ -1615,3 +1615,21 @@ select ('true'::jsonb)::bool;
 select ('true'::jsonb).bool;
 select ('{"text": "hello"}'::jsonb)::text;
 select ('{"text": "hello"}'::jsonb).text;
+
+-- non-integer numeric subscripts
+select ('[1, "2", null]'::jsonb)[0.0];
+select ('[1, "2", null]'::jsonb)[0.9];
+select ('[1, "2", null]'::jsonb)[1.9];
+select ('[1, "2", null]'::jsonb)[-1.0];
+select ('[1, "2", null]'::jsonb)[-1.9];
+select ('[1, "2", null]'::jsonb)[1::numeric];
+select ('[1, "2", null]'::jsonb)[1.5::float8]; -- errors
+
+-- non-integer numeric subscript assignment
+create temp table test_jsonb_numeric_subscript(id int, val jsonb);
+insert into test_jsonb_numeric_subscript values (1, '[1, 2, 3]');
+update test_jsonb_numeric_subscript set val[1.0] = '"x"';
+select * from test_jsonb_numeric_subscript;
+update test_jsonb_numeric_subscript set val[1.9] = '"y"';
+select * from test_jsonb_numeric_subscript;
+drop table test_jsonb_numeric_subscript;

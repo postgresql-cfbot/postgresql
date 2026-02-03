@@ -454,9 +454,11 @@ extern bool JsonbExtractScalar(JsonbContainer *jbc, JsonbValue *res);
 extern const char *JsonbTypeName(JsonbValue *val);
 
 extern Datum jsonb_set_element(Jsonb *jb, const Datum *path, int path_len,
-							   JsonbValue *newval);
+							   JsonbValue *newval,
+							   const Oid *index_oid);
 extern Datum jsonb_get_element(Jsonb *jb, const Datum *path, int npath,
-							   bool *isnull, bool as_text);
+							   bool *isnull, bool as_text,
+							   const Oid *index_oid);
 extern bool to_jsonb_is_immutable(Oid typoid);
 extern Datum jsonb_build_object_worker(int nargs, const Datum *args, const bool *nulls,
 									   const Oid *types, bool absent_on_null,

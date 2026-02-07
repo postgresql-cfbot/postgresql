@@ -357,6 +357,48 @@ ORDER BY v.a DESC;
 (2 rows)
 
 ----
+-- Test postponing non-sort output expressions past Sort.
+----
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT repeat(g.i::text, 100)
+  FROM generate_series(1, 100) g(i)
+  ORDER BY g.i;
+                        QUERY PLAN                         
+-----------------------------------------------------------
+ Result
+   Output: repeat((i)::text, 100), i
+   ->  Sort
+         Output: i
+         Sort Key: g.i
+         ->  Function Scan on pg_catalog.generate_series g
+               Output: i
+               Function Call: generate_series(1, 100)
+(8 rows)
+
+-- Don't postpone if that would require carrying a wide column through
+-- the sort.  Use MATERIALIZED to prevent inlining.
+EXPLAIN (VERBOSE, COSTS OFF)
+WITH s(i, wide) AS MATERIALIZED (
+  SELECT i, repeat(i::text, 100) AS wide
+    FROM generate_series(1, 100) g(i)
+)
+SELECT md5(wide)
+  FROM s
+  ORDER BY i;
+                      QUERY PLAN                       
+-------------------------------------------------------
+ Sort
+   Output: (md5(s.wide)), s.i
+   Sort Key: s.i
+   CTE s
+     ->  Function Scan on pg_catalog.generate_series g
+           Output: g.i, repeat((g.i)::text, 100)
+           Function Call: generate_series(1, 100)
+   ->  CTE Scan on s
+         Output: md5(s.wide), s.i
+(9 rows)
+
+----
 -- test forward and backward scans for in-memory and disk based tuplesort
 ----
 -- in-memory

@@ -153,6 +153,32 @@ select sum(tenthous) as s1, sum(tenthous) + random()*0 as s2
   from tenk1 group by thousand order by thousand limit 3;
 
 --
+-- Postpone non-sort output expressions past Sort under LIMIT, when doing so
+-- doesn't require carrying additional columns through the Sort.
+--
+
+explain (verbose, costs off)
+select repeat(g.i::text, 100)
+  from generate_series(1, 100) g(i)
+  order by g.i
+  limit 10;
+
+--
+-- Don't postpone if that would require carrying a wide column through
+-- the Sort.  Use MATERIALIZED to prevent inlining.
+--
+
+explain (verbose, costs off)
+with s(i, wide) as materialized (
+  select i, repeat(i::text, 100) as wide
+    from generate_series(1, 100) g(i)
+)
+select md5(wide)
+  from s
+  order by i
+  limit 10;
+
+--
 -- FETCH FIRST
 -- Check the WITH TIES clause
 --

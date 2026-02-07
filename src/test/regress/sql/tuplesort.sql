@@ -156,6 +156,26 @@ SELECT LEFT(a,10),b FROM
 ORDER BY v.a DESC;
 
 ----
+-- Test postponing non-sort output expressions past Sort.
+----
+
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT repeat(g.i::text, 100)
+  FROM generate_series(1, 100) g(i)
+  ORDER BY g.i;
+
+-- Don't postpone if that would require carrying a wide column through
+-- the sort.  Use MATERIALIZED to prevent inlining.
+EXPLAIN (VERBOSE, COSTS OFF)
+WITH s(i, wide) AS MATERIALIZED (
+  SELECT i, repeat(i::text, 100) AS wide
+    FROM generate_series(1, 100) g(i)
+)
+SELECT md5(wide)
+  FROM s
+  ORDER BY i;
+
+----
 -- test forward and backward scans for in-memory and disk based tuplesort
 ----
 

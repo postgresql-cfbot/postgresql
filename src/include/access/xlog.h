@@ -42,6 +42,7 @@ extern PGDLLIMPORT int wal_keep_size_mb;
 extern PGDLLIMPORT int max_slot_wal_keep_size_mb;
 extern PGDLLIMPORT int XLOGbuffers;
 extern PGDLLIMPORT int XLogArchiveTimeout;
+extern PGDLLIMPORT int XLogArchiveStatusReportInterval;
 extern PGDLLIMPORT int wal_retrieve_retry_interval;
 extern PGDLLIMPORT char *XLogArchiveCommand;
 extern PGDLLIMPORT bool EnableHotStandby;
@@ -67,6 +68,7 @@ typedef enum ArchiveMode
 	ARCHIVE_MODE_OFF = 0,		/* disabled */
 	ARCHIVE_MODE_ON,			/* enabled while server is running normally */
 	ARCHIVE_MODE_ALWAYS,		/* enabled always (even during recovery) */
+	ARCHIVE_MODE_SHARED,		/* shared archive between primary and standby */
 } ArchiveMode;
 extern PGDLLIMPORT int XLogArchiveMode;
 

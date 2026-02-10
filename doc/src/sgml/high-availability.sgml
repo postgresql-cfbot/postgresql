@@ -1449,35 +1449,61 @@ postgres=# WAIT FOR LSN '0/306EE20';
    </indexterm>
 
    <para>
-     When continuous WAL archiving is used in a standby, there are two
-     different scenarios: the WAL archive can be shared between the primary
-     and the standby, or the standby can have its own WAL archive. When
-     the standby has its own WAL archive, set <varname>archive_mode</varname>
+     When continuous WAL archiving is used in a standby, there are three
+     different scenarios: the standby can have its own independent WAL archive,
+     the WAL archive can be shared between the primary and standby, or archiving
+     can be coordinated between them.
+   </para>
+
+   <para>
+     For an independent archive, set <varname>archive_mode</varname>
      to <literal>always</literal>, and the standby will call the archive
      command for every WAL segment it receives, whether it's by restoring
-     from the archive or by streaming replication. The shared archive can
-     be handled similarly, but the <varname>archive_command</varname> or <varname>archive_library</varname> must
-     test if the file being archived exists already, and if the existing file
-     has identical contents. This requires more care in the
-     <varname>archive_command</varname> or <varname>archive_library</varname>, as it must
-     be careful to not overwrite an existing file with different contents,
-     but return success if the exactly same file is archived twice. And
-     all that must be done free of race conditions, if two servers attempt
-     to archive the same file at the same time.
+     from the archive or by streaming replication.
+   </para>
+
+   <para>
+     For a shared archive where both primary and standby can write, use
+     <literal>always</literal> mode as well, but the <varname>archive_command</varname>
+     or <varname>archive_library</varname> must test if the file being archived
+     exists already, and if the existing file has identical contents. This requires
+     more care in the <varname>archive_command</varname> or <varname>archive_library</varname>,
+     as it must be careful to not overwrite an existing file with different contents,
+     but return success if the exactly same file is archived twice. And all that must
+     be done free of race conditions, if two servers attempt to archive the same file
+     at the same time.
+   </para>
+
+   <para>
+     For coordinated archiving in high availability setups, use
+     <varname>archive_mode</varname>=<literal>shared</literal>. In this mode, only
+     the primary archives WAL segments. The standby creates <literal>.ready</literal>
+     files for received segments but defers actual archiving. The primary periodically
+     sends archival status updates to the standby via streaming replication, informing
+     it which segments have been archived. The standby then marks these as archived
+     and allows them to be recycled. Upon promotion, the standby automatically starts
+     archiving any remaining WAL segments that weren't confirmed as archived by the
+     former primary. This prevents WAL history loss during failover while avoiding
+     the complexity of coordinating concurrent archiving. This mode works with cascading
+     replication, where each standby coordinates with its immediate upstream server.
    </para>
 
    <para>
      If <varname>archive_mode</varname> is set to <literal>on</literal>, the
-     archiver is not enabled during recovery or standby mode. If the standby
-     server is promoted, it will start archiving after the promotion, but
-     will not archive any WAL or timeline history files that
-     it did not generate itself. To get a complete
-     series of WAL files in the archive, you must ensure that all WAL is
-     archived, before it reaches the standby. This is inherently true with
-     file-based log shipping, as the standby can only restore files that
-     are found in the archive, but not if streaming replication is enabled.
-     When a server is not in recovery mode, there is no difference between
-     <literal>on</literal> and <literal>always</literal> modes.
+     archiver is not enabled during recovery or standby mode, and this setting
+     cannot be used on a standby. If a standby with <literal>archive_mode</literal>
+     set to <literal>on</literal> is promoted, it will start archiving after the
+     promotion, but will not archive any WAL or timeline history files that it did
+     not generate itself. To get a complete series of WAL files in the archive, you
+     must ensure that all WAL is archived before it reaches the standby. This is
+     inherently true with file-based log shipping, as the standby can only restore
+     files that are found in the archive, but not if streaming replication is enabled.
+   </para>
+
+   <para>
+     When a server is not in recovery mode, <literal>on</literal>,
+     <literal>shared</literal>, and <literal>always</literal> modes all behave
+     identically, archiving completed WAL segments.
    </para>
   </sect2>
   </sect1>

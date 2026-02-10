@@ -4048,14 +4048,36 @@ include_dir 'conf.d'
         are sent to archive storage by setting
         <xref linkend="guc-archive-command"/> or
         <xref linkend="guc-archive-library"/>. In addition to <literal>off</literal>,
-        to disable, there are two modes: <literal>on</literal>, and
-        <literal>always</literal>. During normal operation, there is no
-        difference between the two modes, but when set to <literal>always</literal>
-        the WAL archiver is enabled also during archive recovery or standby
-        mode. In <literal>always</literal> mode, all files restored from the archive
-        or streamed with streaming physical replication will be archived (again). See
-        <xref linkend="continuous-archiving-in-standby"/> for details.
+        to disable, there are three modes: <literal>on</literal>, <literal>shared</literal>,
+        and <literal>always</literal>. During normal operation as a primary, there is no
+        difference between the three modes, but they differ during archive recovery or
+        standby mode:
        </para>
+       <itemizedlist>
+        <listitem>
+         <para>
+          <literal>on</literal>: Archives WAL only when running as a primary.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>shared</literal>: Coordinates archiving between primary and standby.
+          The standby defers WAL archival and deletion until the primary confirms
+          archival via streaming replication. This prevents WAL history loss during
+          standby promotion in high availability setups. Upon promotion, the standby
+          automatically starts archiving any remaining unarchived WAL. This mode works
+          with cascading replication, where each standby coordinates with its immediate
+          upstream server. See <xref linkend="continuous-archiving-in-standby"/> for details.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>always</literal>: Archives all WAL independently, even during recovery.
+          All files restored from the archive or streamed with streaming physical
+          replication will be archived (again), regardless of their source.
+         </para>
+        </listitem>
+       </itemizedlist>
        <para>
         <varname>archive_mode</varname> is a separate setting from
         <varname>archive_command</varname> and

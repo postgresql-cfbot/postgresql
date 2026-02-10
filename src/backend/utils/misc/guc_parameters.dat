@@ -94,6 +94,15 @@
   boot_val => 'ARCHIVE_MODE_OFF',
   options => 'archive_mode_options',
 },
+    
+{ name => 'archive_status_report_interval', type => 'int', context => 'PGC_SIGHUP', group => 'WAL_ARCHIVING',
+  short_desc => 'Sets the amount of time between consecutive WAL archive status reports.',
+  flags => 'GUC_UNIT_MS',
+  variable => 'XLogArchiveStatusReportInterval',
+  boot_val => '10000',
+  min => '10',
+  max => 'INT_MAX / 2',
+},
 
 { name => 'archive_timeout', type => 'int', context => 'PGC_SIGHUP', group => 'WAL_ARCHIVING',
   short_desc => 'Sets the amount of time to wait before forcing a switch to the next WAL file.',

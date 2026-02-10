@@ -2839,6 +2839,32 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
          </variablelist>
         </listitem>
        </varlistentry>
+
+       <varlistentry id="protocol-replication-primary-status-update">
+        <term>WAL archival report message (B)</term>
+        <listitem>
+         <variablelist>
+          <varlistentry>
+           <term>Byte1('a')</term>
+           <listitem>
+            <para>
+             Identifies the message as a last archived WAL segment update.
+            </para>
+           </listitem>
+          </varlistentry>
+
+          <varlistentry>
+           <term>Byte<replaceable>n</replaceable></term>
+           <listitem>
+            <para>
+             Filename of the latest archived file.
+            </para>
+           </listitem>
+          </varlistentry>
+         </variablelist>
+        </listitem>
+       </varlistentry>
+
       </variablelist>
 
       <para>

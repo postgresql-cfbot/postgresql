@@ -83,16 +83,6 @@
  */
 #define NUM_FILES_PER_DIRECTORY_SCAN 64
 
-/* Shared memory area for archiver process */
-typedef struct PgArchData
-{
-	int			pgprocno;		/* proc number of archiver process */
-
-	/*
-	 * Forces a directory scan in pgarch_readyXlog().
-	 */
-	pg_atomic_uint32 force_dir_scan;
-} PgArchData;
 
 char	   *XLogArchiveLibrary = "";
 char	   *arch_module_check_errdetail_string;
@@ -103,7 +93,7 @@ char	   *arch_module_check_errdetail_string;
  * ----------
  */
 static time_t last_sigterm_time = 0;
-static PgArchData *PgArch = NULL;
+PgArchData *PgArch = NULL;
 static const ArchiveModuleCallbacks *ArchiveCallbacks;
 static ArchiveModuleState *archive_module_state;
 static MemoryContext archive_context;
@@ -180,6 +170,10 @@ PgArchShmemInit(void *arg)
 	MemSet(PgArch, 0, sizeof(PgArchData));
 	PgArch->pgprocno = INVALID_PROC_NUMBER;
 	pg_atomic_init_u32(&PgArch->force_dir_scan, 0);
+
+	PgArch->primary_last_archived[0] = '\0';
+
+	SpinLockInit(&PgArch->lock);	
 }
 
 /*
@@ -475,10 +469,10 @@ pgarch_ArchiverCopyLoop(void)
 				continue;
 			}
 
-			if (pgarch_archiveXlog(xlog))
-			{
-				/* successful */
-				pgarch_archiveDone(xlog);
+		if (pgarch_archiveXlog(xlog))
+		{
+			/* successful */
+			pgarch_archiveDone(xlog);
 
 				/*
 				 * Tell the cumulative stats system about the WAL file that we

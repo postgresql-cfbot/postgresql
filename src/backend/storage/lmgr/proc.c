@@ -575,6 +575,14 @@ InitProcess(void)
 	if (IsUnderPostmaster)
 		AttachSharedMemoryStructs();
 #endif
+
+	/*
+	 * Update access to the address space occupied by the resizable shared
+	 * structures. We do it here so that the structures can be accessed safely
+	 * by this backend. But we will do this again after ProcSignalInit() for
+	 * the reasons mentioned there.
+	 */
+	ShmemReprotectResizableStructs();
 }
 
 /*
@@ -756,6 +764,14 @@ InitAuxiliaryProcess(void)
 	if (IsUnderPostmaster)
 		AttachSharedMemoryStructs();
 #endif
+
+	/*
+	 * Update access to the address space occupied by the resizable shared
+	 * structures. We do it here so that the structures can be accessed safely
+	 * by this backend. But we will do this again after ProcSignalInit() for
+	 * the reasons mentioned there.
+	 */
+	ShmemReprotectResizableStructs();
 }
 
 /*

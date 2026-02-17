@@ -1166,6 +1166,9 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 		case T_TidRangeScanState:
 			ExecTidRangeScanRetrieveInstrumentation((TidRangeScanState *) planstate);
 			break;
+		case T_CustomScanState:
+			ExecCustomScanRetrieveInstrumentation((CustomScanState *) planstate);
+			break;
 		default:
 			break;
 	}

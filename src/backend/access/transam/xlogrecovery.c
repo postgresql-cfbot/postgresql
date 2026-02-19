@@ -4303,6 +4303,7 @@ XLogFileReadAnyTLI(XLogSegNo segno, XLogSource source)
 	ListCell   *cell;
 	int			fd;
 	List	   *tles;
+	bool		found_eligible;
 
 	/*
 	 * Loop looking for a suitable timeline ID: we might need to read any of
@@ -4327,6 +4328,7 @@ XLogFileReadAnyTLI(XLogSegNo segno, XLogSource source)
 	else
 		tles = readTimeLineHistory(recoveryTargetTLI);
 
+	found_eligible = false;
 	foreach(cell, tles)
 	{
 		TimeLineHistoryEntry *hent = (TimeLineHistoryEntry *) lfirst(cell);
@@ -4358,6 +4360,18 @@ XLogFileReadAnyTLI(XLogSegNo segno, XLogSource source)
 			if (segno < beginseg)
 				continue;
 		}
+
+		/*
+		 * This is the first (newest) timeline eligible for this segment.
+		 * Older timelines that also pass the beginseg check have divergent
+		 * WAL starting at their own switch point: once a child timeline
+		 * branches off, the parent's WAL is no longer valid for the child's
+		 * recovery path.  If the correct timeline's segment isn't available,
+		 * we must not silently fall back to a parent with wrong data.
+		 */
+		if (found_eligible)
+			break;
+		found_eligible = true;
 
 		if (source == XLOG_FROM_ANY || source == XLOG_FROM_ARCHIVE)
 		{

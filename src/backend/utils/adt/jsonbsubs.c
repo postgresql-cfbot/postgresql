@@ -22,6 +22,7 @@
 #include "parser/parse_expr.h"
 #include "utils/builtins.h"
 #include "utils/jsonb.h"
+#include "utils/jsonfuncs.h"
 
 
 /* SubscriptingRefState.workspace for jsonb subscripting execution */
@@ -33,6 +34,17 @@ typedef struct JsonbSubWorkspace
 	Datum	   *index;			/* Subscript values in Datum format */
 } JsonbSubWorkspace;
 
+typedef struct
+{
+	ForeachAIterator pub;
+	JsonbIterator *it;
+	bool		skip_nested;
+	Oid			expected_typid;
+	int32		expected_typmod;
+
+	MemoryContext cache_mcxt;
+	void	   *cache;
+} JsonbForeachAIterator;
 
 /*
  * Finish parse analysis of a SubscriptingRef expression for a jsonb.
@@ -395,6 +407,187 @@ jsonb_exec_setup(const SubscriptingRef *sbsref,
 }
 
 /*
+ * Convert JsonbValue to Datum. This function is used by
+ * generic array iterator. When expected_type is unknown
+ * or it is json or jsonb, then there are minimal transformations.
+ * When JsonValue is of basic types (string, numeric, bool),
+ * then value is converted to most near Postgres native types.
+ * In other cases, the generic transformation json_populate_type
+ * is used.
+ *
+ * The reason why generic transformation is not used by default
+ * are different cast rules, because it uses only implicit or
+ * IO casts, that are usually more restrictive. The cast
+ * JSONB->INT is more restrictive than casts JSONB->NUMERIC->INT.
+ *
+ * The type of result is of expected_typid, expected_typmod only
+ * when expected_typid is of composite type. Theoretically it can
+ * be converted to this type in all cases, but it requires more
+ * significant change of plpgsql code (the cast routines should be
+ * moved to core), and because (in this moment) only one user of
+ * generic array iterator is plpgsql FOREACH statement, then the
+ * cast to expected_type is not enforced here (for all cases).
+ */
+static Datum
+JsonbValueToDatum(JsonbValue *jbv,
+				  Oid *typid, int32 *typmod, bool *isnull,
+				  Oid expected_typid, int32 expected_typmod,
+				  void **cache, MemoryContext mcxt)
+{
+	Datum		result;
+
+	*isnull = false;
+	*typmod = -1;
+
+	/*
+	 * These types can holds JSON null, so must be processed
+	 * before processing jbvNull. We don't want to convert
+	 * JSON null, to SQL null, when targer is of JSON.
+	 */
+	if (expected_typid == JSONBOID || expected_typid == JSONOID)
+	{
+		Jsonb	   *jb = JsonbValueToJsonb(jbv);
+
+		if (expected_typid == JSONOID)
+		{
+			char	   *str;
+
+			str = JsonbToCString(NULL, &jb->root, VARSIZE(jb));
+			result = PointerGetDatum(cstring_to_text(str));
+		}
+		else
+			result = PointerGetDatum(jb);
+
+		*typid = expected_typid;
+	}
+
+	/*
+	 * For special cases we can skip conversion to Jsonb
+	 * and possibly IO cast.
+	 */
+	else if (jbv->type == jbvNull)
+	{
+		result = (Datum) 0;
+		*isnull = true;
+		*typid = expected_typid;
+	}
+	else if (jbv->type == jbvString)
+	{
+		text	   *txt = cstring_to_text_with_len(jbv->val.string.val,
+												   jbv->val.string.len);
+
+		result = PointerGetDatum(txt);
+		*typid = TEXTOID;
+	}
+	else if (jbv->type == jbvNumeric)
+	{
+		result = PointerGetDatum(jbv->val.numeric);
+		*typid = NUMERICOID;
+	}
+	else if (jbv->type == jbvBool)
+	{
+		result = BoolGetDatum(jbv->val.boolean);
+		*typid = BOOLOID;
+	}
+
+	/* generic conversion */
+	else
+	{
+		Jsonb	   *jb = JsonbValueToJsonb(jbv);
+
+		result = json_populate_type(PointerGetDatum(jb), JSONBOID,
+									expected_typid, expected_typmod,
+									cache, mcxt,
+									isnull, false, NULL);
+
+		*typid = expected_typid;
+		*typmod = expected_typmod;
+	}
+
+	return result;
+}
+
+static bool
+jsonb_foreach_a_iterate(ForeachAIterator *self,
+						Datum *value, bool *isnull,
+						Oid *typid, int32 *typmod)
+{
+	JsonbForeachAIterator *iter = (JsonbForeachAIterator *) self;
+	JsonbIteratorToken r;
+	JsonbValue	jbv;
+
+	while ((r = JsonbIteratorNext(&iter->it, &jbv, iter->skip_nested)) != WJB_DONE)
+	{
+		iter->skip_nested = true;
+
+		if (r == WJB_ELEM)
+		{
+			*value = JsonbValueToDatum(&jbv, typid, typmod, isnull,
+									   iter->expected_typid, iter->expected_typmod,
+									   &iter->cache, iter->cache_mcxt);
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/*
+ * Create foreach array iterator for jsonb array
+ */
+static ForeachAIterator *
+create_jsonb_foreach_a_iterator(Datum value, Oid typid, int32 typmod,
+								int slice, Oid expected_typid, int32 expected_typmod)
+{
+	JsonbForeachAIterator *iter = palloc0(sizeof(JsonbForeachAIterator));
+	Jsonb	   *jb;
+
+	Assert(typid == JSONBOID);
+
+	if (slice > 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("jsonb array iterator doesn't support slicing")));
+
+	jb = DatumGetJsonbP(value);
+
+	/*
+	 * Jsonb iterator is designed like jsonb_array_element. Input value
+	 * must be json array.
+	 */
+	if (JB_ROOT_IS_SCALAR(jb))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot iterate over a scalar value.")));
+	else if (JB_ROOT_IS_OBJECT(jb))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("cannot iterate over an object value.")));
+
+	Assert(JB_ROOT_IS_ARRAY(jb));
+
+	iter->it = JsonbIteratorInit(&jb->root);
+
+	if (OidIsValid(expected_typid))
+	{
+		iter->expected_typid = expected_typid;
+		iter->expected_typmod = expected_typmod;
+	}
+	else
+	{
+		iter->expected_typid = JSONBOID;
+		iter->expected_typmod = -1;
+	}
+
+	iter->cache_mcxt = CurrentMemoryContext;
+
+	iter->pub.iterate = jsonb_foreach_a_iterate;
+
+	return (ForeachAIterator *) iter;
+}
+
+/*
  * jsonb_subscript_handler
  *		Subscripting handler for jsonb.
  *
@@ -407,7 +600,8 @@ jsonb_subscript_handler(PG_FUNCTION_ARGS)
 		.exec_setup = jsonb_exec_setup,
 		.fetch_strict = true,	/* fetch returns NULL for NULL inputs */
 		.fetch_leakproof = true,	/* fetch returns NULL for bad subscript */
-		.store_leakproof = false	/* ... but assignment throws error */
+		.store_leakproof = false,	/* ... but assignment throws error */
+		.create_foreach_a_iterator = create_jsonb_foreach_a_iterator
 	};
 
 	PG_RETURN_POINTER(&sbsroutines);

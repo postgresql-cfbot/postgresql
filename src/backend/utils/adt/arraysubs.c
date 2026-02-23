@@ -23,6 +23,7 @@
 #include "parser/parse_coerce.h"
 #include "parser/parse_expr.h"
 #include "utils/array.h"
+#include "utils/builtins.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 
@@ -46,6 +47,91 @@ typedef struct ArraySubWorkspace
 	int			lowerindex[MAXDIM];
 } ArraySubWorkspace;
 
+typedef struct
+{
+	ForeachAIterator pub;
+	ArrayIterator it;
+	Oid			result_typid;
+	int32		result_typmod;
+} ArrayForeachAIterator;
+
+static bool
+array_foreach_a_iterate(ForeachAIterator *self,
+						Datum *value, bool *isnull,
+						Oid *typid, int32 *typmod)
+{
+	ArrayForeachAIterator *iter = (ArrayForeachAIterator *) self;
+
+	*typid = iter->result_typid;
+	*typmod = iter->result_typmod;
+
+	return array_iterate(iter->it, value, isnull);
+}
+
+/*
+ * An array ForeachAIterator constructor
+ */
+static ForeachAIterator *
+create_array_foreach_a_iterator(Datum value, Oid typid, int32 typmod, int slice,
+								Oid expected_typid, int32 expected_typmod)
+{
+	ArrayForeachAIterator *iter = palloc0(sizeof(ArrayForeachAIterator));
+	ArrayType  *arr;
+
+	Assert(OidIsValid(get_element_type(typid)));
+
+	arr = DatumGetArrayTypeP(value);
+
+	/* Slice dimension must be less than or equal to array dimension */
+	if (slice < 0 || slice > ARR_NDIM(arr))
+		ereport(ERROR,
+				(errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
+				 errmsg("slice dimension (%d) is out of the valid range 0..%d",
+						slice, ARR_NDIM(arr))));
+
+	if (OidIsValid(expected_typid))
+	{
+		Oid			target_elem_typid;
+
+		/*
+		 * Sanity-check the expected type.  We don't try very hard here, and
+		 * should not be too picky since it's possible that exec_assign_value can
+		 * coerce values of different types.  But it seems worthwhile to complain
+		 * if the array-ness of the loop variable is not right.
+		 */
+		target_elem_typid = get_element_type(expected_typid);
+
+		if (slice > 0 && target_elem_typid == InvalidOid)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("cannot to cast a value of array type to scalar type")));
+		if (slice == 0 && target_elem_typid != InvalidOid)
+			ereport(ERROR,
+					(errcode(ERRCODE_DATATYPE_MISMATCH),
+					 errmsg("cannot to cast a value of scalar type to array type")));
+	}
+
+	/* Identify iterator result type */
+	if (slice > 0)
+	{
+		/* When slicing, nominal type of result is same as array type */
+		iter->result_typid = typid;
+		iter->result_typmod = typmod;
+	}
+	else
+	{
+		/* Without slicing, results are individual array elements */
+		iter->result_typid = ARR_ELEMTYPE(arr);
+		iter->result_typmod = typmod;
+	}
+
+	/* Create an iterator to step through the array */
+	iter->it = array_create_iterator(arr, slice, NULL);
+
+	iter->pub.iterate = array_foreach_a_iterate;
+
+	return (ForeachAIterator *) iter;
+}
 
 /*
  * Finish parse analysis of a SubscriptingRef expression for an array.
@@ -545,7 +631,8 @@ array_subscript_handler(PG_FUNCTION_ARGS)
 		.exec_setup = array_exec_setup,
 		.fetch_strict = true,	/* fetch returns NULL for NULL inputs */
 		.fetch_leakproof = true,	/* fetch returns NULL for bad subscript */
-		.store_leakproof = false	/* ... but assignment throws error */
+		.store_leakproof = false,	/* ... but assignment throws error */
+		.create_foreach_a_iterator = create_array_foreach_a_iterator
 	};
 
 	PG_RETURN_POINTER(&sbsroutines);
@@ -572,7 +659,8 @@ raw_array_subscript_handler(PG_FUNCTION_ARGS)
 		.exec_setup = array_exec_setup,
 		.fetch_strict = true,	/* fetch returns NULL for NULL inputs */
 		.fetch_leakproof = true,	/* fetch returns NULL for bad subscript */
-		.store_leakproof = false	/* ... but assignment throws error */
+		.store_leakproof = false,	/* ... but assignment throws error */
+		.create_foreach_a_iterator = create_array_foreach_a_iterator
 	};
 
 	PG_RETURN_POINTER(&sbsroutines);

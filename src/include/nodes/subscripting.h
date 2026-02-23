@@ -154,6 +154,32 @@ typedef void (*SubscriptExecSetup) (const SubscriptingRef *sbsref,
 									SubscriptingRefState *sbsrefstate,
 									SubscriptExecSteps *methods);
 
+typedef struct _ForeachAIterator ForeachAIterator;
+
+/*
+ * ForeachAIiterator is used by PLpgSQL FOREACH IN ARRAY statement.
+ * Input value should not be null, and inside CreateForeachAIterator
+ * routine must be copied to current (statement) context. "iterate"
+ * routine is called under short life memory context, that is resetted
+ * after any call.
+ */
+struct _ForeachAIterator
+{
+	bool		(*iterate) (ForeachAIterator *self,
+							Datum *value,
+							bool *isnull,
+							Oid *typid,
+							int32 *typmod);
+	/* Private fields might appear beyond this point... */
+};
+
+typedef ForeachAIterator * (*CreateForeachAIterator) (Datum value,
+													  Oid typid,
+													  int32 typmod,
+													  int slice,
+													  Oid target_typid,
+													  int32 target_typmod);
+
 /* Struct returned by the SQL-visible subscript handler function */
 typedef struct SubscriptRoutines
 {
@@ -163,6 +189,9 @@ typedef struct SubscriptRoutines
 	bool		fetch_leakproof;	/* is fetch SubscriptingRef leakproof? */
 	bool		store_leakproof;	/* is assignment SubscriptingRef
 									 * leakproof? */
+
+	/* returns iterator used by PL/pgSQL FOREACH statement */
+	CreateForeachAIterator create_foreach_a_iterator;
 } SubscriptRoutines;
 
 #endif							/* SUBSCRIPTING_H */

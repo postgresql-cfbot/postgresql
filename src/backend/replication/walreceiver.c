@@ -76,6 +76,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/injection_point.h"
 #include "utils/pg_lsn.h"
 #include "utils/ps_status.h"
 #include "utils/timestamp.h"
@@ -643,10 +644,11 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 				 * WAIT_EVENT_RECOVERY_WAL_STREAM waiting for new data that
 				 * will never arrive while we are fetching history.
 				 */
-				WakeupRecovery();
+			WakeupRecovery();
 
-			}
-			WalRcvFetchTimeLineHistoryFiles(startpointTLI, primaryTLI);
+			INJECTION_POINT("walreceiver-switch-timeline", NULL);
+		}
+		WalRcvFetchTimeLineHistoryFiles(startpointTLI, primaryTLI);
 		}
 		else
 			ereport(LOG,

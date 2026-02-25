@@ -208,6 +208,7 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 		case WALRCV_CONNECTING:
 		case WALRCV_WAITING:
 		case WALRCV_STREAMING:
+		case WALRCV_SWITCHING_TIMELINE:
 		case WALRCV_RESTARTING:
 		default:
 			/* Shouldn't happen */
@@ -619,7 +620,32 @@ WalReceiverMain(const void *startup_data, size_t startup_data_len)
 			 * If the server had switched to a new timeline that we didn't
 			 * know about when we began streaming, fetch its timeline history
 			 * file now.
+			 *
+			 * Transition to WALRCV_SWITCHING_TIMELINE while the fetch is in
+			 * progress.  This tells the startup process that we are still
+			 * doing useful work related to the timeline switch and should not
+			 * be shut down: from startup's perspective,
+			 * WALRCV_SWITCHING_TIMELINE is not "streaming" (WalRcvStreaming()
+			 * returns false), so it will not call XLogShutdownWalRcv()
+			 * prematurely.  Once the fetch completes we move to
+			 * WALRCV_WAITING via WalRcvWaitForStartPosition() as usual.
 			 */
+			if (startpointTLI != primaryTLI)
+			{
+				SpinLockAcquire(&walrcv->mutex);
+				Assert(walrcv->walRcvState == WALRCV_STREAMING);
+				walrcv->walRcvState = WALRCV_SWITCHING_TIMELINE;
+				SpinLockRelease(&walrcv->mutex);
+
+				/*
+				 * Notify the startup process that we have stopped streaming.
+				 * Without this, startup would remain stuck in
+				 * WAIT_EVENT_RECOVERY_WAL_STREAM waiting for new data that
+				 * will never arrive while we are fetching history.
+				 */
+				WakeupRecovery();
+
+			}
 			WalRcvFetchTimeLineHistoryFiles(startpointTLI, primaryTLI);
 		}
 		else
@@ -671,7 +697,8 @@ WalRcvWaitForStartPosition(XLogRecPtr *startpoint, TimeLineID *startpointTLI)
 
 	SpinLockAcquire(&walrcv->mutex);
 	state = walrcv->walRcvState;
-	if (state != WALRCV_STREAMING && state != WALRCV_CONNECTING)
+	if (state != WALRCV_STREAMING && state != WALRCV_CONNECTING &&
+		state != WALRCV_SWITCHING_TIMELINE)
 	{
 		SpinLockRelease(&walrcv->mutex);
 		if (state == WALRCV_STOPPING)
@@ -814,6 +841,7 @@ WalRcvDie(int code, Datum arg)
 	SpinLockAcquire(&walrcv->mutex);
 	Assert(walrcv->walRcvState == WALRCV_STREAMING ||
 		   walrcv->walRcvState == WALRCV_CONNECTING ||
+		   walrcv->walRcvState == WALRCV_SWITCHING_TIMELINE ||
 		   walrcv->walRcvState == WALRCV_RESTARTING ||
 		   walrcv->walRcvState == WALRCV_STARTING ||
 		   walrcv->walRcvState == WALRCV_WAITING ||
@@ -1426,6 +1454,8 @@ WalRcvGetStateString(WalRcvState state)
 			return "connecting";
 		case WALRCV_STREAMING:
 			return "streaming";
+		case WALRCV_SWITCHING_TIMELINE:
+			return "switching timeline";
 		case WALRCV_WAITING:
 			return "waiting";
 		case WALRCV_RESTARTING:

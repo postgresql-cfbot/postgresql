@@ -49,6 +49,9 @@ typedef enum
 								 * initialized yet */
 	WALRCV_CONNECTING,			/* connecting to upstream server */
 	WALRCV_STREAMING,			/* walreceiver is streaming */
+	WALRCV_SWITCHING_TIMELINE,	/* fetching timeline history from primary
+								 * after end-of-timeline; not yet waiting for
+								 * orders from startup */
 	WALRCV_WAITING,				/* stopped streaming, waiting for orders */
 	WALRCV_RESTARTING,			/* asked to restart streaming */
 	WALRCV_STOPPING,			/* requested to stop, but still running */

@@ -3664,10 +3664,14 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 					 * WAL that we restore from archive.
 					 *
 					 * If walreceiver is actively streaming (or attempting to
-					 * connect), we must shut it down. However, if it's
-					 * already in WAITING state (e.g., due to timeline
-					 * divergence), we only need to reset the install flag to
-					 * allow archive restoration.
+					 * connect), we must shut it down. However, if it's in
+					 * WAITING state (e.g., due to timeline divergence) or in
+					 * SWITCHING_TIMELINE state (fetching the timeline history
+					 * file from the primary after end-of-timeline), we only
+					 * need to reset the install flag to allow archive
+					 * restoration; in the latter case walreceiver will soon
+					 * transition to WAITING and wake us up with new
+					 * instructions.
 					 */
 					if (WalRcvStreaming())
 						XLogShutdownWalRcv();

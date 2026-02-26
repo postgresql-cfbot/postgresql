@@ -2984,8 +2984,12 @@ bt_verify_index_tuple_points_to_heap(BtreeCheckState *state, IndexTuple itup,
 	/*
 	 * Bloom filter says (key, tid) not in heap.  Follow TID to verify; this
 	 * amortizes random heap lookups when the filter has false negatives, or
-	 * reports corruption when the index points to wrong heap tuple.  Skip
-	 * dead tuples (table_tuple_fetch_row_version returns false for them).
+	 * reports corruption when the index points to wrong heap tuple.
+	 *
+	 * Use SnapshotAny first to distinguish "tuple doesn't exist" (corruption)
+	 * from "tuple exists but is dead" (skip).  SnapshotAny returns any tuple
+	 * at the TID; if that fails, the slot was reclaimed or the page was
+	 * reorganized (e.g. by VACUUM), so the index has an orphaned entry.
 	 */
 	{
 		TupleTableSlot *slot;
@@ -2999,11 +3003,25 @@ bt_verify_index_tuple_points_to_heap(BtreeCheckState *state, IndexTuple itup,
 
 		slot = table_slot_create(state->heaprel, NULL);
 		found = table_tuple_fetch_row_version(state->heaprel, tid,
-											  state->snapshot, slot);
+											  SnapshotAny, slot);
 		if (!found)
 		{
 			ExecDropSingleTupleTableSlot(slot);
-			return;			/* dead or non-existent heap tuple, skip */
+			ereport(ERROR,
+					(errcode(ERRCODE_INDEX_CORRUPTED),
+					 errmsg("index tuple in index \"%s\" points to non-existent heap tuple",
+							RelationGetRelationName(state->rel)),
+					 errdetail_internal("Index tid=(%u,%u) points to heap tid=(%u,%u) that no longer exists.",
+									   targetblock, offset,
+									   ItemPointerGetBlockNumber(tid),
+									   ItemPointerGetOffsetNumber(tid))));
+		}
+
+		/* Skip dead tuples (not visible to our snapshot) */
+		if (!table_tuple_satisfies_snapshot(state->heaprel, slot, state->snapshot))
+		{
+			ExecDropSingleTupleTableSlot(slot);
+			return;
 		}
 
 		indexinfo = state->indexinfo;

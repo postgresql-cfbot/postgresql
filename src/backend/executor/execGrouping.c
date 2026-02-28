@@ -199,6 +199,10 @@ BuildTupleHashTable(PlanState *parent,
 	TupleHashTable hashtable;
 	uint32		nbuckets;
 	MemoryContext oldcontext;
+	/*
+	 * The value here must match what ExecInitSubPlan passes to
+	 * ExecBuildHash32FromAttrs.
+	 */
 	uint32		hash_iv = 0;
 
 	/*
@@ -240,13 +244,15 @@ BuildTupleHashTable(PlanState *parent,
 	/*
 	 * If parallelism is in use, even if the leader backend is performing the
 	 * scan itself, we don't want to create the hashtable exactly the same way
-	 * in all workers. As hashtables are iterated over in keyspace-order,
-	 * doing so in all processes in the same way is likely to lead to
-	 * "unbalanced" hashtables when the table size initially is
-	 * underestimated.
+	 * in all workers. As hashtables are iterated over in hash value order,
+	 * inserting into a smaller table or from multiple tables is going to
+	 * cause collisions which triggers hash table growth. In hash aggregates
+	 * a too large hash table causes excessive spilling as there is no memory
+	 * left over for tuples.
 	 */
 	if (use_variable_hash_iv)
-		hash_iv = murmurhash32(ParallelWorkerNumber);
+		hash_iv = hash_combine(murmurhash32(ParallelWorkerNumber),
+							   murmurhash32(parent->plan->plan_node_id));
 
 	hashtable->hashtab = tuplehash_create(metacxt, nbuckets, hashtable);
 

@@ -92,7 +92,6 @@ ALTER DOMAIN <replaceable class="parameter">name</replaceable>
       valid using <command>ALTER DOMAIN ... VALIDATE CONSTRAINT</command>.
       Newly inserted or updated rows are always checked against all
       constraints, even those marked <literal>NOT VALID</literal>.
-      <literal>NOT VALID</literal> is only accepted for <literal>CHECK</literal> constraints.
      </para>
     </listitem>
    </varlistentry>

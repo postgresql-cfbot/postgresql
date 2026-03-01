@@ -4569,11 +4569,13 @@ DomainConstraintElem:
 					n->contype = CONSTR_NOTNULL;
 					n->location = @1;
 					n->keys = list_make1(makeString("value"));
-					/* no NOT VALID, NO INHERIT support */
+					/* NO INHERIT is not supported */
 					processCASbits($3, @3, "NOT NULL",
 								   NULL, NULL, NULL,
-								   NULL, NULL, yyscanner);
-					n->initially_valid = true;
+								   &n->skip_validation,
+								   NULL, yyscanner);
+					n->is_enforced = true;
+					n->initially_valid = !n->skip_validation;
 					$$ = (Node *) n;
 				}
 		;

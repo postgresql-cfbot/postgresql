@@ -14283,6 +14283,7 @@ CreateFKCheckTrigger(Oid myRelOid, Oid refRelOid, Constraint *fkconstraint,
 	 */
 	fk_trigger = makeNode(CreateTrigStmt);
 	fk_trigger->replace = false;
+	fk_trigger->tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_c";
 	fk_trigger->relation = NULL;
@@ -14344,6 +14345,7 @@ createForeignKeyActionTriggers(Oid myRelOid, Oid refRelOid, Constraint *fkconstr
 	 */
 	fk_trigger = makeNode(CreateTrigStmt);
 	fk_trigger->replace = false;
+	fk_trigger->tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_a";
 	fk_trigger->relation = NULL;
@@ -14406,6 +14408,7 @@ createForeignKeyActionTriggers(Oid myRelOid, Oid refRelOid, Constraint *fkconstr
 	 */
 	fk_trigger = makeNode(CreateTrigStmt);
 	fk_trigger->replace = false;
+	fk_trigger->tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 	fk_trigger->isconstraint = true;
 	fk_trigger->trigname = "RI_ConstraintTrigger_a";
 	fk_trigger->relation = NULL;
@@ -21392,6 +21395,7 @@ CloneRowTriggersToPartition(Relation parent, Relation partition)
 
 		trigStmt = makeNode(CreateTrigStmt);
 		trigStmt->replace = false;
+		trigStmt->tgenabled = trigForm->tgenabled;
 		trigStmt->isconstraint = OidIsValid(trigForm->tgconstraint);
 		trigStmt->trigname = NameStr(trigForm->tgname);
 		trigStmt->relation = NULL;

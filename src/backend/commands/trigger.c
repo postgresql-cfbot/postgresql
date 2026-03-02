@@ -7096,6 +7096,7 @@ generateClonedTriggerStmt(RangeVar *heapRel, Oid source_trigid,
 
 	trigStmt = makeNode(CreateTrigStmt);
 	trigStmt->replace = false;
+	trigStmt->tgenabled = trigForm->tgenabled;
 	trigStmt->isconstraint = OidIsValid(trigForm->tgconstraint);
 	trigStmt->trigname = pstrdup(NameStr(trigForm->tgname));
 	trigStmt->relation = heapRel;

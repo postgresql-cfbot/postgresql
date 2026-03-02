@@ -6196,6 +6196,7 @@ CreateTrigStmt:
 					CreateTrigStmt *n = makeNode(CreateTrigStmt);
 
 					n->replace = $2;
+					n->tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 					n->isconstraint = false;
 					n->trigname = $4;
 					n->relation = $8;
@@ -6247,6 +6248,7 @@ CreateTrigStmt:
 								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 								 errmsg("CREATE OR REPLACE CONSTRAINT TRIGGER is not supported"),
 								 parser_errposition(@1)));
+					n->tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 					n->isconstraint = true;
 					n->trigname = $5;
 					n->relation = $9;

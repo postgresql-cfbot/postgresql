@@ -288,6 +288,9 @@ INSERT INTO some_t VALUES (TRUE);
 UPDATE some_t SET some_col = TRUE;
 UPDATE some_t SET some_col = FALSE;
 UPDATE some_t SET some_col = TRUE;
+ALTER TABLE some_t ENABLE REPLICA TRIGGER some_trig_aftera;
+ALTER TABLE some_t DISABLE TRIGGER some_trig_afterb;
+ALTER TABLE some_t ENABLE ALWAYS TRIGGER some_trig_before;
 CREATE TABLE some_t1 (c INT, LIKE some_t INCLUDING TRIGGERS INCLUDING COMMENTS);
 \d+ some_t1
 DROP TABLE some_t;

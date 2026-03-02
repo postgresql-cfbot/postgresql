@@ -3214,6 +3214,7 @@ typedef struct CreateTrigStmt
 {
 	NodeTag		type;
 	bool		replace;		/* replace trigger if already exists */
+	char		tgenabled;		/* trigger's firing configuration */
 	bool		isconstraint;	/* This is a constraint trigger */
 	char	   *trigname;		/* TRIGGER's name */
 	RangeVar   *relation;		/* relation trigger is on */

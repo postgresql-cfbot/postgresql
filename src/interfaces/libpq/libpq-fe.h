@@ -542,6 +542,15 @@ extern int	PQsendQueryPrepared(PGconn *conn,
 								const int *paramLengths,
 								const int *paramFormats,
 								int resultFormat);
+extern int	PQsendPBES(PGconn *conn,
+					   const char *stmtName,
+					   const char *query,
+					   int nParams,
+					   const Oid *paramTypes,
+					   const char *const *paramValues,
+					   const int *paramLengths,
+					   const int *paramFormats,
+					   int resultFormat);
 extern int	PQsetSingleRowMode(PGconn *conn);
 extern int	PQsetChunkedRowsMode(PGconn *conn, int chunkSize);
 extern PGresult *PQgetResult(PGconn *conn);

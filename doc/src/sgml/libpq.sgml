@@ -5346,6 +5346,7 @@ unsigned char *PQunescapeBytea(const unsigned char *from, size_t *to_length);
    <xref linkend="libpq-PQsendQueryParams"/>,
    <xref linkend="libpq-PQsendPrepare"/>,
    <xref linkend="libpq-PQsendQueryPrepared"/>,
+   <xref linkend="libpq-PQsendPBES"/>,
    <xref linkend="libpq-PQsendDescribePrepared"/>,
    <xref linkend="libpq-PQsendDescribePortal"/>,
    <xref linkend="libpq-PQsendClosePrepared"/>, and
@@ -5467,6 +5468,34 @@ int PQsendQueryPrepared(PGconn *conn,
      </listitem>
     </varlistentry>
 
+    <varlistentry id="libpq-PQsendPBES">
+     <term><function>PQsendPBES</function><indexterm><primary>PQsendPBES</primary></indexterm></term>
+
+     <listitem>
+      <para>
+       Sends a request to prepare and execute a statement with given
+       parameters, without waiting for the result(s).
+<synopsis>
+int PQsendPBES(PGconn *conn,
+               const char *stmtName,
+               const char *query,
+               int nParams,
+               const Oid *paramTypes,
+               const char *const *paramValues,
+               const int *paramLengths,
+               const int *paramFormats,
+               int resultFormat);
+</synopsis>
+
+       This is similar to <xref linkend="libpq-PQsendQueryPrepared"/>, but the
+       statement is prepared as part of the same request using the supplied
+       query string. Internally, it sends a Parse, Bind, Execute, and Sync
+       message sequence. The function's parameters are handled identically to
+       <xref linkend="libpq-PQexecParams"/>.
+      </para>
+     </listitem>
+    </varlistentry>
+
     <varlistentry id="libpq-PQsendDescribePrepared">
      <term><function>PQsendDescribePrepared</function><indexterm><primary>PQsendDescribePrepared</primary></indexterm></term>
 
@@ -5557,6 +5586,7 @@ int PQsendClosePortal(PGconn *conn, const char *portalName);
        <xref linkend="libpq-PQsendQueryParams"/>,
        <xref linkend="libpq-PQsendPrepare"/>,
        <xref linkend="libpq-PQsendQueryPrepared"/>,
+       <xref linkend="libpq-PQsendPBES"/>,
        <xref linkend="libpq-PQsendDescribePrepared"/>,
        <xref linkend="libpq-PQsendDescribePortal"/>,
        <xref linkend="libpq-PQsendClosePrepared"/>,

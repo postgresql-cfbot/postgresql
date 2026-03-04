@@ -3242,15 +3242,21 @@ include_dir 'conf.d'
       </term>
       <listitem>
        <para>
-        <varname>wal_level</varname> determines how much information is written to
-        the WAL. The default value is <literal>replica</literal>, which writes enough
-        data to support WAL archiving and replication, including running
-        read-only queries on a standby server. <literal>minimal</literal> removes all
-        logging except the information required to recover from a crash or
-        immediate shutdown.  Finally,
-        <literal>logical</literal> adds information necessary to support logical
-        decoding.  Each level includes the information logged at all lower
-        levels.  This parameter can only be set at server start.
+        <varname>wal_level</varname> determines the minimum amount of information
+        that is to be written to the WAL. The default, and middle, value is
+        <literal>replica</literal>, which writes enough data to support
+        WAL archiving (see <xref linkend="continuous-archiving"/>) and
+        physical replication (see <xref linkend="streaming-replication"/>)
+        Running read-only queries on a standby server. Below that is <literal>minimal</literal>,
+        which removes all logging except the information required to recover from a crash or
+        immediate shutdown.  Finally, above replica, is <literal>logical</literal>,
+        which adds information necessary to support logical decoding and
+        logical replication (see <xref linkend="logical-replication"/>).
+        Each level includes the information logged at all lower levels.
+        The <xref linkend="guc-effective-wal-level"/> parameter reports the actual
+        level used by the system.  Namely, whether replica has been promoted to
+        logical (minimal never promotes).
+        This parameter can only be set at server start.
        </para>
        <para>
         The <literal>minimal</literal> level generates the least WAL
@@ -3286,17 +3292,6 @@ include_dir 'conf.d'
         tables are configured for <literal>REPLICA IDENTITY FULL</literal> and
         many <command>UPDATE</command> and <command>DELETE</command> statements are
         executed.
-       </para>
-       <para>
-        It is important to note that when <varname>wal_level</varname> is set to
-        <literal>replica</literal>, the effective WAL level can automatically change
-        based on the presence of <link linkend="logicaldecoding-replication-slots">
-        logical replication slots</link>. The system automatically increases the
-        effective WAL level to <literal>logical</literal> when creating the first
-        logical replication slot, and decreases it back to <literal>replica</literal>
-        when dropping or invalidating the last logical replication slot. The current
-        effective WAL level can be monitored through
-        <xref linkend="guc-effective-wal-level"/> parameter.
        </para>
        <para>
         In releases prior to 9.6, this parameter also allowed the
@@ -12353,17 +12348,17 @@ dynamic_library_path = '/usr/local/lib/postgresql:$libdir'
         system. This parameter shares the same set of values as
         <xref linkend="guc-wal-level"/>, but reflects the operational WAL
         level rather than the configured setting. For descriptions of
-        possible values, refer to the <varname>wal_level</varname>
+        possible values, refer to the <xref linkend="guc-wal-level"/>
         parameter documentation.
        </para>
        <para>
-        The effective WAL level can differ from the configured
-        <varname>wal_level</varname> in certain situations. For example,
-        when <varname>wal_level</varname> is set to <literal>replica</literal>
-        and the system has one or more logical replication slots,
-        <varname>effective_wal_level</varname> will show <literal>logical</literal>
-        to indicate that the system is maintaining WAL records at
-        <literal>logical</literal> level equivalent.
+        Presently, on primary servers, differences from <xref linkend="guc-wal-level"/>
+        only happen when <xref linkend="guc-wal-level"/> is set to <literal>replica</literal>.
+        Based on the presence of <link linkend="logicaldecoding-replication-slots">
+        logical replication slots</link>, the system automatically increases the
+        effective WAL level to <literal>logical</literal> when creating the first
+        logical replication slot, and decreases it back to <literal>replica</literal>
+        when dropping or invalidating the last logical replication slot.
        </para>
        <para>
         On standby servers, <varname>effective_wal_level</varname> matches

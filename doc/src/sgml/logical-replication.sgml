@@ -3538,11 +3538,12 @@ pg_ctl -D /opt/PostgreSQL/data2_upgraded start -l logfile
   <title>Quick Setup</title>
 
   <para>
-   First set the configuration options in <filename>postgresql.conf</filename>:
+   Ensure that <xref linkend="guc-effective-wal-level"/> is at least replica
+   (this is the default).
 <programlisting>
-wal_level = logical
+SHOW effective_wal_level;
 </programlisting>
-   The other required settings have default values that are sufficient for a
+   The other required settings also have default values that are sufficient for a
    basic setup.
   </para>
 

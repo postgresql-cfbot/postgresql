@@ -233,13 +233,13 @@ static List *get_qual_for_hash(Relation parent, PartitionBoundSpec *spec);
 static List *get_qual_for_list(Relation parent, PartitionBoundSpec *spec);
 static List *get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 								bool for_default);
-static void get_range_key_properties(PartitionKey key, int keynum,
+static void get_range_key_properties(Relation rel, PartitionKey key, int keynum,
 									 PartitionRangeDatum *ldatum,
 									 PartitionRangeDatum *udatum,
 									 ListCell **partexprs_item,
 									 Expr **keyCol,
 									 Const **lower_val, Const **upper_val);
-static List *get_range_nulltest(PartitionKey key);
+static List *get_range_nulltest(Relation rel, PartitionKey key);
 
 /*
  * get_qual_from_partbound
@@ -4018,7 +4018,7 @@ get_qual_for_hash(Relation parent, PartitionBoundSpec *spec)
 		Node	   *keyCol;
 
 		/* Left operand */
-		if (key->partattrs[i] != 0)
+		if (key->partattrs[i] != 0 && !attrIsVirtualGenerated(parent, key->partattrs[i]))
 		{
 			keyCol = (Node *) makeVar(1,
 									  key->partattrs[i],
@@ -4074,7 +4074,7 @@ get_qual_for_list(Relation parent, PartitionBoundSpec *spec)
 	Assert(key->partnatts == 1);
 
 	/* Construct Var or expression representing the partition column */
-	if (key->partattrs[0] != 0)
+	if (key->partattrs[0] != 0 && !attrIsVirtualGenerated(parent, key->partattrs[0]))
 		keyCol = (Expr *) makeVar(1,
 								  key->partattrs[0],
 								  key->parttypid[0],
@@ -4345,7 +4345,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 			 */
 			other_parts_constr =
 				makeBoolExpr(AND_EXPR,
-							 lappend(get_range_nulltest(key),
+							 lappend(get_range_nulltest(parent, key),
 									 list_length(or_expr_args) > 1
 									 ? makeBoolExpr(OR_EXPR, or_expr_args,
 													-1)
@@ -4368,7 +4368,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 	 * to avoid accumulating the NullTest on the same keys for each partition.
 	 */
 	if (!for_default)
-		result = get_range_nulltest(key);
+		result = get_range_nulltest(parent, key);
 
 	/*
 	 * Iterate over the key columns and check if the corresponding lower and
@@ -4400,7 +4400,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 		 */
 		partexprs_item_saved = partexprs_item;
 
-		get_range_key_properties(key, i, ldatum, udatum,
+		get_range_key_properties(parent, key, i, ldatum, udatum,
 								 &partexprs_item,
 								 &keyCol,
 								 &lower_val, &upper_val);
@@ -4480,7 +4480,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 			if (lnext(spec->upperdatums, cell2))
 				udatum_next = castNode(PartitionRangeDatum,
 									   lfirst(lnext(spec->upperdatums, cell2)));
-			get_range_key_properties(key, j, ldatum, udatum,
+			get_range_key_properties(parent, key, j, ldatum, udatum,
 									 &partexprs_item,
 									 &keyCol,
 									 &lower_val, &upper_val);
@@ -4600,7 +4600,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
 	 */
 	if (result == NIL)
 		result = for_default
-			? get_range_nulltest(key)
+			? get_range_nulltest(parent, key)
 			: list_make1(makeBoolConst(true, false));
 
 	return result;
@@ -4622,7 +4622,7 @@ get_qual_for_range(Relation parent, PartitionBoundSpec *spec,
  * the key->partexprs list, or NULL.  It may be advanced upon return.
  */
 static void
-get_range_key_properties(PartitionKey key, int keynum,
+get_range_key_properties(Relation rel, PartitionKey key, int keynum,
 						 PartitionRangeDatum *ldatum,
 						 PartitionRangeDatum *udatum,
 						 ListCell **partexprs_item,
@@ -4630,7 +4630,8 @@ get_range_key_properties(PartitionKey key, int keynum,
 						 Const **lower_val, Const **upper_val)
 {
 	/* Get partition key expression for this column */
-	if (key->partattrs[keynum] != 0)
+	if (key->partattrs[keynum] != 0 &&
+		!attrIsVirtualGenerated(rel, key->partattrs[keynum]))
 	{
 		*keyCol = (Expr *) makeVar(1,
 								   key->partattrs[keynum],
@@ -4666,7 +4667,7 @@ get_range_key_properties(PartitionKey key, int keynum,
  * keys to be null, so emit an IS NOT NULL expression for each key column.
  */
 static List *
-get_range_nulltest(PartitionKey key)
+get_range_nulltest(Relation rel, PartitionKey key)
 {
 	List	   *result = NIL;
 	NullTest   *nulltest;
@@ -4678,7 +4679,8 @@ get_range_nulltest(PartitionKey key)
 	{
 		Expr	   *keyCol;
 
-		if (key->partattrs[i] != 0)
+		if (key->partattrs[i] != 0 &&
+			!attrIsVirtualGenerated(rel, key->partattrs[i]))
 		{
 			keyCol = (Expr *) makeVar(1,
 									  key->partattrs[i],

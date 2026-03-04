@@ -2401,6 +2401,13 @@ pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 			get_atttypetypmodcoll(relid, attnum,
 								  &keycoltype, &keycoltypmod,
 								  &keycolcollation);
+
+			/*
+			 * Advance partexprs if the partition key is a virtual generated
+			 * column, as it holds the generation expression
+			 */
+			if (get_attgenerated(relid, attnum) == ATTRIBUTE_GENERATED_VIRTUAL)
+				partexpr_item = lnext(partexprs, partexpr_item);
 		}
 		else
 		{

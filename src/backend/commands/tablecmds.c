@@ -8755,6 +8755,51 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 		tab->verify_new_notnull = true;
 
 	/*
+	 * We cannot alter the generation expression of a virtual generated column
+	 * if it's used in the partition key. Note that stored generated columns
+	 * are already rejected as partition keys in ComputePartitionAttrs.
+	 */
+	if (attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+	{
+		if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE &&
+			has_partition_attrs(rel,
+								bms_make_singleton(attnum - FirstLowInvalidHeapAttributeNumber),
+								NULL))
+			ereport(ERROR,
+					errcode(ERRCODE_INVALID_COLUMN_DEFINITION),
+					errmsg("cannot alter column \"%s\" because it is part of the partition key of relation \"%s\"",
+						   colName, RelationGetRelationName(rel)));
+
+		if (rel->rd_rel->relispartition)
+		{
+			AttrNumber	parent_attnum;
+
+			Oid			parentId = get_partition_parent(RelationGetRelid(rel),
+														false);
+			Relation	parent = table_open(parentId, AccessShareLock);
+
+			AttrMap    *map = build_attrmap_by_name_if_req(RelationGetDescr(parent),
+														   RelationGetDescr(rel),
+														   false);
+
+			if (map != NULL)
+				parent_attnum = map->attnums[attnum - 1];
+			else
+				parent_attnum = attnum;
+
+			if (has_partition_attrs(parent,
+									bms_make_singleton(parent_attnum - FirstLowInvalidHeapAttributeNumber),
+									NULL))
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_COLUMN_DEFINITION),
+						errmsg("cannot alter column \"%s\" because it is part of the partition key of relation \"%s\"",
+							   colName, RelationGetRelationName(parent)));
+
+			table_close(parent, AccessShareLock);
+		}
+	}
+
+	/*
 	 * We need to prevent this because a change of expression could affect a
 	 * row filter and inject expressions that are not permitted in a row
 	 * filter.  XXX We could try to have a more precise check to catch only
@@ -20074,6 +20119,7 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 		PartitionElem *pelem = lfirst_node(PartitionElem, lc);
 		Oid			atttype;
 		Oid			attcollation;
+		AttrNumber	virtualattnum = InvalidAttrNumber;
 
 		if (pelem->name != NULL)
 		{
@@ -20101,17 +20147,18 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 			/*
 			 * Stored generated columns cannot work: They are computed after
 			 * BEFORE triggers, but partition routing is done before all
-			 * triggers.  Maybe virtual generated columns could be made to
-			 * work, but then they would need to be handled as an expression
-			 * below.
+			 * triggers. However virtual generated columns is supported.
 			 */
-			if (attform->attgenerated)
+			if (attform->attgenerated == ATTRIBUTE_GENERATED_STORED)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-						 errmsg("cannot use generated column in partition key"),
-						 errdetail("Column \"%s\" is a generated column.",
+						 errmsg("cannot use stored generated column in partition key"),
+						 errdetail("Column \"%s\" is a stored generated column.",
 								   pelem->name),
 						 parser_errposition(pstate, pelem->location)));
+
+			if (attform->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+				virtualattnum = attform->attnum;
 
 			partattrs[attn] = attform->attnum;
 			atttype = attform->atttypid;
@@ -20119,6 +20166,51 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 			ReleaseSysCache(atttuple);
 		}
 		else
+		{
+			/* Expression */
+			Node	   *expr = pelem->expr;
+
+			atttype = exprType(expr);
+			attcollation = exprCollation(expr);
+
+			while (expr && IsA(expr, CollateExpr))
+				expr = (Node *) ((CollateExpr *) expr)->arg;
+
+			if (IsA(expr, Var) && ((Var *) expr)->varattno > 0)
+			{
+				Var		   *var = (Var *) expr;
+
+				if (TupleDescAttr(RelationGetDescr(rel), var->varattno - 1)->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+					virtualattnum = var->varattno;
+			}
+		}
+
+		if (AttributeNumberIsValid(virtualattnum))
+		{
+			Node	   *expr = build_generation_expression(rel, virtualattnum);
+
+			expr = (Node *) expression_planner((Expr *) expr);
+
+			/*
+			 * Generation expression expected to be IMMUTABLE, So this is
+			 * unlikely to happen.
+			 */
+			if (contain_mutable_functions(expr))
+				elog(ERROR, "functions in partition key expression must be marked IMMUTABLE");
+
+			/*
+			 * While it is not exactly *wrong* for a partition expression to
+			 * be a constant, it seems better to reject such keys.
+			 */
+			if (IsA(expr, Const))
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
+						errmsg("cannot use constant expression as partition key"));
+
+			partattrs[attn] = virtualattnum;
+			*partexprs = lappend(*partexprs, expr);
+		}
+		else if (pelem->expr != NULL)
 		{
 			/* Expression */
 			Node	   *expr = pelem->expr;
@@ -20182,18 +20274,25 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 				/*
 				 * Stored generated columns cannot work: They are computed
 				 * after BEFORE triggers, but partition routing is done before
-				 * all triggers.  Virtual generated columns could probably
-				 * work, but it would require more work elsewhere (for example
-				 * SET EXPRESSION would need to check whether the column is
-				 * used in partition keys).  Seems safer to prohibit for now.
+				 * all triggers.
+				 *
+				 * Virtual generated columns are supported, but expression
+				 * over virtual generated column is not supported.
 				 */
-				if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated)
+				if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated == ATTRIBUTE_GENERATED_STORED)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
-							 errmsg("cannot use generated column in partition key"),
-							 errdetail("Column \"%s\" is a generated column.",
+							 errmsg("cannot use stored generated column in partition key"),
+							 errdetail("Column \"%s\" is a stored generated column.",
 									   get_attname(RelationGetRelid(rel), attno, false)),
 							 parser_errposition(pstate, pelem->location)));
+
+				if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+					ereport(ERROR,
+							errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("cannot use expression over virtual generated column in partition key"),
+							errdetail("Partition key expression over virtual generated column is not supported"),
+							parser_errposition(pstate, pelem->location));
 			}
 
 			if (IsA(expr, Var) &&
@@ -20776,6 +20875,55 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 							RelationGetRelationName(attachrel), attributeName,
 							RelationGetRelationName(rel)),
 					 errdetail("The new partition may contain only the columns present in parent.")));
+	}
+
+	/*
+	 * If the partition key contains virtual generated columns, then the
+	 * generated expression in partition key must match that of the
+	 * partitioned table.
+	 */
+	if (tupleDesc->constr && tupleDesc->constr->has_generated_virtual)
+	{
+		AttrMap    *map = build_attrmap_by_name_if_req(RelationGetDescr(rel),
+													   tupleDesc, false);
+
+		PartitionKey key = RelationGetPartitionKey(rel);
+
+		for (int i = 0; i < key->partnatts; i++)
+		{
+			if (AttributeNumberIsValid(key->partattrs[i]) &&
+				attrIsVirtualGenerated(rel, key->partattrs[i]))
+			{
+				Node	   *attachrel_defval = NULL;
+				bool		found_whole_row = false;
+
+				Node	   *rel_defval = build_generation_expression(rel,
+																	 key->partattrs[i]);
+
+				if (map)
+				{
+					attachrel_defval = build_generation_expression(attachrel,
+																   map->attnums[key->partattrs[i] - 1]);
+					attachrel_defval = map_variable_attnos(attachrel_defval,
+														   1, 0,
+														   map,
+														   InvalidOid,
+														   &found_whole_row);
+				}
+				else
+					attachrel_defval = build_generation_expression(attachrel,
+																   key->partattrs[i]);
+
+				if (found_whole_row)
+					elog(ERROR, "cannot use whole-row variable in column generation expression");
+
+				if (!equal(rel_defval, attachrel_defval))
+					ereport(ERROR,
+							errcode(ERRCODE_WRONG_OBJECT_TYPE),
+							errmsg("cannot attach table \"%s\" as a partition because it has with different generation expression",
+								   RelationGetRelationName(attachrel)));
+			}
+		}
 	}
 
 	/*

@@ -1025,6 +1025,18 @@ DefineIndex(ParseState *pstate,
 						 errdetail("%s constraints cannot be used when partition keys include expressions.",
 								   constraint_type)));
 
+			/*
+			 * Since we do not support indexes on virtual generated columns,
+			 * UNIQUE constraints on these columns are also unsupported
+			 */
+			if (attrIsVirtualGenerated(rel, key->partattrs[i]))
+				ereport(ERROR,
+						errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("unsupported %s constraint with partition key definition",
+							   constraint_type),
+						errdetail("%s constraints cannot be used when partition keys include virtual generated column.",
+								  constraint_type));
+
 			/* Search the index column(s) for a match */
 			for (j = 0; j < indexInfo->ii_NumIndexKeyAttrs; j++)
 			{

@@ -233,6 +233,9 @@ RelationBuildPartitionKey(Relation relation)
 			key->parttypid[i] = att->atttypid;
 			key->parttypmod[i] = att->atttypmod;
 			key->parttypcoll[i] = att->attcollation;
+
+			if (att->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+				partexprs_item = lnext(key->partexprs, partexprs_item);
 		}
 		else
 		{

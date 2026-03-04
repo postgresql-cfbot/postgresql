@@ -27,9 +27,17 @@ typedef struct PartitionKeyData
 	PartitionStrategy strategy; /* partitioning strategy */
 	int16		partnatts;		/* number of columns in the partition key */
 	AttrNumber *partattrs;		/* attribute numbers of columns in the
-								 * partition key or 0 if it's an expr */
-	List	   *partexprs;		/* list of expressions in the partitioning
-								 * key, one for each zero-valued partattrs */
+								 * partition key or 0 if it's an expr. Note:
+								 * These can include attribute numbers for
+								 * virtual generated columns. */
+
+	/*
+	 * list of expressions in the partitioning key, one for each zero-valued
+	 * partattrs. For a virtual generated column, this is its generation
+	 * expression, and partattrs stores the attribute number of the virtual
+	 * generated column.
+	 */
+	List	   *partexprs;
 
 	Oid		   *partopfamily;	/* OIDs of operator families */
 	Oid		   *partopcintype;	/* OIDs of opclass declared input data types */

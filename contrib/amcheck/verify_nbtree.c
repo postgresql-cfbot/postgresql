@@ -2983,8 +2983,10 @@ bt_verify_index_tuple_points_to_heap(BtreeCheckState *state, IndexTuple itup,
 
 	/*
 	 * Bloom filter says (key, tid) not in heap.  Follow TID to verify; this
-	 * amortizes random heap lookups when the filter has false negatives, or
-	 * reports corruption when the index points to wrong heap tuple.
+	 * amortizes random heap lookups by only fetching when the probe indicates
+	 * absence (Bloom filters have false positives, never false negatives, so
+	 * "not in" means we must verify), or reports corruption when the index
+	 * points to wrong heap tuple.
 	 *
 	 * Use SnapshotAny first to distinguish "tuple doesn't exist" (corruption)
 	 * from "tuple exists but is dead" (skip).  SnapshotAny returns any tuple
@@ -3009,8 +3011,9 @@ bt_verify_index_tuple_points_to_heap(BtreeCheckState *state, IndexTuple itup,
 			ExecDropSingleTupleTableSlot(slot);
 			ereport(ERROR,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
-					 errmsg("index tuple in index \"%s\" points to non-existent heap tuple",
-							RelationGetRelationName(state->rel)),
+					 errmsg("index tuple in index \"%s\" points to non-existent heap tuple in table \"%s\"",
+							RelationGetRelationName(state->rel),
+							RelationGetRelationName(state->heaprel)),
 					 errdetail_internal("Index tid=(%u,%u) points to heap tid=(%u,%u) that no longer exists.",
 									   targetblock, offset,
 									   ItemPointerGetBlockNumber(tid),
@@ -3050,8 +3053,9 @@ bt_verify_index_tuple_points_to_heap(BtreeCheckState *state, IndexTuple itup,
 				pfree(norm);
 			ereport(ERROR,
 					(errcode(ERRCODE_INDEX_CORRUPTED),
-					 errmsg("index tuple in index \"%s\" does not match heap tuple",
-							RelationGetRelationName(state->rel)),
+					 errmsg("index tuple in index \"%s\" does not match heap tuple in table \"%s\"",
+							RelationGetRelationName(state->rel),
+							RelationGetRelationName(state->heaprel)),
 					 errdetail_internal("Index tid=(%u,%u) points to heap tid=(%u,%u) with different key.",
 									   targetblock, offset,
 									   ItemPointerGetBlockNumber(tid),

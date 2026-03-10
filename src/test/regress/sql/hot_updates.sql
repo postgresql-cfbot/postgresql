@@ -1,0 +1,605 @@
+--
+-- HOT_UPDATES
+-- Test Heap-Only Tuple (HOT) update decisions
+--
+-- This test systematically verifies that HOT updates are used when appropriate
+-- and avoided when necessary (e.g., when indexed columns are modified).
+--
+-- We use multiple validation methods:
+-- 1. Statistics functions (pg_stat_get_tuples_hot_updated)
+-- 2. pageinspect extension for HOT chain examination
+-- 3. EXPLAIN to verify index usage after updates
+--
+
+-- Load required extensions
+CREATE EXTENSION IF NOT EXISTS pageinspect;
+
+-- Function to get HOT update count
+CREATE OR REPLACE FUNCTION get_hot_count(rel_name text)
+RETURNS TABLE (
+    updates BIGINT,
+    hot BIGINT
+) AS $$
+DECLARE
+  rel_oid oid;
+BEGIN
+  rel_oid := rel_name::regclass::oid;
+
+  -- Read both committed and transaction-local stats
+  -- In autocommit mode (default for regression tests), this works correctly
+  -- Note: In explicit transactions (BEGIN/COMMIT), committed stats already
+  -- include flushed updates, so this would double-count. For explicit
+  -- transaction testing, call pg_stat_force_next_flush() before this function.
+  updates := COALESCE(pg_stat_get_tuples_updated(rel_oid), 0) +
+             COALESCE(pg_stat_get_xact_tuples_updated(rel_oid), 0);
+  hot := COALESCE(pg_stat_get_tuples_hot_updated(rel_oid), 0) +
+         COALESCE(pg_stat_get_xact_tuples_hot_updated(rel_oid), 0);
+
+  RETURN NEXT;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Check if a tuple is part of a HOT chain (has a predecessor on same page)
+CREATE OR REPLACE FUNCTION has_hot_chain(rel_name text, target_ctid tid)
+RETURNS boolean AS $$
+DECLARE
+  block_num int;
+  page_item record;
+BEGIN
+  block_num := (target_ctid::text::point)[0]::int;
+
+  -- Look for a different tuple on the same page that points to our target tuple
+  FOR page_item IN
+    SELECT lp, lp_flags, t_ctid
+    FROM heap_page_items(get_raw_page(rel_name, block_num))
+    WHERE lp_flags = 1
+      AND t_ctid IS NOT NULL
+      AND t_ctid = target_ctid
+      AND ('(' || block_num::text || ',' || lp::text || ')')::tid != target_ctid
+  LOOP
+    RETURN true;
+  END LOOP;
+
+  RETURN false;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Print the HOT chain starting from a given tuple
+CREATE OR REPLACE FUNCTION print_hot_chain(rel_name text, start_ctid tid)
+RETURNS TABLE(chain_position int, ctid tid, lp_flags text, t_ctid tid, chain_end boolean) AS
+$$
+#variable_conflict use_column
+DECLARE
+  block_num int;
+  line_ptr int;
+  current_ctid tid := start_ctid;
+  next_ctid tid;
+  position int := 0;
+  max_iterations int := 100;
+  page_item record;
+  found_predecessor boolean := false;
+  flags_name text;
+BEGIN
+  block_num := (start_ctid::text::point)[0]::int;
+
+  -- Find the predecessor (old tuple pointing to our start_ctid)
+  FOR page_item IN
+    SELECT lp, lp_flags, t_ctid
+    FROM heap_page_items(get_raw_page(rel_name, block_num))
+    WHERE lp_flags = 1
+      AND t_ctid = start_ctid
+  LOOP
+    current_ctid := ('(' || block_num::text || ',' || page_item.lp::text || ')')::tid;
+    found_predecessor := true;
+    EXIT;
+  END LOOP;
+
+  -- If no predecessor found, start with the given ctid
+  IF NOT found_predecessor THEN
+    current_ctid := start_ctid;
+  END IF;
+
+  -- Follow the chain forward
+  WHILE position < max_iterations LOOP
+    line_ptr := (current_ctid::text::point)[1]::int;
+
+    FOR page_item IN
+      SELECT lp, lp_flags, t_ctid
+      FROM heap_page_items(get_raw_page(rel_name, block_num))
+      WHERE lp = line_ptr
+    LOOP
+      -- Map lp_flags to names
+      flags_name := CASE page_item.lp_flags
+        WHEN 0 THEN 'unused (0)'
+        WHEN 1 THEN 'normal (1)'
+        WHEN 2 THEN 'redirect (2)'
+        WHEN 3 THEN 'dead (3)'
+        ELSE 'unknown (' || page_item.lp_flags::text || ')'
+      END;
+
+      RETURN QUERY SELECT
+        position,
+        current_ctid,
+        flags_name,
+        page_item.t_ctid,
+        (page_item.t_ctid IS NULL OR page_item.t_ctid = current_ctid)::boolean
+      ;
+
+      IF page_item.t_ctid IS NULL OR page_item.t_ctid = current_ctid THEN
+        RETURN;
+      END IF;
+
+      next_ctid := page_item.t_ctid;
+
+      IF (next_ctid::text::point)[0]::int != block_num THEN
+        RETURN;
+      END IF;
+
+      current_ctid := next_ctid;
+      position := position + 1;
+    END LOOP;
+
+    IF position = 0 THEN
+      RETURN;
+    END IF;
+  END LOOP;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Basic HOT update (update non-indexed column)
+CREATE TABLE hot_test (
+    id int PRIMARY KEY,
+    indexed_col int,
+    non_indexed_col text
+) WITH (fillfactor = 50);
+
+CREATE INDEX hot_test_indexed_idx ON hot_test(indexed_col);
+
+INSERT INTO hot_test VALUES (1, 100, 'initial');
+INSERT INTO hot_test VALUES (2, 200, 'initial');
+INSERT INTO hot_test VALUES (3, 300, 'initial');
+
+-- Get baseline
+SELECT * FROM get_hot_count('hot_test');
+
+-- Should be HOT updates (only non-indexed column modified)
+UPDATE hot_test SET non_indexed_col = 'updated1' WHERE id = 1;
+UPDATE hot_test SET non_indexed_col = 'updated2' WHERE id = 2;
+UPDATE hot_test SET non_indexed_col = 'updated3' WHERE id = 3;
+
+-- Verify HOT updates occurred
+SELECT * FROM get_hot_count('hot_test');
+
+-- Dump the HOT chain before VACUUMing
+WITH current_tuple AS (
+  SELECT ctid FROM hot_test WHERE id = 1
+)
+SELECT
+  has_hot_chain('hot_test', current_tuple.ctid) AS has_chain,
+  chain_position,
+  print_hot_chain.ctid,
+  lp_flags,
+  t_ctid
+FROM current_tuple,
+LATERAL print_hot_chain('hot_test', current_tuple.ctid);
+
+-- Vacuum the relation, expect the HOT chain to collapse
+VACUUM hot_test;
+
+-- Show that there is no chain after vacuum
+WITH current_tuple AS (
+  SELECT ctid FROM hot_test WHERE id = 1
+)
+SELECT
+  has_hot_chain('hot_test', current_tuple.ctid) AS has_chain,
+  chain_position,
+  print_hot_chain.ctid,
+  lp_flags,
+  t_ctid
+FROM current_tuple,
+LATERAL print_hot_chain('hot_test', current_tuple.ctid);
+
+-- Non-HOT update (update indexed column)
+UPDATE hot_test SET indexed_col = 150 WHERE id = 1;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Verify index was updated (new value findable)
+SET enable_seqscan = off;
+EXPLAIN (COSTS OFF) SELECT id, indexed_col FROM hot_test WHERE indexed_col = 150;
+SELECT id, indexed_col FROM hot_test WHERE indexed_col = 150;
+
+-- Verify old value no longer in index
+EXPLAIN (COSTS OFF) SELECT id FROM hot_test WHERE indexed_col = 100;
+SELECT id FROM hot_test WHERE indexed_col = 100;
+RESET enable_seqscan;
+
+-- All-or-none property: updating one indexed column requires ALL index updates
+DROP TABLE hot_test;
+
+CREATE TABLE hot_test (
+    id int PRIMARY KEY,
+    col_a int,
+    col_b int,
+    col_c int,
+    non_indexed text
+) WITH (fillfactor = 50);
+
+CREATE INDEX hot_test_a_idx ON hot_test(col_a);
+CREATE INDEX hot_test_b_idx ON hot_test(col_b);
+CREATE INDEX hot_test_c_idx ON hot_test(col_c);
+
+INSERT INTO hot_test VALUES (1, 10, 20, 30, 'initial');
+
+-- Update only col_a - should NOT be HOT because an indexed column changed
+-- This means ALL indexes must be updated (all-or-none property)
+UPDATE hot_test SET col_a = 15 WHERE id = 1;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Now update only non-indexed column - should be HOT
+UPDATE hot_test SET non_indexed = 'updated';
+SELECT * FROM get_hot_count('hot_test');
+
+-- Partial index: both old and new outside predicate (conservative = non-HOT)
+DROP TABLE hot_test;
+
+CREATE TABLE hot_test (
+    id int PRIMARY KEY,
+    status text,
+    data text
+) WITH (fillfactor = 50);
+
+-- Partial index only covers status = 'active'
+CREATE INDEX hot_test_active_idx ON hot_test(status) WHERE status = 'active';
+
+INSERT INTO hot_test VALUES (1, 'active', 'data1');
+INSERT INTO hot_test VALUES (2, 'inactive', 'data2');
+INSERT INTO hot_test VALUES (3, 'deleted', 'data3');
+
+-- Update non-indexed column on 'active' row (in predicate, status unchanged)
+-- Should be HOT
+UPDATE hot_test SET data = 'updated1' WHERE id = 1;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Update non-indexed column on 'inactive' row (outside predicate)
+-- Should be HOT
+UPDATE hot_test SET data = 'updated2' WHERE id = 2;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Update status from 'inactive' to 'deleted' (both outside predicate)
+-- PostgreSQL is conservative: heap insert happens before predicate check
+-- So this is NON-HOT even though both values are outside predicate
+UPDATE hot_test SET status = 'deleted' WHERE id = 2;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Verify index still works for 'active' rows
+SELECT id, status FROM hot_test WHERE status = 'active';
+
+-- Only BRIN (summarizing) indexes on non-PK columns
+DROP TABLE hot_test;
+
+CREATE TABLE hot_test (
+    id int PRIMARY KEY,
+    ts timestamp,
+    value int,
+    brin_col int
+) WITH (fillfactor = 50);
+
+CREATE INDEX hot_test_ts_brin ON hot_test USING brin(ts);
+CREATE INDEX hot_test_brin_col_brin ON hot_test USING brin(brin_col);
+
+INSERT INTO hot_test VALUES (1, '2024-01-01', 100, 1000);
+
+-- Update both BRIN columns - should still be HOT (only summarizing indexes)
+UPDATE hot_test SET ts = '2024-01-02', brin_col = 2000 WHERE id = 1;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Update non-indexed column - should also be HOT
+UPDATE hot_test SET value = 200 WHERE id = 1;
+SELECT * FROM get_hot_count('hot_test');
+
+-- TOAST and HOT: TOASTed columns can participate in HOT
+DROP TABLE hot_test;
+
+CREATE TABLE hot_test (
+    id int PRIMARY KEY,
+    indexed_col int,
+    large_text text,
+    small_text text
+) WITH (fillfactor = 50);
+
+CREATE INDEX hot_test_idx ON hot_test(indexed_col);
+
+-- Insert row with TOASTed column (> 2KB)
+INSERT INTO hot_test VALUES (1, 100, repeat('x', 3000), 'small');
+
+-- Update non-indexed, non-TOASTed column - should be HOT
+UPDATE hot_test SET small_text = 'updated';
+SELECT * FROM get_hot_count('hot_test');
+
+-- Update TOASTed column - should be HOT if indexed column unchanged
+UPDATE hot_test SET large_text = repeat('y', 3000);
+SELECT * FROM get_hot_count('hot_test');
+
+-- Update indexed column - should NOT be HOT
+UPDATE hot_test SET indexed_col = 200;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Unique constraint (unique index) behaves like regular index
+DROP TABLE hot_test;
+
+CREATE TABLE hot_test (
+    id int PRIMARY KEY,
+    unique_col int UNIQUE,
+    data text
+) WITH (fillfactor = 50);
+
+INSERT INTO hot_test VALUES (1, 100, 'data1');
+INSERT INTO hot_test VALUES (2, 200, 'data2');
+
+-- Update data (non-indexed) - should be HOT
+UPDATE hot_test SET data = 'updated';
+SELECT * FROM get_hot_count('hot_test');
+
+-- Verify unique constraint still enforced
+SELECT id, unique_col, data FROM hot_test ORDER BY id;
+
+-- This should fail (unique violation)
+UPDATE hot_test SET unique_col = 100 WHERE id = 2;
+
+-- Multi-column index: any column change = non-HOT
+DROP TABLE hot_test;
+
+CREATE TABLE hot_test (
+    id int PRIMARY KEY,
+    col_a int,
+    col_b int,
+    col_c int,
+    data text
+) WITH (fillfactor = 50);
+
+CREATE INDEX hot_test_ab_idx ON hot_test(col_a, col_b);
+
+INSERT INTO hot_test VALUES (1, 10, 20, 30, 'data');
+
+-- Update col_a (part of multi-column index) - should NOT be HOT
+UPDATE hot_test SET col_a = 15;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Reset
+UPDATE hot_test SET col_a = 10;
+
+-- Update col_b (part of multi-column index) - should NOT be HOT
+UPDATE hot_test SET col_b = 25;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Reset
+UPDATE hot_test SET col_b = 20;
+SELECT * FROM get_hot_count('hot_test');
+
+-- Update col_c (not indexed) - should be HOT
+UPDATE hot_test SET col_c = 35;
+
+-- Update data (not indexed) - should be HOT
+UPDATE hot_test SET data = 'updated';
+SELECT * FROM get_hot_count('hot_test');
+
+-- Partitioned tables: HOT works within partitions
+DROP TABLE IF EXISTS hot_test_partitioned CASCADE;
+
+CREATE TABLE hot_test_partitioned (
+    id int,
+    partition_key int,
+    indexed_col int,
+    data text,
+    PRIMARY KEY (id, partition_key)
+) PARTITION BY RANGE (partition_key);
+
+CREATE TABLE hot_test_part1 PARTITION OF hot_test_partitioned
+    FOR VALUES FROM (1) TO (100) WITH (fillfactor = 50);
+CREATE TABLE hot_test_part2 PARTITION OF hot_test_partitioned
+    FOR VALUES FROM (100) TO (200) WITH (fillfactor = 50);
+
+CREATE INDEX hot_test_part_idx ON hot_test_partitioned(indexed_col);
+
+INSERT INTO hot_test_partitioned VALUES (1, 50, 100, 'initial1');
+INSERT INTO hot_test_partitioned VALUES (2, 150, 200, 'initial2');
+
+-- Update in partition 1 (non-indexed column) - should be HOT
+UPDATE hot_test_partitioned SET data = 'updated1' WHERE id = 1;
+
+-- Update in partition 2 (non-indexed column) - should be HOT
+UPDATE hot_test_partitioned SET data = 'updated2' WHERE id = 2;
+
+SELECT * FROM get_hot_count('hot_test_part1');
+SELECT * FROM get_hot_count('hot_test_part2');
+
+-- Verify indexes work on partitions
+SELECT id FROM hot_test_partitioned WHERE indexed_col = 100;
+SELECT id FROM hot_test_partitioned WHERE indexed_col = 200;
+
+-- Update indexed column in partition - should NOT be HOT
+UPDATE hot_test_partitioned SET indexed_col = 150 WHERE id = 1;
+SELECT * FROM get_hot_count('hot_test_part1');
+
+-- Verify index was updated
+SELECT id FROM hot_test_partitioned WHERE indexed_col = 150;
+
+-- ============================================================================
+-- Trigger modifications: heap_modify_tuple() and HOT
+-- ============================================================================
+-- Test that we correctly detect when triggers modify indexed columns via
+-- heap_modify_tuple(), even when those columns aren't in the UPDATE's SET clause
+
+CREATE TABLE hot_trigger_test (
+    id int PRIMARY KEY,
+    triggered_col int,
+    data text
+) WITH (fillfactor = 50);
+
+CREATE INDEX hot_trigger_idx ON hot_trigger_test(triggered_col);
+
+-- Create a trigger that modifies an indexed column
+CREATE OR REPLACE FUNCTION modify_triggered_col()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.triggered_col = NEW.triggered_col + 1;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER before_update_modify
+    BEFORE UPDATE ON hot_trigger_test
+    FOR EACH ROW
+    EXECUTE FUNCTION modify_triggered_col();
+
+INSERT INTO hot_trigger_test VALUES (1, 100, 'initial');
+
+SELECT * FROM get_hot_count('hot_trigger_test');
+
+-- Update only data column, but trigger modifies indexed column
+-- Should NOT be HOT because trigger modified an indexed column
+UPDATE hot_trigger_test SET data = 'updated' WHERE id = 1;
+
+-- Verify it was NOT a HOT update (indexed column was modified by trigger)
+SELECT * FROM get_hot_count('hot_trigger_test');
+
+-- Verify the triggered column was actually modified
+SELECT triggered_col FROM hot_trigger_test WHERE id = 1;
+
+DROP TABLE hot_trigger_test CASCADE;
+DROP FUNCTION modify_triggered_col();
+
+-- ============================================================================
+-- JSONB expression indexes and sub-attribute tracking
+-- ============================================================================
+-- Test that updates to non-indexed JSONB paths can be HOT updates
+
+CREATE TABLE hot_jsonb_test (
+    id int PRIMARY KEY,
+    data jsonb
+) WITH (fillfactor = 50);
+
+-- Create expression index on a specific JSON path
+CREATE INDEX hot_jsonb_name_idx ON hot_jsonb_test ((data->>'name'));
+
+INSERT INTO hot_jsonb_test VALUES
+    (1, '{"name":"Alice","age":30,"city":"NYC"}'),
+    (2, '{"name":"Bob","age":25,"city":"LA"}');
+
+SELECT * FROM get_hot_count('hot_jsonb_test');
+
+-- Update non-indexed JSON path (age) - should be HOT after instrumentation
+UPDATE hot_jsonb_test SET data = jsonb_set(data, '{age}', '31') WHERE id = 1;
+
+SELECT * FROM get_hot_count('hot_jsonb_test');
+
+-- Update indexed JSON path (name) - should NOT be HOT
+UPDATE hot_jsonb_test SET data = jsonb_set(data, '{name}', '"Alice2"') WHERE id = 1;
+
+SELECT * FROM get_hot_count('hot_jsonb_test');
+
+-- Verify index works
+SELECT id FROM hot_jsonb_test WHERE data->>'name' = 'Alice2';
+
+-- Test jsonb_delete on non-indexed path - should be HOT after instrumentation
+UPDATE hot_jsonb_test SET data = data - 'city' WHERE id = 2;
+
+SELECT * FROM get_hot_count('hot_jsonb_test');
+
+-- Test jsonb_insert on non-indexed path - should be HOT after instrumentation
+UPDATE hot_jsonb_test SET data = jsonb_insert(data, '{country}', '"USA"') WHERE id = 2;
+
+SELECT * FROM get_hot_count('hot_jsonb_test');
+
+DROP TABLE hot_jsonb_test;
+
+-- ============================================================================
+-- XML expression indexes and sub-attribute tracking
+-- ============================================================================
+-- Test that updates to non-indexed XML paths can be HOT updates
+
+CREATE TABLE hot_xml_test (
+    id int PRIMARY KEY,
+    doc xml
+) WITH (fillfactor = 50);
+
+-- Create expression index on a specific XPath
+CREATE INDEX hot_xml_name_idx ON hot_xml_test ((xpath('/person/name/text()', doc)));
+
+INSERT INTO hot_xml_test VALUES
+    (1, '<person><name>Alice</name><age>30</age></person>'),
+    (2, '<person><name>Bob</name><age>25</age></person>');
+
+SELECT * FROM get_hot_count('hot_xml_test');
+
+-- Update non-indexed XPath (age) - behavior depends on XML comparison fallback
+-- Full XML value replacement means non-indexed path updates still require index comparison
+UPDATE hot_xml_test SET doc = '<person><name>Alice</name><age>31</age></person>' WHERE id = 1;
+
+SELECT * FROM get_hot_count('hot_xml_test');
+
+-- Update indexed XPath (name) - should NOT be HOT
+UPDATE hot_xml_test SET doc = '<person><name>Alice2</name><age>31</age></person>' WHERE id = 1;
+
+SELECT * FROM get_hot_count('hot_xml_test');
+
+-- Verify index works
+SELECT id FROM hot_xml_test WHERE xpath('/person/name/text()', doc) = ARRAY['Alice2'::text];
+
+DROP TABLE hot_xml_test;
+
+-- ============================================================================
+-- GIN indexes and amcomparedatums for JSONB
+-- ============================================================================
+-- Test that GIN indexes can use amcomparedatums to enable HOT when extracted keys match
+
+CREATE TABLE hot_gin_test (
+    id int PRIMARY KEY,
+    tags text[],
+    properties jsonb
+) WITH (fillfactor = 50);
+
+-- GIN index on text array
+CREATE INDEX hot_gin_tags_idx ON hot_gin_test USING gin (tags);
+
+-- GIN index on JSONB (jsonb_ops - keys and values)
+CREATE INDEX hot_gin_props_idx ON hot_gin_test USING gin (properties);
+
+INSERT INTO hot_gin_test VALUES
+    (1, ARRAY['tag1', 'tag2'], '{"key1":"val1","key2":"val2"}'),
+    (2, ARRAY['tag3', 'tag4'], '{"key3":"val3","key4":"val4"}');
+
+SELECT * FROM get_hot_count('hot_gin_test');
+
+-- Update that changes tag order but not content - after amcomparedatums should be HOT
+-- (GIN extracts same keys, just different order)
+UPDATE hot_gin_test SET tags = ARRAY['tag2', 'tag1'] WHERE id = 1;
+
+SELECT * FROM get_hot_count('hot_gin_test');
+
+-- Update JSONB value (not key) - after amcomparedatums may be HOT or non-HOT
+-- depending on GIN operator class (jsonb_ops indexes both keys and values)
+UPDATE hot_gin_test SET properties = '{"key1":"val1_new","key2":"val2"}' WHERE id = 1;
+
+SELECT * FROM get_hot_count('hot_gin_test');
+
+-- Add new tag - should NOT be HOT (different extracted keys)
+UPDATE hot_gin_test SET tags = ARRAY['tag2', 'tag1', 'tag5'] WHERE id = 1;
+
+SELECT * FROM get_hot_count('hot_gin_test');
+
+-- Verify GIN indexes work
+SELECT id FROM hot_gin_test WHERE tags @> ARRAY['tag5'];
+SELECT id FROM hot_gin_test WHERE properties @> '{"key1":"val1_new"}';
+
+DROP TABLE hot_gin_test;
+
+-- ============================================================================
+-- Cleanup
+-- ============================================================================
+DROP TABLE IF EXISTS hot_test;
+DROP TABLE IF EXISTS hot_test_partitioned CASCADE;
+DROP FUNCTION IF EXISTS has_hot_chain(text, tid);
+DROP FUNCTION IF EXISTS print_hot_chain(text, tid);
+DROP FUNCTION IF EXISTS get_hot_count(text);
+DROP EXTENSION pageinspect;

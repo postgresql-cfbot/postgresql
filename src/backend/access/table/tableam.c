@@ -361,6 +361,7 @@ void
 simple_table_tuple_update(Relation rel, ItemPointer otid,
 						  TupleTableSlot *slot,
 						  Snapshot snapshot,
+						  const Bitmapset *modified_idx_attrs,
 						  TU_UpdateIndexes *update_indexes)
 {
 	TM_Result	result;
@@ -371,7 +372,9 @@ simple_table_tuple_update(Relation rel, ItemPointer otid,
 								GetCurrentCommandId(true),
 								0, snapshot, InvalidSnapshot,
 								true /* wait for commit */ ,
-								&tmfd, &lockmode, update_indexes);
+								&tmfd, &lockmode,
+								modified_idx_attrs,
+								update_indexes);
 
 	switch (result)
 	{

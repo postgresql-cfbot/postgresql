@@ -66,6 +66,7 @@
 #include "nodes/nodeFuncs.h"
 #include "storage/bufmgr.h"
 #include "utils/builtins.h"
+#include "utils/datum.h"
 #include "utils/expandeddatum.h"
 #include "utils/lsyscache.h"
 #include "utils/typcache.h"
@@ -2010,6 +2011,108 @@ ExecFetchSlotHeapTupleDatum(TupleTableSlot *slot)
 		pfree(tup);
 
 	return ret;
+}
+
+/*
+ * ExecCompareSlotAttrs
+ *
+ * Compare the subset of attributes in attrs between TupleTableSlots to detect
+ * which attributes have changed.
+ *
+ * The input Bitmapset attrs is modified in place (recycled when possible via
+ * bms_del_member, which may pfree it and return NULL) and may be freed;
+ * callers must use only the returned pointer, not their original attrs
+ * value.  Returns the Bitmapset of attribute indices (using the
+ * FirstLowInvalidHeapAttributeNumber convention) that differ between the two
+ * slots.
+ */
+Bitmapset *
+ExecCompareSlotAttrs(Bitmapset *attrs, TupleDesc tupdesc,
+					 TupleTableSlot *s1, TupleTableSlot *s2)
+{
+	int			attidx = -1;
+
+	while ((attidx = bms_next_member(attrs, attidx)) >= 0)
+	{
+		/* attidx is zero-based, attrnum is the normal attribute number */
+		AttrNumber	attrnum = attidx + FirstLowInvalidHeapAttributeNumber;
+		Datum		value1,
+					value2;
+		bool		null1,
+					null2;
+		CompactAttribute *att;
+
+		/*
+		 * If it's a whole-tuple reference, say "not equal".  It's not really
+		 * worth supporting this case, since it could only succeed after a
+		 * no-op update, which is hardly a case worth optimizing for.
+		 */
+		if (attrnum == 0)
+			continue;
+
+		/*
+		 * Likewise, automatically say "not equal" for any system attribute
+		 * other than tableOID; we cannot expect these to be consistent in a
+		 * HOT chain, or even to be set correctly yet in the new tuple.
+		 */
+		if (attrnum < 0)
+		{
+			if (attrnum == TableOidAttributeNumber)
+				attrs = bms_del_member(attrs, attidx);
+			continue;
+		}
+
+		att = TupleDescCompactAttr(tupdesc, attrnum - 1);
+		value1 = slot_getattr(s1, attrnum, &null1);
+		value2 = slot_getattr(s2, attrnum, &null2);
+
+		/* A change to/from NULL, so not equal */
+		if (null1 != null2)
+			continue;
+
+		/* Both NULL, no change/unmodified */
+		if (null2)
+		{
+			attrs = bms_del_member(attrs, attidx);
+			continue;
+		}
+
+		/*
+		 * Compare with datum_image_eq, NOT datumIsEqual (the comparator
+		 * heap_attr_equals uses).  This is an intentional and necessary
+		 * difference, not an oversight:
+		 *
+		 * 1. This runs in the executor on TupleTableSlots, whose Datums are the
+		 *    logical, in-memory values of the new/old tuple.  At this stage the
+		 *    values have not been through any table AM's storage path, so no
+		 *    slot value can be TOASTed here.  TOAST (compression/externalization)
+		 *    is a heapam storage detail applied later, inside the table AM; the
+		 *    "two physically different varlena encodings of the same value"
+		 *    hazard that would distinguish datum_image_eq from datumIsEqual
+		 *    cannot arise at this point.
+		 *
+		 * 2. The executor must stay agnostic of how any table AM stores
+		 *    variable-length data.  datum_image_eq is the correct storage-neutral
+		 *    "are these two logical values image-identical" test for slot Datums;
+		 *    datumIsEqual bakes in a byte-layout assumption that does not belong
+		 *    here.
+		 *
+		 * 3. datumIsEqual would force a slot->Datum transform with heap
+		 *    semantics on a hot path, per attribute per updated row -- pure
+		 *    overhead for no benefit.
+		 *
+		 * This function and heap_attr_equals()/HeapDetermineColumnsInfo() are
+		 * meant to be *functionally* equivalent (both answer "which indexed
+		 * attributes changed value?"), not to use the identical Datum-level
+		 * comparator.  Erring toward "changed" is the safe direction for the
+		 * modified-indexed-attributes decision anyway (a redundant fresh index
+		 * entry is tolerated; a skipped one is not).
+		 */
+		if (datum_image_eq(value1, value2, att->attbyval, att->attlen))
+			attrs = bms_del_member(attrs, attidx);
+	}
+
+	return attrs;
 }
 
 /* ----------------------------------------------------------------

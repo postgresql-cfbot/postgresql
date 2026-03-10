@@ -2680,7 +2680,17 @@ apply_concurrent_update(Relation rel, TupleTableSlot *spilled_tuple,
 	LockTupleMode lockmode;
 	TM_FailureData tmfd;
 	TU_UpdateIndexes update_indexes;
+	Bitmapset  *modified_idx_attrs;
 	TM_Result	res;
+
+	/*
+	 * Compute the set of modified indexed attributes by comparing the old
+	 * (ondisk) and new (spilled) tuples; heap_update needs it for a correct
+	 * HOT decision (a NULL set would look like "no indexed column changed").
+	 */
+	modified_idx_attrs = ExecUpdateModifiedIdxAttrs(chgcxt->cc_rri,
+													ondisk_tuple,
+													spilled_tuple);
 
 	/*
 	 * Carry out the update, skipping logical decoding for it.
@@ -2691,7 +2701,7 @@ apply_concurrent_update(Relation rel, TupleTableSlot *spilled_tuple,
 							 InvalidSnapshot,
 							 InvalidSnapshot,
 							 false,
-							 &tmfd, &lockmode, &update_indexes);
+							 &tmfd, &lockmode, modified_idx_attrs, &update_indexes);
 	if (res != TM_Ok)
 		ereport(ERROR,
 				errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
@@ -2712,6 +2722,8 @@ apply_concurrent_update(Relation rel, TupleTableSlot *spilled_tuple,
 	}
 
 	pgstat_progress_incr_param(PROGRESS_REPACK_HEAP_TUPLES_UPDATED, 1);
+
+	bms_free(modified_idx_attrs);
 }
 
 static void

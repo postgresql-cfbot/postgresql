@@ -33,6 +33,7 @@
 #include "utils/builtins.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
+#include "utils/relcache.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/typcache.h"
@@ -910,6 +911,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 	bool		skip_tuple = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	ItemPointer tid = &(searchslot->tts_tid);
+	Bitmapset  *modified_idx_attrs;
 
 	/*
 	 * We support only non-system tables, with
@@ -948,8 +950,13 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		if (rel->rd_rel->relispartition)
 			ExecPartitionCheck(resultRelInfo, slot, estate, true);
 
+		modified_idx_attrs = ExecUpdateModifiedIdxAttrs(resultRelInfo,
+														searchslot, slot);
+
 		simple_table_tuple_update(rel, tid, slot, estate->es_snapshot,
-								  &update_indexes);
+								  modified_idx_attrs, &update_indexes);
+		bms_free(modified_idx_attrs);
+
 
 		conflictindexes = resultRelInfo->ri_onConflictArbiterIndexes;
 

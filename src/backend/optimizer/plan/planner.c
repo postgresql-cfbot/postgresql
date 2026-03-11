@@ -385,6 +385,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->partPruneInfos = NIL;
 	glob->relationOids = NIL;
 	glob->invalItems = NIL;
+	glob->fkRemovedRelOids = NIL;
 	glob->paramExecTypes = NIL;
 	glob->lastPHId = 0;
 	glob->lastRowMarkId = 0;
@@ -693,6 +694,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 
 	result->relationOids = glob->relationOids;
 	result->invalItems = glob->invalItems;
+	result->fkRemovedRelOids = glob->fkRemovedRelOids;
 	result->paramExecTypes = glob->paramExecTypes;
 	/* utilityStmt should be null, but we might as well copy it */
 	result->utilityStmt = parse->utilityStmt;

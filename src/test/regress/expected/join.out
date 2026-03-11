@@ -10703,6 +10703,46 @@ FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id;
          ->  Seq Scan on fk_parent1 p
 (5 rows)
 
+-- Trigger gap: fk_parent1 cannot be removed when RowExclusiveLock is held
+-- during active DML on a FK-related table
+ALTER TABLE fk_child DROP CONSTRAINT fk_child_p1_id_fkey;
+ALTER TABLE fk_child ADD CONSTRAINT fk_child_p1_id_fkey
+  FOREIGN KEY (p1_id) REFERENCES fk_parent1(id) ON DELETE CASCADE;
+CREATE FUNCTION trigger_gap_test_fn() RETURNS int LANGUAGE plpgsql AS $$
+DECLARE
+    join_count int;
+    plan_line text;
+BEGIN
+    SELECT count(*) INTO join_count
+    FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id;
+    RAISE NOTICE 'Join Count: %', join_count;
+
+    RAISE NOTICE '--- EXPLAIN PLAN ---';
+    FOR plan_line IN
+        EXPLAIN (COSTS OFF)
+        SELECT count(*) FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id
+    LOOP
+        RAISE NOTICE '%', plan_line;
+    END LOOP;
+
+    RETURN join_count;
+END;
+$$;
+DELETE FROM fk_parent1 WHERE id = 1 RETURNING trigger_gap_test_fn();
+NOTICE:  Join Count: 1
+NOTICE:  --- EXPLAIN PLAN ---
+NOTICE:  Aggregate
+NOTICE:    ->  Nested Loop
+NOTICE:          Join Filter: (p.id = c.p1_id)
+NOTICE:          ->  Seq Scan on fk_child c
+NOTICE:          ->  Materialize
+NOTICE:                ->  Seq Scan on fk_parent1 p
+ trigger_gap_test_fn 
+---------------------
+                   1
+(1 row)
+
+DROP FUNCTION trigger_gap_test_fn();
 DROP TABLE fk_child;
 DROP TABLE fk_multi_parent;
 DROP TABLE fk_parent_text;

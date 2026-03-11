@@ -229,6 +229,9 @@ typedef struct PlannerGlobal
 	/* other dependencies, as PlanInvalItems */
 	List	   *invalItems;
 
+	/* OIDs of relations involved in FK-based inner join removal */
+	List	   *fkRemovedRelOids;
+
 	/* type OIDs for PARAM_EXEC Params */
 	List	   *paramExecTypes;
 

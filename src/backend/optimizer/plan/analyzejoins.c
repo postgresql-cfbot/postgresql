@@ -35,6 +35,7 @@
 #include "optimizer/restrictinfo.h"
 #include "parser/parse_agg.h"
 #include "rewrite/rewriteManip.h"
+#include "storage/lmgr.h"
 #include "utils/lsyscache.h"
 
 /*
@@ -2728,6 +2729,18 @@ restart:
 		if (!inner_join_is_removable(root, fkinfo))
 			continue;
 
+		/*
+		 * Record the OIDs of both sides of the FK so that the plan cache can
+		 * detect when a cached plan with FK-based join removal needs
+		 * replanning due to the trigger gap becoming possible.
+		 */
+		root->glob->fkRemovedRelOids =
+			list_append_unique_oid(root->glob->fkRemovedRelOids,
+								   root->simple_rte_array[fkinfo->con_relid]->relid);
+		root->glob->fkRemovedRelOids =
+			list_append_unique_oid(root->glob->fkRemovedRelOids,
+								   root->simple_rte_array[fkinfo->ref_relid]->relid);
+
 		/* Inject IS NOT NULL clauses for nullable foreign key columns */
 		inject_fk_not_null_quals(root, fkinfo);
 
@@ -2795,6 +2808,8 @@ inner_join_is_removable(PlannerInfo *root, ForeignKeyOptInfo *fkinfo)
 {
 	RelOptInfo *con_rel;
 	RelOptInfo *ref_rel;
+	Oid			con_reloid;
+	Oid			ref_reloid;
 	int			attroff;
 	Relids		inputrelids;
 	Bitmapset  *fk_attnums = NULL;
@@ -2849,6 +2864,44 @@ inner_join_is_removable(PlannerInfo *root, ForeignKeyOptInfo *fkinfo)
 	 */
 	if (con_rel->reloptkind != RELOPT_BASEREL ||
 		ref_rel->reloptkind != RELOPT_BASEREL)
+		return false;
+
+	con_reloid = root->simple_rte_array[fkinfo->con_relid]->relid;
+	ref_reloid = root->simple_rte_array[fkinfo->ref_relid]->relid;
+
+	/*
+	 * FK constraints are enforced via AFTER ROW triggers, creating a window
+	 * (the "trigger gap") between when a row is physically modified and when
+	 * the FK enforcement trigger fires.  Within this window the FK invariant
+	 * is locally false in the heap.  It becomes user-observable through any
+	 * query that runs against a snapshot captured inside the window -- for
+	 * example, a SELECT inside a plpgsql function invoked from RETURNING, a
+	 * query inside an AFTER ROW trigger body, or a fetch from a cursor opened
+	 * inside the window.
+	 *
+	 * The predicate guarding the optimization must remain positive at least
+	 * as long as any snapshot in this transaction could still be referenced,
+	 * because a snapshot captured during the gap can outlive the gap's
+	 * closure -- for example, a cursor frozen via CopySnapshot inside the
+	 * window, or a cached plan reused at execution time against a snapshot
+	 * that was captured inside the window.  Any FK-removed plan executed
+	 * against such a stale snapshot would observe the inconsistent state and
+	 * produce wrong results, even if the trigger queue has long since
+	 * drained.  Predicates tied to the active DML's own lifetime, such as a
+	 * per-statement counter or AfterTriggerPendingOnRel(), go silent once the
+	 * gap closes and would leave stale-snapshot executions unguarded.
+	 *
+	 * RowExclusiveLock has exactly the right lifetime: it is acquired during
+	 * parse analysis of any DML on the rel and released only at end of
+	 * transaction, which trivially exceeds the lifetime of any in-transaction
+	 * snapshot.  The pessimism this introduces -- skipping the optimization
+	 * for the rest of the transaction after the DML completes, or when
+	 * RowExclusiveLock is held for other reasons such as LOCK TABLE -- is the
+	 * price of that lifetime guarantee.  In those cases the query falls back
+	 * to executing the join normally.
+	 */
+	if (CheckRelationOidLockedByMe(con_reloid, RowExclusiveLock, true) ||
+		CheckRelationOidLockedByMe(ref_reloid, RowExclusiveLock, true))
 		return false;
 
 	/*

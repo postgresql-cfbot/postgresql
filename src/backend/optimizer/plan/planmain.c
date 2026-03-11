@@ -242,6 +242,14 @@ query_planner(PlannerInfo *root,
 	joinlist = remove_useless_self_joins(root, joinlist);
 
 	/*
+	 * Remove any useless inner joins based on foreign key constraints.  This
+	 * must be done after equivalence classes are finalized and foreign key
+	 * lists are initialized, as the optimization relies on these structures
+	 * to safely identify and eliminate redundant relations.
+	 */
+	joinlist = remove_useless_inner_joins(root, joinlist);
+
+	/*
 	 * Now distribute "placeholders" to base rels as needed.  This has to be
 	 * done after join removal because removal could change whether a
 	 * placeholder is evaluable at a base rel.

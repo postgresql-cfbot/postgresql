@@ -4077,15 +4077,18 @@ match_foreign_keys_to_quals(PlannerInfo *root)
 		for (colno = 0; colno < fkinfo->nkeys; colno++)
 		{
 			EquivalenceClass *ec;
+			EquivalenceMember *em = NULL;
 			AttrNumber	con_attno,
 						ref_attno;
 			Oid			fpeqop;
 			ListCell   *lc2;
 
-			ec = match_eclasses_to_foreign_key_col(root, fkinfo, colno);
+			ec = match_eclasses_to_foreign_key_col(root, fkinfo, colno, &em);
 			/* Don't bother looking for loose quals if we got an EC match */
 			if (ec != NULL)
 			{
+				fkinfo->eclass[colno] = ec;
+				fkinfo->fk_eclass_member[colno] = em;
 				fkinfo->nmatched_ec++;
 				if (ec->ec_has_const)
 					fkinfo->nconst_ec++;

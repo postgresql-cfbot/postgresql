@@ -662,6 +662,8 @@ get_relation_foreign_keys(PlannerInfo *root, RelOptInfo *rel,
 			info->con_relid = rel->relid;
 			info->ref_relid = rti;
 			info->nkeys = cachedfk->nkeys;
+			info->con_deferrable = cachedfk->condeferrable;
+			info->con_validated = cachedfk->convalidated;
 			memcpy(info->conkey, cachedfk->conkey, sizeof(info->conkey));
 			memcpy(info->confkey, cachedfk->confkey, sizeof(info->confkey));
 			memcpy(info->conpfeqop, cachedfk->conpfeqop, sizeof(info->conpfeqop));

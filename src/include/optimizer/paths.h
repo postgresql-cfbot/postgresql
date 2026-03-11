@@ -172,7 +172,8 @@ extern bool exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2,
 							  Oid opfamily);
 extern EquivalenceClass *match_eclasses_to_foreign_key_col(PlannerInfo *root,
 														   ForeignKeyOptInfo *fkinfo,
-														   int colno);
+														   int colno,
+														   EquivalenceMember **fk_eclass_member);
 extern RestrictInfo *find_derived_clause_for_ec_member(PlannerInfo *root,
 													   EquivalenceClass *ec,
 													   EquivalenceMember *em);

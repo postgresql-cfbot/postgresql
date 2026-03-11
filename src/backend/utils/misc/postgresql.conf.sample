@@ -447,6 +447,7 @@
 #enable_group_by_reordering = on
 #enable_distinct_reordering = on
 #enable_self_join_elimination = on
+#enable_fk_inner_join_removal = on
 #enable_eager_aggregate = on
 
 # - Planner Cost Constants -

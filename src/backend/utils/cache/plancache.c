@@ -1132,6 +1132,7 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 	 */
 	plan->planRoleId = GetUserId();
 	plan->dependsOnRole = plansource->dependsOnRLS;
+	plan->hasFKJoinRemoval = false;
 	is_transient = false;
 	foreach(lc, plist)
 	{
@@ -1144,6 +1145,8 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 			is_transient = true;
 		if (plannedstmt->dependsOnRole)
 			plan->dependsOnRole = true;
+		if (plannedstmt->fkRemovedRelOids != NIL)
+			plan->hasFKJoinRemoval = true;
 	}
 	if (is_transient)
 	{
@@ -1179,6 +1182,37 @@ choose_custom_plan(CachedPlanSource *plansource, ParamListInfo boundParams)
 	/* One-shot plans will always be considered custom */
 	if (plansource->is_oneshot)
 		return true;
+
+	/*
+	 * If the generic plan used FK-based inner join removal, check whether any
+	 * of the relations involved are currently being modified in this
+	 * transaction (detected by RowExclusiveLock).  If so, we must force a
+	 * custom plan: an FK-removed plan executed against a snapshot that still
+	 * sees the trigger-gap state would produce incorrect results.  This check
+	 * uses the same predicate as inner_join_is_removable() at planning time;
+	 * see that function for the correctness argument.
+	 *
+	 * This check must come before all other early returns, because
+	 * correctness requires replanning regardless of parameter availability,
+	 * GUC settings, or cursor options.
+	 *
+	 * We use the hasFKJoinRemoval flag for a fast-path check so that plans
+	 * without FK join removal (the common case) pay only a single boolean
+	 * test.
+	 */
+	if (plansource->gplan != NULL && plansource->gplan->hasFKJoinRemoval)
+	{
+		foreach_node(PlannedStmt, stmt, plansource->gplan->stmt_list)
+		{
+			if (stmt->commandType == CMD_UTILITY)
+				continue;
+			foreach_oid(reloid, stmt->fkRemovedRelOids)
+			{
+				if (CheckRelationOidLockedByMe(reloid, RowExclusiveLock, true))
+					return true;
+			}
+		}
+	}
 
 	/* Otherwise, never any point in a custom plan if there's no parameters */
 	if (boundParams == NULL)

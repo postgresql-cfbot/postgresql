@@ -165,6 +165,7 @@ typedef struct CachedPlan
 	bool		is_valid;		/* is the stmt_list currently valid? */
 	Oid			planRoleId;		/* Role ID the plan was created for */
 	bool		dependsOnRole;	/* is plan specific to that role? */
+	bool		hasFKJoinRemoval;	/* does plan use FK-based join removal? */
 	TransactionId saved_xmin;	/* if valid, replan when TransactionXmin
 								 * changes from this value */
 	int			generation;		/* parent's generation number for this plan */

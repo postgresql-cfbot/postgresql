@@ -33,6 +33,8 @@
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "pgstat.h"
+#include "port/pg_bitutils.h"
+#include "port/simd.h"
 #include "storage/fd.h"
 #include "tcop/tcopprot.h"
 #include "utils/json.h"
@@ -128,11 +130,173 @@ static const char BinarySignature[11] = "PGCOPY\n\377\r\n\0";
 static void EndCopy(CopyToState cstate);
 static void ClosePipeToProgram(CopyToState cstate);
 static void CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot);
-static void CopyAttributeOutText(CopyToState cstate, const char *string);
-static void CopyAttributeOutCSV(CopyToState cstate, const char *string,
-								bool use_quote);
+static pg_attribute_always_inline void CopyAttributeOutText(CopyToState cstate, const char *string,
+															bool use_simd, size_t len);
+static pg_attribute_always_inline void CopyAttributeOutCSV(CopyToState cstate, const char *string,
+														   bool use_quote, bool use_simd, size_t len);
 static void CopyRelationTo(CopyToState cstate, Relation rel, Relation root_rel,
 						   uint64 *processed);
+static void CopySkipTextSIMD(const char **ptr,
+							 size_t len, char delimc);
+static void CopyCheckCSVQuoteNeedSIMD(const char **ptr,
+									  size_t len, char delimc, char quotec);
+static void CopySkipCSVEscapeSIMD(const char **ptr,
+								  size_t len, char escapec, char quotec);
+
+/*
+ * CopySkipTextSIMD - Scan forward in TEXT mode using SIMD,
+ * stopping at the first special character then caller continues processing any remaining
+ * characters in the scalar path.
+ *
+ * Special characters for TEXT mode are: ASCII control characters (< 0x20),
+ * backslash, and the delimiter.
+ */
+static void
+CopySkipTextSIMD(const char **ptr, size_t len, char delimc)
+{
+#ifndef USE_NO_SIMD
+	const char *p = *ptr;
+	const char *end = p + len;
+
+	const Vector8 backslash_mask = vector8_broadcast('\\');
+	const Vector8 delim_mask = vector8_broadcast(delimc);
+	const Vector8 control_mask = vector8_broadcast(0x20);
+
+	while (p + sizeof(Vector8) <= end)
+	{
+		Vector8		chunk;
+		Vector8		match;
+
+		vector8_load(&chunk, (const uint8 *) p);
+
+		match = vector8_or(vector8_gt(control_mask, chunk),
+						   vector8_eq(chunk, backslash_mask));
+		match = vector8_or(match, vector8_eq(chunk, delim_mask));
+
+		if (vector8_is_highbit_set(match))
+		{
+			uint32		mask;
+
+			mask = vector8_highbit_mask(match);
+			*ptr = p + pg_rightmost_one_pos32(mask);
+			return;
+		}
+
+		p += sizeof(Vector8);
+	}
+
+	*ptr = p;
+#endif
+}
+
+/*
+ * CopyCheckCSVQuoteNeedSIMD - Scan a CSV field using SIMD to determine
+ * whether it needs quoting stopping at the first character that would require the field to be quoted:
+ * the delimiter, the quote character, newline, or carriage return.
+ */
+static void
+CopyCheckCSVQuoteNeedSIMD(const char **ptr, size_t len, char delimc, char quotec)
+{
+#ifndef USE_NO_SIMD
+	const char *p = *ptr;
+	const char *end = p + len;
+
+	// Do a scalar prescan of sizeof(Vector8) if possible, to avoid the overhead of setting up SIMD for early stops.
+	const char *prescan_end = p + sizeof(Vector8);
+	while (p < prescan_end && p < end)
+	{
+		char c = *p;
+		if (c == delimc || c == quotec || c == '\n' || c == '\r')
+		{
+			*ptr = p;
+			return;
+		}
+		p++;
+	}
+
+	const Vector8 delim_mask = vector8_broadcast(delimc);
+	const Vector8 quote_mask = vector8_broadcast(quotec);
+	const Vector8 nl_mask = vector8_broadcast('\n');
+	const Vector8 cr_mask = vector8_broadcast('\r');
+
+	while (p + sizeof(Vector8) <= end)
+	{
+		Vector8		chunk;
+		Vector8		match;
+
+		vector8_load(&chunk, (const uint8 *) p);
+
+		match = vector8_or(vector8_eq(chunk, nl_mask), vector8_eq(chunk, cr_mask));
+		match = vector8_or(match, vector8_or(vector8_eq(chunk, delim_mask),
+											 vector8_eq(chunk, quote_mask)));
+
+		if (vector8_is_highbit_set(match))
+		{
+			uint32		mask;
+
+			mask = vector8_highbit_mask(match);
+			*ptr = p + pg_rightmost_one_pos32(mask);
+			return;
+		}
+
+		p += sizeof(Vector8);
+	}
+
+	*ptr = p;
+#endif
+}
+
+/*
+ * CopySkipCSVEscapeSIMD - Same as CopyCheckCSVQuoteNeedSIMD, scan forward in CSV mode using SIMD,
+ * stopping at the first character that requires escaping.
+ */
+static void
+CopySkipCSVEscapeSIMD(const char **ptr, size_t len, char escapec, char quotec)
+{
+#ifndef USE_NO_SIMD
+	const char *p = *ptr;
+	const char *end = p + len;
+
+	// Do a scalar prescan of sizeof(Vector8) if possible, to avoid the overhead of setting up SIMD for early stops.
+	const char *prescan_end = p + sizeof(Vector8);
+	while (p < prescan_end && p < end)
+	{
+		char c = *p;
+		if (c == escapec || c == quotec)
+		{
+			*ptr = p;
+			return;
+		}
+		p++;
+	}
+
+	const Vector8 escape_mask = vector8_broadcast(escapec);
+	const Vector8 quote_mask = vector8_broadcast(quotec);
+
+	while (p + sizeof(Vector8) <= end)
+	{
+		Vector8		chunk;
+		Vector8		match;
+
+		vector8_load(&chunk, (const uint8 *) p);
+
+		match = vector8_or(vector8_eq(chunk, quote_mask), vector8_eq(chunk, escape_mask));
+
+		if (vector8_is_highbit_set(match))
+		{
+			uint32		mask;
+
+			mask = vector8_highbit_mask(match);
+			*ptr = p + pg_rightmost_one_pos32(mask);
+			return;
+		}
+
+		p += sizeof(Vector8);
+	}
+
+	*ptr = p;
+#endif
+}
 
 /* built-in format-specific routines */
 static void CopyToTextLikeStart(CopyToState cstate, TupleDesc tupDesc);
@@ -244,9 +408,9 @@ CopyToTextLikeStart(CopyToState cstate, TupleDesc tupDesc)
 			colname = NameStr(TupleDescAttr(tupDesc, attnum - 1)->attname);
 
 			if (cstate->opts.format == COPY_FORMAT_CSV)
-				CopyAttributeOutCSV(cstate, colname, false);
+				CopyAttributeOutCSV(cstate, colname, false, false, 0);
 			else
-				CopyAttributeOutText(cstate, colname);
+				CopyAttributeOutText(cstate, colname, false, 0);
 		}
 
 		CopySendTextLikeEndOfRow(cstate);
@@ -304,6 +468,7 @@ CopyToTextLikeOneRow(CopyToState cstate,
 {
 	bool		need_delim = false;
 	FmgrInfo   *out_functions = cstate->out_functions;
+	TupleDesc	tup_desc = slot->tts_tupleDescriptor;
 
 	foreach_int(attnum, cstate->attnumlist)
 	{
@@ -321,15 +486,48 @@ CopyToTextLikeOneRow(CopyToState cstate,
 		else
 		{
 			char	   *string;
+			bool		use_simd = false;
+			size_t		len = 0;
 
-			string = OutputFunctionCall(&out_functions[attnum - 1],
-										value);
+			string = OutputFunctionCall(&out_functions[attnum - 1], value);
+
+			/*
+			* Only use SIMD for varlena types without transcoding.  Fixed-size
+			* types (int4, bool, date, etc.) always produce short ASCII output
+			* for which SIMD provides no benefit.  When transcoding is needed,
+			* the string length may change after conversion, so we skip SIMD
+			* entirely in that case too.
+			*
+			* We use VARSIZE_ANY_EXHDR as a cheap pre-filter to avoid calling
+			* strlen() on short varlenas.  The actual length passed to the SIMD
+			* helpers is always strlen(string) so the text output length not
+			* the binary storage size.
+			*/
+			if (TupleDescAttr(tup_desc, attnum - 1)->attlen == -1 &&
+				VARSIZE_ANY_EXHDR(DatumGetPointer(value)) > sizeof(Vector8))
+			{
+				len = strlen(string);
+				use_simd = !cstate->need_transcoding && (len > sizeof(Vector8));
+			}
 
 			if (is_csv)
-				CopyAttributeOutCSV(cstate, string,
-									cstate->opts.force_quote_flags[attnum - 1]);
+			{
+				if (use_simd)
+					CopyAttributeOutCSV(cstate, string,
+										cstate->opts.force_quote_flags[attnum - 1],
+										true, len);
+				else
+					CopyAttributeOutCSV(cstate, string,
+										cstate->opts.force_quote_flags[attnum - 1],
+										false, len);
+			}
 			else
-				CopyAttributeOutText(cstate, string);
+			{
+				if (use_simd)
+					CopyAttributeOutText(cstate, string, true, len);
+				else
+					CopyAttributeOutText(cstate, string, false, len);
+			}
 		}
 	}
 
@@ -1435,8 +1633,24 @@ CopyOneRowTo(CopyToState cstate, TupleTableSlot *slot)
 			CopySendData(cstate, start, ptr - start); \
 	} while (0)
 
-static void
-CopyAttributeOutText(CopyToState cstate, const char *string)
+/*
+ * CopyAttributeOutText - Send text representation of one attribute,
+ * with conversion and escaping.
+ *
+ * For a little extra speed, if use_simd is true we first use SIMD
+ * instructions to skip over chunks of data that contain no special
+ * characters.  This pre-pass advances ptr as far as possible before
+ * handing off to the scalar loop below, which then processes any
+ * remaining characters.  use_simd is only set by the caller when the
+ * attribute is a varlena type whose text representation is longer than
+ * a single SIMD vector and no encoding conversion is required.  In all
+ * other cases we fall straight through to the scalar path.
+ *
+ * When use_simd is true, len must be the strlen() of string, otherwise it is unused
+ */
+static pg_attribute_always_inline void
+CopyAttributeOutText(CopyToState cstate, const char *string,
+					 bool use_simd, size_t len)
 {
 	const char *ptr;
 	const char *start;
@@ -1444,7 +1658,15 @@ CopyAttributeOutText(CopyToState cstate, const char *string)
 	char		delimc = cstate->opts.delim[0];
 
 	if (cstate->need_transcoding)
-		ptr = pg_server_to_any(string, strlen(string), cstate->file_encoding);
+	{
+		/*
+		 * len may already be set by the caller for long varlenas, avoiding an extra
+		 * strlen() call.  For all other cases it is 0 and we compute it here.
+		 */
+		if (len == 0)
+			len = strlen(string);
+		ptr = pg_server_to_any(string, len, cstate->file_encoding);
+	}
 	else
 		ptr = string;
 
@@ -1465,6 +1687,9 @@ CopyAttributeOutText(CopyToState cstate, const char *string)
 	if (cstate->encoding_embeds_ascii)
 	{
 		start = ptr;
+		if (use_simd)
+			CopySkipTextSIMD(&ptr, len, delimc);
+
 		while ((c = *ptr) != '\0')
 		{
 			if ((unsigned char) c < (unsigned char) 0x20)
@@ -1525,6 +1750,9 @@ CopyAttributeOutText(CopyToState cstate, const char *string)
 	else
 	{
 		start = ptr;
+		if (use_simd)
+			CopySkipTextSIMD(&ptr, len, delimc);
+
 		while ((c = *ptr) != '\0')
 		{
 			if ((unsigned char) c < (unsigned char) 0x20)
@@ -1585,12 +1813,14 @@ CopyAttributeOutText(CopyToState cstate, const char *string)
 }
 
 /*
- * Send text representation of one attribute, with conversion and
- * CSV-style escaping
+ * CopyAttributeOutCSV - Send text representation of one attribute,
+ * with conversion and CSV-style escaping.
+ *
+ * We use the same simd optimization idea, see CopyAttributeOutText comment.
  */
-static void
+static pg_attribute_always_inline void
 CopyAttributeOutCSV(CopyToState cstate, const char *string,
-					bool use_quote)
+					bool use_quote, bool use_simd, size_t len)
 {
 	const char *ptr;
 	const char *start;
@@ -1605,7 +1835,15 @@ CopyAttributeOutCSV(CopyToState cstate, const char *string,
 		use_quote = true;
 
 	if (cstate->need_transcoding)
-		ptr = pg_server_to_any(string, strlen(string), cstate->file_encoding);
+	{
+		/*
+		 * len may already be set by the caller for long varlenas, avoiding an extra
+		 * strlen() call.  For all other cases it is 0 and we compute it here.
+		 */
+		if (len == 0)
+			len = strlen(string);
+		ptr = pg_server_to_any(string, len, cstate->file_encoding);
+	}
 	else
 		ptr = string;
 
@@ -1626,6 +1864,9 @@ CopyAttributeOutCSV(CopyToState cstate, const char *string,
 		else
 		{
 			const char *tptr = ptr;
+
+			if (use_simd)
+				CopyCheckCSVQuoteNeedSIMD(&tptr, len, delimc, quotec);
 
 			while ((c = *tptr) != '\0')
 			{
@@ -1650,6 +1891,9 @@ CopyAttributeOutCSV(CopyToState cstate, const char *string,
 		 * We adopt the same optimization strategy as in CopyAttributeOutText
 		 */
 		start = ptr;
+		if (use_simd)
+			CopySkipCSVEscapeSIMD(&ptr, len, escapec, quotec);
+
 		while ((c = *ptr) != '\0')
 		{
 			if (c == quotec || c == escapec)

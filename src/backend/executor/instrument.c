@@ -284,20 +284,29 @@ InstrStartParallelQuery(void)
 
 /* report usage after parallel executor shutdown */
 void
-InstrEndParallelQuery(BufferUsage *bufusage, WalUsage *walusage)
+InstrEndParallelQuery(Instrumentation *instr)
 {
-	memset(bufusage, 0, sizeof(BufferUsage));
-	BufferUsageAccumDiff(bufusage, &pgBufferUsage, &save_pgBufferUsage);
-	memset(walusage, 0, sizeof(WalUsage));
-	WalUsageAccumDiff(walusage, &pgWalUsage, &save_pgWalUsage);
+	memset(&instr->bufusage, 0, sizeof(BufferUsage));
+	BufferUsageAccumDiff(&instr->bufusage, &pgBufferUsage, &save_pgBufferUsage);
+	memset(&instr->walusage, 0, sizeof(WalUsage));
+	WalUsageAccumDiff(&instr->walusage, &pgWalUsage, &save_pgWalUsage);
 }
 
-/* accumulate work done by workers in leader's stats */
+/*
+ * Accumulate work done by parallel workers in the leader's stats.
+ *
+ * instr points to the per-worker Instrumentation array the leader allocated in
+ * DSM; each of the nworkers launched workers reported into its own slot via
+ * InstrEndParallelQuery.  Must be called only after the workers have finished.
+ */
 void
-InstrAccumParallelQuery(BufferUsage *bufusage, WalUsage *walusage)
+InstrAccumParallelQuery(Instrumentation *instr, int nworkers)
 {
-	BufferUsageAdd(&pgBufferUsage, bufusage);
-	WalUsageAdd(&pgWalUsage, walusage);
+	for (int i = 0; i < nworkers; i++)
+	{
+		BufferUsageAdd(&pgBufferUsage, &instr[i].bufusage);
+		WalUsageAdd(&pgWalUsage, &instr[i].walusage);
+	}
 }
 
 /* dst += add */

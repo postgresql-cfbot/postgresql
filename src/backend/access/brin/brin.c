@@ -51,8 +51,7 @@
 #define PARALLEL_KEY_BRIN_SHARED		UINT64CONST(0xB000000000000001)
 #define PARALLEL_KEY_TUPLESORT			UINT64CONST(0xB000000000000002)
 #define PARALLEL_KEY_QUERY_TEXT			UINT64CONST(0xB000000000000003)
-#define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xB000000000000004)
-#define PARALLEL_KEY_BUFFER_USAGE		UINT64CONST(0xB000000000000005)
+#define PARALLEL_KEY_INSTRUMENTATION	UINT64CONST(0xB000000000000004)
 
 /*
  * Status for index builds performed in parallel.  This is allocated in a
@@ -148,8 +147,7 @@ typedef struct BrinLeader
 	BrinShared *brinshared;
 	Sharedsort *sharedsort;
 	Snapshot	snapshot;
-	WalUsage   *walusage;
-	BufferUsage *bufferusage;
+	Instrumentation *instr;
 } BrinLeader;
 
 /*
@@ -2387,8 +2385,7 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	BrinShared *brinshared;
 	Sharedsort *sharedsort;
 	BrinLeader *brinleader = palloc0_object(BrinLeader);
-	WalUsage   *walusage;
-	BufferUsage *bufferusage;
+	Instrumentation *instr;
 	bool		leaderparticipates = true;
 	int			querylen;
 
@@ -2430,18 +2427,14 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	shm_toc_estimate_keys(&pcxt->estimator, 2);
 
 	/*
-	 * Estimate space for WalUsage and BufferUsage -- PARALLEL_KEY_WAL_USAGE
-	 * and PARALLEL_KEY_BUFFER_USAGE.
+	 * Estimate space for Instrumentation -- PARALLEL_KEY_INSTRUMENTATION.
 	 *
 	 * If there are no extensions loaded that care, we could skip this.  We
 	 * have no way of knowing whether anyone's looking at pgWalUsage or
 	 * pgBufferUsage, so do it unconditionally.
 	 */
 	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(WalUsage), pcxt->nworkers));
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
-	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(BufferUsage), pcxt->nworkers));
+						   mul_size(sizeof(Instrumentation), pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
 	/* Finally, estimate PARALLEL_KEY_QUERY_TEXT space */
@@ -2514,15 +2507,12 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	}
 
 	/*
-	 * Allocate space for each worker's WalUsage and BufferUsage; no need to
+	 * Allocate space for each worker's Instrumentation; no need to
 	 * initialize.
 	 */
-	walusage = shm_toc_allocate(pcxt->toc,
-								mul_size(sizeof(WalUsage), pcxt->nworkers));
-	shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAL_USAGE, walusage);
-	bufferusage = shm_toc_allocate(pcxt->toc,
-								   mul_size(sizeof(BufferUsage), pcxt->nworkers));
-	shm_toc_insert(pcxt->toc, PARALLEL_KEY_BUFFER_USAGE, bufferusage);
+	instr = shm_toc_allocate(pcxt->toc,
+							 mul_size(sizeof(Instrumentation), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, PARALLEL_KEY_INSTRUMENTATION, instr);
 
 	/* Launch workers, saving status for leader/caller */
 	LaunchParallelWorkers(pcxt);
@@ -2533,8 +2523,7 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	brinleader->brinshared = brinshared;
 	brinleader->sharedsort = sharedsort;
 	brinleader->snapshot = snapshot;
-	brinleader->walusage = walusage;
-	brinleader->bufferusage = bufferusage;
+	brinleader->instr = instr;
 
 	/* If no workers were successfully launched, back out (do serial build) */
 	if (pcxt->nworkers_launched == 0)
@@ -2563,8 +2552,6 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 static void
 _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state)
 {
-	int			i;
-
 	/* Shutdown worker processes */
 	WaitForParallelWorkersToFinish(brinleader->pcxt);
 
@@ -2572,8 +2559,8 @@ _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state)
 	 * Next, accumulate WAL usage.  (This must wait for the workers to finish,
 	 * or we might get incomplete data.)
 	 */
-	for (i = 0; i < brinleader->pcxt->nworkers_launched; i++)
-		InstrAccumParallelQuery(&brinleader->bufferusage[i], &brinleader->walusage[i]);
+	InstrAccumParallelQuery(brinleader->instr,
+							brinleader->pcxt->nworkers_launched);
 
 	/* Free last reference to MVCC snapshot, if one was used */
 	if (IsMVCCSnapshot(brinleader->snapshot))
@@ -2887,8 +2874,7 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	Relation	indexRel;
 	LOCKMODE	heapLockmode;
 	LOCKMODE	indexLockmode;
-	WalUsage   *walusage;
-	BufferUsage *bufferusage;
+	Instrumentation *worker_instr;
 	int			sortmem;
 
 	/*
@@ -2949,10 +2935,8 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 								  heapRel, indexRel, sortmem, false);
 
 	/* Report WAL/buffer usage during parallel execution */
-	bufferusage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
-	walusage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
-	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
-						  &walusage[ParallelWorkerNumber]);
+	worker_instr = shm_toc_lookup(toc, PARALLEL_KEY_INSTRUMENTATION, false);
+	InstrEndParallelQuery(&worker_instr[ParallelWorkerNumber]);
 
 	index_close(indexRel, indexLockmode);
 	table_close(heapRel, heapLockmode);

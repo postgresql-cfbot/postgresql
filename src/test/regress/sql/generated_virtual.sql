@@ -405,31 +405,31 @@ CREATE TABLE gtest22b (a int, b int GENERATED ALWAYS AS (a / 2) VIRTUAL, PRIMARY
 
 -- indexes
 CREATE TABLE gtest22c (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
---CREATE INDEX gtest22c_b_idx ON gtest22c (b);
---CREATE INDEX gtest22c_expr_idx ON gtest22c ((b * 3));
---CREATE INDEX gtest22c_pred_idx ON gtest22c (a) WHERE b > 0;
---\d gtest22c
+CREATE INDEX gtest22c_b_idx ON gtest22c (b);
+CREATE INDEX gtest22c_expr_idx ON gtest22c ((b * 3));
+CREATE INDEX gtest22c_pred_idx ON gtest22c (a) WHERE b > 0;
+\d gtest22c
 
---INSERT INTO gtest22c VALUES (1), (2), (3);
---SET enable_seqscan TO off;
---SET enable_bitmapscan TO off;
---EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b = 4;
---SELECT * FROM gtest22c WHERE b = 4;
---EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b * 3 = 6;
---SELECT * FROM gtest22c WHERE b * 3 = 6;
---EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
---SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+INSERT INTO gtest22c VALUES (1), (2), (3);
+SET enable_seqscan TO off;
+SET enable_bitmapscan TO off;
+EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b = 4;
+SELECT * FROM gtest22c WHERE b = 4;
+EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b * 3 = 6;
+SELECT * FROM gtest22c WHERE b * 3 = 6;
+EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
 
---ALTER TABLE gtest22c ALTER COLUMN b SET EXPRESSION AS (a * 4);
---ANALYZE gtest22c;
---EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b = 8;
---SELECT * FROM gtest22c WHERE b = 8;
---EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b * 3 = 12;
---SELECT * FROM gtest22c WHERE b * 3 = 12;
---EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
---SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
---RESET enable_seqscan;
---RESET enable_bitmapscan;
+ALTER TABLE gtest22c ALTER COLUMN b SET EXPRESSION AS (a * 4);
+ANALYZE gtest22c;
+EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b = 8;
+SELECT * FROM gtest22c WHERE b = 8;
+EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE b * 3 = 12;
+SELECT * FROM gtest22c WHERE b * 3 = 12;
+EXPLAIN (COSTS OFF) SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+SELECT * FROM gtest22c WHERE a = 1 AND b > 0;
+RESET enable_seqscan;
+RESET enable_bitmapscan;
 
 -- foreign keys
 CREATE TABLE gtest23a (x int PRIMARY KEY, y int);

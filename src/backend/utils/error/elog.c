@@ -1087,6 +1087,9 @@ errcode_for_socket_access(void)
  * In addition to the usual %-escapes recognized by printf, "%m" in
  * fmt is replaced by the error message for the caller's value of errno.
  *
+ * Style guidelines: do not capitalize the first letter, and do not end
+ * the message with a period or other punctuation.
+ *
  * Note: no newline is needed at the end of the fmt string, since
  * ereport will provide one for the output methods that need it.
  */
@@ -1390,6 +1393,11 @@ errmsg_plural(const char *fmt_singular, const char *fmt_plural,
 
 /*
  * errdetail --- add a detail error message text to the current error
+ *
+ * Style guidelines: use complete sentences; capitalize the first word
+ * of each sentence, and end each with a period; put two spaces after
+ * a period if another sentence follows (for English text; may be
+ * inappropriate in other languages).
  */
 int
 errdetail(const char *fmt, ...)
@@ -1504,6 +1512,11 @@ errdetail_plural(const char *fmt_singular, const char *fmt_plural,
 
 /*
  * errhint --- add a hint error message text to the current error
+ *
+ * Style guidelines: use complete sentences; capitalize the first word
+ * of each sentence, and end each with a period; put two spaces after
+ * a period if another sentence follows (for English text; may be
+ * inappropriate in other languages).
  */
 int
 errhint(const char *fmt, ...)

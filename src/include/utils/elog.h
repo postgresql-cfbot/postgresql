@@ -210,6 +210,9 @@ extern int	errhint_plural(const char *fmt_singular, const char *fmt_plural,
  * is not usually the correct domain for translating the context message.
  * set_errcontext_domain() first sets the domain to be used, and
  * errcontext_msg() passes the actual message.
+ *
+ * Style guidelines: do not capitalize the first letter, do not end the string
+ * with a period, and avoid complete sentences.
  */
 #define errcontext	set_errcontext_domain(TEXTDOMAIN),	errcontext_msg
 
@@ -237,6 +240,11 @@ extern int	getinternalerrposition(void);
 /*----------
  * Old-style error reporting API: to be used in this way:
  *		elog(ERROR, "portal \"%s\" not found", stmt->portalname);
+ *
+ * elog() is intended for internal errors and low-level debug logging.
+ * It always uses a default SQLSTATE, and the message is not translated.
+ * Messages that may be of interest to end users should use ereport()
+ * instead.
  *----------
  */
 #define elog(elevel, ...)  \

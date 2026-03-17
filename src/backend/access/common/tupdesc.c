@@ -715,8 +715,7 @@ equalTupleDescs(TupleDesc tupdesc1, TupleDesc tupdesc2)
 			CompactAttribute *cattr2 = TupleDescCompactAttr(tupdesc2, i);
 
 			Assert(cattr1->attnullability != ATTNULLABLE_UNKNOWN);
-			Assert((cattr1->attnullability == ATTNULLABLE_UNKNOWN) ==
-				   (cattr2->attnullability == ATTNULLABLE_UNKNOWN));
+			Assert(cattr2->attnullability != ATTNULLABLE_UNKNOWN);
 
 			if (cattr1->attnullability != cattr2->attnullability)
 				return false;

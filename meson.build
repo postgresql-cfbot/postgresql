@@ -620,6 +620,15 @@ dir_doc_extension = dir_doc / 'extension'
 # used, they need to be added to test_c_args as well.
 ###############################################################
 
+# Validate user-supplied c_args early: when using clang, meson injects
+# -Werror=unknown-warning-option into cc.compiles(), so an unsupported
+# flag would cause the C11 check below to fail with a misleading error.
+if not cc.has_multi_arguments(get_option('c_args'))
+  error('One or more c_args are not supported by @0@ @1@'.format(
+    cc.get_id(),
+    cc.version()))
+endif
+
 # Do we need an option to enable C11?
 c11_test = '''
 #if !defined __STDC_VERSION__ || __STDC_VERSION__ < 201112L

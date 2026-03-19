@@ -159,6 +159,13 @@ typedef struct ReplicationSlotPersistentData
 	 * for logical slots on the primary server.
 	 */
 	bool		failover;
+
+	/*
+	 * If true, an invalidated physical slot may be automatically revalidated
+	 * once the standby reconnects and confirms WAL receipt (flush ACK).
+	 * Only applicable to physical slots; ignored for logical slots.
+	 */
+	bool		auto_revalidate;
 } ReplicationSlotPersistentData;
 
 /*
@@ -286,6 +293,23 @@ typedef struct ReplicationSlot
 
 #define SlotIsPhysical(slot) ((slot)->data.database == InvalidOid)
 #define SlotIsLogical(slot) ((slot)->data.database != InvalidOid)
+#define SlotIsValid(slot) ((slot)->data.invalidated == RS_INVAL_NONE)
+
+/*
+ * Can this slot be automatically revalidated?
+ *
+ * Only physical slots with auto_revalidate enabled and invalidated by
+ * an explicitly supported reason are eligible. New invalidation reasons
+ * must be added here to become revalidatable.
+ */
+static inline bool
+SlotCanBeRevalidated(ReplicationSlot *s)
+{
+	return SlotIsPhysical(s) &&
+		s->data.auto_revalidate &&
+		(s->data.invalidated == RS_INVAL_WAL_REMOVED ||
+		 s->data.invalidated == RS_INVAL_IDLE_TIMEOUT);
+}
 
 /*
  * Shared memory control area for all of replication slots.

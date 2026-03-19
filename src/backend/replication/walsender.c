@@ -871,11 +871,33 @@ StartReplication(StartReplicationCmd *cmd)
 
 	if (cmd->slotname)
 	{
-		ReplicationSlotAcquire(cmd->slotname, true, true);
+		ReplicationSlotAcquire(cmd->slotname, true, false);
 		if (SlotIsLogical(MyReplicationSlot))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 					 errmsg("cannot use a logical replication slot for physical replication")));
+
+		/*
+		 * Check if the slot is invalidated.  Physical slots with
+		 * auto_revalidate can proceed -- they will be revalidated once the
+		 * standby confirms WAL receipt.  All other invalidated slots must
+		 * error out as before.
+		 */
+		if (!SlotIsValid(MyReplicationSlot))
+		{
+			if (SlotCanBeRevalidated(MyReplicationSlot))
+				ereport(WARNING,
+						errmsg("replication slot \"%s\" is invalidated due to \"%s\", will attempt revalidation",
+							   NameStr(MyReplicationSlot->data.name),
+							   GetSlotInvalidationCauseName(MyReplicationSlot->data.invalidated)));
+			else
+				ereport(ERROR,
+						errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+						errmsg("can no longer access replication slot \"%s\"",
+							   NameStr(MyReplicationSlot->data.name)),
+						errdetail("This replication slot has been invalidated due to \"%s\".",
+								  GetSlotInvalidationCauseName(MyReplicationSlot->data.invalidated)));
+		}
 
 		/*
 		 * We don't need to verify the slot's restart_lsn here; instead we
@@ -2494,6 +2516,7 @@ static void
 PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 {
 	bool		changed = false;
+	bool		revalidated = false;
 	ReplicationSlot *slot = MyReplicationSlot;
 
 	Assert(XLogRecPtrIsValid(lsn));
@@ -2503,6 +2526,19 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 		changed = true;
 		slot->data.restart_lsn = lsn;
 	}
+
+	/*
+	 * If the slot is invalidated and eligible for auto-revalidation, clear
+	 * the invalidation now that the standby has confirmed WAL receipt.  Both
+	 * restart_lsn and invalidated must be updated under the same spinlock to
+	 * stay atomic with respect to ReplicationSlotsComputeRequiredLSN().
+	 */
+	if (SlotCanBeRevalidated(slot))
+	{
+		slot->data.invalidated = RS_INVAL_NONE;
+		changed = true;
+		revalidated = true;
+	}
 	SpinLockRelease(&slot->mutex);
 
 	if (changed)
@@ -2510,6 +2546,20 @@ PhysicalConfirmReceivedLocation(XLogRecPtr lsn)
 		ReplicationSlotMarkDirty();
 		ReplicationSlotsComputeRequiredLSN();
 		PhysicalWakeupLogicalWalSnd();
+	}
+
+	/*
+	 * Persist the revalidation to disk immediately so the cleared state
+	 * survives a crash.  Normal restart_lsn updates are not saved here
+	 * (the comment below explains why), but a revalidation is a significant
+	 * one-time state change worth persisting right away.
+	 */
+	if (revalidated)
+	{
+		ReplicationSlotSave();
+		ereport(LOG,
+				errmsg("physical replication slot \"%s\" has been revalidated",
+					   NameStr(slot->data.name)));
 	}
 
 	/*

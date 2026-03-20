@@ -48,6 +48,8 @@ check-unit: $(TESTS)
 	cd $(top_builddir)/$(subdir) && \
 	   $(PROVE) $(PROVE_FLAGS) \
 	    -v $(addprefix ./,$(if $(PROVE_TESTS), $(PROVE_TESTS), $(TESTS)))
+# The example of using the check-unit rule:
+#		make check-unit PROVE_TESTS='test_dfor_u16' PROVE_FLAGS='--verbose'
 
 check: check-unit
 

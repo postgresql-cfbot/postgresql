@@ -176,7 +176,7 @@ px_find_digest(const char *name, PX_MD **res)
 	 * The order is crucial, to make sure we don't leak anything on
 	 * out-of-memory or other error.
 	 */
-	digest = MemoryContextAlloc(TopMemoryContext, sizeof(*digest));
+	digest = palloc(sizeof(*digest));
 
 	ctx = EVP_MD_CTX_create();
 	if (!ctx)
@@ -196,7 +196,6 @@ px_find_digest(const char *name, PX_MD **res)
 	digest->owner = CurrentResourceOwner;
 	ResourceOwnerRememberOSSLDigest(digest->owner, digest);
 
-	/* The PX_MD object is allocated in the current memory context. */
 	h = palloc_object(PX_MD);
 	h->result_size = digest_result_size;
 	h->block_size = digest_block_size;
@@ -794,7 +793,7 @@ px_find_cipher(const char *name, PX_Cipher **res)
 	 * The order is crucial, to make sure we don't leak anything on
 	 * out-of-memory or other error.
 	 */
-	od = MemoryContextAllocZero(TopMemoryContext, sizeof(*od));
+	od = palloc0(sizeof(*od));
 	od->ciph = i->ciph;
 
 	/* Allocate an EVP_CIPHER_CTX object. */
@@ -812,7 +811,6 @@ px_find_cipher(const char *name, PX_Cipher **res)
 	if (i->ciph->cipher_func)
 		od->evp_ciph = i->ciph->cipher_func();
 
-	/* The PX_Cipher is allocated in current memory context */
 	c = palloc_object(PX_Cipher);
 	c->block_size = gen_ossl_block_size;
 	c->key_size = gen_ossl_key_size;

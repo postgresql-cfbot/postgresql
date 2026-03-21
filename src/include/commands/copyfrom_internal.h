@@ -17,6 +17,45 @@
 #include "commands/copy.h"
 #include "commands/trigger.h"
 #include "nodes/miscnodes.h"
+#include "utils/jsonb.h"
+
+/*
+ * State for COPY FROM JSON format.  line_buf holds decoded UTF-8: while
+ * scanning, parse_pos advances; after each row, line_buf is [row object][tail]
+ * and parse_pos is the row length (tail starts there) for jsonb_in.
+ */
+typedef enum CopyJsonScanState
+{
+	COPY_JSON_BEFORE_ARRAY,		/* skip whitespace, expect '[' (array mode) */
+	COPY_JSON_BEFORE_OBJECT,	/* after {...} row when input is {...}{...}
+								 * form */
+	COPY_JSON_IN_ARRAY,			/* inside [...], expect value/comma/']' */
+	COPY_JSON_IN_OBJECT,		/* inside {...}, track depth to find matching
+								 * '}' */
+	COPY_JSON_IN_STRING,		/* inside "...", skip until unescaped '"' */
+	COPY_JSON_IN_STRING_ESC,	/* saw '\' in string, consume escape sequence */
+	COPY_JSON_ARRAY_END			/* saw ']', no more rows */
+} CopyJsonScanState;
+
+typedef enum CopyJsonArrayScanState
+{
+	COPY_JSON_ARRAY_EXPECT_VALUE_OR_END,	/* start of array: expect '{' or
+											 * ']' */
+	COPY_JSON_ARRAY_EXPECT_VALUE,	/* after comma: expect next object */
+	COPY_JSON_ARRAY_EXPECT_COMMA_OR_END /* after object: expect ',' or ']' */
+} CopyJsonArrayScanState;
+
+typedef struct CopyFromJsonState
+{
+	CopyJsonScanState parse_state;
+	CopyJsonArrayScanState array_parse_state;
+	int			object_depth;	/* brace/bracket depth: 1 = in target object */
+	bool		array_mode;		/* have we seen the opening '[' */
+	int			parse_pos;		/* scan cursor in line_buf; after row = row
+								 * len */
+	int			row_text_start; /* set while completing a row; else -1 */
+	int			row_text_end;	/* byte offset just past row's closing '}' */
+} CopyFromJsonState;
 
 /*
  * Represents the different source cases we need to worry about at
@@ -189,6 +228,9 @@ typedef struct CopyFromStateData
 #define RAW_BUF_BYTES(cstate) ((cstate)->raw_buf_len - (cstate)->raw_buf_index)
 
 	uint64		bytes_processed;	/* number of bytes processed so far */
+
+	/* Format-specific private data */
+	void	   *format_private;
 } CopyFromStateData;
 
 extern void ReceiveCopyBegin(CopyFromState cstate);
@@ -201,5 +243,7 @@ extern bool CopyFromCSVOneRow(CopyFromState cstate, ExprContext *econtext,
 							  Datum *values, bool *nulls);
 extern bool CopyFromBinaryOneRow(CopyFromState cstate, ExprContext *econtext,
 								 Datum *values, bool *nulls);
+extern bool CopyFromJsonOneRow(CopyFromState cstate, ExprContext *econtext,
+							   Datum *values, bool *nulls);
 
 #endif							/* COPYFROM_INTERNAL_H */

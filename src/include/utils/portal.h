@@ -215,6 +215,7 @@ typedef struct PortalData
 extern void EnablePortalManager(void);
 extern bool PreCommit_Portals(bool isPrepare);
 extern void AtAbort_Portals(void);
+extern void AtAbort_Portals_ReleaseMemory(void);
 extern void AtCleanup_Portals(void);
 extern void PortalErrorCleanup(void);
 extern void AtSubCommit_Portals(SubTransactionId mySubid,
@@ -225,6 +226,7 @@ extern void AtSubAbort_Portals(SubTransactionId mySubid,
 							   SubTransactionId parentSubid,
 							   ResourceOwner myXactOwner,
 							   ResourceOwner parentXactOwner);
+extern void AtSubAbort_Portals_ReleaseMemory(SubTransactionId mySubid);
 extern void AtSubCleanup_Portals(SubTransactionId mySubid);
 extern Portal CreatePortal(const char *name, bool allowDup, bool dupSilent);
 extern Portal CreateNewPortal(void);

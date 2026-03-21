@@ -135,9 +135,127 @@ LINE 1: copy copytest to stdout (format json, on_error ignore);
                                               ^
 copy copytest to stdout (format json, reject_limit 1);
 ERROR:  COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE
-copy copytest from stdin(format json);
-ERROR:  COPY FORMAT JSON is not supported for COPY FROM
 -- all of the above should yield error
+-- COPY FROM JSON: each array element is a row, object keys match column names
+create temp table copytest_from_json (like copytest);
+copy copytest_from_json (style, test) from stdin (format json);
+select * from copytest_from_json order by style;
+  style  |   test   | filler 
+---------+----------+--------
+ DOS     | abc\r   +|       
+         | def      | 
+ Mac     | abc\rdef |       
+ Unix    | abc     +|       
+         | def      | 
+ esc\ape | a\r\\r\ +|       
+         | \nb      | 
+(4 rows)
+
+-- Round trip: COPY TO JSON file, then COPY FROM JSON file
+\set copy_json_rt :abs_builddir '/results/copytest_roundtrip.json'
+truncate copytest2;
+copy copytest to :'copy_json_rt' (format json);
+copy copytest2 from :'copy_json_rt' (format json);
+select * from copytest except select * from copytest2;
+ style | test | filler 
+-------+------+--------
+(0 rows)
+
+truncate copytest2;
+copy copytest to :'copy_json_rt' (format json, force_array true);
+copy copytest2 from :'copy_json_rt' (format json);
+select * from copytest except select * from copytest2;
+ style | test | filler 
+-------+------+--------
+(0 rows)
+
+-- COPY FROM JSON edge cases: invalid input, non-array, missing required field
+copy copytest_from_json from stdin (format json);
+ERROR:  invalid input format for COPY JSON
+DETAIL:  Document must begin with "[" or "{".
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  invalid input syntax for type json
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  COPY JSON, line 1: each array element must be a JSON object
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  COPY JSON, line 1: each array element must be a JSON object
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  COPY JSON, line 1: invalid input format
+DETAIL:  Expected "," between array elements.
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  COPY JSON, line 1: invalid input format
+DETAIL:  Cannot use a comma between concatenated JSON objects; use a JSON array.
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  invalid input format for COPY JSON
+DETAIL:  JSON array input was not closed with "]".
+CONTEXT:  COPY copytest_from_json, line 2
+copy copytest_from_json from stdin (format json);
+ERROR:  invalid input format for COPY JSON
+DETAIL:  JSON array input was not closed with "]".
+CONTEXT:  COPY copytest_from_json, line 2
+copy copytest_from_json from stdin (format json);
+ERROR:  unexpected end of input in COPY JSON
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  unexpected end of input in COPY JSON
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  COPY JSON, line 1: each array element must be a JSON object
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  invalid input format for COPY JSON
+DETAIL:  Trailing data after JSON array.
+CONTEXT:  COPY copytest_from_json, line 1
+copy copytest_from_json from stdin (format json);
+ERROR:  invalid input format for COPY JSON
+DETAIL:  Trailing data after JSON array.
+CONTEXT:  COPY copytest_from_json, line 1
+create temp table copyjson_req (style text NOT NULL, test text);
+copy copyjson_req from stdin (format json);
+ERROR:  null value in column "style" of relation "copyjson_req" violates not-null constraint
+DETAIL:  Failing row contains (null, only test).
+CONTEXT:  COPY copyjson_req, line 1
+copy copyjson_req from stdin (format json);
+select * from copyjson_req;
+ style | test 
+-------+------
+ ok    | both
+(1 row)
+
+truncate copytest_from_json;
+copy copytest_from_json (style, test) from stdin (format json);
+select style, test, filler from copytest_from_json;
+ style | test | filler 
+-------+------+--------
+ a     | b    |       
+(1 row)
+
+\set copy_json_boundary :abs_builddir '/results/copytest_json_boundary.json'
+copy (select '[{"style":"' || repeat('x', 65512) || '","test":"a"},{"style":"b","test":"c"}]') to :'copy_json_boundary';
+truncate copytest_from_json;
+copy copytest_from_json (style, test) from :'copy_json_boundary' (format json);
+select length(style), test from copytest_from_json order by length(style);
+ length | test 
+--------+------
+      1 | c
+  65512 | a
+(2 rows)
+
+create temp table copyjsontest_scalars (js json, jsb jsonb);
+copy copyjsontest_scalars from stdin (format json);
+select js, jsb from copyjsontest_scalars;
+  js   |  jsb  
+-------+-------
+ "foo" | true
+ false | "bar"
+(2 rows)
+
 -- column list with json format
 copy copytest (style, test, filler) to stdout (format json);
 {"style":"DOS","test":"abc\r\ndef","filler":1}

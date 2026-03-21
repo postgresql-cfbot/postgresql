@@ -543,10 +543,13 @@ CookedConstraint
 CopyDest
 CopyFormat
 CopyFormatOptions
+CopyFromJsonState
 CopyFromRoutine
 CopyFromState
 CopyFromStateData
 CopyInsertMethod
+CopyJsonArrayScanState
+CopyJsonScanState
 CopyLogVerbosityChoice
 CopyMethod
 CopyMultiInsertBuffer

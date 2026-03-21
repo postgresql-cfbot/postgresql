@@ -233,8 +233,7 @@ llvm_create_context(int jitFlags)
 
 	ResourceOwnerEnlarge(CurrentResourceOwner);
 
-	context = MemoryContextAllocZero(TopMemoryContext,
-									 sizeof(LLVMJitContext));
+	context = palloc0(sizeof(LLVMJitContext));
 	context->base.flags = jitFlags;
 
 	/* ensure cleanup */
@@ -760,8 +759,13 @@ llvm_compile_module(LLVMJitContext *context)
 		pfree(filename);
 	}
 
+	/*
+	 * Allocate handle in the same long-lived context as the LLVMJitContext,
+	 * since this can be called during expression evaluation in a short-lived
+	 * per-tuple context.
+	 */
 	handle = (LLVMJitHandle *)
-		MemoryContextAlloc(TopMemoryContext, sizeof(LLVMJitHandle));
+		MemoryContextAlloc(GetMemoryChunkContext(context), sizeof(LLVMJitHandle));
 
 	/*
 	 * Emit the code. Note that this can, depending on the optimization
@@ -805,8 +809,8 @@ llvm_compile_module(LLVMJitContext *context)
 	context->module = NULL;
 	context->compiled = true;
 
-	/* remember emitted code for cleanup and lookups */
-	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+	/* remember emitted code for cleanup and lookups. */
+	oldcontext = MemoryContextSwitchTo(GetMemoryChunkContext(context));
 	context->handles = lappend(context->handles, handle);
 	MemoryContextSwitchTo(oldcontext);
 

@@ -86,6 +86,7 @@ IndexNext(IndexScanState *node)
 	ScanDirection direction;
 	IndexScanDesc scandesc;
 	TupleTableSlot *slot;
+	bool		recheck;
 
 	/*
 	 * extract necessary information from index scan node
@@ -110,6 +111,7 @@ IndexNext(IndexScanState *node)
 		 */
 		scandesc = index_beginscan(node->ss.ss_currentRelation,
 								   node->iss_RelationDesc,
+								   false,
 								   estate->es_snapshot,
 								   node->iss_Instrument,
 								   node->iss_NumScanKeys,
@@ -132,7 +134,7 @@ IndexNext(IndexScanState *node)
 	/*
 	 * ok, now that we have what we need, fetch the next tuple.
 	 */
-	while (index_getnext_slot(scandesc, direction, slot))
+	while (table_index_getnext_slot(scandesc, direction, slot, &recheck))
 	{
 		CHECK_FOR_INTERRUPTS();
 
@@ -140,7 +142,7 @@ IndexNext(IndexScanState *node)
 		 * If the index was lossy, we have to recheck the index quals using
 		 * the fetched tuple.
 		 */
-		if (scandesc->xs_recheck)
+		if (recheck)
 		{
 			econtext->ecxt_scantuple = slot;
 			if (!ExecQualAndReset(node->indexqualorig, econtext))
@@ -178,6 +180,7 @@ IndexNextWithReorder(IndexScanState *node)
 	TupleTableSlot *slot;
 	ReorderTuple *topmost = NULL;
 	bool		was_exact;
+	bool		recheck;
 	Datum	   *lastfetched_vals;
 	bool	   *lastfetched_nulls;
 	int			cmp;
@@ -208,6 +211,7 @@ IndexNextWithReorder(IndexScanState *node)
 		 */
 		scandesc = index_beginscan(node->ss.ss_currentRelation,
 								   node->iss_RelationDesc,
+								   false,
 								   estate->es_snapshot,
 								   node->iss_Instrument,
 								   node->iss_NumScanKeys,
@@ -266,7 +270,8 @@ IndexNextWithReorder(IndexScanState *node)
 		 * Fetch next tuple from the index.
 		 */
 next_indextuple:
-		if (!index_getnext_slot(scandesc, ForwardScanDirection, slot))
+		if (!table_index_getnext_slot(scandesc, ForwardScanDirection, slot,
+									  &recheck))
 		{
 			/*
 			 * No more tuples from the index.  But we still need to drain any
@@ -280,7 +285,7 @@ next_indextuple:
 		 * If the index was lossy, we have to recheck the index quals and
 		 * ORDER BY expressions using the fetched tuple.
 		 */
-		if (scandesc->xs_recheck)
+		if (recheck)
 		{
 			econtext->ecxt_scantuple = slot;
 			if (!ExecQualAndReset(node->indexqualorig, econtext))
@@ -818,6 +823,7 @@ ExecEndIndexScan(IndexScanState *node)
 		 * which will have a new IndexOnlyScanState and zeroed stats.
 		 */
 		winstrument->nsearches += node->iss_Instrument->nsearches;
+		Assert(node->iss_Instrument->ntabletuplefetches == 0);
 	}
 
 	/*
@@ -1706,6 +1712,7 @@ ExecIndexScanInitializeDSM(IndexScanState *node,
 	node->iss_ScanDesc =
 		index_beginscan_parallel(node->ss.ss_currentRelation,
 								 node->iss_RelationDesc,
+								 false,
 								 node->iss_Instrument,
 								 node->iss_NumScanKeys,
 								 node->iss_NumOrderByKeys,
@@ -1754,6 +1761,7 @@ ExecIndexScanInitializeWorker(IndexScanState *node,
 	node->iss_ScanDesc =
 		index_beginscan_parallel(node->ss.ss_currentRelation,
 								 node->iss_RelationDesc,
+								 false,
 								 node->iss_Instrument,
 								 node->iss_NumScanKeys,
 								 node->iss_NumOrderByKeys,

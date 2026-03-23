@@ -268,7 +268,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 21
+#define PG_GET_REPLICATION_SLOTS_COLS 22
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	XLogRecPtr	currlsn;
 	int			slotno;
@@ -475,6 +475,8 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		values[i++] = BoolGetDatum(slot_contents.data.failover);
 
 		values[i++] = BoolGetDatum(slot_contents.data.synced);
+
+		values[i++] = BoolGetDatum(slot_contents.data.auto_revalidate);
 
 		if (slot_contents.slotsync_skip_reason == SS_SKIP_NONE)
 			nulls[i++] = true;

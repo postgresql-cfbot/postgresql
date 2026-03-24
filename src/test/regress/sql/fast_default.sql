@@ -294,6 +294,34 @@ DROP DOMAIN domain3;
 DROP DOMAIN domain4;
 DROP FUNCTION foo(INT);
 
+-- Test chaning  column data type to constrained domain
+CREATE DOMAIN domain1 AS INT CHECK(VALUE > 1) NOT NULL;
+CREATE DOMAIN domain2 AS domain1 CHECK(VALUE > 1) NOT NULL;
+CREATE DOMAIN domain3 AS domain1 CHECK(VALUE > random(min=>10, max=>10)) CHECK(VALUE > 1) NOT NULL;
+CREATE DOMAIN domain4 AS TEXT COLLATE "POSIX" CHECK (value <> 'hello');
+CREATE DOMAIN domain5 AS int[] NOT NULL;
+CREATE DOMAIN domain6 AS varchar COLLATE "POSIX" CHECK (value <> 'hello');
+CREATE TABLE t22(a INT, b INT, c text COLLATE "C", col1 INT[]);
+INSERT INTO t22 VALUES(-2, -1, 'hello', NULL);
+
+-- all of the following no need table rewrite, some may fail because of domain constraint violation
+ALTER TABLE t22 ALTER COLUMN a SET DATA TYPE domain2 USING ((a))::domain2;
+ALTER TABLE t22 ALTER COLUMN a SET DATA TYPE domain3 USING ((a))::domain3;
+ALTER TABLE t22 ALTER COLUMN c SET DATA TYPE domain4;
+ALTER TABLE t22 ALTER COLUMN c SET DATA TYPE domain6;
+ALTER TABLE t22 ALTER COLUMN col1 SET DATA TYPE domain5 USING col1::int4[]::domain5;
+UPDATE t22 set col1 = '{-2,null}';
+ALTER TABLE t22 ALTER COLUMN col1 SET DATA TYPE domain5 USING col1::int4[]::domain5;
+ALTER TABLE t22 ALTER COLUMN col1 SET DATA TYPE int4[] USING col1::int4[];
+-- all of the above no need table rewrite
+
+ALTER TABLE t22 ALTER COLUMN a SET DATA TYPE domain2 USING ((b))::domain2; -- table rewrite
+ALTER TABLE t22 ALTER COLUMN b SET DATA TYPE domain2 USING -2; -- table rewrite, fail
+ALTER TABLE t22 ALTER COLUMN b SET DATA TYPE domain2 USING 15; -- table rewrite, ok
+TABLE t22;
+DROP TABLE t22;
+DROP DOMAIN domain1, domain2, domain3, domain4, domain5, domain6;
+
 -- Fall back to full rewrite for volatile expressions
 CREATE TABLE T(pk INT NOT NULL PRIMARY KEY);
 

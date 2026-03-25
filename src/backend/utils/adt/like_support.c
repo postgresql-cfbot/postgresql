@@ -386,7 +386,8 @@ match_pattern_prefix(Node *leftop,
 	{
 		if (!op_in_opfamily(eqopr, opfamily))
 			return NIL;
-		if (indexcollation != expr_coll)
+		if (indexcollation != expr_coll &&
+			expr_coll && !get_collation_isdeterministic(expr_coll))
 			return NIL;
 		expr = make_opclause(eqopr, BOOLOID, false,
 							 (Expr *) leftop, (Expr *) prefix,

@@ -740,6 +740,17 @@ LockHasWaiters(const LOCKTAG *locktag, LOCKMODE lockmode, bool sessionLock)
 	 */
 	partitionLock = LockHashPartitionLock(locallock->hashcode);
 
+	/*
+	 * If the local lock was taken via the fast-path, we need to move it
+	 * to the primary lock table, or just get a pointer to the existing
+	 * primary lock table entry if by chance it's already been transferred.
+	 */
+	if (locallock->proclock == NULL)
+	{
+		locallock->proclock = FastPathGetRelationLockEntry(locallock);
+		locallock->lock = locallock->proclock->tag.myLock;
+	}
+
 	LWLockAcquire(partitionLock, LW_SHARED);
 
 	/*

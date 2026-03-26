@@ -3133,6 +3133,17 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>auto_revalidate</structfield> <type>bool</type>
+      </para>
+      <para>
+       True if this physical slot is eligible for automatic revalidation
+       after invalidation, once the standby reconnects and confirms WAL
+       receipt.  Always false for logical slots.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>slotsync_skip_reason</structfield><type>text</type>
       </para>
       <para>

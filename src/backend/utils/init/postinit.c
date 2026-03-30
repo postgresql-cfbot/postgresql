@@ -275,7 +275,8 @@ PerformAuthentication(Port *port)
 	/* Capture authentication end time for logging */
 	conn_timing.auth_end = GetCurrentTimestamp();
 
-	if (log_connections & LOG_CONNECTION_AUTHORIZATION)
+	if ((log_connections & LOG_CONNECTION_AUTHORIZATION) &&
+		message_level_is_interesting(LOG))
 	{
 		StringInfoData logmsg;
 

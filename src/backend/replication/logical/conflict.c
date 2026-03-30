@@ -281,6 +281,11 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	Relation	localrel = relinfo->ri_RelationDesc;
 	StringInfoData err_detail;
 
+	pgstat_report_subscription_conflict(MySubscription->oid, type);
+
+	if (!message_level_is_interesting(elevel))
+		return;
+
 	initStringInfo(&err_detail);
 
 	/* Form errdetail message by combining conflicting tuples information. */
@@ -292,8 +297,6 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 								 conflicttuple->origin,
 								 conflicttuple->ts,
 								 &err_detail);
-
-	pgstat_report_subscription_conflict(MySubscription->oid, type);
 
 	ereport(elevel,
 			errcode_apply_conflict(type),

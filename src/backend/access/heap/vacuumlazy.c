@@ -1705,6 +1705,9 @@ heap_vac_scan_next_block(ReadStream *stream,
 	/* Now we must be in one of the two remaining states: */
 	if (next_block < vacrel->next_unskippable_block)
 	{
+		/* read_stream_put_value() requires an lvalue, not a literal */
+		bool		temp = false;
+
 		/*
 		 * 2. We are processing a range of blocks that we could have skipped
 		 * but chose not to.  We know that they are all-visible in the VM,
@@ -1712,7 +1715,7 @@ heap_vac_scan_next_block(ReadStream *stream,
 		 */
 		vacrel->current_block = next_block;
 		/* Block was not eager scanned */
-		*((bool *) per_buffer_data) = false;
+		read_stream_put_value(stream, per_buffer_data, temp);
 		return vacrel->current_block;
 	}
 	else
@@ -1724,7 +1727,7 @@ heap_vac_scan_next_block(ReadStream *stream,
 		Assert(next_block == vacrel->next_unskippable_block);
 
 		vacrel->current_block = next_block;
-		*((bool *) per_buffer_data) = vacrel->next_unskippable_eager_scanned;
+		read_stream_put_value(stream, per_buffer_data, vacrel->next_unskippable_eager_scanned);
 		return vacrel->current_block;
 	}
 }
@@ -2612,7 +2615,7 @@ vacuum_reap_lp_read_stream_next(ReadStream *stream,
 	 * Save the TidStoreIterResult for later, so we can extract the offsets.
 	 * It is safe to copy the result, according to TidStoreIterateNext().
 	 */
-	memcpy(per_buffer_data, iter_result, sizeof(*iter_result));
+	read_stream_put_value(stream, per_buffer_data, *iter_result);
 
 	return iter_result->blkno;
 }

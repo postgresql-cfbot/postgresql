@@ -569,7 +569,7 @@ bucket_loop:
 		 * We need to acquire a cleanup lock on the primary bucket page to out
 		 * wait concurrent scans before deleting the dead tuples.
 		 */
-		buf = read_stream_next_buffer(stream, NULL);
+		buf = read_stream_get_buffer(stream);
 		Assert(BufferIsValid(buf));
 		LockBufferForCleanup(buf);
 		_hash_checkpage(rel, buf, LH_BUCKET_PAGE);
@@ -653,7 +653,7 @@ bucket_loop:
 	}
 
 	/* Stream should be exhausted since we processed all buckets */
-	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 	read_stream_end(stream);
 
 	/* Okay, we're really done.  Update tuple count in metapage. */

@@ -868,7 +868,7 @@ spgvacuumscan(spgBulkDeleteState *bds)
 			/* call vacuum_delay_point while not holding any buffer lock */
 			vacuum_delay_point(false);
 
-			buf = read_stream_next_buffer(stream, NULL);
+			buf = read_stream_get_buffer(stream);
 
 			if (!BufferIsValid(buf))
 				break;

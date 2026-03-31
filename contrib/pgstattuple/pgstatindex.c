@@ -306,7 +306,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 
 		CHECK_FOR_INTERRUPTS();
 
-		buffer = read_stream_next_buffer(stream, NULL);
+		buffer = read_stream_get_buffer(stream);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
 		page = BufferGetPage(buffer);
@@ -345,7 +345,7 @@ pgstatindex_impl(Relation rel, FunctionCallInfo fcinfo)
 		UnlockReleaseBuffer(buffer);
 	}
 
-	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 	read_stream_end(stream);
 
 	relation_close(rel, AccessShareLock);
@@ -694,7 +694,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 
 		CHECK_FOR_INTERRUPTS();
 
-		buf = read_stream_next_buffer(stream, NULL);
+		buf = read_stream_get_buffer(stream);
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);
 
@@ -739,7 +739,7 @@ pgstathashindex(PG_FUNCTION_ARGS)
 		UnlockReleaseBuffer(buf);
 	}
 
-	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 	read_stream_end(stream);
 
 	/* Done accessing the index */

@@ -156,7 +156,7 @@ statapprox_heap(Relation rel, output_type *stat)
 					maxoff;
 		BlockNumber blkno;
 
-		buf = read_stream_next_buffer(stream, NULL);
+		buf = read_stream_get_buffer(stream);
 		if (buf == InvalidBuffer)
 			break;
 

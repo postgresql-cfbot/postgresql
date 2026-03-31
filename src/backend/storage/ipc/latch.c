@@ -41,7 +41,7 @@ InitializeLatchWaitSet(void)
 	/* Set up the WaitEventSet used by WaitLatch(). */
 	LatchWaitSet = CreateWaitEventSet(NULL, 2);
 	latch_pos = AddWaitEventToSet(LatchWaitSet, WL_LATCH_SET, PGINVALID_SOCKET,
-								  MyLatch, NULL);
+								  MyLatch, NULL, NULL);
 	Assert(latch_pos == LatchWaitSetLatchPos);
 
 	/*
@@ -51,7 +51,7 @@ InitializeLatchWaitSet(void)
 	if (IsUnderPostmaster)
 	{
 		latch_pos = AddWaitEventToSet(LatchWaitSet, WL_EXIT_ON_PM_DEATH,
-									  PGINVALID_SOCKET, NULL, NULL);
+									  PGINVALID_SOCKET, NULL, NULL, NULL);
 		Assert(latch_pos == LatchWaitSetPostmasterDeathPos);
 	}
 }
@@ -186,12 +186,12 @@ WaitLatch(Latch *latch, int wakeEvents, long timeout,
 	 */
 	if (!(wakeEvents & WL_LATCH_SET))
 		latch = NULL;
-	ModifyWaitEvent(LatchWaitSet, LatchWaitSetLatchPos, WL_LATCH_SET, latch);
+	ModifyWaitEvent(LatchWaitSet, LatchWaitSetLatchPos, WL_LATCH_SET, latch, NULL);
 
 	if (IsUnderPostmaster)
 		ModifyWaitEvent(LatchWaitSet, LatchWaitSetPostmasterDeathPos,
 						(wakeEvents & (WL_EXIT_ON_PM_DEATH | WL_POSTMASTER_DEATH)),
-						NULL);
+						NULL, NULL);
 
 	if (WaitEventSetWait(LatchWaitSet,
 						 (wakeEvents & WL_TIMEOUT) ? timeout : -1,
@@ -235,7 +235,7 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 
 	if (wakeEvents & WL_LATCH_SET)
 		AddWaitEventToSet(set, WL_LATCH_SET, PGINVALID_SOCKET,
-						  latch, NULL);
+						  latch, NULL, NULL);
 
 	/* Postmaster-managed callers must handle postmaster death somehow. */
 	Assert(!IsUnderPostmaster ||
@@ -244,18 +244,18 @@ WaitLatchOrSocket(Latch *latch, int wakeEvents, pgsocket sock,
 
 	if ((wakeEvents & WL_POSTMASTER_DEATH) && IsUnderPostmaster)
 		AddWaitEventToSet(set, WL_POSTMASTER_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
+						  NULL, NULL, NULL);
 
 	if ((wakeEvents & WL_EXIT_ON_PM_DEATH) && IsUnderPostmaster)
 		AddWaitEventToSet(set, WL_EXIT_ON_PM_DEATH, PGINVALID_SOCKET,
-						  NULL, NULL);
+						  NULL, NULL, NULL);
 
 	if (wakeEvents & WL_SOCKET_MASK)
 	{
 		int			ev;
 
 		ev = wakeEvents & WL_SOCKET_MASK;
-		AddWaitEventToSet(set, ev, sock, NULL, NULL);
+		AddWaitEventToSet(set, ev, sock, NULL, NULL, NULL);
 	}
 
 	rc = WaitEventSetWait(set, timeout, &event, 1, wait_event_info);

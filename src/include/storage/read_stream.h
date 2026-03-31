@@ -161,4 +161,13 @@ read_stream_get_buffer_and_value_with_size(ReadStream *stream,
 	(AssertMacro(sizeof(**(pointer)) <= read_stream_per_buffer_data_size(stream)), \
 	 read_stream_next_buffer((stream), ((void **) (pointer))))
 
+/*
+ * Set the per-buffer data by value.  This can be called from inside a
+ * callback that is returning block numbers.  It asserts that the value's size
+ * matches the available space.
+ */
+#define read_stream_put_value(stream, per_buffer_data, value) \
+	(AssertMacro(sizeof(value) == read_stream_per_buffer_data_size(stream)), \
+	 memcpy((per_buffer_data), &(value), sizeof(value)))
+
 #endif							/* READ_STREAM_H */

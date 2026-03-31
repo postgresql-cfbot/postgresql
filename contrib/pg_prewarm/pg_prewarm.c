@@ -263,11 +263,11 @@ pg_prewarm(PG_FUNCTION_ARGS)
 			Buffer		buf;
 
 			CHECK_FOR_INTERRUPTS();
-			buf = read_stream_next_buffer(stream, NULL);
+			buf = read_stream_get_buffer(stream);
 			ReleaseBuffer(buf);
 			++blocks_done;
 		}
-		Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+		Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 		read_stream_end(stream);
 	}
 

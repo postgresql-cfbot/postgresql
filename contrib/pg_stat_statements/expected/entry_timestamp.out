@@ -150,6 +150,125 @@ WHERE query LIKE '%STMTTS%';
      2 |                1 |                   2 |                     0
 (1 row)
 
+--
+-- last_execution_start timestamp tests
+--
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
+(1 row)
+
+-- Capture a reference timestamp before running the tracked queries.
+SELECT now() AS ref_ts_upd1 \gset
+SELECT 1 AS "EXECSTART1";
+ EXECSTART1 
+------------
+          1
+(1 row)
+
+-- last_execution_start should be set and >= ref_ts_upd1.
+SELECT
+    query,
+    last_execution_start IS NOT NULL as has_ts,
+    last_execution_start >= :'ref_ts_upd1' as after_ref1
+FROM pg_stat_statements
+WHERE query LIKE '%EXECSTART%'
+ORDER BY query COLLATE "C";
+           query           | has_ts | after_ref1 
+---------------------------+--------+------------
+ SELECT $1 AS "EXECSTART1" | t      | t
+(1 row)
+
+-- Run EXECSTART1 again and verify that last_execution_start is updated.
+SELECT now() AS ref_ts_upd2 \gset
+SELECT 1 AS "EXECSTART1";
+ EXECSTART1 
+------------
+          1
+(1 row)
+
+SELECT
+    query,
+    last_execution_start >= :'ref_ts_upd2' as updated
+FROM pg_stat_statements
+WHERE query LIKE '%EXECSTART1%';
+           query           | updated 
+---------------------------+---------
+ SELECT $1 AS "EXECSTART1" | t
+(1 row)
+
+-- minmax reset should not affect last_execution_start
+SELECT pg_stat_statements_reset(0, 0, queryid, true)
+FROM pg_stat_statements
+WHERE query LIKE '%EXECSTART1%' \gset
+SELECT
+    query,
+    last_execution_start >= :'ref_ts_upd2' as ts_preserved
+FROM pg_stat_statements
+WHERE query LIKE '%EXECSTART1%';
+           query           | ts_preserved 
+---------------------------+--------------
+ SELECT $1 AS "EXECSTART1" | t
+(1 row)
+
+--
+-- Deferred ExecutorEnd test (extended query protocol)
+--
+-- In the extended query protocol the previous query's ExecutorEnd is
+-- deferred until the next Bind message, at which point
+-- GetCurrentStatementStartTimestamp() already reflects the *new* query.
+-- Verify that last_execution_start still records the *old* query's start.
+-- An explicit transaction keeps the portal open past the Bind of END,
+-- which is when the deferred ExecutorEnd actually fires.
+--
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
+(1 row)
+
+BEGIN;
+SELECT 1 AS "DEFERRED_END", statement_timestamp() AS query_stmt_ts \bind \gset
+END;
+SELECT
+    query,
+    last_execution_start < :'query_stmt_ts' as before_next
+FROM pg_stat_statements
+WHERE query LIKE '%DEFERRED_END%'
+ORDER BY query COLLATE "C";
+                                query                                | before_next 
+---------------------------------------------------------------------+-------------
+ SELECT $1 AS "DEFERRED_END", statement_timestamp() AS query_stmt_ts | t
+(1 row)
+
+--
+-- DDL test: last_execution_start is updated for utility statements
+--
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
+(1 row)
+
+SET pg_stat_statements.track_utility = TRUE;
+SELECT now() AS ref_ts_ddl \gset
+CREATE TEMP TABLE pgss_exec_start_test (a int);
+DROP TABLE pgss_exec_start_test;
+SELECT
+    query,
+    last_execution_start IS NOT NULL as has_ts,
+    last_execution_start >= :'ref_ts_ddl' as after_ref
+FROM pg_stat_statements
+WHERE query LIKE '%pgss_exec_start_test%'
+ORDER BY query COLLATE "C";
+                     query                      | has_ts | after_ref 
+------------------------------------------------+--------+-----------
+ CREATE TEMP TABLE pgss_exec_start_test (a int) | t      | t
+ DROP TABLE pgss_exec_start_test                | t      | t
+(2 rows)
+
+RESET pg_stat_statements.track_utility;
 -- Cleanup
 SELECT pg_stat_statements_reset() IS NOT NULL AS t;
  t 

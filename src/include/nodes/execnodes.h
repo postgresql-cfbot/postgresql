@@ -30,6 +30,7 @@
 #define EXECNODES_H
 
 #include "access/htup.h"
+#include "datatype/timestamp.h"
 #include "executor/instrument_node.h"
 #include "fmgr.h"
 #include "lib/ilist.h"
@@ -784,6 +785,14 @@ typedef struct EState
 												 * launch. */
 	int			es_parallel_workers_launched;	/* number of workers actually
 												 * launched. */
+
+	/*
+	 * Statement start timestamp captured at ExecutorStart time. We store
+	 * this here so that extensions (e.g. pg_stat_statements) can read the
+	 * correct start time at ExecutorEnd, even when ExecutorEnd is deferred
+	 * to a later Bind message in the extended query protocol.
+	 */
+	TimestampTz es_exec_start;
 
 	/* The per-query shared memory area to use for parallel execution. */
 	struct dsa_area *es_query_dsa;

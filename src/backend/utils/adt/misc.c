@@ -32,6 +32,7 @@
 #include "funcapi.h"
 #include "miscadmin.h"
 #include "nodes/miscnodes.h"
+#include "nodes/supportnodes.h"
 #include "parser/parse_type.h"
 #include "parser/scansup.h"
 #include "pgstat.h"
@@ -43,6 +44,7 @@
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
+#include "utils/numeric.h"
 #include "utils/ruleutils.h"
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
@@ -1094,4 +1096,296 @@ Datum
 any_value_transfn(PG_FUNCTION_ARGS)
 {
 	PG_RETURN_DATUM(PG_GETARG_DATUM(0));
+}
+
+/*
+ * monotonic_slope_support
+ *		Generic helper for prosupport functions that declare monotonic slopes.
+ *
+ * If the request is a SupportRequestMonotonic, fills in nslopes and slopes
+ * and returns the request pointer.  Otherwise returns NULL.
+ */
+static Datum
+monotonic_slope_support(Node *rawreq, int nslopes,
+						const MonotonicFunction *slopes)
+{
+	if (IsA(rawreq, SupportRequestMonotonic))
+	{
+		SupportRequestMonotonic *req = (SupportRequestMonotonic *) rawreq;
+
+		req->nslopes = nslopes;
+		req->slopes = slopes;
+		return PointerGetDatum(req);
+	}
+
+	return PointerGetDatum(NULL);
+}
+
+/*
+ * arg0_asc_slope_support
+ *		Prosupport: f(x, ...) is monotonically increasing in x.
+ */
+Datum
+arg0_asc_slope_support(PG_FUNCTION_ARGS)
+{
+	static const MonotonicFunction pattern[1] = {MONOTONICFUNC_INCREASING};
+
+	return monotonic_slope_support((Node *) PG_GETARG_POINTER(0),
+								   lengthof(pattern), pattern);
+}
+
+/*
+ * arg0_desc_slope_support
+ *		Prosupport: f(x, ...) is monotonically decreasing in x.
+ */
+Datum
+arg0_desc_slope_support(PG_FUNCTION_ARGS)
+{
+	static const MonotonicFunction pattern[1] = {MONOTONICFUNC_DECREASING};
+
+	return monotonic_slope_support((Node *) PG_GETARG_POINTER(0),
+								   lengthof(pattern), pattern);
+}
+
+/*
+ * arg1_asc_slope_support
+ *		Prosupport: f(a, x, ...) is monotonically increasing in x.
+ */
+Datum
+arg1_asc_slope_support(PG_FUNCTION_ARGS)
+{
+	static const MonotonicFunction pattern[2] = {MONOTONICFUNC_NONE,
+												 MONOTONICFUNC_INCREASING};
+
+	return monotonic_slope_support((Node *) PG_GETARG_POINTER(0),
+								   lengthof(pattern), pattern);
+}
+
+/*
+ * diff_slope_support
+ *		Prosupport: f(x, y) = x - y is increasing in x, decreasing in y.
+ */
+Datum
+diff_slope_support(PG_FUNCTION_ARGS)
+{
+	static const MonotonicFunction pattern[2] = {MONOTONICFUNC_INCREASING,
+												 MONOTONICFUNC_DECREASING};
+
+	return monotonic_slope_support((Node *) PG_GETARG_POINTER(0),
+								   lengthof(pattern), pattern);
+}
+
+/*
+ * addition_slope_support
+ *		Prosupport: f(x, y) = x + y is increasing in both x and y.
+ */
+Datum
+addition_slope_support(PG_FUNCTION_ARGS)
+{
+	static const MonotonicFunction pattern[2] = {MONOTONICFUNC_INCREASING,
+												 MONOTONICFUNC_INCREASING};
+
+	return monotonic_slope_support((Node *) PG_GETARG_POINTER(0),
+								   lengthof(pattern), pattern);
+}
+
+/*
+ * get_const_sign
+ *		Helper to determine the sign of a numeric constant.
+ *		Returns 1 for positive, -1 for negative, 0 for zero or unknown.
+ */
+static int
+get_const_sign(Const *constval)
+{
+	if (constval->constisnull)
+		return 0;
+
+	switch (constval->consttype)
+	{
+		case INT2OID:
+			{
+				int16		val = DatumGetInt16(constval->constvalue);
+
+				return (val > 0) ? 1 : (val < 0) ? -1 : 0;
+			}
+		case INT4OID:
+			{
+				int32		val = DatumGetInt32(constval->constvalue);
+
+				return (val > 0) ? 1 : (val < 0) ? -1 : 0;
+			}
+		case INT8OID:
+			{
+				int64		val = DatumGetInt64(constval->constvalue);
+
+				return (val > 0) ? 1 : (val < 0) ? -1 : 0;
+			}
+		case FLOAT4OID:
+			{
+				float4		val = DatumGetFloat4(constval->constvalue);
+
+				if (isnan(val) || val == 0.0f)
+					return 0;
+				return (val > 0.0f) ? 1 : -1;
+			}
+		case FLOAT8OID:
+			{
+				float8		val = DatumGetFloat8(constval->constvalue);
+
+				if (isnan(val) || val == 0.0)
+					return 0;
+				return (val > 0.0) ? 1 : -1;
+			}
+		case NUMERICOID:
+			{
+				Numeric		num = DatumGetNumeric(constval->constvalue);
+				Datum		result;
+				Numeric		sign_num;
+				int			sign;
+
+				if (numeric_is_nan(num) || numeric_is_inf(num))
+					return 0;
+
+				result = DirectFunctionCall1(numeric_sign, NumericGetDatum(num));
+				sign_num = DatumGetNumeric(result);
+				sign = numeric_int4_safe(sign_num, NULL);
+				return sign;
+			}
+		default:
+			return 0;
+	}
+}
+
+/*
+ * multiply_slope_support
+ *		Prosupport: x * c is increasing if c > 0, decreasing if c < 0.
+ *		Similarly for c * x.
+ *
+ * For multiplication, the monotonicity depends on the sign of the constant:
+ * - x * positive_const: increasing in x
+ * - x * negative_const: decreasing in x
+ * - x * 0: not monotonic (constant result)
+ */
+Datum
+multiply_slope_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, SupportRequestMonotonic))
+	{
+		SupportRequestMonotonic *req = (SupportRequestMonotonic *) rawreq;
+		List	   *args;
+		Node	   *arg0;
+		Node	   *arg1;
+		Const	   *constval = NULL;
+		int			var_argno = -1;
+		int			sign;
+
+		if (IsA(req->expr, FuncExpr))
+			args = ((FuncExpr *) req->expr)->args;
+		else if (IsA(req->expr, OpExpr))
+			args = ((OpExpr *) req->expr)->args;
+		else
+			PG_RETURN_POINTER(NULL);
+
+		if (list_length(args) != 2)
+			PG_RETURN_POINTER(NULL);
+
+		arg0 = (Node *) linitial(args);
+		arg1 = (Node *) lsecond(args);
+
+		if (IsA(arg0, Const))
+		{
+			constval = (Const *) arg0;
+			var_argno = 1;
+		}
+		else if (IsA(arg1, Const))
+		{
+			constval = (Const *) arg1;
+			var_argno = 0;
+		}
+		else
+			PG_RETURN_POINTER(NULL);
+
+		sign = get_const_sign(constval);
+		if (sign == 0)
+			PG_RETURN_POINTER(NULL);
+
+		{
+			static const MonotonicFunction asc_first[2] = {MONOTONICFUNC_INCREASING,
+														   MONOTONICFUNC_NONE};
+			static const MonotonicFunction asc_second[2] = {MONOTONICFUNC_NONE,
+															MONOTONICFUNC_INCREASING};
+			static const MonotonicFunction desc_first[2] = {MONOTONICFUNC_DECREASING,
+															MONOTONICFUNC_NONE};
+			static const MonotonicFunction desc_second[2] = {MONOTONICFUNC_NONE,
+															 MONOTONICFUNC_DECREASING};
+
+			if (var_argno == 0)
+				req->slopes = (sign > 0) ? asc_first : desc_first;
+			else
+				req->slopes = (sign > 0) ? asc_second : desc_second;
+			req->nslopes = 2;
+			PG_RETURN_POINTER(req);
+		}
+	}
+
+	PG_RETURN_POINTER(NULL);
+}
+
+/*
+ * divide_slope_support
+ *		Prosupport: x / c is increasing if c > 0, decreasing if c < 0.
+ *
+ * Division by a constant has the same monotonicity as multiplication:
+ * - x / positive_const: increasing in x
+ * - x / negative_const: decreasing in x
+ * - x / 0: undefined (not monotonic)
+ */
+Datum
+divide_slope_support(PG_FUNCTION_ARGS)
+{
+	Node	   *rawreq = (Node *) PG_GETARG_POINTER(0);
+
+	if (IsA(rawreq, SupportRequestMonotonic))
+	{
+		SupportRequestMonotonic *req = (SupportRequestMonotonic *) rawreq;
+		List	   *args;
+		Node	   *arg1;
+		Const	   *constval;
+		int			sign;
+
+		if (IsA(req->expr, FuncExpr))
+			args = ((FuncExpr *) req->expr)->args;
+		else if (IsA(req->expr, OpExpr))
+			args = ((OpExpr *) req->expr)->args;
+		else
+			PG_RETURN_POINTER(NULL);
+
+		if (list_length(args) != 2)
+			PG_RETURN_POINTER(NULL);
+
+		arg1 = (Node *) lsecond(args);
+
+		if (!IsA(arg1, Const))
+			PG_RETURN_POINTER(NULL);
+
+		constval = (Const *) arg1;
+		sign = get_const_sign(constval);
+		if (sign == 0)
+			PG_RETURN_POINTER(NULL);
+
+		{
+			static const MonotonicFunction asc_pattern[2] = {MONOTONICFUNC_INCREASING,
+															 MONOTONICFUNC_NONE};
+			static const MonotonicFunction desc_pattern[2] = {MONOTONICFUNC_DECREASING,
+															  MONOTONICFUNC_NONE};
+
+			req->slopes = (sign > 0) ? asc_pattern : desc_pattern;
+			req->nslopes = 2;
+			PG_RETURN_POINTER(req);
+		}
+	}
+
+	PG_RETURN_POINTER(NULL);
 }

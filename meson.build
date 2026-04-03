@@ -3951,6 +3951,12 @@ install_suites = []
 
 testwrap = files('src/tools/testwrap')
 
+# Detect if built with Valgrind support to adjust test timeouts
+is_valgrind_build = cc.compiles('''
+#ifndef USE_VALGRIND
+choke me
+#endif''', name: 'USE_VALGRIND check', args: test_c_args)
+
 foreach test_dir : tests
   testwrap_base = [
     testwrap,
@@ -4018,7 +4024,7 @@ foreach test_dir : tests
       test_kwargs = {
         'protocol': 'tap',
         'priority': 10,
-        'timeout': 1000,
+        'timeout': is_valgrind_build ? 10000 : 1000,
         'depends': test_deps + t.get('deps', []),
         'env': env,
       } + t.get('test_kwargs', {})
@@ -4091,7 +4097,7 @@ foreach test_dir : tests
       test_kwargs = {
         'protocol': 'tap',
         'suite': test_group,
-        'timeout': 1000,
+        'timeout': is_valgrind_build ? 10000 : 1000,
         'depends': test_deps + t.get('deps', []),
         'env': env,
       } + t.get('test_kwargs', {})

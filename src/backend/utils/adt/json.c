@@ -95,8 +95,6 @@ static void array_to_json_internal(Datum array, StringInfo result,
 static void datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 								   JsonTypeCategory tcategory,
 								   FmgrInfo *outflinfo, bool key_scalar);
-static void add_json(Datum val, bool is_null, StringInfo result,
-					 Oid val_type, bool key_scalar);
 static text *catenate_stringinfo_string(StringInfo buffer, const char *addon);
 
 /*
@@ -590,35 +588,6 @@ composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
 
 	appendStringInfoChar(result, '}');
 	ReleaseTupleDesc(tupdesc);
-}
-
-/*
- * Append JSON text for "val" to "result".
- *
- * This is just a thin wrapper around datum_to_json.  If the same type will be
- * printed many times, avoid using this; better to do the json_categorize_type
- * lookups only once.
- */
-static void
-add_json(Datum val, bool is_null, StringInfo result,
-		 Oid val_type, bool key_scalar)
-{
-	JsonTypeCategory tcategory;
-	FmgrInfo	outflinfo;
-
-	if (val_type == InvalidOid)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("could not determine input data type")));
-
-	if (is_null)
-		tcategory = JSONTYPE_NULL;
-	else
-		json_categorize_type(val_type, false,
-							 &tcategory, &outflinfo);
-
-	datum_to_json_internal(val, is_null, result, tcategory, &outflinfo,
-						   key_scalar);
 }
 
 /*
@@ -1200,7 +1169,9 @@ catenate_stringinfo_string(StringInfo buffer, const char *addon)
 }
 
 Datum
-json_build_object_worker(int nargs, const Datum *args, const bool *nulls, const Oid *types,
+json_build_object_worker(int nargs, const Datum *args, const bool *nulls,
+						 const JsonTypeCategory *categories,
+						 FmgrInfo *outflinfos,
 						 bool absent_on_null, bool unique_keys)
 {
 	int			i;
@@ -1256,7 +1227,8 @@ json_build_object_worker(int nargs, const Datum *args, const bool *nulls, const 
 		/* save key offset before appending it */
 		key_offset = out->len;
 
-		add_json(args[i], false, out, types[i], true);
+		datum_to_json_internal(args[i], false, out,
+							   categories[i], &outflinfos[i], true);
 
 		if (unique_keys)
 		{
@@ -1282,7 +1254,9 @@ json_build_object_worker(int nargs, const Datum *args, const bool *nulls, const 
 		appendStringInfoString(result, " : ");
 
 		/* process value */
-		add_json(args[i + 1], nulls[i + 1], result, types[i + 1], false);
+		datum_to_json_internal(args[i + 1], nulls[i + 1], result,
+							   categories[i + 1], &outflinfos[i + 1],
+							   false);
 	}
 
 	appendStringInfoChar(result, '}');
@@ -1299,15 +1273,26 @@ json_build_object(PG_FUNCTION_ARGS)
 	Datum	   *args;
 	bool	   *nulls;
 	Oid		   *types;
+	int			nargs;
+	JsonTypeCategory *categories;
+	FmgrInfo   *outflinfos;
 
 	/* build argument values to build the object */
-	int			nargs = extract_variadic_args(fcinfo, 0, true,
-											  &args, &types, &nulls);
+	nargs = extract_variadic_args(fcinfo, 0, true,
+								  &args, &types, &nulls);
 
 	if (nargs < 0)
 		PG_RETURN_NULL();
 
-	PG_RETURN_DATUM(json_build_object_worker(nargs, args, nulls, types, false, false));
+	categories = palloc_array(JsonTypeCategory, nargs);
+	outflinfos = palloc0_array(FmgrInfo, nargs);
+	for (int i = 0; i < nargs; i++)
+		json_categorize_type(types[i], false,
+							 &categories[i], &outflinfos[i]);
+
+	PG_RETURN_DATUM(json_build_object_worker(nargs, args, nulls,
+											 categories, outflinfos,
+											 false, false));
 }
 
 /*
@@ -1320,8 +1305,9 @@ json_build_object_noargs(PG_FUNCTION_ARGS)
 }
 
 Datum
-json_build_array_worker(int nargs, const Datum *args, const bool *nulls, const Oid *types,
-						bool absent_on_null)
+json_build_array_worker(int nargs, const Datum *args, const bool *nulls,
+						const JsonTypeCategory *categories,
+						FmgrInfo *outflinfos, bool absent_on_null)
 {
 	int			i;
 	const char *sep = "";
@@ -1338,7 +1324,8 @@ json_build_array_worker(int nargs, const Datum *args, const bool *nulls, const O
 
 		appendStringInfoString(&result, sep);
 		sep = ", ";
-		add_json(args[i], nulls[i], &result, types[i], false);
+		datum_to_json_internal(args[i], nulls[i], &result,
+							   categories[i], &outflinfos[i], false);
 	}
 
 	appendStringInfoChar(&result, ']');
@@ -1355,15 +1342,26 @@ json_build_array(PG_FUNCTION_ARGS)
 	Datum	   *args;
 	bool	   *nulls;
 	Oid		   *types;
+	int			nargs;
+	JsonTypeCategory *categories;
+	FmgrInfo   *outflinfos;
 
-	/* build argument values to build the object */
-	int			nargs = extract_variadic_args(fcinfo, 0, true,
-											  &args, &types, &nulls);
+	/* build argument values to build the array */
+	nargs = extract_variadic_args(fcinfo, 0, true,
+								  &args, &types, &nulls);
 
 	if (nargs < 0)
 		PG_RETURN_NULL();
 
-	PG_RETURN_DATUM(json_build_array_worker(nargs, args, nulls, types, false));
+	categories = palloc_array(JsonTypeCategory, nargs);
+	outflinfos = palloc0_array(FmgrInfo, nargs);
+	for (int i = 0; i < nargs; i++)
+		json_categorize_type(types[i], false,
+							 &categories[i], &outflinfos[i]);
+
+	PG_RETURN_DATUM(json_build_array_worker(nargs, args, nulls,
+											categories, outflinfos,
+											false));
 }
 
 /*

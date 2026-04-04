@@ -2399,14 +2399,11 @@ ExecInitExprRec(Expr *node, ExprState *state,
 					jcstate->constructor = ctor;
 					jcstate->arg_values = palloc_array(Datum, nargs);
 					jcstate->arg_nulls = palloc_array(bool, nargs);
-					jcstate->arg_types = palloc_array(Oid, nargs);
 					jcstate->nargs = nargs;
 
 					foreach(lc, args)
 					{
 						Expr	   *arg = (Expr *) lfirst(lc);
-
-						jcstate->arg_types[argno] = exprType((Node *) arg);
 
 						if (IsA(arg, Const))
 						{
@@ -2425,25 +2422,28 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						argno++;
 					}
 
-					/* prepare type cache for datum_to_json[b]() */
-					if (ctor->type == JSCTOR_JSON_SCALAR)
+					/*
+					 * Prepare type cache for json_build_*_worker and
+					 * datum_to_json[b], which are used for SCALAR, OBJECT,
+					 * and ARRAY constructors.
+					 */
+					if (ctor->type != JSCTOR_JSON_PARSE)
 					{
 						bool		is_jsonb =
 							ctor->returning->format->format_type == JS_FORMAT_JSONB;
 
-						jcstate->arg_type_cache =
-							palloc(sizeof(*jcstate->arg_type_cache) * nargs);
+						jcstate->arg_categories =
+							palloc_array(JsonTypeCategory, nargs);
+						jcstate->arg_outflinfos =
+							palloc0_array(FmgrInfo, nargs);
 
 						for (int i = 0; i < nargs; i++)
 						{
-							JsonTypeCategory category;
-							Oid			typid = jcstate->arg_types[i];
+							Node	   *arg = (Node *) list_nth(args, i);
 
-							json_categorize_type(typid, is_jsonb,
-												 &category,
-												 &jcstate->arg_type_cache[i].outflinfo);
-
-							jcstate->arg_type_cache[i].category = (int) category;
+							json_categorize_type(exprType(arg), is_jsonb,
+												 &jcstate->arg_categories[i],
+												 &jcstate->arg_outflinfos[i]);
 						}
 					}
 

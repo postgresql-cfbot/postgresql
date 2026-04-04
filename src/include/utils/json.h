@@ -15,8 +15,11 @@
 #define JSON_H
 
 #include "lib/stringinfo.h"
+#include "utils/jsontypes.h"
 
 /* functions in json.c */
+extern Datum datum_to_json(Datum val, JsonTypeCategory tcategory,
+						   FmgrInfo *outflinfo);
 extern void composite_to_json(Datum composite, StringInfo result,
 							  bool use_line_feeds);
 extern void escape_json(StringInfo buf, const char *str);

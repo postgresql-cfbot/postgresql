@@ -224,7 +224,9 @@ ExecReScanAppendBase(AppendBaseState *node)
 
 		/*
 		 * If chgParam of subnode is not null then plan will be re-scanned by
-		 * first ExecProcNode.
+		 * first ExecProcNode.  For an async-capable subplan, that's by
+		 * ExecAppendBaseAsyncBegin()/ExecAsyncRequest() instead, the next
+		 * time it fires a request for it.
 		 */
 		if (subnode->chgParam == NULL)
 			ExecReScan(subnode);

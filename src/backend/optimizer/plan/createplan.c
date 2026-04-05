@@ -1131,18 +1131,19 @@ create_join_plan(PlannerInfo *root, JoinPath *best_path)
 static bool
 mark_async_capable_plan(Plan *plan, Path *path)
 {
+	/*
+	 * If the generated plan node includes a gating Result node, a Sort node,
+	 * or an IncrementalSort node, we can't execute it asynchronously.
+	 */
+	if (IsA(plan, Result) || IsA(plan, Sort) ||
+		IsA(plan, IncrementalSort))
+		return false;
+
 	switch (nodeTag(path))
 	{
 		case T_SubqueryScanPath:
 			{
 				SubqueryScan *scan_plan = (SubqueryScan *) plan;
-
-				/*
-				 * If the generated plan node includes a gating Result node,
-				 * we can't execute it asynchronously.
-				 */
-				if (IsA(plan, Result))
-					return false;
 
 				/*
 				 * If a SubqueryScan node atop of an async-capable plan node
@@ -1158,13 +1159,6 @@ mark_async_capable_plan(Plan *plan, Path *path)
 			{
 				FdwRoutine *fdwroutine = path->parent->fdwroutine;
 
-				/*
-				 * If the generated plan node includes a gating Result node,
-				 * we can't execute it asynchronously.
-				 */
-				if (IsA(plan, Result))
-					return false;
-
 				Assert(fdwroutine != NULL);
 				if (fdwroutine->IsForeignPathAsyncCapable != NULL &&
 					fdwroutine->IsForeignPathAsyncCapable((ForeignPath *) path))
@@ -1172,13 +1166,6 @@ mark_async_capable_plan(Plan *plan, Path *path)
 				return false;
 			}
 		case T_ProjectionPath:
-
-			/*
-			 * If the generated plan node includes a Result node for the
-			 * projection, we can't execute it asynchronously.
-			 */
-			if (IsA(plan, Result))
-				return false;
 
 			/*
 			 * create_projection_plan() would have pulled up the subplan, so

@@ -1451,6 +1451,7 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	List	   *subplans = NIL;
 	ListCell   *subpaths;
 	RelOptInfo *rel = best_path->path.parent;
+	bool		consider_async = false;
 
 	/*
 	 * We don't have the actual creation of the MergeAppend node split out
@@ -1465,6 +1466,10 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 	plan->righttree = NULL;
 	node->ab.apprelids = rel->relids;
 	node->ab.child_append_relid_sets = best_path->child_append_relid_sets;
+
+	consider_async = (enable_async_merge_append &&
+					  !best_path->path.parallel_safe &&
+					  list_length(best_path->subpaths) > 1);
 
 	/*
 	 * Compute sort column info, and adjust MergeAppend's tlist as needed.
@@ -1565,6 +1570,10 @@ create_merge_append_plan(PlannerInfo *root, MergeAppendPath *best_path,
 
 			subplan = sort_plan;
 		}
+
+		/* If needed, check to see if subplan can be executed asynchronously */
+		if (consider_async)
+			mark_async_capable_plan(subplan, subpath);
 
 		subplans = lappend(subplans, subplan);
 	}

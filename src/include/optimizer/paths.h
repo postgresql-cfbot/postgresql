@@ -235,6 +235,7 @@ extern Path *get_cheapest_fractional_path_for_pathkeys(List *paths,
 													   Relids required_outer,
 													   double fraction);
 extern Path *get_cheapest_parallel_safe_total_inner(List *paths);
+extern void precompute_slope_pathkeys(PlannerInfo *root);
 extern List *build_index_pathkeys(PlannerInfo *root, IndexOptInfo *index);
 extern PathKey *make_reversed_pathkey(PlannerInfo *root, PathKey *pathkey);
 extern List *reverse_pathkeys(PlannerInfo *root, List *pathkeys);

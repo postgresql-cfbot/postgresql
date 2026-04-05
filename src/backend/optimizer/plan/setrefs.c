@@ -1881,10 +1881,10 @@ set_append_references(PlannerInfo *root,
 	 * check quals.  If it's got exactly one child plan, then it's not doing
 	 * anything useful at all, and we can strip it out.
 	 */
-	Assert(aplan->plan.qual == NIL);
+	Assert(aplan->ab.plan.qual == NIL);
 
 	/* First, we gotta recurse on the children */
-	foreach(l, aplan->appendplans)
+	foreach(l, aplan->ab.subplans)
 	{
 		lfirst(l) = set_plan_refs(root, (Plan *) lfirst(l), rtoffset);
 	}
@@ -1897,11 +1897,11 @@ set_append_references(PlannerInfo *root,
 	 * plan may execute the non-parallel aware child multiple times.  (If you
 	 * change these rules, update create_append_path to match.)
 	 */
-	if (list_length(aplan->appendplans) == 1)
+	if (list_length(aplan->ab.subplans) == 1)
 	{
-		Plan	   *p = (Plan *) linitial(aplan->appendplans);
+		Plan	   *p = (Plan *) linitial(aplan->ab.subplans);
 
-		if (p->parallel_aware == aplan->plan.parallel_aware)
+		if (p->parallel_aware == aplan->ab.plan.parallel_aware)
 		{
 			Plan	   *result;
 
@@ -1909,7 +1909,7 @@ set_append_references(PlannerInfo *root,
 
 			/* Remember that we removed an Append */
 			record_elided_node(root->glob, p->plan_node_id, T_Append,
-							   offset_relid_set(aplan->apprelids, rtoffset));
+							   offset_relid_set(aplan->ab.apprelids, rtoffset));
 
 			return result;
 		}
@@ -1922,19 +1922,19 @@ set_append_references(PlannerInfo *root,
 	 */
 	set_dummy_tlist_references((Plan *) aplan, rtoffset);
 
-	aplan->apprelids = offset_relid_set(aplan->apprelids, rtoffset);
+	aplan->ab.apprelids = offset_relid_set(aplan->ab.apprelids, rtoffset);
 
 	/*
 	 * Add PartitionPruneInfo, if any, to PlannerGlobal and update the index.
 	 * Also update the RT indexes present in it to add the offset.
 	 */
-	if (aplan->part_prune_index >= 0)
-		aplan->part_prune_index =
-			register_partpruneinfo(root, aplan->part_prune_index, rtoffset);
+	if (aplan->ab.part_prune_index >= 0)
+		aplan->ab.part_prune_index =
+			register_partpruneinfo(root, aplan->ab.part_prune_index, rtoffset);
 
 	/* We don't need to recurse to lefttree or righttree ... */
-	Assert(aplan->plan.lefttree == NULL);
-	Assert(aplan->plan.righttree == NULL);
+	Assert(aplan->ab.plan.lefttree == NULL);
+	Assert(aplan->ab.plan.righttree == NULL);
 
 	return (Plan *) aplan;
 }
@@ -1958,10 +1958,10 @@ set_mergeappend_references(PlannerInfo *root,
 	 * or check quals.  If it's got exactly one child plan, then it's not
 	 * doing anything useful at all, and we can strip it out.
 	 */
-	Assert(mplan->plan.qual == NIL);
+	Assert(mplan->ab.plan.qual == NIL);
 
 	/* First, we gotta recurse on the children */
-	foreach(l, mplan->mergeplans)
+	foreach(l, mplan->ab.subplans)
 	{
 		lfirst(l) = set_plan_refs(root, (Plan *) lfirst(l), rtoffset);
 	}
@@ -1975,11 +1975,11 @@ set_mergeappend_references(PlannerInfo *root,
 	 * multiple times.  (If you change these rules, update
 	 * create_merge_append_path to match.)
 	 */
-	if (list_length(mplan->mergeplans) == 1)
+	if (list_length(mplan->ab.subplans) == 1)
 	{
-		Plan	   *p = (Plan *) linitial(mplan->mergeplans);
+		Plan	   *p = (Plan *) linitial(mplan->ab.subplans);
 
-		if (p->parallel_aware == mplan->plan.parallel_aware)
+		if (p->parallel_aware == mplan->ab.plan.parallel_aware)
 		{
 			Plan	   *result;
 
@@ -1987,7 +1987,7 @@ set_mergeappend_references(PlannerInfo *root,
 
 			/* Remember that we removed a MergeAppend */
 			record_elided_node(root->glob, p->plan_node_id, T_MergeAppend,
-							   offset_relid_set(mplan->apprelids, rtoffset));
+							   offset_relid_set(mplan->ab.apprelids, rtoffset));
 
 			return result;
 		}
@@ -2000,19 +2000,19 @@ set_mergeappend_references(PlannerInfo *root,
 	 */
 	set_dummy_tlist_references((Plan *) mplan, rtoffset);
 
-	mplan->apprelids = offset_relid_set(mplan->apprelids, rtoffset);
+	mplan->ab.apprelids = offset_relid_set(mplan->ab.apprelids, rtoffset);
 
 	/*
 	 * Add PartitionPruneInfo, if any, to PlannerGlobal and update the index.
 	 * Also update the RT indexes present in it to add the offset.
 	 */
-	if (mplan->part_prune_index >= 0)
-		mplan->part_prune_index =
-			register_partpruneinfo(root, mplan->part_prune_index, rtoffset);
+	if (mplan->ab.part_prune_index >= 0)
+		mplan->ab.part_prune_index =
+			register_partpruneinfo(root, mplan->ab.part_prune_index, rtoffset);
 
 	/* We don't need to recurse to lefttree or righttree ... */
-	Assert(mplan->plan.lefttree == NULL);
-	Assert(mplan->plan.righttree == NULL);
+	Assert(mplan->ab.plan.lefttree == NULL);
+	Assert(mplan->ab.plan.righttree == NULL);
 
 	return (Plan *) mplan;
 }

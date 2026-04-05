@@ -160,7 +160,7 @@ pgpa_build_scan(pgpa_plan_walker_context *walker, Plan *plan,
 
 				/* Be sure to account for pulled-up scans. */
 				child_append_relid_sets =
-					((Append *) plan)->child_append_relid_sets;
+					((Append *) plan)->ab.child_append_relid_sets;
 				break;
 			case T_MergeAppend:
 				/* Same logic here as for Append, above. */
@@ -172,7 +172,7 @@ pgpa_build_scan(pgpa_plan_walker_context *walker, Plan *plan,
 
 				/* Be sure to account for pulled-up scans. */
 				child_append_relid_sets =
-					((MergeAppend *) plan)->child_append_relid_sets;
+					((MergeAppend *) plan)->ab.child_append_relid_sets;
 				break;
 			default:
 				strategy = PGPA_SCAN_ORDINARY;

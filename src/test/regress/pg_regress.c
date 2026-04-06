@@ -905,6 +905,13 @@ initialize_environment(void)
 		 */
 		unsetenv("PGDATABASE");
 
+		/* Disabling difffile output via an environment variable */
+		if (getenv("PG_REGRESS_DISABLE_DIFFS_OUTPUT") != NULL)
+		{
+			unlink(diff);
+			return true;
+		}
+
 		/*
 		 * Report what we're connecting to
 		 */

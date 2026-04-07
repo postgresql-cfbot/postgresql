@@ -215,5 +215,64 @@ RESET enable_seqscan;
 DROP TABLE slope_nulls_results;
 DROP TABLE slope_nulls_tmp;
 
+--
+-- Test pathkey chains: f(x), x (descending chain)
+-- The order of f(x) is implied by the order of x when f is monotonic.
+-- A single index on ts should satisfy ORDER BY ts::date, ts.
+--
+
+-- descending chain: ts::date, ts — both from index on ts
+explain (costs off, verbose)
+select * from slope_src order by ts::date, ts limit 10;
+
+-- descending chain: date_trunc('day', ts), ts
+explain (costs off, verbose)
+select * from slope_src order by date_trunc('day', ts), ts limit 10;
+
+-- descending chain with siblings: date_trunc('month', ts), ts::date, ts
+explain (costs off, verbose)
+select * from slope_src order by date_trunc('month', ts), ts::date, ts limit 10;
+
+--
+-- Test pathkey chains: x, f(x) (ascending chain)
+-- f(x) is constant when x is constant, so f(x) is a redundant tiebreaker.
+-- A single index on ts should satisfy ORDER BY ts, ts::date.
+--
+
+-- ascending chain: ts, ts::date — f(x) redundant after x
+explain (costs off, verbose)
+select * from slope_src order by ts, ts::date limit 10;
+
+-- ascending chain: ts, date_trunc('day', ts)
+explain (costs off, verbose)
+select * from slope_src order by ts, date_trunc('day', ts) limit 10;
+
+-- ascending chain with non-monotonic but immutable function:
+-- abs() is immutable but NOT monotonic; still valid as tiebreaker.
+explain (costs off, verbose)
+select v_float8, abs(v_float8)
+from slope_src order by v_float8, abs(v_float8) limit 10;
+
+--
+-- Test DISTINCT with monotonic functions
+--
+
+-- DISTINCT on ts::date should use index on ts
+explain (costs off, verbose)
+select distinct ts::date from slope_src;
+
+-- DISTINCT on floor(v_float8)
+explain (costs off, verbose)
+select distinct floor(v_float8) from slope_src;
+
+--
+-- Test window functions with PARTITION BY monotonic function
+--
+
+-- Window with PARTITION BY ts::date ORDER BY ts
+explain (costs off, verbose)
+select ts::date, ts, row_number() over (partition by ts::date order by ts)
+from slope_src;
+
 -- Cleanup
 RESET enable_hashagg;

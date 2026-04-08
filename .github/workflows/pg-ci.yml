@@ -407,6 +407,13 @@ jobs:
 
           meson test ${{env.MTEST_ARGS}} --num-processes ${{env.TEST_JOBS}} --no-suite setup ${{env.MTEST_TARGET}}
 
+      # Clear test folder so only failed tests are left
+      - &clear_test_folder_step
+        name: Clear test folder
+        if: failure() && !cancelled()
+        run: |
+          meson compile clear_testrun_folder -C build
+
       - &linux_collect_cores_step
         name: Core backtraces
         if: failure() && !cancelled()
@@ -615,6 +622,10 @@ jobs:
 
           build/tmp_install/usr/local/pgsql/bin/pg_ctl -D build/runningcheck stop
 
+          # Clear test folder so only failed tests are left
+          meson compile clear_testrun_folder -C build
+
+      - *clear_test_folder_step
       - *linux_collect_cores_step
       - *upload_logs_step
 
@@ -670,6 +681,7 @@ jobs:
         shell: *su_postgres_shell
         run: *meson_test_world_cmd
 
+      - *clear_test_folder_step
       - *linux_collect_cores_step
       - *upload_logs_step
 
@@ -823,6 +835,8 @@ jobs:
           # default is 256, pretty low
           ADDITIONAL_SETUP: ulimit -n 1024
         run: *meson_test_world_cmd
+
+      - *clear_test_folder_step
 
       - name: Core backtraces
         if: failure() && !cancelled()
@@ -1019,6 +1033,8 @@ jobs:
             call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvarsall.bat" x64
         run: *meson_test_world_cmd
 
+      - *clear_test_folder_step
+
       # TODO: We need to collect crashlogs but for them to be generated, we'd
       # have to configure the JIT Debugger to do so. cdb.exe is installed on
       # the runner so that is possible.
@@ -1137,6 +1153,8 @@ jobs:
 
       - name: Test world
         run: *meson_test_world_cmd
+
+      - *clear_test_folder_step
 
       # TODO: We want to include crashlogs, but they are not yet
       # collected. cdb.exe is installed on the runner, so we can configure it

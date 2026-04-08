@@ -149,6 +149,8 @@ typedef struct BtreeCheckState
 	bloom_filter *heapfilter;
 	/* Debug counter for index tuples verified */
 	int64		indextuplesverified;
+	/* Short heap segments verification */
+	BlockNumber heapnblocks;
 } BtreeCheckState;
 
 /*
@@ -443,6 +445,7 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 	state->rel = rel;
 	state->heaprel = heaprel;
 	state->heapkeyspace = heapkeyspace;
+	state->heapnblocks = RelationGetNumberOfBlocks(state->heaprel);
 	state->readonly = readonly;
 	state->heapallindexed = heapallindexed;
 	state->indexallkeysmatch = indexallkeysmatch;
@@ -1607,6 +1610,57 @@ bt_target_page_check(BtreeCheckState *state)
 				/* Be tidy */
 				if (norm != itup)
 					pfree(norm);
+			}
+		}
+
+		/* Check if leaf page tuples point to valid heap tuples */
+		if(P_ISLEAF(topaque) && !ItemIdIsDead(itemid))
+		{
+			int nposting = 1;
+
+			if(BTreeTupleIsPosting(itup))
+				nposting = BTreeTupleGetNPosting(itup);
+
+			for (int i = 0; i < nposting; i++)
+			{
+				ItemPointer htid;
+				BlockNumber heapblk;
+				OffsetNumber heapoff;
+
+				if (nposting > 1)
+					htid = BTreeTupleGetPostingN(itup, i);
+				else
+					htid = BTreeTupleGetPointsToTID(itup);
+
+				heapblk = ItemPointerGetBlockNumber(htid);
+				heapoff = ItemPointerGetOffsetNumber(htid);
+
+				/*
+				* Does heapblk goes beyond RelationGetNumberOfBlocks() - potentially
+				* indicating missing relation segment?
+				*/
+				if (heapblk >= state->heapnblocks)
+				{
+					/* We may need to recheck our cached value as we operate with ASL */
+					state->heapnblocks = RelationGetNumberOfBlocks(state->heaprel);
+					if (heapblk >= state->heapnblocks)
+					{
+						char *postingoff = "";
+						if(nposting > 1)
+							postingoff = psprintf("posting list offset=%d", i);
+
+						ereport(ERROR,
+							(errcode(ERRCODE_INDEX_CORRUPTED),
+							 errmsg("index line pointer in index \"%s\" points to missing page in table \"%s\"",
+								RelationGetRelationName(state->rel),
+								RelationGetRelationName(state->heaprel)),
+							 errdetail_internal("Index tid=(%u,%u) %s points to heap tid=(%u,%u) but heap has only %u blocks.",
+								state->targetblock, offset, postingoff,
+								heapblk, heapoff,
+								state->heapnblocks)),
+							 errhint("this can be caused by lost relation segment (missing or removed file)."));
+					}
+				}
 			}
 		}
 
@@ -2954,6 +3008,7 @@ bt_heap_fingerprint_callback(Relation index, ItemPointer tid, Datum *values,
 }
 
 /*
+ * Launched only with indexallkeysmatch:
  * Verify that the index tuple points to a heap tuple with the same key.
  * When the Bloom filter lacks the (key, tid), perform a heap lookup to confirm.
  * Skip index tuples that point to dead heap tuples (not visible to snapshot).

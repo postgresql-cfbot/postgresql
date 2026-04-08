@@ -163,19 +163,21 @@ ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RENAME TO <r
     <listitem>
      <para>
       Name of an existing table.  If <literal>ONLY</literal> is specified before the
-      table name, only that table is affected.  If <literal>ONLY</literal> is not
-      specified, the table and all its descendant tables (if any) are
-      affected.  Optionally, <literal>*</literal> can be specified after the table
-      name to explicitly indicate that descendant tables are included.
+      <replaceable class="parameter">table_name</replaceable>, only that table
+      is affected.  If <literal>ONLY</literal> is not specified, the table and
+      all its descendant tables (if any) are affected.  Optionally,
+      <literal>*</literal> can be specified after the
+      <replaceable class="parameter">table_name</replaceable> to explicitly
+      indicate that descendant tables are included.
      </para>
 
      <para>
-      Optionally, a column list can be specified.  See <xref
-      linkend="sql-createpublication"/> for details. Note that a subscription
-      having several publications in which the same table has been published
-      with different column lists is not supported. See
-      <xref linkend="logical-replication-col-list-combining"/> for details of
-      potential problems when altering column lists.
+      Optionally, a <replaceable class="parameter">column_name</replaceable>
+      list can be specified.  See <xref linkend="sql-createpublication"/> for
+      details. Note that a subscription having several publications in which
+      the same table has been published with different column lists is not
+      supported. See <xref linkend="logical-replication-col-list-combining"/>
+      for details of potential problems when altering column lists.
      </para>
 
      <para>
@@ -185,6 +187,16 @@ ALTER PUBLICATION <replaceable class="parameter">name</replaceable> RENAME TO <r
       are required around the expression. The
       <replaceable class="parameter">expression</replaceable> is evaluated with
       the role used for the replication connection.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><replaceable class="parameter">column_name</replaceable></term>
+    <listitem>
+     <para>
+      Name of an existing column of table
+      <replaceable class="parameter">table_name</replaceable>
      </para>
     </listitem>
    </varlistentry>

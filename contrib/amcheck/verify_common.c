@@ -189,3 +189,28 @@ index_checkable(Relation rel, Oid am_id)
 
 	return amcheck_index_mainfork_expected(rel);
 }
+
+/*
+ * GetTransactionSnapshot() always acquires a new MVCC snapshot in
+ * READ COMMITTED mode.  A new snapshot is guaranteed to have all
+ * the entries it requires in the index.
+ *
+ * We must defend against the possibility that an old xact
+ * snapshot was returned at higher isolation levels when that
+ * snapshot is not safe for index scans of the target index.  This
+ * is possible when the snapshot sees tuples that are before the
+ * index's indcheckxmin horizon.  Throwing an error here should be
+ * very rare.  It doesn't seem worth using a secondary snapshot to
+ * avoid this.
+ */
+void
+check_indcheckxmin(Relation idxrel, Snapshot snapshot)
+{
+	if (IsolationUsesXactSnapshot() && idxrel->rd_index->indcheckxmin &&
+		!TransactionIdPrecedes(HeapTupleHeaderGetXmin(idxrel->rd_indextuple->t_data),
+							   snapshot->xmin))
+		ereport(ERROR,
+				(errcode(ERRCODE_T_R_SERIALIZATION_FAILURE),
+				 errmsg("index \"%s\" cannot be verified using transaction snapshot",
+						RelationGetRelationName(idxrel))));
+}

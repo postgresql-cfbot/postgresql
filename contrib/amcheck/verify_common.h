@@ -14,6 +14,7 @@
 #include "storage/lmgr.h"
 #include "storage/lockdefs.h"
 #include "utils/relcache.h"
+#include "utils/snapshot.h"
 #include "miscadmin.h"
 
 /* Typedef for callback function for amcheck_lock_relation_and_check */
@@ -26,3 +27,5 @@ extern void amcheck_lock_relation_and_check(Oid indrelid,
 											Oid am_id,
 											IndexDoCheckCallback check,
 											LOCKMODE lockmode, void *state);
+
+extern void check_indcheckxmin(Relation idxrel, Snapshot snapshot);

@@ -1,0 +1,5 @@
+# Makefile.dfor
+
+OBJS_DFOR := \
+	bitpack_u16.o \
+	vect_u16.o

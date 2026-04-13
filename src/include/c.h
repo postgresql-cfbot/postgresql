@@ -505,6 +505,10 @@ extern "C++"
 #define CppAsString(identifier) #identifier
 #define CppAsString2(x)			CppAsString(x)
 #define CppConcat(x, y)			x##y
+#define CppConcat2(x, y)		CppConcat(x, y)
+
+#define CppConcatTriple(x, y, z)	x##y##z
+#define CppConcatTriple2(a, b, c)	CppConcatTriple(a, b, c)
 
 /*
  * VA_ARGS_NARGS

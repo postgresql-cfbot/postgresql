@@ -158,6 +158,15 @@ do
 
 	test "$f" = src/interfaces/libpq/oauth-debug.h && continue
 
+	# These files are templates and cannot be included standalone
+	test "$f" = src/include/lib/bitpack_templ.h && continue
+	test "$f" = src/include/lib/bitpack_templ_staple.h && continue
+	test "$f" = src/include/lib/bitpack_templ_undef.h && continue
+
+	test "$f" = src/include/lib/vect_templ.h && continue
+	test "$f" = src/include/lib/vect_templ_staple.h && continue
+	test "$f" = src/include/lib/vect_templ_undef.h && continue
+
 	# We can't make these Bison output files compilable standalone
 	# without using "%code require", which old Bison versions lack.
 	# parser/gram.h will be included by parser/gramparse.h anyway.

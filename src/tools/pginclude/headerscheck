@@ -163,6 +163,10 @@ do
 	test "$f" = src/include/lib/bitpack_templ_staple.h && continue
 	test "$f" = src/include/lib/bitpack_templ_undef.h && continue
 
+	test "$f" = src/include/lib/dfor_templ.h && continue
+	test "$f" = src/include/lib/dfor_templ_staple.h && continue
+	test "$f" = src/include/lib/dfor_templ_undef.h && continue
+
 	test "$f" = src/include/lib/vect_templ.h && continue
 	test "$f" = src/include/lib/vect_templ_staple.h && continue
 	test "$f" = src/include/lib/vect_templ_undef.h && continue

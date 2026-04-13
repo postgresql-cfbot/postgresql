@@ -2,4 +2,5 @@
 
 OBJS_DFOR := \
 	bitpack_u16.o \
+	dfor_u16.o \
 	vect_u16.o

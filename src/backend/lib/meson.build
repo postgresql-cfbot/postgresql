@@ -2,6 +2,7 @@
 
 dfor_sources = files(
   'bitpack_u16.c',
+  'dfor_u16.c',
   'vect_u16.c'
 )
 

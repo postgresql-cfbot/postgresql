@@ -8,6 +8,7 @@ subdir('postmaster')
 subdir('recovery')
 subdir('subscription')
 subdir('modules')
+subdir('dfor')
 
 if ssl.found()
   subdir('ssl')

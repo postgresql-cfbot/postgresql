@@ -1,0 +1,3 @@
+test_bitpack_u16
+test_uniqsortvect_u16
+test_vect_u16

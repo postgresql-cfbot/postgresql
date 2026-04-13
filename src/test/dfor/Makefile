@@ -33,7 +33,8 @@ LIBTAP_OBJS = $(top_builddir)/src/test/libtap/tap.o
 
 TESTS= test_vect_u16 \
        test_uniqsortvect_u16 \
-       test_bitpack_u16
+       test_bitpack_u16 \
+       test_dfor_u16
 
 $(TESTS:%=%.o): CPPFLAGS += -I$(top_builddir)/src/test -DFRONTEND
 

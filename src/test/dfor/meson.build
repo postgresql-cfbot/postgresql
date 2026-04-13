@@ -8,6 +8,7 @@ dfor_dir = join_paths(meson.project_source_root(), 'src/backend/lib')
 dfor_sources = files(
   join_paths(dfor_dir, 'vect_u16.c'),
   join_paths(dfor_dir, 'bitpack_u16.c'),
+  join_paths(dfor_dir, 'dfor_u16.c'),
 )
 
 dfor_test_lib = static_library(
@@ -36,6 +37,7 @@ test_names = [
   'test_vect_u16',
   'test_uniqsortvect_u16',
   'test_bitpack_u16',
+  'test_dfor_u16',
 ]
 
 foreach t : test_names

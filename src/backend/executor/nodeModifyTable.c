@@ -1438,6 +1438,14 @@ ExecForPortionOfLeftovers(ModifyTableContext *context,
 	leftoverSlot = fpoState->fp_Leftover;
 
 	/*
+	 * We only ever insert leftovers into a real table: foreign tables are
+	 * rejected by CheckValidResultRel, and views with INSTEAD OF triggers are
+	 * skipped by our callers (we'd have no base-table tuple to fetch here
+	 * anyway).
+	 */
+	Assert(resultRelInfo->ri_RelationDesc->rd_rel->relkind == RELKIND_RELATION);
+
+	/*
 	 * Get the old pre-UPDATE/DELETE tuple. We will use its range to compute
 	 * untouched parts of history, and if necessary we will insert copies with
 	 * truncated start/end times.
@@ -1814,7 +1822,15 @@ ExecDeleteEpilogue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 
 	/* Compute temporal leftovers in FOR PORTION OF */
 	if (((ModifyTable *) context->mtstate->ps.plan)->forPortionOf)
-		ExecForPortionOfLeftovers(context, estate, resultRelInfo, tupleid);
+	{
+		/*
+		 * Skip leftovers if there were INSTEAD OF triggers.
+		 * We would have no way of accessing the old row.
+		 */
+		if (!resultRelInfo->ri_TrigDesc ||
+			!resultRelInfo->ri_TrigDesc->trig_delete_instead_row)
+				ExecForPortionOfLeftovers(context, estate, resultRelInfo, tupleid);
+	}
 
 	/* AFTER ROW DELETE Triggers */
 	ExecARDeleteTriggers(estate, resultRelInfo, tupleid, oldtuple,
@@ -2619,7 +2635,15 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 
 	/* Compute temporal leftovers in FOR PORTION OF */
 	if (((ModifyTable *) context->mtstate->ps.plan)->forPortionOf)
-		ExecForPortionOfLeftovers(context, context->estate, resultRelInfo, tupleid);
+	{
+		/*
+		 * Skip leftovers if there were INSTEAD OF triggers.
+		 * We would have no way of accessing the old row.
+		 */
+		if (!resultRelInfo->ri_TrigDesc ||
+			!resultRelInfo->ri_TrigDesc->trig_update_instead_row)
+			ExecForPortionOfLeftovers(context, context->estate, resultRelInfo, tupleid);
+	}
 
 	/* AFTER ROW UPDATE Triggers */
 	ExecARUpdateTriggers(context->estate, resultRelInfo,

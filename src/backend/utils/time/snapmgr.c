@@ -1307,24 +1307,28 @@ parseIntFromText(const char *prefix, char **s, const char *filename)
 {
 	char	   *ptr = *s;
 	int			prefixlen = strlen(prefix);
-	int			val;
+	long		val;
+	char	   *endptr;
 
 	if (strncmp(ptr, prefix, prefixlen) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	ptr += prefixlen;
-	if (sscanf(ptr, "%d", &val) != 1)
+	errno = 0;
+	val = strtol(ptr, &endptr, 10);
+	if (endptr == ptr || errno != 0 ||
+		val < INT_MIN || val > INT_MAX)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
-	ptr = strchr(ptr, '\n');
+	ptr = strchr(endptr, '\n');
 	if (!ptr)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	*s = ptr + 1;
-	return val;
+	return (int) val;
 }
 
 static TransactionId
@@ -1332,24 +1336,27 @@ parseXidFromText(const char *prefix, char **s, const char *filename)
 {
 	char	   *ptr = *s;
 	int			prefixlen = strlen(prefix);
-	TransactionId val;
+	unsigned long xid;
+	char	   *endptr;
 
 	if (strncmp(ptr, prefix, prefixlen) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	ptr += prefixlen;
-	if (sscanf(ptr, "%u", &val) != 1)
+	errno = 0;
+	xid = strtoul(ptr, &endptr, 10);
+	if (endptr == ptr || errno != 0 || xid > UINT_MAX)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
-	ptr = strchr(ptr, '\n');
+	ptr = strchr(endptr, '\n');
 	if (!ptr)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	*s = ptr + 1;
-	return val;
+	return (TransactionId) xid;
 }
 
 static void
@@ -1358,17 +1365,37 @@ parseVxidFromText(const char *prefix, char **s, const char *filename,
 {
 	char	   *ptr = *s;
 	int			prefixlen = strlen(prefix);
+	long		procno;
+	unsigned long xid;
+	char	   *endptr;
 
 	if (strncmp(ptr, prefix, prefixlen) != 0)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
 	ptr += prefixlen;
-	if (sscanf(ptr, "%d/%u", &vxid->procNumber, &vxid->localTransactionId) != 2)
+
+	/* Parse procNumber (the signed integer before '/') */
+	errno = 0;
+	procno = strtol(ptr, &endptr, 10);
+	if (endptr == ptr || errno != 0 ||
+		procno < INT_MIN || procno > INT_MAX ||
+		*endptr != '/')
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
 				 errmsg("invalid snapshot data in file \"%s\"", filename)));
-	ptr = strchr(ptr, '\n');
+	vxid->procNumber = (ProcNumber) procno;
+	ptr = endptr + 1;			/* skip the '/' separator */
+
+	/* Parse localTransactionId (the unsigned integer after '/') */
+	errno = 0;
+	xid = strtoul(ptr, &endptr, 10);
+	if (endptr == ptr || errno != 0 || xid > UINT_MAX)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),
+				 errmsg("invalid snapshot data in file \"%s\"", filename)));
+	vxid->localTransactionId = (LocalTransactionId) xid;
+	ptr = strchr(endptr, '\n');
 	if (!ptr)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),

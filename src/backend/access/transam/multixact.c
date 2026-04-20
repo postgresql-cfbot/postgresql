@@ -277,16 +277,11 @@ MyOldestVisibleMXactIdSlot(void)
  * We use this cache to store known MultiXacts, so we don't need to go to
  * SLRU areas every time.
  *
- * The cache lasts for the duration of a single transaction, the rationale
- * for this being that most entries will contain our own TransactionId and
- * so they will be uninteresting by the time our next transaction starts.
- * (XXX not clear that this is correct --- other members of the MultiXact
- * could hang around longer than we did.  However, it's not clear what a
- * better policy for flushing old cache entries would be.)	FIXME actually
- * this is plain wrong now that multixact's may contain update Xids.
- *
- * We allocate the cache entries in a memory context that is deleted at
- * transaction end, so we don't need to do retail freeing of entries.
+ * The cache lasts for the duration of the backend session.  Since
+ * MultiXact member lists are immutable (write-once), cached data
+ * remains correct for any given MultiXactId.  Entries that have been
+ * truncated (MultiXactId older than oldestMultiXactId) are detected
+ * and evicted at lookup time.
  */
 typedef struct mXactCacheEnt
 {
@@ -1438,7 +1433,7 @@ mxactMemberComparator(const void *arg1, const void *arg2)
 static MultiXactId
 mXactCacheGetBySet(int nmembers, MultiXactMember *members)
 {
-	dlist_iter	iter;
+	dlist_mutable_iter iter;
 
 	debug_elog3(DEBUG2, "CacheGet: looking for %s",
 				mxid_to_string(InvalidMultiXactId, nmembers, members));
@@ -1446,10 +1441,21 @@ mXactCacheGetBySet(int nmembers, MultiXactMember *members)
 	/* sort the array so comparison is easy */
 	qsort(members, nmembers, sizeof(MultiXactMember), mxactMemberComparator);
 
-	dclist_foreach(iter, &MXactCache)
+	dclist_foreach_modify(iter, &MXactCache)
 	{
 		mXactCacheEnt *entry = dclist_container(mXactCacheEnt, node,
 												iter.cur);
+
+		/* Evict entries that have been truncated */
+		if (MultiXactIdPrecedes(entry->multi,
+								MultiXactState->oldestMultiXactId))
+		{
+			debug_elog3(DEBUG2, "CacheGet: %u evicted (truncated)",
+						entry->multi);
+			dclist_delete_from(&MXactCache, iter.cur);
+			pfree(entry);
+			continue;
+		}
 
 		if (entry->nmembers != nmembers)
 			continue;
@@ -1495,6 +1501,22 @@ mXactCacheGetById(MultiXactId multi, MultiXactMember **members)
 			MultiXactMember *ptr;
 			Size		size;
 
+			/*
+			 * Evict the entry if it has been truncated.  We read
+			 * oldestMultiXactId without lock; a stale value just means we
+			 * keep the entry slightly longer, which is harmless.
+			 */
+			if (MultiXactIdPrecedes(entry->multi,
+									MultiXactState->oldestMultiXactId))
+			{
+				debug_elog3(DEBUG2, "CacheGet: %u evicted (truncated)",
+							entry->multi);
+				dclist_delete_from(&MXactCache, &entry->node);
+				pfree(entry);
+				*members = NULL;
+				return -1;
+			}
+
 			size = sizeof(MultiXactMember) * entry->nmembers;
 			ptr = (MultiXactMember *) palloc(size);
 
@@ -1535,9 +1557,9 @@ mXactCachePut(MultiXactId multi, int nmembers, MultiXactMember *members)
 
 	if (MXactContext == NULL)
 	{
-		/* The cache only lives as long as the current transaction */
+		/* The cache lives for the duration of the backend session */
 		debug_elog2(DEBUG2, "CachePut: initializing memory context");
-		MXactContext = AllocSetContextCreate(TopTransactionContext,
+		MXactContext = AllocSetContextCreate(CacheMemoryContext,
 											 "MultiXact cache context",
 											 ALLOCSET_SMALL_SIZES);
 	}
@@ -1638,11 +1660,11 @@ AtEOXact_MultiXact(void)
 	*MyOldestVisibleMXactIdSlot() = InvalidMultiXactId;
 
 	/*
-	 * Discard the local MultiXactId cache.  Since MXactContext was created as
-	 * a child of TopTransactionContext, we needn't delete it explicitly.
+	 * We no longer discard the local MultiXactId cache at transaction end.
+	 * MultiXact member lists are immutable, so cached data remains valid
+	 * across transactions.  Stale entries (older than oldestMultiXactId) are
+	 * detected and evicted at lookup time.
 	 */
-	MXactContext = NULL;
-	dclist_init(&MXactCache);
 }
 
 /*
@@ -1705,9 +1727,14 @@ PostPrepare_MultiXact(FullTransactionId fxid)
 	*MyOldestVisibleMXactIdSlot() = InvalidMultiXactId;
 
 	/*
-	 * Discard the local MultiXactId cache like in AtEOXact_MultiXact.
+	 * Discard the local MultiXactId cache.  Since MXactContext is under
+	 * CacheMemoryContext, we must delete it explicitly.
 	 */
-	MXactContext = NULL;
+	if (MXactContext != NULL)
+	{
+		MemoryContextDelete(MXactContext);
+		MXactContext = NULL;
+	}
 	dclist_init(&MXactCache);
 }
 

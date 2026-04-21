@@ -481,7 +481,6 @@ typedef struct ForPortionOfState
 								 * PORTION OF expression */
 	int			fp_rangeAttno;	/* the attno of the range column */
 	Datum		fp_targetRange; /* the range/multirange from FOR PORTION OF */
-	TypeCacheEntry *fp_leftoverstypcache;	/* type cache entry of the range */
 	TupleTableSlot *fp_Existing;	/* slot to store old tuple */
 	TupleTableSlot *fp_Leftover;	/* slot to store leftover */
 } ForPortionOfState;

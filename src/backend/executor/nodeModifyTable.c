@@ -1413,7 +1413,6 @@ ExecForPortionOfLeftovers(ModifyTableContext *context,
 	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
 	ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
 	Datum		oldRange;
-	TypeCacheEntry *typcache;
 	ForPortionOfState *fpoState;
 	TupleTableSlot *oldtupleSlot;
 	TupleTableSlot *leftoverSlot;
@@ -1459,18 +1458,6 @@ ExecForPortionOfLeftovers(ModifyTableContext *context,
 	if (oldtupleSlot->tts_isnull[fpoState->fp_rangeAttno - 1])
 		elog(ERROR, "found a NULL range in a temporal table");
 	oldRange = oldtupleSlot->tts_values[fpoState->fp_rangeAttno - 1];
-
-	/*
-	 * Get the range's type cache entry. This is worth caching for the whole
-	 * UPDATE/DELETE as range functions do.
-	 */
-
-	typcache = fpoState->fp_leftoverstypcache;
-	if (typcache == NULL)
-	{
-		typcache = lookup_type_cache(forPortionOf->rangeType, 0);
-		fpoState->fp_leftoverstypcache = typcache;
-	}
 
 	/*
 	 * Get the ranges to the left/right of the targeted range. We call a SETOF

@@ -1386,6 +1386,17 @@ AC_SEARCH_LIBS(backtrace_symbols, execinfo)
 
 AC_SEARCH_LIBS(pthread_barrier_wait, pthread)
 
+dnl
+dnl DNS SRV record support in libpq.
+dnl On Linux and some BSDs res_query() lives in libresolv; on macOS it is
+dnl available from the system library without any extra -l flag.
+dnl AC_SEARCH_LIBS handles both cases: it tries libc first, then libresolv.
+dnl
+AC_SEARCH_LIBS(res_query, resolv,
+  [AC_DEFINE([HAVE_RES_QUERY], 1,
+             [Define to 1 if you have the res_query() DNS resolver function.])])
+AC_CHECK_HEADERS([arpa/nameser.h resolv.h])
+
 if test "$with_readline" = yes; then
   PGAC_CHECK_READLINE
   if test x"$pgac_cv_check_readline" = x"no"; then

@@ -12615,6 +12615,62 @@ if test "$ac_res" != no; then :
 fi
 
 
+{ $as_echo "$as_me:${as_lineno-$LINENO}: checking for library containing res_query" >&5
+$as_echo_n "checking for library containing res_query... " >&6; }
+if ${ac_cv_search_res_query+:} false; then :
+  $as_echo_n "(cached) " >&6
+else
+  ac_func_search_save_LIBS=$LIBS
+cat confdefs.h - <<_ACEOF >conftest.$ac_ext
+/* end confdefs.h.  */
+
+#ifdef __cplusplus
+extern "C"
+#endif
+char res_query ();
+int
+main ()
+{
+return res_query ();
+  ;
+  return 0;
+}
+_ACEOF
+for ac_lib in '' resolv; do
+  if test -z "$ac_lib"; then
+    ac_res="none required"
+  else
+    ac_res=-l$ac_lib
+    LIBS="-l$ac_lib  $ac_func_search_save_LIBS"
+  fi
+  if ac_fn_c_try_link "$LINENO"; then :
+  ac_cv_search_res_query=$ac_res
+fi
+rm -f core conftest.err conftest.$ac_objext \
+    conftest$ac_exeext
+  if ${ac_cv_search_res_query+:} false; then :
+  break
+fi
+done
+if ${ac_cv_search_res_query+:} false; then :
+
+else
+  ac_cv_search_res_query=no
+fi
+rm conftest.$ac_ext
+LIBS=$ac_func_search_save_LIBS
+fi
+{ $as_echo "$as_me:${as_lineno-$LINENO}: result: $ac_cv_search_res_query" >&5
+$as_echo "$ac_cv_search_res_query" >&6; }
+ac_res=$ac_cv_search_res_query
+if test "$ac_res" != no; then :
+  test "$ac_res" = "none required" || LIBS="$ac_res $LIBS"
+
+$as_echo "#define HAVE_RES_QUERY 1" >>confdefs.h
+
+fi
+
+
 if test "$with_readline" = yes; then
 
 

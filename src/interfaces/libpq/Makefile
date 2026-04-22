@@ -34,6 +34,7 @@ OBJS = \
 	fe-auth-scram.o \
 	fe-cancel.o \
 	fe-connect.o \
+	fe-connect-srv.o \
 	fe-exec.o \
 	fe-lobj.o \
 	fe-misc.o \
@@ -88,11 +89,21 @@ endif
 SHLIB_LINK_INTERNAL = -lpgcommon_shlib -lpgport_shlib
 ifneq ($(PORTNAME), win32)
 SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi_krb5 -lgss -lgssapi -lssl -lsocket -lnsl -lresolv -lintl -ldl -lm, $(LIBS)) $(LDAP_LIBS_FE) $(PTHREAD_LIBS)
+# DNS SRV: link with libresolv if the library exists and -lresolv is not
+# already in SHLIB_LINK (e.g. because configure added it to LIBS).
+# On Linux/glibc res_query lives in libresolv; on macOS it is in
+# /usr/lib/libresolv.dylib.  The empty-source link test is portable.
+ifeq ($(filter -lresolv, $(SHLIB_LINK)),)
+HAVE_RESOLV_LIB := $(shell echo 'int main(void){return 0;}' | $(CC) -lresolv -o /dev/null -x c - 2>/dev/null && echo yes)
+ifeq ($(HAVE_RESOLV_LIB), yes)
+SHLIB_LINK += -lresolv
+endif
+endif
 else
 SHLIB_LINK += $(filter -lcrypt -ldes -lcom_err -lcrypto -lk5crypto -lkrb5 -lgssapi32 -lssl -lsocket -lnsl -lresolv -lintl -lm $(PTHREAD_LIBS), $(LIBS)) $(LDAP_LIBS_FE)
 endif
 ifeq ($(PORTNAME), win32)
-SHLIB_LINK += -lshell32 -lws2_32 -lsecur32 $(filter -lcomerr32 -lkrb5_32, $(LIBS))
+SHLIB_LINK += -lshell32 -lws2_32 -lsecur32 -ldnsapi $(filter -lcomerr32 -lkrb5_32, $(LIBS))
 endif
 SHLIB_PREREQS = submake-libpgport
 

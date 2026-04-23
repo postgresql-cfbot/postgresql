@@ -3063,16 +3063,84 @@ bt_verify_index_tuple_points_to_heap(BtreeCheckState *state, IndexTuple itup,
 											  SnapshotAny, slot);
 		if (!found)
 		{
+			BlockNumber blkno = ItemPointerGetBlockNumber(tid);
+			OffsetNumber offnum = ItemPointerGetOffsetNumber(tid);
+			Buffer      buffer;
+			Page        page;
+
 			ExecDropSingleTupleTableSlot(slot);
-			ereport(ERROR,
-					(errcode(ERRCODE_INDEX_CORRUPTED),
-					 errmsg("index tuple in index \"%s\" points to non-existent heap tuple in table \"%s\"",
+
+			/*
+			 * Technically duplicate error as the same check for EOF in bt_target_page_check()
+			 * and we could avoid this, but add this as another sanity check before reading
+			 * the buffer itself. Also AccessShareLock prevents truncate.
+			 */
+			if (blkno >= RelationGetNumberOfBlocks(state->heaprel)) {
+				ereport(ERROR, (errcode(ERRCODE_INDEX_CORRUPTED),
+					errmsg("index tuple in index \"%s\" points to heap tuple in table \"%s\" that is beyond EOF",
+					RelationGetRelationName(state->rel),
+					RelationGetRelationName(state->heaprel)),
+					errdetail_internal("Index tid=(%u,%u) points to heap tid=(%u,%u) that is beyond EOF of heap.",
+					targetblock, offset,
+					ItemPointerGetBlockNumber(tid),
+					ItemPointerGetOffsetNumber(tid))));
+			}
+			else
+			{
+				/*
+				* heap_fetch() might have returned false for
+				* - offsets past the end of the page
+				* - for any item whose line pointer is not LP_NORMAL (LP_DEAD, LP_UNUSED,
+				*   LP_REDIRECT).
+				*
+				* There's also SELECT performing it's opportunistic pruning that could
+				* produce LP_UNUSED, but only on HOT-chain intermediate tuples and those
+				* should not be referenced by btree index directly.
+				*
+				* To avoid false-positive corruption reports, pin and share-lock the
+				* heap buffer and inspect the line pointer directly.
+				*/
+
+				buffer = ReadBufferExtended(state->heaprel, MAIN_FORKNUM, blkno,
+								RBM_NORMAL, state->checkstrategy);
+				LockBuffer(buffer, BUFFER_LOCK_SHARE);
+				page = BufferGetPage(buffer);
+
+				if (offnum < FirstOffsetNumber || offnum > PageGetMaxOffsetNumber(page))
+				{
+					ereport(ERROR, (errcode(ERRCODE_INDEX_CORRUPTED),
+						errmsg("index tuple in index \"%s\" points to heap tuple in table \"%s\" with illegal offset",
+						RelationGetRelationName(state->rel),
+						RelationGetRelationName(state->heaprel)),
+						errdetail_internal("Index tid=(%u,%u) points to heap tid=(%u,%u) with illegal offset",
+						targetblock, offset,
+						ItemPointerGetBlockNumber(tid),
+						ItemPointerGetOffsetNumber(tid))));
+				}
+				else
+				{
+					/*
+					 * If we detect index tuple pointing to LP_UNUSED flag in the heap entry,
+					 * we can assume it's corruption (dangling index pointer). The other flags
+					 * such as LP_DEAD or LP_REDIRECT are fine and can be hit as we progress.
+					 */
+					ItemId lp = PageGetItemId(page, offnum);
+					if (lp->lp_flags == LP_UNUSED)
+					{
+						ereport(ERROR, (errcode(ERRCODE_INDEX_CORRUPTED),
+							errmsg("index tuple in index \"%s\" points to heap tuple marked unused in table \"%s\"",
 							RelationGetRelationName(state->rel),
 							RelationGetRelationName(state->heaprel)),
-					 errdetail_internal("Index tid=(%u,%u) points to heap tid=(%u,%u) that no longer exists.",
-									   targetblock, offset,
-									   ItemPointerGetBlockNumber(tid),
-									   ItemPointerGetOffsetNumber(tid))));
+							errdetail_internal("Index tid=(%u,%u) points to heap tid=(%u,%u) with LP_UNUSED flag.",
+							targetblock, offset,
+							ItemPointerGetBlockNumber(tid),
+							ItemPointerGetOffsetNumber(tid))));
+					}
+				}
+				UnlockReleaseBuffer(buffer);
+			}
+
+			return;
 		}
 
 		/* Skip dead tuples (not visible to our snapshot) */

@@ -3890,6 +3890,10 @@ apply_dispatch(StringInfo s)
 			apply_handle_stream_prepare(s);
 			break;
 
+		case LOGICAL_REP_MSG_INTERNAL_MESSAGE:
+			apply_handle_internal_message(s);
+			break;
+
 		default:
 			ereport(ERROR,
 					(errcode(ERRCODE_PROTOCOL_VIOLATION),

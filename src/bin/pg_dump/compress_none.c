@@ -14,6 +14,7 @@
 #include "postgres_fe.h"
 #include <unistd.h>
 
+#include "port.h"
 #include "compress_none.h"
 #include "pg_backup_utils.h"
 
@@ -210,13 +211,40 @@ close_none(CompressFileHandle *CFH)
 
 	if (fp)
 	{
-		errno = 0;
-		if (CFH->path_is_pipe_command)
+		if (CFH->is_pipe)
+		{
 			ret = pclose(fp);
+			if (ret != 0)
+			{
+				/*
+				 * For pipe commands, pclose() returns the exit status of the
+				 * child process. If the shell command itself fails (e.g.
+				 * "command not found"), pclose() will return a non-zero exit
+				 * status, but errno will likely remain 0 (Success). We use
+				 * wait_result_to_str to decode the status and pg_fatal to
+				 * prevent the caller from logging a generic and misleading
+				 * "could not close file: Success" message. We also include
+				 * the failing command string to help the user debug.
+				 */
+				char	   *reason = wait_result_to_str(ret);
+
+				pg_fatal("pipe command failed: \"%s\": %s",
+						 CFH->command ? CFH->command : "unknown",
+						 reason);
+			}
+		}
 		else
+		{
 			ret = fclose(fp);
-		if (ret != 0)
-			pg_log_error("could not close file: %m");
+			if (ret != 0)
+				pg_fatal("could not close file: %m");
+		}
+	}
+
+	if (CFH->command)
+	{
+		pg_free(CFH->command);
+		CFH->command = NULL;
 	}
 
 	return ret == 0;
@@ -226,6 +254,23 @@ static bool
 eof_none(CompressFileHandle *CFH)
 {
 	return feof((FILE *) CFH->private_data) != 0;
+}
+
+static FILE *
+open_handle_none(const char *path, const char *mode, bool is_pipe)
+{
+	if (is_pipe)
+	{
+		/*
+		 * If the path is a pipe, we use popen(). Note that we do not track
+		 * the child PID for cleanup during fatal errors. We intentionally
+		 * rely on standard POSIX semantics: if pg_dump crashes, the OS will
+		 * close our end of the pipe, sending EOF to the child process, which
+		 * will then cleanly exit on its own.
+		 */
+		return popen(path, mode);
+	}
+	return fopen(path, mode);
 }
 
 static bool
@@ -248,13 +293,13 @@ open_none(const char *path, int fd, const char *mode, CompressFileHandle *CFH)
 	}
 	else
 	{
-		if (CFH->path_is_pipe_command)
-			CFH->private_data = popen(path, mode);
-		else
-			CFH->private_data = fopen(path, mode);
+		CFH->private_data = open_handle_none(path, mode, CFH->is_pipe);
 
 		if (CFH->private_data == NULL)
 			return false;
+
+		if (CFH->is_pipe)
+			CFH->command = pg_strdup(path);
 	}
 
 	return true;
@@ -266,15 +311,15 @@ open_write_none(const char *path, const char *mode, CompressFileHandle *CFH)
 	Assert(CFH->private_data == NULL);
 
 	pg_log_debug("Opening %s, pipe is %s",
-				 path, CFH->path_is_pipe_command ? "true" : "false");
+				 path, CFH->is_pipe ? "true" : "false");
 
-	if (CFH->path_is_pipe_command)
-		CFH->private_data = popen(path, mode);
-	else
-		CFH->private_data = fopen(path, mode);
+	CFH->private_data = open_handle_none(path, mode, CFH->is_pipe);
 
 	if (CFH->private_data == NULL)
 		return false;
+
+	if (CFH->is_pipe)
+		CFH->command = pg_strdup(path);
 
 	return true;
 }
@@ -286,7 +331,7 @@ open_write_none(const char *path, const char *mode, CompressFileHandle *CFH)
 void
 InitCompressFileHandleNone(CompressFileHandle *CFH,
 						   const pg_compress_specification compression_spec,
-						   bool path_is_pipe_command)
+						   bool is_pipe)
 {
 	CFH->open_func = open_none;
 	CFH->open_write_func = open_write_none;
@@ -298,7 +343,8 @@ InitCompressFileHandleNone(CompressFileHandle *CFH,
 	CFH->eof_func = eof_none;
 	CFH->get_error_func = get_error_none;
 
-	CFH->path_is_pipe_command = path_is_pipe_command;
+	CFH->is_pipe = is_pipe;
 
+	CFH->command = NULL;
 	CFH->private_data = NULL;
 }

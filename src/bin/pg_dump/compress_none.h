@@ -20,6 +20,6 @@ extern void InitCompressorNone(CompressorState *cs,
 							   const pg_compress_specification compression_spec);
 extern void InitCompressFileHandleNone(CompressFileHandle *CFH,
 									   const pg_compress_specification compression_spec,
-									   bool path_is_pipe_command);
+									   bool is_pipe);
 
 #endif							/* _COMPRESS_NONE_H_ */

@@ -192,28 +192,27 @@ free_keep_errno(void *p)
  */
 CompressFileHandle *
 InitCompressFileHandle(const pg_compress_specification compression_spec,
-					   bool path_is_pipe_command)
+					   bool is_pipe)
 {
 	CompressFileHandle *CFH;
 
 	CFH = pg_malloc0_object(CompressFileHandle);
 
 	/*
-	 * Always set to non-compressed when path_is_pipe_command assuming that
-	 * external compressor as part of pipe is more efficient. Can review in
-	 * the future.
+	 * Always set to non-compressed when is_pipe assuming that external
+	 * compressor as part of pipe is more efficient. Can review in the future.
 	 */
-	if (path_is_pipe_command)
-		InitCompressFileHandleNone(CFH, compression_spec, path_is_pipe_command);
+	if (is_pipe)
+		InitCompressFileHandleNone(CFH, compression_spec, is_pipe);
 
 	else if (compression_spec.algorithm == PG_COMPRESSION_NONE)
-		InitCompressFileHandleNone(CFH, compression_spec, path_is_pipe_command);
+		InitCompressFileHandleNone(CFH, compression_spec, is_pipe);
 	else if (compression_spec.algorithm == PG_COMPRESSION_GZIP)
-		InitCompressFileHandleGzip(CFH, compression_spec, path_is_pipe_command);
+		InitCompressFileHandleGzip(CFH, compression_spec, is_pipe);
 	else if (compression_spec.algorithm == PG_COMPRESSION_LZ4)
-		InitCompressFileHandleLZ4(CFH, compression_spec, path_is_pipe_command);
+		InitCompressFileHandleLZ4(CFH, compression_spec, is_pipe);
 	else if (compression_spec.algorithm == PG_COMPRESSION_ZSTD)
-		InitCompressFileHandleZstd(CFH, compression_spec, path_is_pipe_command);
+		InitCompressFileHandleZstd(CFH, compression_spec, is_pipe);
 
 	return CFH;
 }
@@ -247,7 +246,7 @@ check_compressed_file(const char *path, char **fname, char *ext)
  */
 CompressFileHandle *
 InitDiscoverCompressFileHandle(const char *path, const char *mode,
-							   bool path_is_pipe_command)
+							   bool is_pipe)
 {
 	CompressFileHandle *CFH = NULL;
 	struct stat st;
@@ -263,7 +262,7 @@ InitDiscoverCompressFileHandle(const char *path, const char *mode,
 	/*
 	 * If the path is a pipe command, the compression algorithm is none.
 	 */
-	if (!path_is_pipe_command)
+	if (!is_pipe)
 	{
 		if (hasSuffix(fname, ".gz"))
 			compression_spec.algorithm = PG_COMPRESSION_GZIP;
@@ -284,7 +283,7 @@ InitDiscoverCompressFileHandle(const char *path, const char *mode,
 		}
 	}
 
-	CFH = InitCompressFileHandle(compression_spec, path_is_pipe_command);
+	CFH = InitCompressFileHandle(compression_spec, is_pipe);
 	errno = 0;
 	if (!CFH->open_func(fname, -1, mode, CFH))
 	{

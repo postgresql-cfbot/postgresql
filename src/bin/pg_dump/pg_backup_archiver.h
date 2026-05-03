@@ -301,7 +301,7 @@ struct _archiveHandle
 	int			loCount;		/* # of LOs restored */
 
 	char	   *fSpec;			/* Archive File Spec */
-	bool		fSpecIsPipe;	/* fSpec is a pipe command template requiring
+	bool		is_pipe;		/* fSpec is a pipe command template requiring
 								 * replacing %f with file name */
 	FILE	   *FH;				/* General purpose file handle */
 	void	   *OF;				/* Output file */

@@ -298,6 +298,15 @@ main(int argc, char *argv[])
 			case 'F':
 				format_name = pg_strdup(optarg);
 				break;
+
+				/*
+				 * Note: support for --pipe is currently skipped for
+				 * pg_dumpall due to the complexity of avoiding path
+				 * collisions between multiple databases and coordinating
+				 * nested directory structures. This could be considered as a
+				 * future enhancement.
+				 */
+
 			case 'g':
 				globals_only = true;
 				break;

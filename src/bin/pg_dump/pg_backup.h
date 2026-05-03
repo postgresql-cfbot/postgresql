@@ -316,7 +316,7 @@ extern void ProcessArchiveRestoreOptions(Archive *AHX);
 extern void RestoreArchive(Archive *AHX, bool append_data);
 
 /* Open an existing archive */
-extern Archive *OpenArchive(const char *FileSpec, const ArchiveFormat fmt, bool FileSpecIsPipe);
+extern Archive *OpenArchive(const char *FileSpec, const ArchiveFormat fmt, bool is_pipe);
 
 /* Create a new archive */
 extern Archive *CreateArchive(const char *FileSpec, const ArchiveFormat fmt,
@@ -324,7 +324,7 @@ extern Archive *CreateArchive(const char *FileSpec, const ArchiveFormat fmt,
 							  bool dosync, ArchiveMode mode,
 							  SetupWorkerPtrType setupDumpWorker,
 							  DataDirSyncMethod sync_method,
-							  bool FileSpecIsPipe);
+							  bool is_pipe);
 
 /* The --list option */
 extern void PrintTOCSummary(Archive *AHX);

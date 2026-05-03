@@ -189,7 +189,12 @@ struct CompressFileHandle
 	/*
 	 * Compression specification for this file handle.
 	 */
-	bool		path_is_pipe_command;
+	bool		is_pipe;
+
+	/*
+	 * The command path or template (only used if is_pipe is true).
+	 */
+	char	   *command;
 
 	/*
 	 * Private data to be used by the compressor.
@@ -201,7 +206,7 @@ struct CompressFileHandle
  * Initialize a compress file handle with the requested compression.
  */
 extern CompressFileHandle *InitCompressFileHandle(const pg_compress_specification compression_spec,
-												  bool path_is_pipe_command);
+												  bool is_pipe);
 
 /*
  * Initialize a compress file stream. Infer the compression algorithm
@@ -210,6 +215,6 @@ extern CompressFileHandle *InitCompressFileHandle(const pg_compress_specificatio
  */
 extern CompressFileHandle *InitDiscoverCompressFileHandle(const char *path,
 														  const char *mode,
-														  bool path_is_pipe_command);
+														  bool is_pipe);
 extern bool EndCompressFileHandle(CompressFileHandle *CFH);
 #endif

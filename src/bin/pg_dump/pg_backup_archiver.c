@@ -1744,7 +1744,19 @@ SetOutput(ArchiveHandle *AH, const char *filename,
 	else
 		mode = PG_BINARY_W;
 
-	CFH = InitCompressFileHandle(compression_spec, AH->fSpecIsPipe);
+	/*
+	 * The output handle (usually stdout) should never be a pipe command
+	 * managed by our popen logic, even if the archive itself is a pipe.  Our
+	 * pipe command implementation for directory mode is a template for the
+	 * data files, not for this primary output stream.
+	 *
+	 * Furthermore, marking this as a pipe command would cause it to be closed
+	 * with pclose() instead of fclose().  Since this handle is opened via
+	 * fdopen() (for stdout) or fopen() (for a regular file), using pclose()
+	 * on it is a bug that causes failures on BSD-based systems (like FreeBSD
+	 * or macOS).
+	 */
+	CFH = InitCompressFileHandle(compression_spec, false);
 
 	if (!CFH->open_func(filename, fn, mode, CFH))
 	{
@@ -2442,7 +2454,7 @@ _allocAH(const char *FileSpec, const ArchiveFormat fmt,
 	else
 		AH->fSpec = NULL;
 
-	AH->fSpecIsPipe = FileSpecIsPipe;
+	AH->is_pipe = FileSpecIsPipe;
 
 	AH->currUser = NULL;		/* unknown */
 	AH->currSchema = NULL;		/* ditto */
@@ -2463,7 +2475,19 @@ _allocAH(const char *FileSpec, const ArchiveFormat fmt,
 
 	/* Open stdout with no compression for AH output handle */
 	out_compress_spec.algorithm = PG_COMPRESSION_NONE;
-	CFH = InitCompressFileHandle(out_compress_spec, AH->fSpecIsPipe);
+
+	/*
+	 * The output handle (usually stdout) should never be a pipe command
+	 * managed by our popen logic, even if the archive itself is a pipe.  Our
+	 * pipe command implementation for directory mode is a template for the
+	 * data files, not for this primary output stream.
+	 *
+	 * Furthermore, marking this as a pipe command would cause it to be closed
+	 * with pclose() instead of fclose().  Since this handle is opened via
+	 * fdopen() (for stdout), using pclose() on it is a bug that causes
+	 * failures on BSD-based systems (like FreeBSD or macOS).
+	 */
+	CFH = InitCompressFileHandle(out_compress_spec, false);
 	if (!CFH->open_func(NULL, fileno(stdout), PG_BINARY_A, CFH))
 		pg_fatal("could not open stdout for appending: %m");
 	AH->OF = CFH;

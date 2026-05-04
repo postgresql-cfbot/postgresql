@@ -2912,8 +2912,77 @@ ALTER TABLE list_parted2 ALTER COLUMN b TYPE text;
 ALTER TABLE list_parted DROP COLUMN b;
 SELECT * FROM list_parted;
 
+CREATE TABLE list_parted4 (a int, b text) PARTITION BY LIST (a);
+CREATE TABLE list_parted4_1 PARTITION OF list_parted4 FOR VALUES IN (1);
+
+-- set column attribute on partitioned table without ONLY should get a notice
+ALTER TABLE list_parted4 ALTER COLUMN b SET (n_distinct = 0.2);
+ALTER TABLE list_parted4 ALTER COLUMN b RESET (n_distinct);
+ALTER TABLE ONLY list_parted4 ALTER COLUMN b SET (n_distinct = 0.2);
+ALTER TABLE ONLY list_parted4 ALTER COLUMN b RESET (n_distinct);
+
+-- enable/disable rules on partitioned tables without ONLY should get a notice
+CREATE RULE list_parted4_rule AS ON INSERT TO list_parted4 DO INSTEAD NOTHING;
+ALTER TABLE list_parted4 DISABLE RULE list_parted4_rule;
+ALTER TABLE ONLY list_parted4 DISABLE RULE list_parted4_rule;
+ALTER TABLE list_parted4 ENABLE RULE list_parted4_rule;
+ALTER TABLE ONLY list_parted4 ENABLE RULE list_parted4_rule;
+DROP RULE list_parted4_rule ON list_parted4;
+
+-- enable/disable row level security on partitioned tables without ONLY should get a notice
+ALTER TABLE list_parted4 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY list_parted4 ENABLE ROW LEVEL SECURITY;
+ALTER TABLE list_parted4 DISABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY list_parted4 DISABLE ROW LEVEL SECURITY;
+
+-- force/no force row level security on partitioned tables without ONLY should get a notice
+ALTER TABLE list_parted4 FORCE ROW LEVEL SECURITY;
+ALTER TABLE ONLY list_parted4 FORCE ROW LEVEL SECURITY;
+ALTER TABLE list_parted4 NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE ONLY list_parted4 NO FORCE ROW LEVEL SECURITY;
+
+-- set replica identity on partitioned tables without ONLY should get a notice
+ALTER TABLE list_parted4 REPLICA IDENTITY FULL;
+ALTER TABLE ONLY list_parted4 REPLICA IDENTITY FULL;
+ALTER TABLE list_parted4 REPLICA IDENTITY NOTHING;
+ALTER TABLE ONLY list_parted4 REPLICA IDENTITY NOTHING;
+
+-- set compression on partitioned tables without ONLY should get a notice
+ALTER TABLE list_parted4 ALTER COLUMN b SET COMPRESSION pglz;
+ALTER TABLE ONLY list_parted4 ALTER COLUMN b SET COMPRESSION pglz;
+
+-- set owner on partitioned tables without ONLY should get a notice
+ALTER TABLE list_parted4 OWNER TO regress_alter_table_user1;
+ALTER TABLE ONLY list_parted4 OWNER TO regress_alter_table_user1;
+
+-- set access method on partitioned tables without ONLY should get a notice
+ALTER TABLE list_parted4 SET ACCESS METHOD heap;
+ALTER TABLE ONLY list_parted4 SET ACCESS METHOD heap;
+
+-- set schema on partitioned tables without ONLY should get a notice
+CREATE SCHEMA alter_table_test_schema;
+ALTER TABLE list_parted4 SET SCHEMA alter_table_test_schema;
+ALTER TABLE ONLY alter_table_test_schema.list_parted4 SET SCHEMA public;
+DROP SCHEMA alter_table_test_schema CASCADE;
+
+-- when there are multiple sub-command, notice should not duplicated
+ALTER TABLE list_parted4
+  ALTER COLUMN b SET COMPRESSION pglz,
+  ALTER COLUMN b SET COMPRESSION pglz, -- duplicate, but should not get duplicate notice
+  FORCE ROW LEVEL SECURITY,
+  REPLICA IDENTITY FULL,
+  OWNER TO regress_alter_table_user1;
+
+-- when the sub-command fails, notice should not be printed
+ALTER TABLE list_parted4 SET ACCESS METHOD invalid_am;
+
+-- list_parted5 is a partitioned table that has no partition.
+CREATE TABLE list_parted5 (a int, b text) PARTITION BY LIST (a);
+-- as it has no partition, there should be no notice when altering it without ONLY
+ALTER TABLE list_parted5 FORCE ROW LEVEL SECURITY;
+
 -- cleanup
-DROP TABLE list_parted, list_parted2, range_parted, list_parted3;
+DROP TABLE list_parted, list_parted2, range_parted, list_parted3, list_parted4, list_parted5;
 DROP TABLE fail_def_part;
 DROP TABLE hash_parted;
 

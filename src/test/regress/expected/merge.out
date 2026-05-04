@@ -2298,8 +2298,8 @@ SELECT * FROM pa_target ORDER BY tid, val;
 ROLLBACK;
 -- test RLS enforcement
 BEGIN;
-ALTER TABLE pa_target ENABLE ROW LEVEL SECURITY;
-ALTER TABLE pa_target FORCE ROW LEVEL SECURITY;
+ALTER TABLE ONLY pa_target ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY pa_target FORCE ROW LEVEL SECURITY;
 CREATE POLICY pa_target_pol ON pa_target USING (tid != 0);
 MERGE INTO pa_target t
   USING pa_source s

@@ -258,7 +258,7 @@ ALTER TABLE ptnowner1 OWNER TO regress_ptnowner;
 SET SESSION AUTHORIZATION regress_ptnowner;
 CLUSTER ptnowner USING ptnowner_i_idx;
 RESET SESSION AUTHORIZATION;
-ALTER TABLE ptnowner OWNER TO regress_ptnowner;
+ALTER TABLE ONLY ptnowner OWNER TO regress_ptnowner;
 CREATE TEMP TABLE ptnowner_oldnodes AS
   SELECT oid, relname, relfilenode FROM pg_partition_tree('ptnowner') AS tree
   JOIN pg_class AS c ON c.oid=tree.relid;

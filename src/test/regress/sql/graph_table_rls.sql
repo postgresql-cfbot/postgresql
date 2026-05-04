@@ -185,7 +185,7 @@ INSERT INTO accessed VALUES
 -- Enable RLS and move policies p1 and p2 to parent table but leave p3 and p4 on
 -- child table. The policies on child table are not applied when querying parent
 -- table.
-ALTER TABLE document ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY document ENABLE ROW LEVEL SECURITY;
 DROP POLICY p1 ON document_people;
 DROP POLICY p2 ON document_people;
 CREATE POLICY p1 ON document AS PERMISSIVE
@@ -255,7 +255,7 @@ GRANT SELECT ON document TO public;
 ALTER TABLE document ATTACH PARTITION document_people FOR VALUES IN ('People');
 ALTER TABLE document ATTACH PARTITION document_places FOR VALUES IN ('Places');
 -- Enable RLS on partitioned table
-ALTER TABLE document ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY document ENABLE ROW LEVEL SECURITY;
 -- create policies on partitioned table
 CREATE POLICY p1 ON document AS PERMISSIVE
     USING (dlevel <= (SELECT seclv FROM users WHERE pguser = current_user));
@@ -352,7 +352,7 @@ EXECUTE graph_rls_query;
 SET SESSION AUTHORIZATION regress_graph_rls_alice;
 EXECUTE graph_rls_query;
 -- FORCE ROW LEVEL SECURITY applies RLS to owners too
-ALTER TABLE document FORCE ROW LEVEL SECURITY;
+ALTER TABLE ONLY document FORCE ROW LEVEL SECURITY;
 EXECUTE graph_rls_query;
 SET row_security TO OFF;
 EXECUTE graph_rls_query; -- error

@@ -6062,7 +6062,7 @@
   prosrc => 'pg_stat_get_io' },
 
 { oid => '6509', descr => 'statistics: per lock type statistics',
-  proname => 'pg_stat_get_lock', prorows => '10', proretset => 't',
+  proname => 'pg_stat_get_lock', prorows => '12', proretset => 't',
   provolatile => 'v', proparallel => 'r', prorettype => 'record',
   proargtypes => '', proallargtypes => '{text,int8,int8,int8,timestamptz}',
   proargmodes => '{o,o,o,o,o}',

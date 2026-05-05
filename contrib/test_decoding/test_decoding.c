@@ -554,6 +554,17 @@ tuple_to_stringinfo(StringInfo s, TupleDesc tupdesc, HeapTuple tuple, bool skip_
 		if (attr->attnum < 0)
 			continue;
 
+		/*
+		 * Don't print virtual generated columns. Their values are not stored
+		 * in the heap tuple, so heap_getattr() would always return a wrong
+		 * NULL. This matches pgoutput's policy of never publishing virtual
+		 * generated columns (see logicalrep_should_publish_column()). Stored
+		 * generated columns are emitted as usual since their values are
+		 * actually on disk.
+		 */
+		if (attr->attgenerated == ATTRIBUTE_GENERATED_VIRTUAL)
+			continue;
+
 		typid = attr->atttypid;
 
 		/* get Datum from tuple */

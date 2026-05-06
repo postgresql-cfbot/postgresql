@@ -50,6 +50,8 @@ typedef struct
 	bool		typisvarlena;	/* is it varlena (ie possibly toastable)? */
 	int16		format;			/* format code for this column */
 	FmgrInfo	finfo;			/* Precomputed call info for output fn */
+	/* XXX: Would probably be faster to allocate "inline" */
+	FunctionCallInfo outstate;	/* Prepared FCI for slightly faster calls */
 } PrinttupAttrInfo;
 
 typedef struct
@@ -291,6 +293,10 @@ printtup_prepare_info(DR_printtup *myState, TupleDesc typeinfo, int numAttrs)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("unsupported format code: %d", format)));
+
+		/* both out and send funcs have one argument */
+		thisState->outstate = palloc0(SizeForFunctionCallInfo(1));
+		thisState->outstate->flinfo = &thisState->finfo;
 	}
 }
 
@@ -353,12 +359,16 @@ printtup(TupleTableSlot *slot, DestReceiver *self)
 			VALGRIND_CHECK_MEM_IS_DEFINED(DatumGetPointer(attr),
 										  VARSIZE_ANY(DatumGetPointer(attr)));
 
+		/* fill in argument for output / send function */
+		thisState->outstate->args[0].value = attr;
+
 		if (thisState->format == 0)
 		{
 			/* Text output */
 			char	   *outputstr;
 
-			outputstr = OutputFunctionCall(&thisState->finfo, attr);
+			outputstr = DatumGetCString(FunctionCallInvoke(thisState->outstate));
+			Assert(!thisState->outstate->isnull);
 			pq_sendcountedtext(buf, outputstr, strlen(outputstr));
 		}
 		else
@@ -366,7 +376,8 @@ printtup(TupleTableSlot *slot, DestReceiver *self)
 			/* Binary output */
 			bytea	   *outputbytes;
 
-			outputbytes = SendFunctionCall(&thisState->finfo, attr);
+			outputbytes = DatumGetByteaP(FunctionCallInvoke(thisState->outstate));
+			Assert(!thisState->outstate->isnull);
 			pq_sendint32(buf, VARSIZE(outputbytes) - VARHDRSZ);
 			pq_sendbytes(buf, VARDATA(outputbytes),
 						 VARSIZE(outputbytes) - VARHDRSZ);

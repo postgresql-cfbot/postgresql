@@ -327,10 +327,54 @@ Datum
 int4out(PG_FUNCTION_ARGS)
 {
 	int32		arg1 = PG_GETARG_INT32(0);
-	char	   *result = (char *) palloc(12);	/* sign, 10 digits, '\0' */
+	int			maxlen = 12;	/* sign, 10 digits, '\0' */
 
-	pg_ltoa(arg1, result);
-	PG_RETURN_CSTRING(result);
+	if (fcinfo->context && IsA(fcinfo->context, InOutContext))
+	{
+		/*
+		 * Optimized path for output functions called as part of a larger
+		 * ouput.
+		 *
+		 * FIXME: A good chunk of this should obviously be in helper
+		 * functions.
+		 */
+		InOutContext *inout = castNode(InOutContext, fcinfo->context);
+		StringInfo	buf = inout->buf;
+		int			prev_buflen;
+		int			len;
+		uint32		len_net;
+
+		/* reserve space for length and the max string length */
+		enlargeStringInfo(buf, sizeof(uint32) + maxlen);
+
+		/* reserve space for length, to be filled out later */
+		prev_buflen = buf->len;
+		buf->len += sizeof(uint32);
+
+		/*
+		 * Construct string directly in buffer, we don't have to care about
+		 * encoding conversions, because we assume that every encoding
+		 * embodies ascii (XXX: Is that actually true with client encodings?).
+		 */
+		len = pg_ltoa(arg1, buf->data + buf->len);
+		buf->len += len;
+
+		/* update the previously reserved length */
+		len_net = pg_hton32(len);
+		memcpy(&buf->data[prev_buflen], &len_net, sizeof(uint32));
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		/*
+		 * Fallback path called in any other context.
+		 */
+		char	   *result = (char *) palloc(maxlen);
+
+		pg_ltoa(arg1, result);
+		PG_RETURN_CSTRING(result);
+	}
 }
 
 /*
@@ -351,11 +395,26 @@ Datum
 int4send(PG_FUNCTION_ARGS)
 {
 	int32		arg1 = PG_GETARG_INT32(0);
-	StringInfoData buf;
 
-	pq_begintypsend(&buf);
-	pq_sendint32(&buf, arg1);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (fcinfo->context && IsA(fcinfo->context, InOutContext))
+	{
+		InOutContext *inout = castNode(InOutContext, fcinfo->context);
+
+		/* length of data */
+		pq_sendint32(inout->buf, 4);
+		/* data itself */
+		pq_sendint32(inout->buf, arg1);
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendint32(&buf, arg1);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 

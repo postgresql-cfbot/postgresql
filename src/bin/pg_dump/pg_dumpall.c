@@ -1594,7 +1594,7 @@ dumpRoleGUCPrivs(PGconn *conn)
 									  .section = SECTION_PRE_DATA,
 									  .createStmt = buf->data));
 
-		free(fparname);
+		pg_free(fparname);
 		destroyPQExpBuffer(buf);
 	}
 
@@ -1799,7 +1799,7 @@ dumpTablespaces(PGconn *conn)
 										  .createStmt = seclabel_buf->data));
 		}
 
-		free(fspcname);
+		pg_free(fspcname);
 		destroyPQExpBuffer(buf);
 	}
 
@@ -1865,7 +1865,7 @@ dropDBs(PGconn *conn)
 										  .description = "DROP_GLOBAL",
 										  .section = SECTION_PRE_DATA,
 										  .createStmt = stmt));
-				pg_free(stmt);
+				pfree(stmt);
 			}
 		}
 	}

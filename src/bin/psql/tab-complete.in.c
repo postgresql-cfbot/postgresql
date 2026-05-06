@@ -2139,12 +2139,12 @@ psql_completion(const char *text, int start, int end)
 	}
 
 	/* free storage */
-	free(previous_words);
+	pg_free(previous_words);
 	free(words_buffer);
-	free(text_copy);
-	free(completion_ref_object);
+	pfree(text_copy);
+	pg_free(completion_ref_object);
 	completion_ref_object = NULL;
-	free(completion_ref_schema);
+	pg_free(completion_ref_schema);
 	completion_ref_schema = NULL;
 
 	/* Return our Grand List O' Matches */
@@ -6250,7 +6250,7 @@ _complete_from_query(const char *simple_query,
 		/* Clean up */
 		termPQExpBuffer(&query_buffer);
 		free(schemaname);
-		free(objectname);
+		pg_free(objectname);
 		free(e_object_like);
 		free(e_schemaname);
 		free(e_ref_object);
@@ -6550,7 +6550,7 @@ complete_from_variables(const char *text, const char *prefix, const char *suffix
 
 	for (i = 0; i < nvars; i++)
 		free(varnames[i]);
-	free(varnames);
+	pg_free(varnames);
 
 	return matches;
 }
@@ -6806,7 +6806,7 @@ make_like_pattern(const char *word)
 	*bptr = '\0';
 
 	result = escape_string(buffer);
-	free(buffer);
+	pg_free(buffer);
 	return result;
 }
 
@@ -7192,7 +7192,7 @@ get_previous_words(int point, char **buffer, int *nwords)
 
 	/* Release parsing input workspace, if we made one above */
 	if (buf != rl_line_buffer)
-		free(buf);
+		pg_free(buf);
 
 	*nwords = words_found;
 	return previous_words;
@@ -7319,7 +7319,7 @@ dequote_file_name(char *fname, int quote_char)
 		strcpy(workspace + 1, fname);
 		unquoted_fname = strtokx(workspace, "", NULL, "'", *completion_charp,
 								 false, true, pset.encoding);
-		free(workspace);
+		pg_free(workspace);
 	}
 	else
 		unquoted_fname = strtokx(fname, "", NULL, "'", *completion_charp,

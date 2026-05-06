@@ -590,6 +590,11 @@ ProcessCopyOptions(ParseState *pstate,
 	bool		log_verbosity_specified = false;
 	bool		reject_limit_specified = false;
 	bool		force_array_specified = false;
+	DefElem    *delim_el = NULL;
+	DefElem    *null_el = NULL;
+	DefElem    *default_el = NULL;
+	DefElem    *quote_el = NULL;
+	DefElem    *escape_el = NULL;
 	ListCell   *option;
 
 	/* Support external use for option sanity checking */
@@ -635,21 +640,21 @@ ProcessCopyOptions(ParseState *pstate,
 		}
 		else if (strcmp(defel->defname, "delimiter") == 0)
 		{
-			if (opts_out->delim)
+			if (delim_el)
 				errorConflictingDefElem(defel, pstate);
-			opts_out->delim = defGetString(defel);
+			delim_el = defel;
 		}
 		else if (strcmp(defel->defname, "null") == 0)
 		{
-			if (opts_out->null_print)
+			if (null_el)
 				errorConflictingDefElem(defel, pstate);
-			opts_out->null_print = defGetString(defel);
+			null_el = defel;
 		}
 		else if (strcmp(defel->defname, "default") == 0)
 		{
-			if (opts_out->default_print)
+			if (default_el)
 				errorConflictingDefElem(defel, pstate);
-			opts_out->default_print = defGetString(defel);
+			default_el = defel;
 		}
 		else if (strcmp(defel->defname, "header") == 0)
 		{
@@ -660,15 +665,15 @@ ProcessCopyOptions(ParseState *pstate,
 		}
 		else if (strcmp(defel->defname, "quote") == 0)
 		{
-			if (opts_out->quote)
+			if (quote_el)
 				errorConflictingDefElem(defel, pstate);
-			opts_out->quote = defGetString(defel);
+			quote_el = defel;
 		}
 		else if (strcmp(defel->defname, "escape") == 0)
 		{
-			if (opts_out->escape)
+			if (escape_el)
 				errorConflictingDefElem(defel, pstate);
-			opts_out->escape = defGetString(defel);
+			escape_el = defel;
 		}
 		else if (strcmp(defel->defname, "force_quote") == 0)
 		{
@@ -783,10 +788,9 @@ ProcessCopyOptions(ParseState *pstate,
 	}
 
 	/*
-	 * Check for incompatible options (must do these three before inserting
-	 * defaults)
+	 * Check for incompatible options before inserting defaults.
 	 */
-	if (opts_out->delim &&
+	if (delim_el &&
 		(opts_out->format == COPY_FORMAT_BINARY ||
 		 opts_out->format == COPY_FORMAT_JSON))
 		ereport(ERROR,
@@ -795,7 +799,7 @@ ProcessCopyOptions(ParseState *pstate,
 				? errmsg("cannot specify %s in BINARY mode", "DELIMITER")
 				: errmsg("cannot specify %s in JSON mode", "DELIMITER"));
 
-	if (opts_out->null_print &&
+	if (null_el &&
 		(opts_out->format == COPY_FORMAT_BINARY ||
 		 opts_out->format == COPY_FORMAT_JSON))
 		ereport(ERROR,
@@ -804,7 +808,7 @@ ProcessCopyOptions(ParseState *pstate,
 				? errmsg("cannot specify %s in BINARY mode", "NULL")
 				: errmsg("cannot specify %s in JSON mode", "NULL"));
 
-	if (opts_out->default_print &&
+	if (default_el &&
 		(opts_out->format == COPY_FORMAT_BINARY ||
 		 opts_out->format == COPY_FORMAT_JSON))
 		ereport(ERROR,
@@ -813,7 +817,39 @@ ProcessCopyOptions(ParseState *pstate,
 				? errmsg("cannot specify %s in BINARY mode", "DEFAULT")
 				: errmsg("cannot specify %s in JSON mode", "DEFAULT"));
 
-	/* Set defaults for omitted options */
+	if (opts_out->format != COPY_FORMAT_CSV && quote_el != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+		/*- translator: %s is the name of a COPY option, e.g. ON_ERROR */
+				 errmsg("COPY %s requires CSV mode", "QUOTE")));
+
+	if (opts_out->format != COPY_FORMAT_CSV && escape_el != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+		/*- translator: %s is the name of a COPY option, e.g. ON_ERROR */
+				 errmsg("COPY %s requires CSV mode", "ESCAPE")));
+
+	/*
+	 * Extract option values.
+	 */
+	if (delim_el != NULL)
+		opts_out->delim = defGetString(delim_el);
+
+	if (null_el != NULL)
+		opts_out->null_print = defGetString(null_el);
+
+	if (default_el != NULL)
+		opts_out->default_print = defGetString(default_el);
+
+	if (quote_el != NULL)
+		opts_out->quote = defGetString(quote_el);
+
+	if (escape_el != NULL)
+		opts_out->escape = defGetString(escape_el);
+
+	/*
+	 * Set defaults for omitted options.
+	 */
 	if (!opts_out->delim)
 		opts_out->delim = (opts_out->format == COPY_FORMAT_CSV) ? "," : "\t";
 
@@ -877,7 +913,7 @@ ProcessCopyOptions(ParseState *pstate,
 				 errmsg("COPY delimiter cannot be \"%s\"", opts_out->delim)));
 
 	/* Check header */
-	if (opts_out->header_line != COPY_HEADER_FALSE &&
+	if (header_specified &&
 		(opts_out->format == COPY_FORMAT_BINARY ||
 		 opts_out->format == COPY_FORMAT_JSON))
 		ereport(ERROR,
@@ -888,12 +924,6 @@ ProcessCopyOptions(ParseState *pstate,
 				: errmsg("cannot specify %s in JSON mode", "HEADER"));
 
 	/* Check quote */
-	if (opts_out->format != COPY_FORMAT_CSV && opts_out->quote != NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-		/*- translator: %s is the name of a COPY option, e.g. ON_ERROR */
-				 errmsg("COPY %s requires CSV mode", "QUOTE")));
-
 	if (opts_out->format == COPY_FORMAT_CSV && strlen(opts_out->quote) != 1)
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
@@ -981,7 +1011,7 @@ ProcessCopyOptions(ParseState *pstate,
 						"NULL")));
 
 	/* Check freeze */
-	if (opts_out->freeze && !is_from)
+	if (freeze_specified && !is_from)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 		/*- translator: first %s is the name of a COPY option, e.g. ON_ERROR,
@@ -995,12 +1025,12 @@ ProcessCopyOptions(ParseState *pstate,
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("COPY %s is not supported for %s", "FORMAT JSON", "COPY FROM"));
 
-	if (opts_out->format != COPY_FORMAT_JSON && opts_out->force_array)
+	if (opts_out->format != COPY_FORMAT_JSON && force_array_specified)
 		ereport(ERROR,
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("COPY %s can only be used with JSON mode", "FORCE_ARRAY"));
 
-	if (opts_out->default_print)
+	if (default_el != NULL)
 	{
 		if (!is_from)
 			ereport(ERROR,

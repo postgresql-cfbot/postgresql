@@ -94,13 +94,13 @@ copy (values (1), (2)) TO stdout with (format json);
 {"column1":2}
 copy (select 1 union all select 2) to stdout with (format json, force_array true);
 [
- {"?column?":1}
-,{"?column?":2}
+ {"?column?":1},
+ {"?column?":2}
 ]
 copy (values (1), (2)) TO stdout with (format json, force_array true);
 [
- {"column1":1}
-,{"column1":2}
+ {"column1":1},
+ {"column1":2}
 ]
 copy copytest to stdout json;
 {"style":"DOS","test":"abc\r\ndef","filler":1}
@@ -159,17 +159,17 @@ ERROR:  COPY FORCE_ARRAY can only be used with JSON mode
 -- force_array variants
 copy copytest to stdout (format json, force_array);
 [
- {"style":"DOS","test":"abc\r\ndef","filler":1}
-,{"style":"Unix","test":"abc\ndef","filler":2}
-,{"style":"Mac","test":"abc\rdef","filler":3}
-,{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
+ {"style":"DOS","test":"abc\r\ndef","filler":1},
+ {"style":"Unix","test":"abc\ndef","filler":2},
+ {"style":"Mac","test":"abc\rdef","filler":3},
+ {"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
 ]
 copy copytest(style, test) to stdout (format json, force_array true);
 [
- {"style":"DOS","test":"abc\r\ndef"}
-,{"style":"Unix","test":"abc\ndef"}
-,{"style":"Mac","test":"abc\rdef"}
-,{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb"}
+ {"style":"DOS","test":"abc\r\ndef"},
+ {"style":"Unix","test":"abc\ndef"},
+ {"style":"Mac","test":"abc\rdef"},
+ {"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb"}
 ]
 copy copytest to stdout (format json, force_array false);
 {"style":"DOS","test":"abc\r\ndef","filler":1}

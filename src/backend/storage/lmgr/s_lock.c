@@ -91,6 +91,7 @@ s_lock_stuck(const char *file, int line, const char *func)
 #endif
 }
 
+#ifdef USE_DEFAULT_S_LOCK
 /*
  * s_lock(lock) - platform-independent portion of waiting for a spinlock.
  */
@@ -110,6 +111,7 @@ s_lock(volatile slock_t *lock, const char *file, int line, const char *func)
 
 	return delayStatus.delays;
 }
+#endif
 
 #ifdef USE_DEFAULT_S_UNLOCK
 void

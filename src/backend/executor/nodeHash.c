@@ -105,9 +105,14 @@ ExecHash(PlanState *pstate)
 Node *
 MultiExecHash(HashState *node)
 {
+	WaitEventUsage *previous_wait_event_usage = NULL;
+
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
 		InstrStartNode(node->ps.instrument);
+	if (node->ps.wait_event_usage)
+		previous_wait_event_usage =
+			pgstat_enter_wait_event_usage(node->ps.wait_event_usage);
 
 	if (node->parallel_state != NULL)
 		MultiExecParallelHash(node);
@@ -115,6 +120,8 @@ MultiExecHash(HashState *node)
 		MultiExecPrivateHash(node);
 
 	/* must provide our own instrumentation support */
+	if (node->ps.wait_event_usage)
+		pgstat_restore_wait_event_usage(previous_wait_event_usage);
 	if (node->ps.instrument)
 		InstrStopNode(node->ps.instrument, node->hashtable->reportTuples);
 

@@ -71,6 +71,7 @@ select explain_filter('explain (buffers, format text) select * from int8_tbl i8'
 -- WAITS option
 select explain_filter('explain (analyze, waits, costs off, summary off, timing off, buffers off) select pg_sleep(0.01)');
 select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)') #> '{0,Wait Events,0}';
+select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)') #> '{0,Plan,Wait Events,0}';
 begin;
 create function pg_temp.parallel_pg_sleep(float8) returns void
   language internal volatile parallel safe as 'pg_sleep';
@@ -81,6 +82,34 @@ select jsonb_path_query_first(
                          select pg_temp.parallel_pg_sleep(0.01)
                          from tenk1 where unique1 = 1') #> '{0,Wait Events}',
   '$[*] ? (@."Wait Event" == "PgSleep")'
+);
+select jsonb_path_query_first(
+  explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json)
+                         select pg_temp.parallel_pg_sleep(0.01)
+                         from tenk1 where unique1 = 1') #> '{0,Plan}',
+  '$.**."Wait Events"[*] ? (@."Wait Event" == "PgSleep")'
+);
+rollback;
+begin;
+-- This test deliberately creates a Bitmap Index Scan runtime-key wait.
+-- The STABLE PL/pgSQL wrapper is test scaffolding: STABLE lets the
+-- expression be used as an index runtime key, while PL/pgSQL prevents SQL
+-- inlining from moving pg_sleep() out of the Bitmap Index Scan boundary.
+-- The planner GUCs below are likewise test-only scaffolding to make the
+-- node shape deterministic.
+create function pg_temp.explain_waits_sleep_int(int) returns int
+  language plpgsql stable as $$begin perform pg_sleep(0.01); return $1; end$$;
+create temp table explain_waits_bitmap (a int);
+insert into explain_waits_bitmap select g from generate_series(1, 10) g;
+create index explain_waits_bitmap_a_idx on explain_waits_bitmap(a);
+analyze explain_waits_bitmap;
+set local enable_seqscan = off;
+set local enable_indexscan = off;
+select jsonb_path_query_first(
+  explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json)
+                         select * from explain_waits_bitmap
+                         where a = pg_temp.explain_waits_sleep_int(1)') #> '{0,Plan}',
+  '$.** ? (@."Node Type" == "Bitmap Index Scan")."Wait Events"[*] ? (@."Wait Event" == "PgSleep")'
 );
 rollback;
 explain (waits) select 1;

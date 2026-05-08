@@ -28,6 +28,7 @@
 #include "executor/nodeIndexscan.h"
 #include "miscadmin.h"
 #include "nodes/tidbitmap.h"
+#include "utils/wait_event.h"
 
 
 /* ----------------------------------------------------------------
@@ -54,10 +55,14 @@ MultiExecBitmapIndexScan(BitmapIndexScanState *node)
 	IndexScanDesc scandesc;
 	double		nTuples = 0;
 	bool		doscan;
+	WaitEventUsage *previous_wait_event_usage = NULL;
 
 	/* must provide our own instrumentation support */
 	if (node->ss.ps.instrument)
 		InstrStartNode(node->ss.ps.instrument);
+	if (node->ss.ps.wait_event_usage)
+		previous_wait_event_usage =
+			pgstat_enter_wait_event_usage(node->ss.ps.wait_event_usage);
 
 	/*
 	 * extract necessary information from index scan node
@@ -116,6 +121,8 @@ MultiExecBitmapIndexScan(BitmapIndexScanState *node)
 	}
 
 	/* must provide our own instrumentation support */
+	if (node->ss.ps.wait_event_usage)
+		pgstat_restore_wait_event_usage(previous_wait_event_usage);
 	if (node->ss.ps.instrument)
 		InstrStopNode(node->ss.ps.instrument, nTuples);
 

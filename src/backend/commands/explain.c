@@ -530,6 +530,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		instrument_option |= INSTRUMENT_WAL;
 	if (es->io)
 		instrument_option |= INSTRUMENT_IO;
+	if (es->waits)
+		instrument_option |= INSTRUMENT_WAITS;
 
 	/*
 	 * We always collect timing for the entire statement, even when node-level
@@ -2332,6 +2334,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		show_buffer_usage(es, &planstate->instrument->instr.bufusage);
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->instr.walusage);
+	if (es->waits)
+		show_wait_event_usage(es, planstate->wait_event_usage);
 
 	/* Prepare per-worker buffer/WAL usage */
 	if (es->workers_state && (es->buffers || es->wal) && es->verbose)
@@ -4559,7 +4563,7 @@ show_wait_event_usage(ExplainState *es, const WaitEventUsage *usage)
 	if (usage == NULL)
 		return;
 
-	if (es->format == EXPLAIN_FORMAT_TEXT && usage->nentries == 0)
+	if (usage->nentries == 0)
 		return;
 
 	if (usage->nentries > 0)

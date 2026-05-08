@@ -21,6 +21,7 @@
 #include "nodes/execnodes.h"
 #include "portability/instr_time.h"
 #include "utils/guc_hooks.h"
+#include "utils/wait_event.h"
 
 BufferUsage pgBufferUsage;
 static BufferUsage save_pgBufferUsage;
@@ -181,11 +182,17 @@ TupleTableSlot *
 ExecProcNodeInstr(PlanState *node)
 {
 	TupleTableSlot *result;
+	WaitEventUsage *previous_wait_event_usage = NULL;
 
 	InstrStartNode(node->instrument);
+	if (node->wait_event_usage)
+		previous_wait_event_usage =
+			pgstat_enter_wait_event_usage(node->wait_event_usage);
 
 	result = node->ExecProcNodeReal(node);
 
+	if (node->wait_event_usage)
+		pgstat_restore_wait_event_usage(previous_wait_event_usage);
 	InstrStopNode(node->instrument, TupIsNull(result) ? 0.0 : 1.0);
 
 	return result;

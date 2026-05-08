@@ -27,6 +27,7 @@
 #include "storage/shmem.h"
 #include "storage/subsystems.h"
 #include "storage/spin.h"
+#include "utils/memutils.h"
 #include "utils/wait_event.h"
 
 
@@ -47,6 +48,7 @@ uint32	   *my_wait_event_info = &local_my_wait_event_info;
 
 int			pgstat_wait_event_usage_depth = 0;
 static WaitEventUsage *pgstat_wait_event_usage = NULL;
+static WaitEventUsage *pgstat_wait_event_node_usage = NULL;
 static uint32 pgstat_wait_event_usage_current = 0;
 static instr_time pgstat_wait_event_usage_start;
 
@@ -359,6 +361,28 @@ pgstat_reset_wait_event_storage(void)
 }
 
 /*
+ * Initialize a wait event usage accumulator.
+ */
+void
+pgstat_init_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
+{
+	Assert(usage != NULL);
+	Assert(memcontext != NULL);
+
+	memset(usage, 0, sizeof(WaitEventUsage));
+
+	/*
+	 * Wait events may end inside critical sections, for example while
+	 * performing synchronous I/O.  Keep usage entries in a dedicated context
+	 * where the memory manager permits that accounting path to grow.
+	 */
+	usage->memcontext = AllocSetContextCreate(memcontext,
+											  "Wait Event Usage",
+											  ALLOCSET_SMALL_SIZES);
+	MemoryContextAllowInCriticalSection(usage->memcontext, true);
+}
+
+/*
  * Start collecting exact wait event timings in this backend.
  *
  * This is intended for short-lived instrumentation such as EXPLAIN ANALYZE.
@@ -375,9 +399,9 @@ pgstat_begin_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
 
 	if (pgstat_wait_event_usage_depth++ == 0)
 	{
-		memset(usage, 0, sizeof(WaitEventUsage));
-		usage->memcontext = memcontext;
+		pgstat_init_wait_event_usage(usage, memcontext);
 		pgstat_wait_event_usage = usage;
+		pgstat_wait_event_node_usage = NULL;
 		pgstat_wait_event_usage_current = 0;
 		INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
 	}
@@ -398,9 +422,25 @@ pgstat_end_wait_event_usage(WaitEventUsage *usage)
 			pgstat_count_wait_event_end();
 
 		pgstat_wait_event_usage = NULL;
+		pgstat_wait_event_node_usage = NULL;
 		pgstat_wait_event_usage_current = 0;
 		INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
 	}
+}
+
+WaitEventUsage *
+pgstat_enter_wait_event_usage(WaitEventUsage *usage)
+{
+	WaitEventUsage *previous = pgstat_wait_event_node_usage;
+
+	pgstat_wait_event_node_usage = usage;
+	return previous;
+}
+
+void
+pgstat_restore_wait_event_usage(WaitEventUsage *usage)
+{
+	pgstat_wait_event_node_usage = usage;
 }
 
 /*
@@ -444,6 +484,11 @@ pgstat_count_wait_event_end(void)
 					  pgstat_wait_event_usage_current,
 					  1,
 					  &elapsed);
+	if (pgstat_wait_event_node_usage != NULL)
+		WaitEventUsageAdd(pgstat_wait_event_node_usage,
+						  pgstat_wait_event_usage_current,
+						  1,
+						  &elapsed);
 
 	pgstat_wait_event_usage_current = 0;
 	INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);

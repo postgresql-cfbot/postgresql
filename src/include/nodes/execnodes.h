@@ -1213,6 +1213,7 @@ typedef struct PlanState
 
 	NodeInstrumentation *instrument;	/* Optional runtime stats for this
 										 * node */
+	WaitEventUsage *wait_event_usage; /* Optional wait event usage */
 	WorkerNodeInstrumentation *worker_instrument;	/* per-worker
 													 * instrumentation */
 

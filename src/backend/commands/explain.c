@@ -594,6 +594,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 			waitEventUsagePtr = &waitEventUsage;
 			pgstat_begin_wait_event_usage(waitEventUsagePtr,
 										  queryDesc->estate->es_query_cxt);
+			queryDesc->estate->es_wait_event_usage = waitEventUsagePtr;
 		}
 
 		/* run the plan */
@@ -607,7 +608,10 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		PG_FINALLY();
 		{
 			if (waitEventUsagePtr)
+			{
 				pgstat_end_wait_event_usage(waitEventUsagePtr);
+				queryDesc->estate->es_wait_event_usage = NULL;
+			}
 		}
 		PG_END_TRY();
 

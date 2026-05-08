@@ -87,6 +87,8 @@ typedef struct SharedWaitEventUsageWorker
 {
 	int			nentries;
 	dsa_pointer entries;
+	uint64		overflowed_calls;
+	instr_time	overflowed_time;
 } SharedWaitEventUsageWorker;
 
 /*
@@ -173,6 +175,10 @@ static bool ExecParallelReInitializeDSM(PlanState *planstate,
 static bool ExecParallelRetrieveInstrumentation(PlanState *planstate,
 												ExecParallelRetrieveInstrumentationContext *r);
 static void ExecParallelRetrieveWaitEventUsage(ParallelExecutorInfo *pei);
+static void ExecParallelInitWaitEventUsageWorker(SharedWaitEventUsageWorker *worker);
+static void ExecParallelAccumulateWaitEventUsageWorker(WaitEventUsage *usage,
+													   SharedWaitEventUsageWorker *worker,
+													   dsa_area *area);
 static void ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
 												   dsa_area *area,
 												   const WaitEventUsage *usage);
@@ -904,10 +910,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 		wait_event_usage = shm_toc_allocate(pcxt->toc, wait_event_usage_len);
 		wait_event_usage->num_workers = nworkers;
 		for (int i = 0; i < nworkers; i++)
-		{
-			wait_event_usage->worker_usage[i].nentries = 0;
-			wait_event_usage->worker_usage[i].entries = InvalidDsaPointer;
-		}
+			ExecParallelInitWaitEventUsageWorker(&wait_event_usage->worker_usage[i]);
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAIT_EVENT_USAGE,
 					   wait_event_usage);
 		pei->wait_event_usage = wait_event_usage;
@@ -944,10 +947,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 
 			worker_usage = GetInstrumentationWaitEventUsageArray(instrumentation);
 			for (i = 0; i < nworkers * e.nnodes; ++i)
-			{
-				worker_usage[i].nentries = 0;
-				worker_usage[i].entries = InvalidDsaPointer;
-			}
+				ExecParallelInitWaitEventUsageWorker(&worker_usage[i]);
 		}
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_INSTRUMENTATION,
 					   instrumentation);
@@ -1209,21 +1209,9 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 		wait_event_usage = GetInstrumentationWaitEventUsageArray(instrumentation);
 		wait_event_usage += i * instrumentation->num_workers;
 		for (n = 0; n < instrumentation->num_workers; ++n)
-		{
-			SharedWaitEventUsageWorker *worker = &wait_event_usage[n];
-			WaitEventUsageEntry *entries;
-
-			if (worker->nentries <= 0 || !DsaPointerIsValid(worker->entries))
-				continue;
-
-			entries = dsa_get_address(r->area, worker->entries);
-			pgstat_accumulate_wait_event_usage(planstate->wait_event_usage,
-											   entries,
-											   worker->nentries);
-			dsa_free(r->area, worker->entries);
-			worker->nentries = 0;
-			worker->entries = InvalidDsaPointer;
-		}
+			ExecParallelAccumulateWaitEventUsageWorker(planstate->wait_event_usage,
+													   &wait_event_usage[n],
+													   r->area);
 	}
 
 	/*
@@ -1339,18 +1327,46 @@ ExecParallelRetrieveWaitEventUsage(ParallelExecutorInfo *pei)
 		return;
 
 	for (int i = 0; i < shared->num_workers; i++)
+		ExecParallelAccumulateWaitEventUsageWorker(usage,
+												   &shared->worker_usage[i],
+												   pei->area);
+}
+
+static void
+ExecParallelInitWaitEventUsageWorker(SharedWaitEventUsageWorker *worker)
+{
+	worker->nentries = 0;
+	worker->entries = InvalidDsaPointer;
+	worker->overflowed_calls = 0;
+	INSTR_TIME_SET_ZERO(worker->overflowed_time);
+}
+
+static void
+ExecParallelAccumulateWaitEventUsageWorker(WaitEventUsage *usage,
+										   SharedWaitEventUsageWorker *worker,
+										   dsa_area *area)
+{
+	Assert(usage != NULL);
+	Assert(worker != NULL);
+	Assert(area != NULL);
+
+	if (worker->overflowed_calls > 0)
 	{
-		SharedWaitEventUsageWorker *worker = &shared->worker_usage[i];
+		usage->overflowed_calls += worker->overflowed_calls;
+		INSTR_TIME_ADD(usage->overflowed_time, worker->overflowed_time);
+		worker->overflowed_calls = 0;
+		INSTR_TIME_SET_ZERO(worker->overflowed_time);
+	}
+
+	if (worker->nentries > 0 && DsaPointerIsValid(worker->entries))
+	{
 		WaitEventUsageEntry *entries;
 
-		if (worker->nentries <= 0 || !DsaPointerIsValid(worker->entries))
-			continue;
-
-		entries = dsa_get_address(pei->area, worker->entries);
+		entries = dsa_get_address(area, worker->entries);
 		pgstat_accumulate_wait_event_usage(usage,
 										   entries,
 										   worker->nentries);
-		dsa_free(pei->area, worker->entries);
+		dsa_free(area, worker->entries);
 		worker->nentries = 0;
 		worker->entries = InvalidDsaPointer;
 	}
@@ -1362,24 +1378,65 @@ ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
 									   const WaitEventUsage *usage)
 {
 	WaitEventUsageEntry *entries;
+	WaitEventUsageEntry *old_entries = NULL;
 	dsa_pointer entries_dsa;
 	Size		entries_size;
+	int			old_nentries = 0;
+	int			new_nentries = 0;
+	int			i = 0;
+	int			j = 0;
 
 	Assert(worker != NULL);
 	Assert(area != NULL);
 	Assert(usage != NULL);
 
+	worker->overflowed_calls += usage->overflowed_calls;
+	INSTR_TIME_ADD(worker->overflowed_time, usage->overflowed_time);
+
 	if (usage->nentries <= 0)
 		return;
 
-	entries_size = mul_size(sizeof(WaitEventUsageEntry), usage->nentries);
+	if (DsaPointerIsValid(worker->entries))
+	{
+		Assert(worker->nentries > 0);
+		old_nentries = worker->nentries;
+		old_entries = dsa_get_address(area, worker->entries);
+	}
+
+	entries_size = mul_size(sizeof(WaitEventUsageEntry),
+							(Size) old_nentries + (Size) usage->nentries);
 	entries_dsa = dsa_allocate(area, entries_size);
 	entries = dsa_get_address(area, entries_dsa);
-	memcpy(entries, usage->entries, entries_size);
+
+	while (i < old_nentries && j < usage->nentries)
+	{
+		WaitEventUsageEntry *entry = &entries[new_nentries];
+		uint32		old_info = old_entries[i].wait_event_info;
+		uint32		new_info = usage->entries[j].wait_event_info;
+
+		if (old_info < new_info)
+			*entry = old_entries[i++];
+		else if (old_info > new_info)
+			*entry = usage->entries[j++];
+		else
+		{
+			*entry = old_entries[i++];
+			entry->calls += usage->entries[j].calls;
+			INSTR_TIME_ADD(entry->time, usage->entries[j].time);
+			j++;
+		}
+
+		new_nentries++;
+	}
+
+	while (i < old_nentries)
+		entries[new_nentries++] = old_entries[i++];
+	while (j < usage->nentries)
+		entries[new_nentries++] = usage->entries[j++];
 
 	if (DsaPointerIsValid(worker->entries))
 		dsa_free(area, worker->entries);
-	worker->nentries = usage->nentries;
+	worker->nentries = new_nentries;
 	worker->entries = entries_dsa;
 }
 

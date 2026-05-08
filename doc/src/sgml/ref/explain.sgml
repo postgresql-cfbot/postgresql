@@ -322,9 +322,46 @@ ROLLBACK;
     <term><literal>WAITS</literal></term>
     <listitem>
      <para>
-      Include exact backend-local wait event timing observed during query
-      execution.  Wait events are grouped by wait event type and wait event
-      name, and include the number of waits and total time spent waiting.
+      Include wait event timing observed during query execution.  Wait
+      events are grouped by wait event type and wait event name, using the
+      same wait event identifiers reported by
+      <structname>pg_stat_activity</structname>; see
+      <xref linkend="wait-event-table"/>.  Each entry includes the number
+      of completed waits and the total time spent waiting.  Wait timing is
+      collected when this option is enabled even if <literal>TIMING</literal>
+      is disabled.
+     </para>
+
+     <para>
+      If <command>EXPLAIN</command> cannot grow its per-query or per-node wait
+      event storage without risking an error while a wait is ending, waits
+      whose exact event identifier could not be stored are accumulated in an
+      <literal>Unrecorded Wait Event Calls</literal> counter and
+      <literal>Unrecorded Wait Event Time</literal> total.  This is a
+      reporting fallback under memory pressure, not a wait event emitted by
+      server instrumentation.
+     </para>
+
+     <para>
+      The top-level <literal>Statement Wait Events</literal> summary counts
+      each wait once for the statement, including waits reported by parallel
+      workers.  Nested <command>EXPLAIN (ANALYZE, WAITS)</command> commands
+      maintain separate statement-level summaries; a wait is counted once in
+      each active summary.  Plan nodes can also show <literal>Wait
+      Events</literal>.  Node-level wait events are inclusive, like plan node
+      timing in
+      <command>EXPLAIN ANALYZE</command>: a wait is attributed to every
+      active plan node when the wait begins.  Therefore node-level wait event
+      times should not be summed to compute the statement total.
+     </para>
+
+     <para>
+      The overhead of this option depends on the number of waits observed and,
+      for node-level output, on the number of active plan nodes when each wait
+      begins.
+     </para>
+
+     <para>
       This parameter may only be used when <literal>ANALYZE</literal> is also
       enabled.  It defaults to <literal>FALSE</literal>.
      </para>
@@ -411,6 +448,15 @@ ROLLBACK;
    for plan nodes that in themselves require very little time per
    execution, and on machines that have relatively slow operating
    system calls for obtaining the time of day.
+  </para>
+
+  <para>
+   The <literal>WAITS</literal> option also adds profiling overhead when
+   <literal>ANALYZE</literal> is used.  It measures wait intervals reported
+   by server instrumentation and maintains per-statement and per-node wait
+   event counters while the statement executes.  The overhead depends on the
+   number of reported waits, the number of distinct wait events, and the depth
+   of the active executor plan node stack.
   </para>
  </refsect1>
 

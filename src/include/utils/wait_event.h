@@ -24,7 +24,6 @@ typedef struct WaitEventUsageEntry
 
 typedef struct WaitEventUsage
 {
-	MemoryContext memcontext;
 	struct WaitEventUsage *active_parent; /* active plan-node stack link */
 	struct WaitEventUsage *query_parent;	/* active query-level stack link */
 	struct WaitEventUsage *saved_node_usage;	/* node stack at query start */
@@ -41,8 +40,7 @@ static inline void pgstat_report_wait_start(uint32 wait_event_info);
 static inline void pgstat_report_wait_end(void);
 extern void pgstat_set_wait_event_storage(uint32 *wait_event_info);
 extern void pgstat_reset_wait_event_storage(void);
-extern void pgstat_init_wait_event_usage(WaitEventUsage *usage,
-										 MemoryContext memcontext);
+extern WaitEventUsage *pgstat_create_wait_event_usage(MemoryContext memcontext);
 extern void pgstat_begin_wait_event_usage(WaitEventUsage *usage,
 										  MemoryContext memcontext);
 extern void pgstat_end_wait_event_usage(WaitEventUsage *usage);
@@ -55,7 +53,7 @@ extern void pgstat_count_wait_event_start(uint32 wait_event_info);
 extern void pgstat_count_wait_event_end(void);
 
 extern PGDLLIMPORT uint32 *my_wait_event_info;
-extern PGDLLIMPORT int pgstat_wait_event_usage_depth;
+extern PGDLLIMPORT bool pgstat_wait_event_usage_active;
 
 
 /*
@@ -101,7 +99,7 @@ extern char **GetWaitEventCustomNames(uint32 classId, int *nwaitevents);
 static inline void
 pgstat_report_wait_start(uint32 wait_event_info)
 {
-	if (pgstat_wait_event_usage_depth > 0)
+	if (unlikely(pgstat_wait_event_usage_active))
 		pgstat_count_wait_event_start(wait_event_info);
 
 	/*
@@ -120,7 +118,7 @@ pgstat_report_wait_start(uint32 wait_event_info)
 static inline void
 pgstat_report_wait_end(void)
 {
-	if (pgstat_wait_event_usage_depth > 0)
+	if (unlikely(pgstat_wait_event_usage_active))
 		pgstat_count_wait_event_end();
 
 	/* see pgstat_report_wait_start() */

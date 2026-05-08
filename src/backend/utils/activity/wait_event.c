@@ -27,7 +27,6 @@
 #include "storage/shmem.h"
 #include "storage/subsystems.h"
 #include "storage/spin.h"
-#include "utils/memutils.h"
 #include "utils/wait_event.h"
 
 
@@ -43,15 +42,25 @@ static void WaitEventUsageAddOverflow(WaitEventUsage *usage, uint64 calls,
 									  const instr_time *elapsed);
 static int	WaitEventUsageFind(const WaitEventUsage *usage,
 							   uint32 wait_event_info, bool *found);
+static void WaitEventUsageInit(WaitEventUsage *usage,
+							   MemoryContext memcontext);
 
 
 static uint32 local_my_wait_event_info;
 uint32	   *my_wait_event_info = &local_my_wait_event_info;
 
-#define WAIT_EVENT_USAGE_INITIAL_EVENTS	16
+/*
+ * Hardcoded limit: each EXPLAIN WAITS statement-level or plan-node accumulator
+ * can record this many distinct wait event identities without allocating while
+ * waits are ending.  Additional distinct wait identities are accounted for in
+ * the overflow bucket.
+ */
+#define WAIT_EVENT_USAGE_MAX_EVENTS		64
 
-int			pgstat_wait_event_usage_depth = 0;
+/* Fast-path flag exported for inline pgstat_report_wait_start/end(). */
+bool		pgstat_wait_event_usage_active = false;
 static WaitEventUsage *pgstat_wait_event_usage = NULL;
+static int	pgstat_wait_event_usage_depth = 0;
 
 /*
  * Top of the active executor node and query-level stacks.  Query-level wait
@@ -374,25 +383,35 @@ pgstat_reset_wait_event_storage(void)
 }
 
 /*
+ * Allocate and initialize a wait event usage accumulator.
+ */
+WaitEventUsage *
+pgstat_create_wait_event_usage(MemoryContext memcontext)
+{
+	WaitEventUsage *usage;
+
+	Assert(memcontext != NULL);
+
+	usage = MemoryContextAlloc(memcontext, sizeof(WaitEventUsage));
+	WaitEventUsageInit(usage, memcontext);
+	return usage;
+}
+
+/*
  * Initialize a wait event usage accumulator.
  */
-void
-pgstat_init_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
+static void
+WaitEventUsageInit(WaitEventUsage *usage, MemoryContext memcontext)
 {
 	Assert(usage != NULL);
 	Assert(memcontext != NULL);
 
 	memset(usage, 0, sizeof(WaitEventUsage));
 
-	/*
-	 * Wait events may end inside critical sections, for example while
-	 * performing synchronous I/O.  Keep usage entries in a dedicated context
-	 * where the memory manager permits that accounting path to grow.
-	 */
-	usage->memcontext = AllocSetContextCreate(memcontext,
-											  "Wait Event Usage",
-											  ALLOCSET_SMALL_SIZES);
-	MemoryContextAllowInCriticalSection(usage->memcontext, true);
+	usage->entries = MemoryContextAlloc(memcontext,
+										sizeof(WaitEventUsageEntry) *
+										WAIT_EVENT_USAGE_MAX_EVENTS);
+	usage->maxentries = WAIT_EVENT_USAGE_MAX_EVENTS;
 }
 
 /*
@@ -421,7 +440,7 @@ pgstat_begin_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
 		INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
 	}
 
-	pgstat_init_wait_event_usage(usage, memcontext);
+	WaitEventUsageInit(usage, memcontext);
 	usage->query_parent = pgstat_wait_event_usage;
 	/*
 	 * A nested EXPLAIN can error out while one of its plan nodes is active,
@@ -431,6 +450,7 @@ pgstat_begin_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
 	usage->saved_node_usage = pgstat_wait_event_node_usage;
 	pgstat_wait_event_usage = usage;
 	pgstat_wait_event_usage_depth++;
+	pgstat_wait_event_usage_active = true;
 }
 
 /*
@@ -453,6 +473,7 @@ pgstat_end_wait_event_usage(WaitEventUsage *usage)
 
 	if (--pgstat_wait_event_usage_depth == 0)
 	{
+		pgstat_wait_event_usage_active = false;
 		pgstat_wait_event_usage = NULL;
 		pgstat_wait_event_node_usage = NULL;
 		pgstat_wait_event_usage_node_stack = NULL;
@@ -602,52 +623,13 @@ WaitEventUsageAdd(WaitEventUsage *usage, uint32 wait_event_info,
 	{
 		if (usage->nentries >= usage->maxentries)
 		{
-			int			newmaxentries;
-			Size		entries_size;
-			WaitEventUsageEntry *newentries;
-
-			if (usage->maxentries > 0)
-			{
-				if ((Size) usage->maxentries >
-					MaxAllocSize / sizeof(WaitEventUsageEntry) / 2)
-				{
-					WaitEventUsageAddOverflow(usage, calls, elapsed);
-					return;
-				}
-
-				newmaxentries = usage->maxentries * 2;
-			}
-			else
-				newmaxentries = WAIT_EVENT_USAGE_INITIAL_EVENTS;
-
-			if ((Size) newmaxentries >
-				MaxAllocSize / sizeof(WaitEventUsageEntry))
-			{
-				WaitEventUsageAddOverflow(usage, calls, elapsed);
-				return;
-			}
-
-			entries_size = sizeof(WaitEventUsageEntry) * newmaxentries;
 			/*
-			 * Wait completion can happen in a critical section, so growth
-			 * must not throw ERROR.  If storage cannot be grown without
-			 * throwing, preserve total wait time in the overflow bucket.
+			 * Wait-end accounting must not allocate: it can run in a critical
+			 * section.  Preserve total calls/time without the exact event
+			 * identity once preallocated storage is full.
 			 */
-			if (usage->entries)
-				newentries = repalloc_extended(usage->entries, entries_size,
-											   MCXT_ALLOC_NO_OOM);
-			else
-				newentries = MemoryContextAllocExtended(usage->memcontext,
-														entries_size,
-														MCXT_ALLOC_NO_OOM);
-			if (newentries == NULL)
-			{
-				WaitEventUsageAddOverflow(usage, calls, elapsed);
-				return;
-			}
-
-			usage->entries = newentries;
-			usage->maxentries = newmaxentries;
+			WaitEventUsageAddOverflow(usage, calls, elapsed);
+			return;
 		}
 
 		if (idx < usage->nentries)

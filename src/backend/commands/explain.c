@@ -514,7 +514,6 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
-	WaitEventUsage waitEventUsage;
 	WaitEventUsage *waitEventUsagePtr = NULL;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
@@ -593,9 +592,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 		if (es->waits)
 		{
-			waitEventUsagePtr = &waitEventUsage;
-			pgstat_begin_wait_event_usage(waitEventUsagePtr,
-										  queryDesc->estate->es_query_cxt);
+			waitEventUsagePtr =
+				pgstat_begin_wait_event_usage(queryDesc->estate->es_query_cxt);
 			queryDesc->estate->es_wait_event_usage = waitEventUsagePtr;
 		}
 
@@ -4559,20 +4557,29 @@ static void
 show_wait_event_usage(ExplainState *es, const char *labelname,
 					  const WaitEventUsage *usage)
 {
+	const WaitEventUsageEntry *usage_entries;
 	WaitEventUsageEntry *entries;
+	uint64		overflowed_calls;
+	instr_time	overflowed_time;
+	int			nentries;
 
 	if (usage == NULL)
 		return;
 
-	if (usage->nentries == 0 && usage->overflowed_calls == 0)
+	if (pgstat_wait_event_usage_is_empty(usage))
 		return;
 
-	if (usage->nentries > 0)
+	nentries = pgstat_get_wait_event_usage_entries(usage, &usage_entries);
+	pgstat_get_wait_event_usage_overflow(usage,
+										 &overflowed_calls,
+										 &overflowed_time);
+
+	if (nentries > 0)
 	{
-		entries = palloc_array(WaitEventUsageEntry, usage->nentries);
-		memcpy(entries, usage->entries,
-			   sizeof(WaitEventUsageEntry) * usage->nentries);
-		qsort(entries, usage->nentries, sizeof(WaitEventUsageEntry),
+		entries = palloc_array(WaitEventUsageEntry, nentries);
+		memcpy(entries, usage_entries,
+			   sizeof(WaitEventUsageEntry) * nentries);
+		qsort(entries, nentries, sizeof(WaitEventUsageEntry),
 			  wait_event_usage_cmp);
 	}
 	else
@@ -4584,7 +4591,7 @@ show_wait_event_usage(ExplainState *es, const char *labelname,
 		appendStringInfo(es->str, "%s:\n", labelname);
 		es->indent++;
 
-		for (int i = 0; i < usage->nentries; i++)
+		for (int i = 0; i < nentries; i++)
 		{
 			const char *event_type;
 			const char *event_name;
@@ -4600,24 +4607,24 @@ show_wait_event_usage(ExplainState *es, const char *labelname,
 							 INSTR_TIME_GET_MILLISEC(entries[i].time));
 		}
 
-		if (usage->overflowed_calls > 0)
+		if (overflowed_calls > 0)
 		{
 			ExplainIndentText(es);
 			appendStringInfo(es->str,
 							 "Unrecorded Wait Event Calls: calls=%" PRIu64 " time=%0.3f ms\n",
-							 usage->overflowed_calls,
-							 INSTR_TIME_GET_MILLISEC(usage->overflowed_time));
+							 overflowed_calls,
+							 INSTR_TIME_GET_MILLISEC(overflowed_time));
 		}
 
 		es->indent--;
 	}
 	else
 	{
-		if (usage->nentries > 0)
+		if (nentries > 0)
 		{
 			ExplainOpenGroup("Wait-Events", labelname, false, es);
 
-			for (int i = 0; i < usage->nentries; i++)
+			for (int i = 0; i < nentries; i++)
 			{
 				const char *event_type;
 				const char *event_name;
@@ -4642,16 +4649,16 @@ show_wait_event_usage(ExplainState *es, const char *labelname,
 			ExplainCloseGroup("Wait-Events", labelname, false, es);
 		}
 
-		if (usage->overflowed_calls > 0)
+		if (overflowed_calls > 0)
 		{
 			/*
 			 * This is not a wait event identity, so keep it outside the
 			 * Wait Events array in structured output.
 			 */
 			ExplainPropertyUInteger("Unrecorded Wait Event Calls", NULL,
-									usage->overflowed_calls, es);
+									overflowed_calls, es);
 			ExplainPropertyFloat("Unrecorded Wait Event Time", "ms",
-								 INSTR_TIME_GET_MILLISEC(usage->overflowed_time),
+								 INSTR_TIME_GET_MILLISEC(overflowed_time),
 								 3, es);
 		}
 	}

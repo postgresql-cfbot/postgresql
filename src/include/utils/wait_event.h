@@ -15,6 +15,12 @@
 #include "utils/palloc.h"
 #include "utils/wait_event_types.h"
 
+/*
+ * EXPLAIN wait event accounting support.  WaitEventUsage is intentionally
+ * opaque outside wait_event.c; callers should allocate, accumulate, and read
+ * it through the functions below.  WaitEventUsageEntry is the reportable
+ * tuple copied to EXPLAIN output and parallel-worker storage.
+ */
 typedef struct WaitEventUsageEntry
 {
 	uint32		wait_event_info;
@@ -22,17 +28,7 @@ typedef struct WaitEventUsageEntry
 	instr_time	time;
 } WaitEventUsageEntry;
 
-typedef struct WaitEventUsage
-{
-	struct WaitEventUsage *active_parent; /* active plan-node stack link */
-	struct WaitEventUsage *query_parent;	/* active query-level stack link */
-	struct WaitEventUsage *saved_node_usage;	/* node stack at query start */
-	int			nentries;
-	int			maxentries;
-	WaitEventUsageEntry *entries;
-	uint64		overflowed_calls;
-	instr_time	overflowed_time;
-} WaitEventUsage;
+typedef struct WaitEventUsage WaitEventUsage;
 
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
@@ -40,13 +36,23 @@ static inline void pgstat_report_wait_start(uint32 wait_event_info);
 static inline void pgstat_report_wait_end(void);
 extern void pgstat_set_wait_event_storage(uint32 *wait_event_info);
 extern void pgstat_reset_wait_event_storage(void);
+
+/* EXPLAIN wait event accounting. */
 extern WaitEventUsage *pgstat_create_wait_event_usage(MemoryContext memcontext);
-extern void pgstat_begin_wait_event_usage(WaitEventUsage *usage,
-										  MemoryContext memcontext);
+extern WaitEventUsage *pgstat_begin_wait_event_usage(MemoryContext memcontext);
 extern void pgstat_end_wait_event_usage(WaitEventUsage *usage);
 extern void pgstat_accumulate_wait_event_usage(WaitEventUsage *usage,
 											   const WaitEventUsageEntry *entries,
 											   int nentries);
+extern void pgstat_accumulate_wait_event_usage_overflow(WaitEventUsage *usage,
+														uint64 calls,
+														const instr_time *elapsed);
+extern bool pgstat_wait_event_usage_is_empty(const WaitEventUsage *usage);
+extern int pgstat_get_wait_event_usage_entries(const WaitEventUsage *usage,
+											   const WaitEventUsageEntry **entries);
+extern void pgstat_get_wait_event_usage_overflow(const WaitEventUsage *usage,
+												 uint64 *calls,
+												 instr_time *elapsed);
 extern WaitEventUsage *pgstat_enter_wait_event_usage(WaitEventUsage *usage);
 extern void pgstat_restore_wait_event_usage(WaitEventUsage *usage);
 extern void pgstat_count_wait_event_start(uint32 wait_event_info);

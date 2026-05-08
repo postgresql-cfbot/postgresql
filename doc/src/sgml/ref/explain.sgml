@@ -47,6 +47,7 @@ EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <rep
     SUMMARY [ <replaceable class="parameter">boolean</replaceable> ]
     MEMORY [ <replaceable class="parameter">boolean</replaceable> ]
     IO [ <replaceable class="parameter">boolean</replaceable> ]
+    WAITS [ <replaceable class="parameter">boolean</replaceable> ]
     FORMAT { TEXT | XML | JSON | YAML }
 </synopsis>
  </refsynopsisdiv>
@@ -311,6 +312,19 @@ ROLLBACK;
       size, the number of I/O waits, and the average number of concurrent I/O
       requests). The request size is reported in blocks.
       In text format, only non-zero values are printed.
+      This parameter may only be used when <literal>ANALYZE</literal> is also
+      enabled.  It defaults to <literal>FALSE</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>WAITS</literal></term>
+    <listitem>
+     <para>
+      Include exact backend-local wait event timing observed during query
+      execution.  Wait events are grouped by wait event type and wait event
+      name, and include the number of waits and total time spent waiting.
       This parameter may only be used when <literal>ANALYZE</literal> is also
       enabled.  It defaults to <literal>FALSE</literal>.
      </para>

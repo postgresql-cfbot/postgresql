@@ -36,6 +36,17 @@ static const char *pgstat_get_wait_client(WaitEventClient w);
 static const char *pgstat_get_wait_ipc(WaitEventIPC w);
 static const char *pgstat_get_wait_timeout(WaitEventTimeout w);
 static const char *pgstat_get_wait_io(WaitEventIO w);
+struct WaitEventUsage
+{
+	struct WaitEventUsage *active_parent; /* active plan-node stack link */
+	struct WaitEventUsage *query_parent;	/* active query-level stack link */
+	struct WaitEventUsage *saved_node_usage;	/* node stack at query start */
+	int			nentries;
+	int			maxentries;
+	WaitEventUsageEntry *entries;
+	uint64		overflowed_calls;
+	instr_time	overflowed_time;
+};
 static void WaitEventUsageAdd(WaitEventUsage *usage, uint32 wait_event_info,
 							  uint64 calls, const instr_time *elapsed);
 static void WaitEventUsageAddOverflow(WaitEventUsage *usage, uint64 calls,
@@ -422,12 +433,12 @@ WaitEventUsageInit(WaitEventUsage *usage, MemoryContext memcontext)
  * local memory.  Nested top-level collectors are kept in a query-level stack;
  * a wait is counted once in each active collector.
  */
-void
-pgstat_begin_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
+WaitEventUsage *
+pgstat_begin_wait_event_usage(MemoryContext memcontext)
 {
+	WaitEventUsage *usage;
 	bool		first;
 
-	Assert(usage != NULL);
 	Assert(memcontext != NULL);
 
 	first = pgstat_wait_event_usage_depth == 0;
@@ -440,7 +451,7 @@ pgstat_begin_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
 		INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
 	}
 
-	WaitEventUsageInit(usage, memcontext);
+	usage = pgstat_create_wait_event_usage(memcontext);
 	usage->query_parent = pgstat_wait_event_usage;
 	/*
 	 * A nested EXPLAIN can error out while one of its plan nodes is active,
@@ -451,6 +462,7 @@ pgstat_begin_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
 	pgstat_wait_event_usage = usage;
 	pgstat_wait_event_usage_depth++;
 	pgstat_wait_event_usage_active = true;
+	return usage;
 }
 
 /*
@@ -577,6 +589,49 @@ pgstat_accumulate_wait_event_usage(WaitEventUsage *usage,
 						  entries[i].wait_event_info,
 						  entries[i].calls,
 						  &entries[i].time);
+}
+
+void
+pgstat_accumulate_wait_event_usage_overflow(WaitEventUsage *usage,
+											uint64 calls,
+											const instr_time *elapsed)
+{
+	Assert(usage != NULL);
+	Assert(elapsed != NULL);
+
+	WaitEventUsageAddOverflow(usage, calls, elapsed);
+}
+
+bool
+pgstat_wait_event_usage_is_empty(const WaitEventUsage *usage)
+{
+	Assert(usage != NULL);
+
+	return usage->nentries == 0 && usage->overflowed_calls == 0;
+}
+
+int
+pgstat_get_wait_event_usage_entries(const WaitEventUsage *usage,
+									const WaitEventUsageEntry **entries)
+{
+	Assert(usage != NULL);
+	Assert(entries != NULL);
+
+	*entries = usage->entries;
+	return usage->nentries;
+}
+
+void
+pgstat_get_wait_event_usage_overflow(const WaitEventUsage *usage,
+									 uint64 *calls,
+									 instr_time *elapsed)
+{
+	Assert(usage != NULL);
+	Assert(calls != NULL);
+	Assert(elapsed != NULL);
+
+	*calls = usage->overflowed_calls;
+	*elapsed = usage->overflowed_time;
 }
 
 /*

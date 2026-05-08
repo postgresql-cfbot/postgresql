@@ -1352,8 +1352,9 @@ ExecParallelAccumulateWaitEventUsageWorker(WaitEventUsage *usage,
 
 	if (worker->overflowed_calls > 0)
 	{
-		usage->overflowed_calls += worker->overflowed_calls;
-		INSTR_TIME_ADD(usage->overflowed_time, worker->overflowed_time);
+		pgstat_accumulate_wait_event_usage_overflow(usage,
+													worker->overflowed_calls,
+													&worker->overflowed_time);
 		worker->overflowed_calls = 0;
 		INSTR_TIME_SET_ZERO(worker->overflowed_time);
 	}
@@ -1377,11 +1378,15 @@ ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
 									   dsa_area *area,
 									   const WaitEventUsage *usage)
 {
+	const WaitEventUsageEntry *usage_entries;
 	WaitEventUsageEntry *entries;
 	WaitEventUsageEntry *old_entries = NULL;
 	dsa_pointer entries_dsa;
+	uint64		overflowed_calls;
+	instr_time	overflowed_time;
 	Size		entries_size;
 	int			old_nentries = 0;
+	int			usage_nentries;
 	int			new_nentries = 0;
 	int			i = 0;
 	int			j = 0;
@@ -1390,10 +1395,15 @@ ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
 	Assert(area != NULL);
 	Assert(usage != NULL);
 
-	worker->overflowed_calls += usage->overflowed_calls;
-	INSTR_TIME_ADD(worker->overflowed_time, usage->overflowed_time);
+	usage_nentries =
+		pgstat_get_wait_event_usage_entries(usage, &usage_entries);
+	pgstat_get_wait_event_usage_overflow(usage,
+										 &overflowed_calls,
+										 &overflowed_time);
+	worker->overflowed_calls += overflowed_calls;
+	INSTR_TIME_ADD(worker->overflowed_time, overflowed_time);
 
-	if (usage->nentries <= 0)
+	if (usage_nentries <= 0)
 		return;
 
 	if (DsaPointerIsValid(worker->entries))
@@ -1404,25 +1414,25 @@ ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
 	}
 
 	entries_size = mul_size(sizeof(WaitEventUsageEntry),
-							(Size) old_nentries + (Size) usage->nentries);
+							(Size) old_nentries + (Size) usage_nentries);
 	entries_dsa = dsa_allocate(area, entries_size);
 	entries = dsa_get_address(area, entries_dsa);
 
-	while (i < old_nentries && j < usage->nentries)
+	while (i < old_nentries && j < usage_nentries)
 	{
 		WaitEventUsageEntry *entry = &entries[new_nentries];
 		uint32		old_info = old_entries[i].wait_event_info;
-		uint32		new_info = usage->entries[j].wait_event_info;
+		uint32		new_info = usage_entries[j].wait_event_info;
 
 		if (old_info < new_info)
 			*entry = old_entries[i++];
 		else if (old_info > new_info)
-			*entry = usage->entries[j++];
+			*entry = usage_entries[j++];
 		else
 		{
 			*entry = old_entries[i++];
-			entry->calls += usage->entries[j].calls;
-			INSTR_TIME_ADD(entry->time, usage->entries[j].time);
+			entry->calls += usage_entries[j].calls;
+			INSTR_TIME_ADD(entry->time, usage_entries[j].time);
 			j++;
 		}
 
@@ -1431,8 +1441,8 @@ ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
 
 	while (i < old_nentries)
 		entries[new_nentries++] = old_entries[i++];
-	while (j < usage->nentries)
-		entries[new_nentries++] = usage->entries[j++];
+	while (j < usage_nentries)
+		entries[new_nentries++] = usage_entries[j++];
 
 	if (DsaPointerIsValid(worker->entries))
 		dsa_free(area, worker->entries);
@@ -1781,7 +1791,6 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	QueryDesc  *queryDesc;
 	SharedExecutorInstrumentation *instrumentation;
 	SharedJitInstrumentation *jit_instrumentation;
-	WaitEventUsage waitEventUsage;
 	WaitEventUsage *waitEventUsagePtr = NULL;
 	int			instrument_options = 0;
 	void	   *area_space;
@@ -1841,11 +1850,8 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	InstrStartParallelQuery();
 
 	if (wait_event_usage != NULL)
-	{
-		waitEventUsagePtr = &waitEventUsage;
-		pgstat_begin_wait_event_usage(waitEventUsagePtr,
-									  queryDesc->estate->es_query_cxt);
-	}
+		waitEventUsagePtr =
+			pgstat_begin_wait_event_usage(queryDesc->estate->es_query_cxt);
 
 	/*
 	 * Run the plan.  If we specified a tuple bound, be careful not to demand

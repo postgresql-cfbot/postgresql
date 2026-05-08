@@ -68,6 +68,11 @@ select explain_filter('explain (analyze, buffers off, verbose) select * from int
 select explain_filter('explain (analyze, buffers, format text) select * from int8_tbl i8');
 select explain_filter('explain (buffers, format text) select * from int8_tbl i8');
 
+-- WAITS option
+select explain_filter('explain (analyze, waits, costs off, summary off, timing off, buffers off) select pg_sleep(0.01)');
+select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)') #> '{0,Wait Events,0}';
+explain (waits) select 1;
+
 \a
 select explain_filter('explain (analyze, buffers, io, format xml) select * from int8_tbl i8');
 select explain_filter('explain (analyze, serialize, buffers, io, format yaml) select * from int8_tbl i8');

@@ -36,10 +36,19 @@ static const char *pgstat_get_wait_client(WaitEventClient w);
 static const char *pgstat_get_wait_ipc(WaitEventIPC w);
 static const char *pgstat_get_wait_timeout(WaitEventTimeout w);
 static const char *pgstat_get_wait_io(WaitEventIO w);
+static void WaitEventUsageAdd(WaitEventUsage *usage, uint32 wait_event_info,
+							  const instr_time *elapsed);
 
 
 static uint32 local_my_wait_event_info;
 uint32	   *my_wait_event_info = &local_my_wait_event_info;
+
+#define WAIT_EVENT_USAGE_INITIAL_EVENTS	16
+
+int			pgstat_wait_event_usage_depth = 0;
+static WaitEventUsage *pgstat_wait_event_usage = NULL;
+static uint32 pgstat_wait_event_usage_current = 0;
+static instr_time pgstat_wait_event_usage_start;
 
 #define WAIT_EVENT_CLASS_MASK	0xFF000000
 #define WAIT_EVENT_ID_MASK		0x0000FFFF
@@ -347,6 +356,146 @@ void
 pgstat_reset_wait_event_storage(void)
 {
 	my_wait_event_info = &local_my_wait_event_info;
+}
+
+/*
+ * Start collecting exact wait event timings in this backend.
+ *
+ * This is intended for short-lived instrumentation such as EXPLAIN ANALYZE.
+ * It records waits observed through pgstat_report_wait_start/end in backend
+ * local memory.  Nested collection is deliberately treated as part of the
+ * outer collection for now; callers that want independent nested accounting
+ * need a stack of WaitEventUsage contexts.
+ */
+void
+pgstat_begin_wait_event_usage(WaitEventUsage *usage, MemoryContext memcontext)
+{
+	Assert(usage != NULL);
+	Assert(memcontext != NULL);
+
+	if (pgstat_wait_event_usage_depth++ == 0)
+	{
+		memset(usage, 0, sizeof(WaitEventUsage));
+		usage->memcontext = memcontext;
+		pgstat_wait_event_usage = usage;
+		pgstat_wait_event_usage_current = 0;
+		INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
+	}
+}
+
+/*
+ * Stop collecting wait event timings.
+ */
+void
+pgstat_end_wait_event_usage(WaitEventUsage *usage)
+{
+	Assert(usage != NULL);
+	Assert(pgstat_wait_event_usage_depth > 0);
+
+	if (--pgstat_wait_event_usage_depth == 0)
+	{
+		if (pgstat_wait_event_usage_current != 0)
+			pgstat_count_wait_event_end();
+
+		pgstat_wait_event_usage = NULL;
+		pgstat_wait_event_usage_current = 0;
+		INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
+	}
+}
+
+/*
+ * Record the beginning of a wait event for exact EXPLAIN-style accounting.
+ */
+void
+pgstat_count_wait_event_start(uint32 wait_event_info)
+{
+	if (pgstat_wait_event_usage == NULL)
+		return;
+
+	/*
+	 * Waits are not expected to nest.  If they do, finish the previous wait
+	 * at the boundary so accounting remains internally consistent.
+	 */
+	if (pgstat_wait_event_usage_current != 0)
+		pgstat_count_wait_event_end();
+
+	pgstat_wait_event_usage_current = wait_event_info;
+	INSTR_TIME_SET_CURRENT(pgstat_wait_event_usage_start);
+}
+
+/*
+ * Record the end of the current wait event.
+ */
+void
+pgstat_count_wait_event_end(void)
+{
+	instr_time	end;
+	instr_time	elapsed;
+
+	if (pgstat_wait_event_usage == NULL ||
+		pgstat_wait_event_usage_current == 0)
+		return;
+
+	INSTR_TIME_SET_CURRENT(end);
+	elapsed = end;
+	INSTR_TIME_SUBTRACT(elapsed, pgstat_wait_event_usage_start);
+
+	WaitEventUsageAdd(pgstat_wait_event_usage,
+					  pgstat_wait_event_usage_current,
+					  &elapsed);
+
+	pgstat_wait_event_usage_current = 0;
+	INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
+}
+
+static void
+WaitEventUsageAdd(WaitEventUsage *usage, uint32 wait_event_info,
+				  const instr_time *elapsed)
+{
+	WaitEventUsageEntry *entry = NULL;
+
+	for (int i = 0; i < usage->nentries; i++)
+	{
+		if (usage->entries[i].wait_event_info == wait_event_info)
+		{
+			entry = &usage->entries[i];
+			break;
+		}
+	}
+
+	if (entry == NULL)
+	{
+		if (usage->nentries >= usage->maxentries)
+		{
+			MemoryContext oldcontext;
+			int			newmaxentries;
+
+			if (usage->maxentries > 0)
+				newmaxentries = usage->maxentries * 2;
+			else
+				newmaxentries = WAIT_EVENT_USAGE_INITIAL_EVENTS;
+
+			oldcontext = MemoryContextSwitchTo(usage->memcontext);
+			if (usage->entries)
+				usage->entries = repalloc_array(usage->entries,
+												WaitEventUsageEntry,
+												newmaxentries);
+			else
+				usage->entries = palloc_array(WaitEventUsageEntry,
+											  newmaxentries);
+			MemoryContextSwitchTo(oldcontext);
+
+			usage->maxentries = newmaxentries;
+		}
+
+		entry = &usage->entries[usage->nentries++];
+		entry->wait_event_info = wait_event_info;
+		entry->calls = 0;
+		INSTR_TIME_SET_ZERO(entry->time);
+	}
+
+	entry->calls++;
+	INSTR_TIME_ADD(entry->time, *elapsed);
 }
 
 /* ----------

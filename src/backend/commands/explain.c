@@ -45,6 +45,7 @@
 #include "utils/tuplesort.h"
 #include "utils/tuplestore.h"
 #include "utils/typcache.h"
+#include "utils/wait_event.h"
 #include "utils/xml.h"
 
 
@@ -149,6 +150,9 @@ static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
+static int	wait_event_usage_cmp(const void *a, const void *b);
+static void show_wait_event_usage(ExplainState *es,
+								  const WaitEventUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
 static void show_result_replacement_info(Result *result, ExplainState *es);
@@ -510,6 +514,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
+	WaitEventUsage waitEventUsage;
+	WaitEventUsage *waitEventUsagePtr = NULL;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -583,11 +589,27 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		else
 			dir = ForwardScanDirection;
 
-		/* run the plan */
-		ExecutorRun(queryDesc, dir, 0);
+		if (es->waits)
+		{
+			waitEventUsagePtr = &waitEventUsage;
+			pgstat_begin_wait_event_usage(waitEventUsagePtr,
+										  queryDesc->estate->es_query_cxt);
+		}
 
-		/* run cleanup too */
-		ExecutorFinish(queryDesc);
+		/* run the plan */
+		PG_TRY();
+		{
+			ExecutorRun(queryDesc, dir, 0);
+
+			/* run cleanup too */
+			ExecutorFinish(queryDesc);
+		}
+		PG_FINALLY();
+		{
+			if (waitEventUsagePtr)
+				pgstat_end_wait_event_usage(waitEventUsagePtr);
+		}
+		PG_END_TRY();
 
 		/* We can't run ExecutorEnd 'till we're done printing the stats... */
 		totaltime += elapsed_time(&starttime);
@@ -604,6 +626,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	/* Create textual dump of plan tree */
 	ExplainPrintPlan(es, queryDesc);
+
+	if (waitEventUsagePtr)
+		show_wait_event_usage(es, waitEventUsagePtr);
 
 	/* Show buffer and/or memory usage in planning */
 	if (peek_buffer_usage(es, bufusage) || mem_counters)
@@ -4501,6 +4526,104 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 		ExplainPropertyInteger("WAL Buffers Full", NULL,
 							   usage->wal_buffers_full, es);
 	}
+}
+
+static int
+wait_event_usage_cmp(const void *a, const void *b)
+{
+	const WaitEventUsageEntry *ea = (const WaitEventUsageEntry *) a;
+	const WaitEventUsageEntry *eb = (const WaitEventUsageEntry *) b;
+	int64		ta = INSTR_TIME_GET_MICROSEC(ea->time);
+	int64		tb = INSTR_TIME_GET_MICROSEC(eb->time);
+
+	if (ta < tb)
+		return 1;
+	if (ta > tb)
+		return -1;
+	if (ea->wait_event_info < eb->wait_event_info)
+		return -1;
+	if (ea->wait_event_info > eb->wait_event_info)
+		return 1;
+	return 0;
+}
+
+static void
+show_wait_event_usage(ExplainState *es, const WaitEventUsage *usage)
+{
+	WaitEventUsageEntry *entries;
+
+	if (usage == NULL)
+		return;
+
+	if (es->format == EXPLAIN_FORMAT_TEXT && usage->nentries == 0)
+		return;
+
+	if (usage->nentries > 0)
+	{
+		entries = palloc_array(WaitEventUsageEntry, usage->nentries);
+		memcpy(entries, usage->entries,
+			   sizeof(WaitEventUsageEntry) * usage->nentries);
+		qsort(entries, usage->nentries, sizeof(WaitEventUsageEntry),
+			  wait_event_usage_cmp);
+	}
+	else
+		entries = NULL;
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		ExplainIndentText(es);
+		appendStringInfoString(es->str, "Wait Events:\n");
+		es->indent++;
+
+		for (int i = 0; i < usage->nentries; i++)
+		{
+			const char *event_type;
+			const char *event_name;
+
+			event_type = pgstat_get_wait_event_type(entries[i].wait_event_info);
+			event_name = pgstat_get_wait_event(entries[i].wait_event_info);
+
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "%s:%s calls=%" PRIu64 " time=%0.3f ms\n",
+							 event_type ? event_type : "Unknown",
+							 event_name ? event_name : "unknown",
+							 entries[i].calls,
+							 INSTR_TIME_GET_MILLISEC(entries[i].time));
+		}
+
+		es->indent--;
+	}
+	else
+	{
+		ExplainOpenGroup("Wait-Events", "Wait Events", false, es);
+
+		for (int i = 0; i < usage->nentries; i++)
+		{
+			const char *event_type;
+			const char *event_name;
+
+			event_type = pgstat_get_wait_event_type(entries[i].wait_event_info);
+			event_name = pgstat_get_wait_event(entries[i].wait_event_info);
+
+			ExplainOpenGroup("Wait-Event", NULL, true, es);
+			ExplainPropertyText("Wait Event Type",
+								event_type ? event_type : "Unknown",
+								es);
+			ExplainPropertyText("Wait Event",
+								event_name ? event_name : "unknown",
+								es);
+			ExplainPropertyUInteger("Calls", NULL, entries[i].calls, es);
+			ExplainPropertyFloat("Time", "ms",
+								 INSTR_TIME_GET_MILLISEC(entries[i].time),
+								 3, es);
+			ExplainCloseGroup("Wait-Event", NULL, true, es);
+		}
+
+		ExplainCloseGroup("Wait-Events", "Wait Events", false, es);
+	}
+
+	if (entries)
+		pfree(entries);
 }
 
 /*

@@ -11,7 +11,24 @@
 #define WAIT_EVENT_H
 
 /* enums for wait events */
+#include "portability/instr_time.h"
+#include "utils/palloc.h"
 #include "utils/wait_event_types.h"
+
+typedef struct WaitEventUsageEntry
+{
+	uint32		wait_event_info;
+	uint64		calls;
+	instr_time	time;
+} WaitEventUsageEntry;
+
+typedef struct WaitEventUsage
+{
+	MemoryContext memcontext;
+	int			nentries;
+	int			maxentries;
+	WaitEventUsageEntry *entries;
+} WaitEventUsage;
 
 extern const char *pgstat_get_wait_event(uint32 wait_event_info);
 extern const char *pgstat_get_wait_event_type(uint32 wait_event_info);
@@ -19,8 +36,14 @@ static inline void pgstat_report_wait_start(uint32 wait_event_info);
 static inline void pgstat_report_wait_end(void);
 extern void pgstat_set_wait_event_storage(uint32 *wait_event_info);
 extern void pgstat_reset_wait_event_storage(void);
+extern void pgstat_begin_wait_event_usage(WaitEventUsage *usage,
+										  MemoryContext memcontext);
+extern void pgstat_end_wait_event_usage(WaitEventUsage *usage);
+extern void pgstat_count_wait_event_start(uint32 wait_event_info);
+extern void pgstat_count_wait_event_end(void);
 
 extern PGDLLIMPORT uint32 *my_wait_event_info;
+extern PGDLLIMPORT int pgstat_wait_event_usage_depth;
 
 
 /*
@@ -66,6 +89,9 @@ extern char **GetWaitEventCustomNames(uint32 classId, int *nwaitevents);
 static inline void
 pgstat_report_wait_start(uint32 wait_event_info)
 {
+	if (pgstat_wait_event_usage_depth > 0)
+		pgstat_count_wait_event_start(wait_event_info);
+
 	/*
 	 * Since this is a four-byte field which is always read and written as
 	 * four-bytes, updates are atomic.
@@ -82,6 +108,9 @@ pgstat_report_wait_start(uint32 wait_event_info)
 static inline void
 pgstat_report_wait_end(void)
 {
+	if (pgstat_wait_event_usage_depth > 0)
+		pgstat_count_wait_event_end();
+
 	/* see pgstat_report_wait_start() */
 	*(volatile uint32 *) my_wait_event_info = 0;
 }

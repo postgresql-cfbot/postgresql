@@ -34,6 +34,7 @@
 #include "executor/nodeBitmapOr.h"
 #include "nodes/tidbitmap.h"
 #include "miscadmin.h"
+#include "utils/wait_event.h"
 
 
 /* ----------------------------------------------------------------
@@ -117,10 +118,14 @@ MultiExecBitmapOr(BitmapOrState *node)
 	int			nplans;
 	int			i;
 	TIDBitmap  *result = NULL;
+	WaitEventUsage *previous_wait_event_usage = NULL;
 
 	/* must provide our own instrumentation support */
 	if (node->ps.instrument)
 		InstrStartNode(node->ps.instrument);
+	if (node->ps.wait_event_usage)
+		previous_wait_event_usage =
+			pgstat_enter_wait_event_usage(node->ps.wait_event_usage);
 
 	/*
 	 * get information from the node
@@ -181,6 +186,8 @@ MultiExecBitmapOr(BitmapOrState *node)
 		elog(ERROR, "BitmapOr doesn't support zero inputs");
 
 	/* must provide our own instrumentation support */
+	if (node->ps.wait_event_usage)
+		pgstat_restore_wait_event_usage(previous_wait_event_usage);
 	if (node->ps.instrument)
 		InstrStopNode(node->ps.instrument, 0 /* XXX */ );
 

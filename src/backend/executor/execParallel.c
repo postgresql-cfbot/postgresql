@@ -83,6 +83,12 @@ typedef struct FixedParallelExecutorState
 	int			jit_flags;
 } FixedParallelExecutorState;
 
+typedef struct SharedWaitEventUsageWorker
+{
+	int			nentries;
+	dsa_pointer entries;
+} SharedWaitEventUsageWorker;
+
 /*
  * DSM structure for accumulating per-PlanState instrumentation.
  *
@@ -91,6 +97,10 @@ typedef struct FixedParallelExecutorState
  * instrument_offset: Offset, relative to the start of this structure,
  * of the first NodeInstrumentation object.  This will depend on the length of
  * the plan_node_id array.
+ *
+ * wait_event_usage_offset: Offset, relative to the start of this structure,
+ * of the first SharedWaitEventUsageWorker object, or 0 if wait event usage is
+ * not being collected.
  *
  * num_workers: Number of workers.
  *
@@ -103,6 +113,7 @@ struct SharedExecutorInstrumentation
 {
 	int			instrument_options;
 	int			instrument_offset;
+	int			wait_event_usage_offset;
 	int			num_workers;
 	int			num_plan_nodes;
 	int			plan_node_id[FLEXIBLE_ARRAY_MEMBER];
@@ -110,17 +121,17 @@ struct SharedExecutorInstrumentation
 	/*
 	 * Array of num_plan_nodes * num_workers NodeInstrumentation objects
 	 * follows.
+	 *
+	 * If wait_event_usage_offset is non-zero, an array of num_plan_nodes *
+	 * num_workers SharedWaitEventUsageWorker objects follows.
 	 */
 };
 #define GetInstrumentationArray(sei) \
 	(StaticAssertVariableIsOfTypeMacro(sei, SharedExecutorInstrumentation *), \
 	 (NodeInstrumentation *) (((char *) sei) + sei->instrument_offset))
-
-typedef struct SharedWaitEventUsageWorker
-{
-	int			nentries;
-	dsa_pointer entries;
-} SharedWaitEventUsageWorker;
+#define GetInstrumentationWaitEventUsageArray(sei) \
+	(StaticAssertVariableIsOfTypeMacro(sei, SharedExecutorInstrumentation *), \
+	 (SharedWaitEventUsageWorker *) (((char *) sei) + sei->wait_event_usage_offset))
 
 struct SharedWaitEventUsage
 {
@@ -143,6 +154,12 @@ typedef struct ExecParallelInitializeDSMContext
 	int			nnodes;
 } ExecParallelInitializeDSMContext;
 
+typedef struct ExecParallelRetrieveInstrumentationContext
+{
+	SharedExecutorInstrumentation *instrumentation;
+	dsa_area   *area;
+} ExecParallelRetrieveInstrumentationContext;
+
 /* Helper functions that run in the parallel leader. */
 static char *ExecSerializePlan(Plan *plan, EState *estate);
 static bool ExecParallelEstimate(PlanState *planstate,
@@ -154,8 +171,11 @@ static shm_mq_handle **ExecParallelSetupTupleQueues(ParallelContext *pcxt,
 static bool ExecParallelReInitializeDSM(PlanState *planstate,
 										ParallelContext *pcxt);
 static bool ExecParallelRetrieveInstrumentation(PlanState *planstate,
-												SharedExecutorInstrumentation *instrumentation);
+												ExecParallelRetrieveInstrumentationContext *r);
 static void ExecParallelRetrieveWaitEventUsage(ParallelExecutorInfo *pei);
+static void ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
+												   dsa_area *area,
+												   const WaitEventUsage *usage);
 static void ExecParallelReportWaitEventUsage(SharedWaitEventUsage *shared,
 											 dsa_area *area,
 											 const WaitEventUsage *usage);
@@ -691,6 +711,7 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	int			instrumentation_len = 0;
 	int			jit_instrumentation_len = 0;
 	int			instrument_offset = 0;
+	int			wait_event_usage_offset = 0;
 	Size		dsa_minsize = dsa_minimum_size();
 	char	   *query_string;
 	int			query_len;
@@ -798,6 +819,14 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 		instrumentation_len +=
 			mul_size(sizeof(NodeInstrumentation),
 					 mul_size(e.nnodes, nworkers));
+		if (estate->es_instrument & INSTRUMENT_WAITS)
+		{
+			instrumentation_len = MAXALIGN(instrumentation_len);
+			wait_event_usage_offset = instrumentation_len;
+			instrumentation_len +=
+				mul_size(sizeof(SharedWaitEventUsageWorker),
+						 mul_size(e.nnodes, nworkers));
+		}
 		shm_toc_estimate_chunk(&pcxt->estimator, instrumentation_len);
 		shm_toc_estimate_keys(&pcxt->estimator, 1);
 
@@ -903,11 +932,23 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 		instrumentation = shm_toc_allocate(pcxt->toc, instrumentation_len);
 		instrumentation->instrument_options = estate->es_instrument;
 		instrumentation->instrument_offset = instrument_offset;
+		instrumentation->wait_event_usage_offset = wait_event_usage_offset;
 		instrumentation->num_workers = nworkers;
 		instrumentation->num_plan_nodes = e.nnodes;
 		instrument = GetInstrumentationArray(instrumentation);
 		for (i = 0; i < nworkers * e.nnodes; ++i)
 			InstrInitNode(&instrument[i], estate->es_instrument, false);
+		if (wait_event_usage_offset != 0)
+		{
+			SharedWaitEventUsageWorker *worker_usage;
+
+			worker_usage = GetInstrumentationWaitEventUsageArray(instrumentation);
+			for (i = 0; i < nworkers * e.nnodes; ++i)
+			{
+				worker_usage[i].nentries = 0;
+				worker_usage[i].entries = InvalidDsaPointer;
+			}
+		}
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_INSTRUMENTATION,
 					   instrumentation);
 		pei->instrumentation = instrumentation;
@@ -1137,9 +1178,11 @@ ExecParallelReInitializeDSM(PlanState *planstate,
  */
 static bool
 ExecParallelRetrieveInstrumentation(PlanState *planstate,
-									SharedExecutorInstrumentation *instrumentation)
+									ExecParallelRetrieveInstrumentationContext *r)
 {
+	SharedExecutorInstrumentation *instrumentation = r->instrumentation;
 	NodeInstrumentation *instrument;
+	SharedWaitEventUsageWorker *wait_event_usage = NULL;
 	int			i;
 	int			n;
 	int			ibytes;
@@ -1158,6 +1201,30 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 	instrument += i * instrumentation->num_workers;
 	for (n = 0; n < instrumentation->num_workers; ++n)
 		InstrAggNode(planstate->instrument, &instrument[n]);
+
+	/* Accumulate the wait event usage from all workers. */
+	if (instrumentation->wait_event_usage_offset != 0 &&
+		planstate->wait_event_usage != NULL)
+	{
+		wait_event_usage = GetInstrumentationWaitEventUsageArray(instrumentation);
+		wait_event_usage += i * instrumentation->num_workers;
+		for (n = 0; n < instrumentation->num_workers; ++n)
+		{
+			SharedWaitEventUsageWorker *worker = &wait_event_usage[n];
+			WaitEventUsageEntry *entries;
+
+			if (worker->nentries <= 0 || !DsaPointerIsValid(worker->entries))
+				continue;
+
+			entries = dsa_get_address(r->area, worker->entries);
+			pgstat_accumulate_wait_event_usage(planstate->wait_event_usage,
+											   entries,
+											   worker->nentries);
+			dsa_free(r->area, worker->entries);
+			worker->nentries = 0;
+			worker->entries = InvalidDsaPointer;
+		}
+	}
 
 	/*
 	 * Also store the per-worker detail.
@@ -1216,7 +1283,7 @@ ExecParallelRetrieveInstrumentation(PlanState *planstate,
 	}
 
 	return planstate_tree_walker(planstate, ExecParallelRetrieveInstrumentation,
-								 instrumentation);
+								 r);
 }
 
 /*
@@ -1290,25 +1357,21 @@ ExecParallelRetrieveWaitEventUsage(ParallelExecutorInfo *pei)
 }
 
 static void
-ExecParallelReportWaitEventUsage(SharedWaitEventUsage *shared,
-								 dsa_area *area,
-								 const WaitEventUsage *usage)
+ExecParallelReportWaitEventUsageWorker(SharedWaitEventUsageWorker *worker,
+									   dsa_area *area,
+									   const WaitEventUsage *usage)
 {
-	SharedWaitEventUsageWorker *worker;
 	WaitEventUsageEntry *entries;
 	dsa_pointer entries_dsa;
 	Size		entries_size;
 
-	Assert(shared != NULL);
+	Assert(worker != NULL);
 	Assert(area != NULL);
 	Assert(usage != NULL);
-	Assert(IsParallelWorker());
-	Assert(ParallelWorkerNumber < shared->num_workers);
 
 	if (usage->nentries <= 0)
 		return;
 
-	worker = &shared->worker_usage[ParallelWorkerNumber];
 	entries_size = mul_size(sizeof(WaitEventUsageEntry), usage->nentries);
 	entries_dsa = dsa_allocate(area, entries_size);
 	entries = dsa_get_address(area, entries_dsa);
@@ -1318,6 +1381,20 @@ ExecParallelReportWaitEventUsage(SharedWaitEventUsage *shared,
 		dsa_free(area, worker->entries);
 	worker->nentries = usage->nentries;
 	worker->entries = entries_dsa;
+}
+
+static void
+ExecParallelReportWaitEventUsage(SharedWaitEventUsage *shared,
+								 dsa_area *area,
+								 const WaitEventUsage *usage)
+{
+	Assert(shared != NULL);
+	Assert(IsParallelWorker());
+	Assert(ParallelWorkerNumber < shared->num_workers);
+
+	ExecParallelReportWaitEventUsageWorker(&shared->worker_usage[ParallelWorkerNumber],
+										   area,
+										   usage);
 }
 
 /*
@@ -1385,8 +1462,13 @@ ExecParallelCleanup(ParallelExecutorInfo *pei)
 {
 	/* Accumulate instrumentation, if any. */
 	if (pei->instrumentation)
-		ExecParallelRetrieveInstrumentation(pei->planstate,
-											pei->instrumentation);
+	{
+		ExecParallelRetrieveInstrumentationContext r;
+
+		r.instrumentation = pei->instrumentation;
+		r.area = pei->area;
+		ExecParallelRetrieveInstrumentation(pei->planstate, &r);
+	}
 
 	/* Accumulate JIT instrumentation, if any. */
 	if (pei->jit_instrumentation)
@@ -1495,6 +1577,17 @@ ExecParallelReportInstrumentation(PlanState *planstate,
 	Assert(IsParallelWorker());
 	Assert(ParallelWorkerNumber < instrumentation->num_workers);
 	InstrAggNode(&instrument[ParallelWorkerNumber], planstate->instrument);
+	if (instrumentation->wait_event_usage_offset != 0 &&
+		planstate->wait_event_usage != NULL)
+	{
+		SharedWaitEventUsageWorker *wait_event_usage;
+
+		wait_event_usage = GetInstrumentationWaitEventUsageArray(instrumentation);
+		wait_event_usage += i * instrumentation->num_workers;
+		ExecParallelReportWaitEventUsageWorker(&wait_event_usage[ParallelWorkerNumber],
+											   planstate->state->es_query_dsa,
+											   planstate->wait_event_usage);
+	}
 
 	return planstate_tree_walker(planstate, ExecParallelReportInstrumentation,
 								 instrumentation);

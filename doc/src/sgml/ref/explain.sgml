@@ -333,13 +333,14 @@ ROLLBACK;
      </para>
 
      <para>
-      If <command>EXPLAIN</command> cannot grow its per-query or per-node wait
-      event storage without risking an error while a wait is ending, waits
-      whose exact event identifier could not be stored are accumulated in an
-      <literal>Unrecorded Wait Event Calls</literal> counter and
-      <literal>Unrecorded Wait Event Time</literal> total.  This is a
-      reporting fallback under memory pressure, not a wait event emitted by
-      server instrumentation.
+      Each statement and plan-node accumulator preallocates storage for up to
+      <literal>64</literal> distinct wait event identifiers.  This bound
+      avoids memory allocation while a wait is ending.  If more distinct wait
+      event identifiers are observed, waits whose exact event identifier could
+      not be stored are accumulated in an <literal>Unrecorded Wait Event
+      Calls</literal> counter and <literal>Unrecorded Wait Event Time</literal>
+      total.  This is a reporting fallback, not a wait event emitted by server
+      instrumentation.
      </para>
 
      <para>

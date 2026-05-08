@@ -4578,7 +4578,7 @@ show_wait_event_usage(ExplainState *es, const char *labelname,
 	else
 		entries = NULL;
 
-		if (es->format == EXPLAIN_FORMAT_TEXT)
+	if (es->format == EXPLAIN_FORMAT_TEXT)
 	{
 		ExplainIndentText(es);
 		appendStringInfo(es->str, "%s:\n", labelname);

@@ -417,15 +417,8 @@ ExecInitNode(Plan *node, EState *estate, int eflags)
 		result->instrument = InstrAllocNode(estate->es_instrument,
 											result->async_capable);
 	if (estate->es_instrument & INSTRUMENT_WAITS)
-	{
-		MemoryContext oldcontext;
-
-		oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
-		result->wait_event_usage = palloc_object(WaitEventUsage);
-		pgstat_init_wait_event_usage(result->wait_event_usage,
-									 estate->es_query_cxt);
-		MemoryContextSwitchTo(oldcontext);
-	}
+		result->wait_event_usage =
+			pgstat_create_wait_event_usage(estate->es_query_cxt);
 
 	return result;
 }

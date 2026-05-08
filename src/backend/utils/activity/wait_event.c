@@ -37,7 +37,7 @@ static const char *pgstat_get_wait_ipc(WaitEventIPC w);
 static const char *pgstat_get_wait_timeout(WaitEventTimeout w);
 static const char *pgstat_get_wait_io(WaitEventIO w);
 static void WaitEventUsageAdd(WaitEventUsage *usage, uint32 wait_event_info,
-							  const instr_time *elapsed);
+							  uint64 calls, const instr_time *elapsed);
 
 
 static uint32 local_my_wait_event_info;
@@ -442,15 +442,31 @@ pgstat_count_wait_event_end(void)
 
 	WaitEventUsageAdd(pgstat_wait_event_usage,
 					  pgstat_wait_event_usage_current,
+					  1,
 					  &elapsed);
 
 	pgstat_wait_event_usage_current = 0;
 	INSTR_TIME_SET_ZERO(pgstat_wait_event_usage_start);
 }
 
+void
+pgstat_accumulate_wait_event_usage(WaitEventUsage *usage,
+								   const WaitEventUsageEntry *entries,
+								   int nentries)
+{
+	Assert(usage != NULL);
+	Assert(nentries == 0 || entries != NULL);
+
+	for (int i = 0; i < nentries; i++)
+		WaitEventUsageAdd(usage,
+						  entries[i].wait_event_info,
+						  entries[i].calls,
+						  &entries[i].time);
+}
+
 static void
 WaitEventUsageAdd(WaitEventUsage *usage, uint32 wait_event_info,
-				  const instr_time *elapsed)
+				  uint64 calls, const instr_time *elapsed)
 {
 	WaitEventUsageEntry *entry = NULL;
 
@@ -494,7 +510,7 @@ WaitEventUsageAdd(WaitEventUsage *usage, uint32 wait_event_info,
 		INSTR_TIME_SET_ZERO(entry->time);
 	}
 
-	entry->calls++;
+	entry->calls += calls;
 	INSTR_TIME_ADD(entry->time, *elapsed);
 }
 

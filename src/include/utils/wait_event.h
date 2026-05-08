@@ -39,6 +39,9 @@ extern void pgstat_reset_wait_event_storage(void);
 extern void pgstat_begin_wait_event_usage(WaitEventUsage *usage,
 										  MemoryContext memcontext);
 extern void pgstat_end_wait_event_usage(WaitEventUsage *usage);
+extern void pgstat_accumulate_wait_event_usage(WaitEventUsage *usage,
+											   const WaitEventUsageEntry *entries,
+											   int nentries);
 extern void pgstat_count_wait_event_start(uint32 wait_event_info);
 extern void pgstat_count_wait_event_end(void);
 

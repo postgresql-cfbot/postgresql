@@ -51,6 +51,7 @@
 #include "utils/dsa.h"
 #include "utils/lsyscache.h"
 #include "utils/snapmgr.h"
+#include "utils/wait_event.h"
 
 /*
  * Magic numbers for parallel executor communication.  We use constants
@@ -67,6 +68,7 @@
 #define PARALLEL_KEY_QUERY_TEXT		UINT64CONST(0xE000000000000008)
 #define PARALLEL_KEY_JIT_INSTRUMENTATION UINT64CONST(0xE000000000000009)
 #define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xE00000000000000A)
+#define PARALLEL_KEY_WAIT_EVENT_USAGE	UINT64CONST(0xE00000000000000B)
 
 #define PARALLEL_TUPLE_QUEUE_SIZE		65536
 
@@ -114,6 +116,18 @@ struct SharedExecutorInstrumentation
 	(StaticAssertVariableIsOfTypeMacro(sei, SharedExecutorInstrumentation *), \
 	 (NodeInstrumentation *) (((char *) sei) + sei->instrument_offset))
 
+typedef struct SharedWaitEventUsageWorker
+{
+	int			nentries;
+	dsa_pointer entries;
+} SharedWaitEventUsageWorker;
+
+struct SharedWaitEventUsage
+{
+	int			num_workers;
+	SharedWaitEventUsageWorker worker_usage[FLEXIBLE_ARRAY_MEMBER];
+};
+
 /* Context object for ExecParallelEstimate. */
 typedef struct ExecParallelEstimateContext
 {
@@ -141,6 +155,10 @@ static bool ExecParallelReInitializeDSM(PlanState *planstate,
 										ParallelContext *pcxt);
 static bool ExecParallelRetrieveInstrumentation(PlanState *planstate,
 												SharedExecutorInstrumentation *instrumentation);
+static void ExecParallelRetrieveWaitEventUsage(ParallelExecutorInfo *pei);
+static void ExecParallelReportWaitEventUsage(SharedWaitEventUsage *shared,
+											 dsa_area *area,
+											 const WaitEventUsage *usage);
 
 /* Helper function that runs in the parallel worker. */
 static DestReceiver *ExecParallelGetReceiver(dsm_segment *seg, shm_toc *toc);
@@ -664,10 +682,12 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	char	   *paramlistinfo_space;
 	BufferUsage *bufusage_space;
 	WalUsage   *walusage_space;
+	SharedWaitEventUsage *wait_event_usage = NULL;
 	SharedExecutorInstrumentation *instrumentation = NULL;
 	SharedJitInstrumentation *jit_instrumentation = NULL;
 	int			pstmt_len;
 	int			paramlistinfo_len;
+	int			wait_event_usage_len = 0;
 	int			instrumentation_len = 0;
 	int			jit_instrumentation_len = 0;
 	int			instrument_offset = 0;
@@ -743,6 +763,16 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	shm_toc_estimate_chunk(&pcxt->estimator,
 						   mul_size(sizeof(WalUsage), pcxt->nworkers));
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
+
+	/* Estimate space for per-worker wait event usage metadata. */
+	if (estate->es_wait_event_usage != NULL)
+	{
+		wait_event_usage_len =
+			offsetof(SharedWaitEventUsage, worker_usage) +
+			mul_size(sizeof(SharedWaitEventUsageWorker), pcxt->nworkers);
+		shm_toc_estimate_chunk(&pcxt->estimator, wait_event_usage_len);
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
 
 	/* Estimate space for tuple queues. */
 	shm_toc_estimate_chunk(&pcxt->estimator,
@@ -838,6 +868,21 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 									  mul_size(sizeof(WalUsage), pcxt->nworkers));
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAL_USAGE, walusage_space);
 	pei->wal_usage = walusage_space;
+
+	/* Allocate metadata for each worker's wait event usage, if requested. */
+	if (estate->es_wait_event_usage != NULL)
+	{
+		wait_event_usage = shm_toc_allocate(pcxt->toc, wait_event_usage_len);
+		wait_event_usage->num_workers = nworkers;
+		for (int i = 0; i < nworkers; i++)
+		{
+			wait_event_usage->worker_usage[i].nentries = 0;
+			wait_event_usage->worker_usage[i].entries = InvalidDsaPointer;
+		}
+		shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAIT_EVENT_USAGE,
+					   wait_event_usage);
+		pei->wait_event_usage = wait_event_usage;
+	}
 
 	/* Set up the tuple queues that the workers will write into. */
 	pei->tqueue = ExecParallelSetupTupleQueues(pcxt, false);
@@ -1213,6 +1258,68 @@ ExecParallelRetrieveJitInstrumentation(PlanState *planstate,
 	memcpy(planstate->worker_jit_instrument, shared_jit, ibytes);
 }
 
+static void
+ExecParallelRetrieveWaitEventUsage(ParallelExecutorInfo *pei)
+{
+	SharedWaitEventUsage *shared = pei->wait_event_usage;
+	WaitEventUsage *usage;
+
+	if (shared == NULL)
+		return;
+
+	usage = pei->planstate->state->es_wait_event_usage;
+	if (usage == NULL)
+		return;
+
+	for (int i = 0; i < shared->num_workers; i++)
+	{
+		SharedWaitEventUsageWorker *worker = &shared->worker_usage[i];
+		WaitEventUsageEntry *entries;
+
+		if (worker->nentries <= 0 || !DsaPointerIsValid(worker->entries))
+			continue;
+
+		entries = dsa_get_address(pei->area, worker->entries);
+		pgstat_accumulate_wait_event_usage(usage,
+										   entries,
+										   worker->nentries);
+		dsa_free(pei->area, worker->entries);
+		worker->nentries = 0;
+		worker->entries = InvalidDsaPointer;
+	}
+}
+
+static void
+ExecParallelReportWaitEventUsage(SharedWaitEventUsage *shared,
+								 dsa_area *area,
+								 const WaitEventUsage *usage)
+{
+	SharedWaitEventUsageWorker *worker;
+	WaitEventUsageEntry *entries;
+	dsa_pointer entries_dsa;
+	Size		entries_size;
+
+	Assert(shared != NULL);
+	Assert(area != NULL);
+	Assert(usage != NULL);
+	Assert(IsParallelWorker());
+	Assert(ParallelWorkerNumber < shared->num_workers);
+
+	if (usage->nentries <= 0)
+		return;
+
+	worker = &shared->worker_usage[ParallelWorkerNumber];
+	entries_size = mul_size(sizeof(WaitEventUsageEntry), usage->nentries);
+	entries_dsa = dsa_allocate(area, entries_size);
+	entries = dsa_get_address(area, entries_dsa);
+	memcpy(entries, usage->entries, entries_size);
+
+	if (DsaPointerIsValid(worker->entries))
+		dsa_free(area, worker->entries);
+	worker->nentries = usage->nentries;
+	worker->entries = entries_dsa;
+}
+
 /*
  * Finish parallel execution.  We wait for parallel workers to finish, and
  * accumulate their buffer/WAL usage.
@@ -1260,6 +1367,9 @@ ExecParallelFinish(ParallelExecutorInfo *pei)
 	 */
 	for (i = 0; i < nworkers; i++)
 		InstrAccumParallelQuery(&pei->buffer_usage[i], &pei->wal_usage[i]);
+
+	/* Accumulate wait event usage, if requested. */
+	ExecParallelRetrieveWaitEventUsage(pei);
 
 	pei->finished = true;
 }
@@ -1516,10 +1626,13 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	FixedParallelExecutorState *fpes;
 	BufferUsage *buffer_usage;
 	WalUsage   *wal_usage;
+	SharedWaitEventUsage *wait_event_usage;
 	DestReceiver *receiver;
 	QueryDesc  *queryDesc;
 	SharedExecutorInstrumentation *instrumentation;
 	SharedJitInstrumentation *jit_instrumentation;
+	WaitEventUsage waitEventUsage;
+	WaitEventUsage *waitEventUsagePtr = NULL;
 	int			instrument_options = 0;
 	void	   *area_space;
 	dsa_area   *area;
@@ -1535,6 +1648,7 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 		instrument_options = instrumentation->instrument_options;
 	jit_instrumentation = shm_toc_lookup(toc, PARALLEL_KEY_JIT_INSTRUMENTATION,
 										 true);
+	wait_event_usage = shm_toc_lookup(toc, PARALLEL_KEY_WAIT_EVENT_USAGE, true);
 	queryDesc = ExecParallelGetQueryDesc(toc, receiver, instrument_options);
 
 	/* Setting debug_query_string for individual workers */
@@ -1576,6 +1690,13 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 	 */
 	InstrStartParallelQuery();
 
+	if (wait_event_usage != NULL)
+	{
+		waitEventUsagePtr = &waitEventUsage;
+		pgstat_begin_wait_event_usage(waitEventUsagePtr,
+									  queryDesc->estate->es_query_cxt);
+	}
+
 	/*
 	 * Run the plan.  If we specified a tuple bound, be careful not to demand
 	 * more tuples than that.
@@ -1586,6 +1707,14 @@ ParallelQueryMain(dsm_segment *seg, shm_toc *toc)
 
 	/* Shut down the executor */
 	ExecutorFinish(queryDesc);
+
+	if (waitEventUsagePtr != NULL)
+	{
+		pgstat_end_wait_event_usage(waitEventUsagePtr);
+		ExecParallelReportWaitEventUsage(wait_event_usage,
+										 area,
+										 waitEventUsagePtr);
+	}
 
 	/* Report buffer/WAL usage during parallel execution. */
 	buffer_usage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);

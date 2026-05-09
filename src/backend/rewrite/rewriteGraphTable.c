@@ -102,6 +102,8 @@ static Query *generate_union_from_pathqueries(List **pathqueries);
 static List *get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf);
 static bool is_property_associated_with_label(Oid labeloid, Oid propoid);
 static Node *get_element_property_expr(Oid elemoid, Oid propoid, int rtindex);
+static bool graph_path_prefix_is_feasible_with_new_element(List *graph_path, struct path_element *new_pe);
+static bool graph_path_edge_is_feasible(List *graph_path, struct path_element *edge_pe);
 
 /*
  * Convert GRAPH_TABLE clause into a subquery using relational
@@ -378,8 +380,26 @@ generate_queries_for_path_pattern_recurse(RangeTblEntry *rte, List *pathqueries,
 
 	foreach_ptr(struct path_element, pe, path_elems)
 	{
-		/* Update current path being built with current element. */
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Add the next selected element to the current path before checking
+		 * feasibility, since the pruning logic inspects the resulting prefix
+		 * using path-factor positions inside graph_path.
+		 */
 		cur_path = lappend(cur_path, pe);
+
+		/*
+		 * If the currently selected prefix already makes any edge unable to
+		 * connect the adjacent selected vertices, abandon it right away. If
+		 * every candidate eventually prunes, DFS returns NIL pathqueries and
+		 * caller routes to generate_query_for_empty_path_pattern().
+		 */
+		if (!graph_path_prefix_is_feasible_with_new_element(cur_path, pe))
+		{
+			cur_path = list_delete_last(cur_path);
+			continue;
+		}
 
 		/*
 		 * If this is the last element in the path, generate query for the
@@ -403,6 +423,88 @@ generate_queries_for_path_pattern_recurse(RangeTblEntry *rte, List *pathqueries,
 	}
 
 	return pathqueries;
+}
+
+/*
+ * Check whether appending the newest selected element can still lead to a
+ * valid graph path.
+ *
+ * Since the older prefix was already known to be feasible, the newly appended
+ * element can invalidate only the edge constraints it participates in.
+ */
+static bool
+graph_path_prefix_is_feasible_with_new_element(List *graph_path, struct path_element *new_pe)
+{
+	struct path_factor *pf = new_pe->path_factor;
+	struct path_element *prev_pe;
+
+	if (list_length(graph_path) == 1)
+		return true;
+
+	if (IS_EDGE_PATTERN(pf->kind))
+		return graph_path_edge_is_feasible(graph_path, new_pe);
+
+	Assert(pf->kind == VERTEX_PATTERN);
+	Assert(list_length(graph_path) > 0);
+
+	/*
+	 * Repeated vertex variables are merged into one path factor before the
+	 * DFS begins, so appending a vertex extends only the immediately
+	 * preceding edge in the prefix. Any later edge referencing the same
+	 * factor will be checked when that edge itself is appended.
+	 */
+	prev_pe = list_nth(graph_path, list_length(graph_path) - 2);
+
+	/*
+	 * Merged duplicate vertices only drop redundant factors from
+	 * path_factors, not from the DFS path; preceding slot is always an edge
+	 * for a vertex.
+	 */
+	Assert(IS_EDGE_PATTERN(prev_pe->path_factor->kind));
+
+	return graph_path_edge_is_feasible(graph_path, prev_pe);
+}
+
+/*
+ * Check whether the selected endpoints of an edge in the current path prefix
+ * still allow at least one valid direction for that edge.
+ */
+static bool
+graph_path_edge_is_feasible(List *graph_path, struct path_element *edge_pe)
+{
+	struct path_factor *pf = edge_pe->path_factor;
+	int			prefix_len = list_length(graph_path);
+
+	/*
+	 * Track feasibility for the edge's declared direction and, for ANY edges,
+	 * its reverse. As endpoints are resolved, both candidates are refined;
+	 * the prefix remains feasible if at least one remains valid.
+	 */
+	bool		feasible = true;
+	bool		rev_feasible = (pf->kind == EDGE_PATTERN_ANY);
+
+	Assert(IS_EDGE_PATTERN(pf->kind));
+
+	if (pf->src_pf->factorpos < prefix_len)
+	{
+		struct path_element *src_pe;
+
+		src_pe = list_nth(graph_path, pf->src_pf->factorpos);
+		feasible = feasible && src_pe->elemoid == edge_pe->srcvertexid;
+		rev_feasible = rev_feasible && src_pe->elemoid == edge_pe->destvertexid;
+	}
+
+	if (pf->dest_pf->factorpos < prefix_len)
+	{
+		struct path_element *dest_pe;
+
+		dest_pe = list_nth(graph_path, pf->dest_pf->factorpos);
+		feasible = feasible && dest_pe->elemoid == edge_pe->destvertexid;
+		rev_feasible = rev_feasible && dest_pe->elemoid == edge_pe->srcvertexid;
+	}
+
+	/* Keep this prefix only if at least one direction still works. */
+	return feasible || rev_feasible;
 }
 
 /*
@@ -499,6 +601,11 @@ generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 			 * If the given edge element does not connect the adjacent vertex
 			 * elements in this path, the path is broken. Abandon this path as
 			 * it won't return any rows.
+			 *
+			 * Prefix pruning rejects such adjacency before we arrive at query
+			 * construction, so this guard is ordinarily unreachable; keep it
+			 * as a defensive counterpart to graph_path_edge_is_feasible()
+			 * rather than relying on tighter coupling alone.
 			 */
 			if (edge_qual == NULL)
 				return NULL;

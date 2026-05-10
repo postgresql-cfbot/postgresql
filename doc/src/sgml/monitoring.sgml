@@ -5610,6 +5610,32 @@ description | Waiting for a newly initialized WAL file to reach durable storage
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_stat_report_anytime</primary>
+        </indexterm>
+        <function>pg_stat_report_anytime</function> ( <type>integer</type> )
+        <returnvalue>boolean</returnvalue>
+       </para>
+       <para>
+        Force flush of pending statistics to shared memory for the backend
+        with the specified process ID. Unlike normal statistics reporting,
+        this can be called from within a transaction. For relations modified
+        by <command>INSERT</command>, <command>UPDATE</command>, or
+        <command>DELETE</command> in the current transaction, only read
+        counters (scans, tuples fetched, blocks hit) are flushed
+        immediately; write counters (tuples inserted, updated, deleted)
+        are deferred until the transaction ends.
+        Returns <literal>true</literal> if the flush was successfully
+        triggered, <literal>false</literal> otherwise.
+       </para>
+       <para>
+        This function is restricted to superusers by default, but other users
+        can be granted EXECUTE to run the function.
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>pg_stat_reset</primary>
         </indexterm>
         <function>pg_stat_reset</function> ()

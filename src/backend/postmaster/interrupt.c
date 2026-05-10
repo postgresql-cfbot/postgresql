@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "postmaster/interrupt.h"
 #include "storage/ipc.h"
 #include "storage/latch.h"
@@ -48,6 +49,9 @@ ProcessMainLoopInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	if (ReportAnytimeStatsPending)
+		ProcessReportAnytimeStatsInterrupt();
 }
 
 /*

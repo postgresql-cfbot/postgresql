@@ -2040,4 +2040,126 @@ SELECT fastpath_exceeded > :fastpath_exceeded_before FROM pg_stat_lock WHERE loc
 (1 row)
 
 DROP TABLE part_test;
+--
+-- Test pg_stat_report_anytime
+--
+CREATE TABLE partial_flush(id int);
+INSERT INTO partial_flush VALUES (1), (2), (3);
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+-- Record counters before the explicit transaction
+SELECT seq_scan AS seq_scan_before,
+       seq_tup_read AS seq_tup_read_before,
+       n_tup_ins AS n_tup_ins_before,
+       n_tup_upd AS n_tup_upd_before
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush' \gset
+BEGIN;
+SET LOCAL stats_fetch_consistency = none;
+-- Generate both transaction-safe and transaction-unsafe counters.
+SELECT count(*) FROM partial_flush;
+ count 
+-------
+     3
+(1 row)
+
+INSERT INTO partial_flush VALUES (4), (5);
+UPDATE partial_flush SET id = id WHERE id = 1;
+-- Flush mid-transaction
+SELECT pg_stat_report_anytime(pg_backend_pid());
+ pg_stat_report_anytime 
+------------------------
+ t
+(1 row)
+
+-- Transaction-safe counters should be visible mid-transaction.
+-- Transaction-unsafe counters (ins, upd) should NOT be flushed yet,
+-- since their final values depend on whether the transaction commits.
+SELECT seq_scan - :seq_scan_before AS seq_scan_delta,
+       seq_tup_read - :seq_tup_read_before AS seq_tup_read_delta,
+       n_tup_ins - :n_tup_ins_before AS n_tup_ins_delta,
+       n_tup_upd - :n_tup_upd_before AS n_tup_upd_delta
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush';
+ seq_scan_delta | seq_tup_read_delta | n_tup_ins_delta | n_tup_upd_delta 
+----------------+--------------------+-----------------+-----------------
+              2 |                  8 |               0 |               0
+(1 row)
+
+-- Generate more transaction-safe activity to verify no double counting.
+SELECT count(*) FROM partial_flush;
+ count 
+-------
+     5
+(1 row)
+
+-- Flush again mid-transaction
+SELECT pg_stat_report_anytime(pg_backend_pid());
+ pg_stat_report_anytime 
+------------------------
+ t
+(1 row)
+
+-- Should show cumulative totals, not double-counted.
+SELECT seq_scan - :seq_scan_before AS seq_scan_delta,
+       seq_tup_read - :seq_tup_read_before AS seq_tup_read_delta,
+       n_tup_ins - :n_tup_ins_before AS n_tup_ins_delta,
+       n_tup_upd - :n_tup_upd_before AS n_tup_upd_delta
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush';
+ seq_scan_delta | seq_tup_read_delta | n_tup_ins_delta | n_tup_upd_delta 
+----------------+--------------------+-----------------+-----------------
+              3 |                 13 |               0 |               0
+(1 row)
+
+COMMIT;
+-- After commit, all counters should be flushed.
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT seq_scan - :seq_scan_before AS seq_scan_delta,
+       seq_tup_read - :seq_tup_read_before AS seq_tup_read_delta,
+       n_tup_ins - :n_tup_ins_before AS n_tup_ins_delta,
+       n_tup_upd - :n_tup_upd_before AS n_tup_upd_delta
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush';
+ seq_scan_delta | seq_tup_read_delta | n_tup_ins_delta | n_tup_upd_delta 
+----------------+--------------------+-----------------+-----------------
+              3 |                 13 |               2 |               1
+(1 row)
+
+DROP TABLE partial_flush;
+-- Test that pg_stat_report_anytime also flushes non-relation stats.
+CREATE TABLE wal_flush_test(id int);
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT wal_records AS wal_records_before
+  FROM pg_stat_get_backend_wal(pg_backend_pid()) \gset
+BEGIN;
+SET LOCAL stats_fetch_consistency = none;
+-- Generate WAL inside the transaction.
+INSERT INTO wal_flush_test SELECT generate_series(1, 10);
+-- Flush mid-transaction; WAL stats should become visible immediately.
+SELECT pg_stat_report_anytime(pg_backend_pid());
+ pg_stat_report_anytime 
+------------------------
+ t
+(1 row)
+
+SELECT wal_records > :wal_records_before AS wal_flushed
+  FROM pg_stat_get_backend_wal(pg_backend_pid());
+ wal_flushed 
+-------------
+ t
+(1 row)
+
+COMMIT;
+DROP TABLE wal_flush_test;
 -- End of Stats Test

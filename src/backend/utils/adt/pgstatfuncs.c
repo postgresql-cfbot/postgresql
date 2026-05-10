@@ -28,6 +28,7 @@
 #include "replication/logicallauncher.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
+#include "storage/procsignal.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/timestamp.h"
@@ -1927,6 +1928,45 @@ pg_stat_force_next_flush(PG_FUNCTION_ARGS)
 	pgstat_force_next_flush();
 
 	PG_RETURN_VOID();
+}
+
+/*
+ * Signal a backend to report all its pending statistics to shared memory.
+ * If the target is the current backend, the report happens immediately.
+ */
+Datum
+pg_stat_report_anytime(PG_FUNCTION_ARGS)
+{
+	int			pid = PG_GETARG_INT32(0);
+	PGPROC	   *proc;
+	ProcNumber	procNumber = INVALID_PROC_NUMBER;
+
+	if (pid == MyProcPid)
+	{
+		pgstat_report_anytime_stat();
+		PG_RETURN_BOOL(true);
+	}
+
+	proc = BackendPidGetProc(pid);
+	if (proc == NULL)
+		proc = AuxiliaryPidGetProc(pid);
+
+	if (proc == NULL)
+	{
+		ereport(WARNING,
+				(errmsg("PID %d is not a PostgreSQL server process", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	procNumber = GetNumberFromPGProc(proc);
+	if (SendProcSignal(pid, PROCSIG_REPORT_ANYTIME_STATS, procNumber) < 0)
+	{
+		ereport(WARNING,
+				(errmsg("could not send signal to process %d: %m", pid)));
+		PG_RETURN_BOOL(false);
+	}
+
+	PG_RETURN_BOOL(true);
 }
 
 

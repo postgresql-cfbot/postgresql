@@ -104,6 +104,7 @@ typedef int16 NumericDigit;
 #endif
 
 #define NBASE_SQR	(NBASE * NBASE)
+#define NUMERIC_INLINE_BUFFER_SIZE 128
 
 /*
  * The Numeric type as stored on disk.
@@ -261,65 +262,164 @@ struct NumericData
 #define NUMERIC_WEIGHT_MAX			PG_INT16_MAX
 
 /* ----------
- * NumericVar is the format we use for arithmetic.  The digit-array part
- * is the same as the NumericData storage format, but the header is more
- * complex.
+ * NumericVar is the in-memory working representation of a numeric value.
  *
- * The value represented by a NumericVar is determined by the sign, weight,
- * ndigits, and digits[] array.  If it is a "special" value (NaN or Inf)
- * then only the sign field matters; ndigits should be zero, and the weight
- * and dscale fields are ignored.
+ * A NumericVar always stores the logical numeric metadata (ndigits, weight,
+ * sign, dscale), but the physical storage backing digits[] is stateful.
  *
- * Note: the first digit of a NumericVar's value is assumed to be multiplied
- * by NBASE ** weight.  Another way to say it is that there are weight+1
- * digits before the decimal point.  It is possible to have weight < 0.
+ * There are four storage states:
  *
- * buf points at the physical start of the palloc'd digit buffer for the
- * NumericVar.  digits points at the first digit in actual use (the one
- * with the specified weight).  We normally leave an unused digit or two
- * (preset to zeroes) between buf and digits, so that there is room to store
- * a carry out of the top digit without reallocating space.  We just need to
- * decrement digits (and increment weight) to make room for the carry digit.
- * (There is no such extra space in a numeric value stored in the database,
- * only in a NumericVar in memory.)
+ * 1. NUMVAR_EMPTY
+ *    The variable carries no digits storage and no digit payload.
  *
- * If buf is NULL then the digit buffer isn't actually palloc'd and should
- * not be freed --- see the constants below for an example.
+ * 2. NUMVAR_BORROWED
+ *    digits points to storage owned by some other representation.
+ *    In this state the current NumericVar does not own writable digit
+ *    storage, and buf is NULL.
  *
- * dscale, or display scale, is the nominal precision expressed as number
- * of digits after the decimal point (it must always be >= 0 at present).
- * dscale may be more than the number of physically stored fractional digits,
- * implying that we have suppressed storage of significant trailing zeroes.
- * It should never be less than the number of stored digits, since that would
- * imply hiding digits that are present.  NOTE that dscale is always expressed
- * in *decimal* digits, and so it may correspond to a fractional number of
- * base-NBASE digits --- divide by DEC_DIGITS to convert to NBASE digits.
+ *    Borrowed storage is further classified by borrow_kind:
  *
- * rscale, or result scale, is the target precision for a computation.
- * Like dscale it is expressed as number of *decimal* digits after the decimal
- * point, and is always >= 0 at present.
- * Note that rscale is not stored in variables --- it's figured on-the-fly
- * from the dscales of the inputs.
+ *    - NUMVAR_BORROW_EXTERNAL
+ *      digits points into external numeric storage, such as a detoasted
+ *      Numeric datum.  This storage is read-only from the NumericVar's
+ *      perspective and cannot be upgraded in-place to writable inline
+ *      storage.
  *
- * While we consistently use "weight" to refer to the base-NBASE weight of
- * a numeric value, it is convenient in some scale-related calculations to
- * make use of the base-10 weight (ie, the approximate log10 of the value).
- * To avoid confusion, such a decimal-units weight is called a "dweight".
+ *    - NUMVAR_BORROW_INLINE
+ *      digits points into numeric storage currently materialized inside the
+ *      inline buffer of an associated BufferedNumericVar.  This is still a
+ *      read-only borrowed view, but because the underlying memory belongs to
+ *      the same buffered home, it may later be converted into writable inline
+ *      working storage.
  *
- * NB: All the variable-level functions are written in a style that makes it
- * possible to give one and the same variable as argument and destination.
- * This is feasible because the digit buffer is separate from the variable.
+ * 3. NUMVAR_OWNED_INLINE
+ *    buf points to the inline buffer associated with this NumericVar, and
+ *    digits points somewhere within that owned writable storage.
+ *
+ * 4. NUMVAR_OWNED_HEAP
+ *    buf points to palloc'd writable storage owned by this NumericVar, and
+ *    digits points somewhere within that owned writable storage.
+ *
+ * In owned states, buf is the base of the current writable digit storage and
+ * digits points to the logical first digit.  As in the historical NumericVar
+ * representation, owned storage is initially allocated with a spare leading
+ * digit so that carry propagation can enlarge the value without immediate
+ * reallocation.  Stored numeric datums do not have this extra working space;
+ * it exists only in the in-memory working representation.  Therefore, a
+ * borrowed view of a stored/detoasted Numeric datum must not be treated as a
+ * writable work buffer without an explicit state transition.
+ *
+ * Note, however, that digits is not required to remain equal to buf + 1 for
+ * the lifetime of an owned NumericVar.  Subsequent normalization steps such as
+ * stripping leading zeroes may advance digits within the owned buffer, as long
+ * as the active digit range remains within the storage owned by buf.
+ *
+ * inline_buf, when non-NULL, identifies the fixed-size inline home provided by
+ * BufferedNumericVar.  It does not by itself imply that the variable is
+ * currently in NUMVAR_OWNED_INLINE state.  For example, a NumericVar may be in
+ * NUMVAR_BORROWED or NUMVAR_OWNED_HEAP state while still retaining an inline
+ * home for possible future reuse.
+ *
+ * capacity is the physical capacity of the current owned buffer, including the
+ * spare leading digit.  It is meaningful only in owned states, and is zero in
+ * empty or borrowed states.
+ *
+ * As with the traditional implementation, variable-level functions should be
+ * written so that a NumericVar may safely be used as both input and
+ * destination.  State transitions must preserve that property.
+ *
+ * NumericVar state invariants:
+ *
+ * NUMVAR_EMPTY:
+ *     buf == NULL
+ *     digits == NULL
+ *     borrow_kind == NUMVAR_BORROW_NONE
+ *     capacity == 0
+ *
+ * NUMVAR_BORROWED:
+ *     buf == NULL
+ *     borrow_kind != NUMVAR_BORROW_NONE
+ *     capacity == 0
+ *     digits points to borrowed storage, unless sign is special
+ *
+ * NUMVAR_OWNED_INLINE:
+ *     buf == inline_buf
+ *     buf != NULL
+ *     digits != NULL
+ *     borrow_kind == NUMVAR_BORROW_NONE
+ *     capacity == NUMERIC_INLINE_BUFFER_SIZE
+ *     the active digit range [digits, digits + ndigits) lies within
+ *     the owned storage range [buf, buf + capacity)
+ *
+ * NUMVAR_OWNED_HEAP:
+ *     buf != NULL
+ *     digits != NULL
+ *     borrow_kind == NUMVAR_BORROW_NONE
+ *     capacity > 0
+ *     the active digit range [digits, digits + ndigits) lies within
+ *     the owned storage range [buf, buf + capacity)
+ *
+ * Special values are represented through sign, not through a separate storage
+ * state.  For NaN and infinities, only sign is semantically meaningful.
  * ----------
  */
+
+typedef enum NUMERIC_VAR_STATUS
+{
+	NUMVAR_EMPTY,
+	NUMVAR_BORROWED,
+	NUMVAR_OWNED_INLINE,
+	NUMVAR_OWNED_HEAP
+}			NUMERIC_VAR_STATUS;
+
+typedef enum NUMERIC_BORROW_KIND
+{
+	NUMVAR_BORROW_NONE,
+	NUMVAR_BORROW_EXTERNAL,
+	NUMVAR_BORROW_INLINE
+}			NUMERIC_BORROW_KIND;
+
 typedef struct NumericVar
 {
-	int			ndigits;		/* # of digits in digits[] - can be 0! */
+	/* logical numeric metadata */
+	int			ndigits;		/* # of digits in digits[]; may be 0 */
 	int			weight;			/* weight of first digit */
 	int			sign;			/* NUMERIC_POS, _NEG, _NAN, _PINF, or _NINF */
 	int			dscale;			/* display scale */
-	NumericDigit *buf;			/* start of palloc'd space for digits[] */
-	NumericDigit *digits;		/* base-NBASE digits */
+
+	/* storage state metadata */
+	NUMERIC_VAR_STATUS state;	/* current storage state */
+	NUMERIC_BORROW_KIND borrow_kind;	/* source of borrowed digits, if
+										 * borrowed */
+	int			capacity;		/* current owned buffer capacity, spare digit
+								 * included */
+
+	/* current digit storage */
+	NumericDigit *buf;			/* base of current owned writable storage, or
+								 * NULL */
+	NumericDigit *digits;		/* logical first base-NBASE digit, or NULL */
+
+	/* optional fixed-size inline home */
+	NumericDigit *inline_buf;	/* inline buffer of associated
+								 * BufferedNumericVar, or NULL */
 } NumericVar;
+
+#define NUMERIC_VARLENA_SIZE (VARHDRSZ / sizeof(NumericDigit) + \
+	(sizeof(uint16) + sizeof(int16)) / sizeof(NumericDigit) + \
+	NUMERIC_INLINE_BUFFER_SIZE + DIV_GUARD_DIGITS + 4)
+
+typedef struct BufferedNumericVar
+{
+	NumericVar	var;
+	int64		magic;			/* used for align with 8-byte */
+	NumericDigit buffer[NUMERIC_VARLENA_SIZE];
+}			BufferedNumericVar;
+
+
+#define BUFFERED_NUMERIC_VAR_MAGIC 0x4E554D455249435F	/* 'NUMERIC_MAGIC' */
+
+#define NUMERICVAR_IS_SPECIAL(v) \
+    ((v)->sign == NUMERIC_NAN || (v)->sign == NUMERIC_PINF || (v)->sign == NUMERIC_NINF)
 
 
 /* ----------
@@ -415,18 +515,18 @@ typedef struct NumericSumAccum
  */
 static const NumericDigit const_zero_data[1] = {0};
 static const NumericVar const_zero =
-{0, 0, NUMERIC_POS, 0, NULL, (NumericDigit *) const_zero_data};
+{0, 0, NUMERIC_POS, 0, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, (NumericDigit *) const_zero_data, NULL};
 
 static const NumericDigit const_one_data[1] = {1};
 static const NumericVar const_one =
-{1, 0, NUMERIC_POS, 0, NULL, (NumericDigit *) const_one_data};
+{1, 0, NUMERIC_POS, 0, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, (NumericDigit *) const_one_data, NULL};
 
 static const NumericVar const_minus_one =
-{1, 0, NUMERIC_NEG, 0, NULL, (NumericDigit *) const_one_data};
+{1, 0, NUMERIC_NEG, 0, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, (NumericDigit *) const_one_data, NULL};
 
 static const NumericDigit const_two_data[1] = {2};
 static const NumericVar const_two =
-{1, 0, NUMERIC_POS, 0, NULL, (NumericDigit *) const_two_data};
+{1, 0, NUMERIC_POS, 0, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, (NumericDigit *) const_two_data, NULL};
 
 #if DEC_DIGITS == 4
 static const NumericDigit const_zero_point_nine_data[1] = {9000};
@@ -436,7 +536,7 @@ static const NumericDigit const_zero_point_nine_data[1] = {90};
 static const NumericDigit const_zero_point_nine_data[1] = {9};
 #endif
 static const NumericVar const_zero_point_nine =
-{1, -1, NUMERIC_POS, 1, NULL, (NumericDigit *) const_zero_point_nine_data};
+{1, -1, NUMERIC_POS, 1, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, (NumericDigit *) const_zero_point_nine_data, NULL};
 
 #if DEC_DIGITS == 4
 static const NumericDigit const_one_point_one_data[2] = {1, 1000};
@@ -446,21 +546,20 @@ static const NumericDigit const_one_point_one_data[2] = {1, 10};
 static const NumericDigit const_one_point_one_data[2] = {1, 1};
 #endif
 static const NumericVar const_one_point_one =
-{2, 0, NUMERIC_POS, 1, NULL, (NumericDigit *) const_one_point_one_data};
+{2, 0, NUMERIC_POS, 1, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, (NumericDigit *) const_one_point_one_data, NULL};
 
 static const NumericVar const_nan =
-{0, 0, NUMERIC_NAN, 0, NULL, NULL};
+{0, 0, NUMERIC_NAN, 0, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, NULL, NULL};
 
 static const NumericVar const_pinf =
-{0, 0, NUMERIC_PINF, 0, NULL, NULL};
+{0, 0, NUMERIC_PINF, 0, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, NULL, NULL};
 
 static const NumericVar const_ninf =
-{0, 0, NUMERIC_NINF, 0, NULL, NULL};
+{0, 0, NUMERIC_NINF, 0, NUMVAR_BORROWED, NUMVAR_BORROW_EXTERNAL, 0, NULL, NULL, NULL};
 
 #if DEC_DIGITS == 4
 static const int round_powers[4] = {0, 1000, 100, 10};
 #endif
-
 
 /* ----------
  * Local functions
@@ -468,6 +567,10 @@ static const int round_powers[4] = {0, 1000, 100, 10};
  */
 
 #ifdef NUMERIC_DEBUG
+static inline int check_digit_overflow(const NumericVar *var);
+static inline void check_numericvar_state(const NumericVar *var, const char *where);
+#define CHECK_NUMERICVAR(v) check_numericvar_state((v), __func__)
+#define CHECK_NUMERICVAR_AT(v, where) check_numericvar_state((v), (where))
 static void dump_numeric(const char *str, Numeric num);
 static void dump_var(const char *str, NumericVar *var);
 #else
@@ -475,15 +578,65 @@ static void dump_var(const char *str, NumericVar *var);
 #define dump_var(s,v)
 #endif
 
-#define digitbuf_alloc(ndigits)  \
-	((NumericDigit *) palloc((ndigits) * sizeof(NumericDigit)))
-#define digitbuf_free(buf)	\
-	do { \
-		 if ((buf) != NULL) \
-			 pfree(buf); \
-	} while (0)
+/*
+ * digitbuf_alloc_raw() -
+ *
+ * Allocate raw heap-backed digit storage with the specified physical
+ * capacity.
+ *
+ * The capacity is measured in NumericDigit units and includes any spare
+ * leading digit space required by the caller.
+ *
+ * This is a low-level storage primitive.  It does not inspect or update any
+ * NumericVar state, and it does not by itself establish a complete working
+ * NumericVar representation.
+ */
+static inline NumericDigit *
+digitbuf_alloc_raw(int sz)
+{
+	return (NumericDigit *) palloc(sizeof(NumericDigit) * sz);
+}
 
-#define init_var(v)		memset(v, 0, sizeof(NumericVar))
+/*
+ * init_var() -
+ *
+ * Initialize a NumericVar in NUMVAR_EMPTY storage state, with no active digit
+ * storage, no borrowed digit view, and no current digit payload.
+ *
+ * This establishes a clean starting point for later transitions into
+ * borrowed or owned states.
+ */
+static inline void
+init_var(NumericVar *v)
+{
+	memset(v, 0, sizeof(NumericVar));
+}
+
+/*
+ * init_buffered_var() -
+ *
+ * Initialize a BufferedNumericVar so that its embedded NumericVar starts with
+ * writable inline working storage backed by the object's fixed-size inline
+ * buffer.
+ *
+ * The inline buffer is installed as the current owned storage, and the digit
+ * pointer is initialized to the normal working position after the spare
+ * leading digit.
+ */
+static void
+init_buffered_var(BufferedNumericVar * bvar)
+{
+	bvar->magic = BUFFERED_NUMERIC_VAR_MAGIC;
+	init_var(&bvar->var);
+
+	bvar->var.inline_buf = bvar->buffer;
+	bvar->var.capacity = NUMERIC_INLINE_BUFFER_SIZE;
+	bvar->var.state = NUMVAR_OWNED_INLINE;
+	bvar->var.borrow_kind = NUMVAR_BORROW_NONE;
+	bvar->var.buf = bvar->buffer;
+	bvar->var.buf[0] = 0;
+	bvar->var.digits = bvar->buffer + 1;
+}
 
 #define NUMERIC_DIGITS(num) (NUMERIC_HEADER_IS_SHORT(num) ? \
 	(num)->choice.n_short.n_data : (num)->choice.n_long.n_data)
@@ -494,8 +647,27 @@ static void dump_var(const char *str, NumericVar *var);
 	(weight) <= NUMERIC_SHORT_WEIGHT_MAX && \
 	(weight) >= NUMERIC_SHORT_WEIGHT_MIN)
 
+static void digitbuf_free(NumericVar *var);
+
+static NumericDigit *digitbuf_get(NumericVar *var,
+								  int require_ndigits);
+
 static void alloc_var(NumericVar *var, int ndigits);
 static void free_var(NumericVar *var);
+
+static bool result_aliases_input(const NumericVar *result,
+								 const NumericVar *a,
+								 const NumericVar *b);
+
+static NumericVar *prepare_result_var(NumericVar *result,
+									  const NumericVar *a,
+									  const NumericVar *b,
+									  int res_ndigits,
+									  BufferedNumericVar * tmp);
+
+static void finish_result_var(NumericVar *work_result,
+							  NumericVar *result);
+
 static void zero_var(NumericVar *var);
 
 static bool set_var_from_str(const char *str, const char *cp,
@@ -507,7 +679,10 @@ static bool set_var_from_non_decimal_integer_str(const char *str,
 												 const char **endptr,
 												 Node *escontext);
 static void set_var_from_num(Numeric num, NumericVar *dest);
-static void init_var_from_num(Numeric num, NumericVar *dest);
+static Numeric init_var_from_num(Numeric num, NumericVar *dest);
+static Numeric init_buffered_var_from_num(Numeric src, BufferedNumericVar * bvar);
+static varlena *numeric_detoast_attr_to_buffer(varlena *attr, unsigned char *buffer,
+											   size_t buffer_size);
 static void set_var_from_var(const NumericVar *value, NumericVar *dest);
 static char *get_str_from_var(const NumericVar *var);
 static char *get_str_from_var_sci(const NumericVar *var, int rscale);
@@ -543,6 +718,7 @@ static int	cmp_var_common(const NumericDigit *var1digits, int var1ndigits,
 						   int var1weight, int var1sign,
 						   const NumericDigit *var2digits, int var2ndigits,
 						   int var2weight, int var2sign);
+
 static void add_var(const NumericVar *var1, const NumericVar *var2,
 					NumericVar *result);
 static void sub_var(const NumericVar *var1, const NumericVar *var2,
@@ -2422,8 +2598,8 @@ numeric_abbrev_convert_var(const NumericVar *var, NumericSortSupport *nss)
 Datum
 numeric_cmp(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 	int			result;
 
 	result = cmp_numerics(num1, num2);
@@ -2434,12 +2610,11 @@ numeric_cmp(PG_FUNCTION_ARGS)
 	PG_RETURN_INT32(result);
 }
 
-
 Datum
 numeric_eq(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 	bool		result;
 
 	result = cmp_numerics(num1, num2) == 0;
@@ -2453,8 +2628,8 @@ numeric_eq(PG_FUNCTION_ARGS)
 Datum
 numeric_ne(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 	bool		result;
 
 	result = cmp_numerics(num1, num2) != 0;
@@ -2468,8 +2643,8 @@ numeric_ne(PG_FUNCTION_ARGS)
 Datum
 numeric_gt(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 	bool		result;
 
 	result = cmp_numerics(num1, num2) > 0;
@@ -2483,8 +2658,8 @@ numeric_gt(PG_FUNCTION_ARGS)
 Datum
 numeric_ge(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 	bool		result;
 
 	result = cmp_numerics(num1, num2) >= 0;
@@ -2498,8 +2673,8 @@ numeric_ge(PG_FUNCTION_ARGS)
 Datum
 numeric_lt(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 	bool		result;
 
 	result = cmp_numerics(num1, num2) < 0;
@@ -2513,8 +2688,8 @@ numeric_lt(PG_FUNCTION_ARGS)
 Datum
 numeric_le(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 	bool		result;
 
 	result = cmp_numerics(num1, num2) <= 0;
@@ -2529,6 +2704,11 @@ static int
 cmp_numerics(Numeric num1, Numeric num2)
 {
 	int			result;
+	BufferedNumericVar var1;
+	BufferedNumericVar var2;
+
+	num1 = init_buffered_var_from_num(num1, &var1);
+	num2 = init_buffered_var_from_num(num2, &var2);
 
 	/*
 	 * We consider all NANs to be equal and larger than any non-NAN (including
@@ -2720,7 +2900,7 @@ in_range_numeric_numeric(PG_FUNCTION_ARGS)
 Datum
 hash_numeric(PG_FUNCTION_ARGS)
 {
-	Numeric		key = PG_GETARG_NUMERIC(0);
+	Numeric		key = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
 	Datum		digit_hash;
 	Datum		result;
 	int			weight;
@@ -2729,6 +2909,9 @@ hash_numeric(PG_FUNCTION_ARGS)
 	int			i;
 	int			hash_len;
 	NumericDigit *digits;
+	BufferedNumericVar var;
+
+	key = init_buffered_var_from_num(key, &var);
 
 	/* If it's NaN or infinity, don't try to hash the rest of the fields */
 	if (NUMERIC_IS_SPECIAL(key))
@@ -2871,11 +3054,15 @@ hash_numeric_extended(PG_FUNCTION_ARGS)
 Datum
 numeric_add(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
+
 	Numeric		res;
 
 	res = numeric_add_safe(num1, num2, NULL);
+
+	PG_FREE_IF_COPY(num1, 0);
+	PG_FREE_IF_COPY(num2, 1);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -2888,10 +3075,14 @@ numeric_add(PG_FUNCTION_ARGS)
 Numeric
 numeric_add_safe(Numeric num1, Numeric num2, Node *escontext)
 {
-	NumericVar	arg1;
-	NumericVar	arg2;
-	NumericVar	result;
+	BufferedNumericVar arg1;
+	BufferedNumericVar arg2;
+
+	BufferedNumericVar result;
 	Numeric		res;
+
+	num1 = init_buffered_var_from_num(num1, &arg1);
+	num2 = init_buffered_var_from_num(num2, &arg2);
 
 	/*
 	 * Handle NaN and infinities
@@ -2921,18 +3112,15 @@ numeric_add_safe(Numeric num1, Numeric num2, Node *escontext)
 		return make_result(&const_ninf);
 	}
 
-	/*
-	 * Unpack the values, let add_var() compute the result and return it.
-	 */
-	init_var_from_num(num1, &arg1);
-	init_var_from_num(num2, &arg2);
+	init_buffered_var(&result);
 
-	init_var(&result);
-	add_var(&arg1, &arg2, &result);
+	add_var(&arg1.var, &arg2.var, &result.var);
 
-	res = make_result_safe(&result, escontext);
+	res = make_result_safe(&result.var, escontext);
 
-	free_var(&result);
+	free_var(&result.var);
+	free_var(&arg2.var);
+	free_var(&arg1.var);
 
 	return res;
 }
@@ -2946,11 +3134,15 @@ numeric_add_safe(Numeric num1, Numeric num2, Node *escontext)
 Datum
 numeric_sub(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
+
 	Numeric		res;
 
 	res = numeric_sub_safe(num1, num2, NULL);
+
+	PG_FREE_IF_COPY(num1, 0);
+	PG_FREE_IF_COPY(num2, 1);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -2964,10 +3156,16 @@ numeric_sub(PG_FUNCTION_ARGS)
 Numeric
 numeric_sub_safe(Numeric num1, Numeric num2, Node *escontext)
 {
-	NumericVar	arg1;
-	NumericVar	arg2;
-	NumericVar	result;
+	BufferedNumericVar arg1;
+	BufferedNumericVar arg2;
+	BufferedNumericVar result;
 	Numeric		res;
+
+	/*
+	 * Unpack the values, let sub_var() compute the result and return it.
+	 */
+	num1 = init_buffered_var_from_num(num1, &arg1);
+	num2 = init_buffered_var_from_num(num2, &arg2);
 
 	/*
 	 * Handle NaN and infinities
@@ -2997,18 +3195,14 @@ numeric_sub_safe(Numeric num1, Numeric num2, Node *escontext)
 		return make_result(&const_pinf);
 	}
 
-	/*
-	 * Unpack the values, let sub_var() compute the result and return it.
-	 */
-	init_var_from_num(num1, &arg1);
-	init_var_from_num(num2, &arg2);
+	init_buffered_var(&result);
+	sub_var(&arg1.var, &arg2.var, &result.var);
 
-	init_var(&result);
-	sub_var(&arg1, &arg2, &result);
+	res = make_result_safe(&result.var, escontext);
 
-	res = make_result_safe(&result, escontext);
-
-	free_var(&result);
+	free_var(&result.var);
+	free_var(&arg2.var);
+	free_var(&arg1.var);
 
 	return res;
 }
@@ -3022,11 +3216,15 @@ numeric_sub_safe(Numeric num1, Numeric num2, Node *escontext)
 Datum
 numeric_mul(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
+
 	Numeric		res;
 
 	res = numeric_mul_safe(num1, num2, fcinfo->context);
+
+	PG_FREE_IF_COPY(num1, 0);
+	PG_FREE_IF_COPY(num2, 1);
 
 	if (unlikely(SOFT_ERROR_OCCURRED(fcinfo->context)))
 		PG_RETURN_NULL();
@@ -3043,10 +3241,24 @@ numeric_mul(PG_FUNCTION_ARGS)
 Numeric
 numeric_mul_safe(Numeric num1, Numeric num2, Node *escontext)
 {
-	NumericVar	arg1;
-	NumericVar	arg2;
-	NumericVar	result;
+	BufferedNumericVar arg1;
+	BufferedNumericVar arg2;
+	BufferedNumericVar result;
 	Numeric		res;
+
+	/*
+	 * Unpack the values, let mul_var() compute the result and return it.
+	 * Unlike add_var() and sub_var(), mul_var() will round its result. In the
+	 * case of numeric_mul(), which is invoked for the * operator on numerics,
+	 * we request exact representation for the product (rscale = sum(dscale of
+	 * arg1, dscale of arg2)).  If the exact result has more digits after the
+	 * decimal point than can be stored in a numeric, we round it.  Rounding
+	 * after computing the exact result ensures that the final result is
+	 * correctly rounded (rounding in mul_var() using a truncated product
+	 * would not guarantee this).
+	 */
+	num1 = init_buffered_var_from_num(num1, &arg1);
+	num2 = init_buffered_var_from_num(num2, &arg2);
 
 	/*
 	 * Handle NaN and infinities
@@ -3108,29 +3320,17 @@ numeric_mul_safe(Numeric num1, Numeric num2, Node *escontext)
 		Assert(false);
 	}
 
-	/*
-	 * Unpack the values, let mul_var() compute the result and return it.
-	 * Unlike add_var() and sub_var(), mul_var() will round its result. In the
-	 * case of numeric_mul(), which is invoked for the * operator on numerics,
-	 * we request exact representation for the product (rscale = sum(dscale of
-	 * arg1, dscale of arg2)).  If the exact result has more digits after the
-	 * decimal point than can be stored in a numeric, we round it.  Rounding
-	 * after computing the exact result ensures that the final result is
-	 * correctly rounded (rounding in mul_var() using a truncated product
-	 * would not guarantee this).
-	 */
-	init_var_from_num(num1, &arg1);
-	init_var_from_num(num2, &arg2);
+	init_buffered_var(&result);
+	mul_var(&arg1.var, &arg2.var, &result.var, arg1.var.dscale + arg2.var.dscale);
 
-	init_var(&result);
-	mul_var(&arg1, &arg2, &result, arg1.dscale + arg2.dscale);
+	if (result.var.dscale > NUMERIC_DSCALE_MAX)
+		round_var(&result.var, NUMERIC_DSCALE_MAX);
 
-	if (result.dscale > NUMERIC_DSCALE_MAX)
-		round_var(&result, NUMERIC_DSCALE_MAX);
+	res = make_result_safe(&result.var, escontext);
 
-	res = make_result_safe(&result, escontext);
-
-	free_var(&result);
+	free_var(&result.var);
+	free_var(&arg2.var);
+	free_var(&arg1.var);
 
 	return res;
 }
@@ -3144,11 +3344,15 @@ numeric_mul_safe(Numeric num1, Numeric num2, Node *escontext)
 Datum
 numeric_div(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
+
 	Numeric		res;
 
 	res = numeric_div_safe(num1, num2, NULL);
+
+	PG_FREE_IF_COPY(num1, 0);
+	PG_FREE_IF_COPY(num2, 1);
 
 	PG_RETURN_NUMERIC(res);
 }
@@ -3162,11 +3366,17 @@ numeric_div(PG_FUNCTION_ARGS)
 Numeric
 numeric_div_safe(Numeric num1, Numeric num2, Node *escontext)
 {
-	NumericVar	arg1;
-	NumericVar	arg2;
-	NumericVar	result;
+	BufferedNumericVar arg1;
+	BufferedNumericVar arg2;
+	BufferedNumericVar result;
 	Numeric		res;
 	int			rscale;
+
+	/*
+	 * Unpack the arguments
+	 */
+	num1 = init_buffered_var_from_num(num1, &arg1);
+	num2 = init_buffered_var_from_num(num2, &arg2);
 
 	/*
 	 * Handle NaN and infinities
@@ -3215,31 +3425,27 @@ numeric_div_safe(Numeric num1, Numeric num2, Node *escontext)
 		return make_result(&const_zero);
 	}
 
-	/*
-	 * Unpack the arguments
-	 */
-	init_var_from_num(num1, &arg1);
-	init_var_from_num(num2, &arg2);
-
-	init_var(&result);
+	init_buffered_var(&result);
 
 	/*
 	 * Select scale for division result
 	 */
-	rscale = select_div_scale(&arg1, &arg2);
+	rscale = select_div_scale(&arg1.var, &arg2.var);
 
 	/* Check for division by zero */
-	if (arg2.ndigits == 0 || arg2.digits[0] == 0)
+	if (arg2.var.ndigits == 0 || arg2.var.digits[0] == 0)
 		goto division_by_zero;
 
 	/*
 	 * Do the divide and return the result
 	 */
-	div_var(&arg1, &arg2, &result, rscale, true, true);
+	div_var(&arg1.var, &arg2.var, &result.var, rscale, true, true);
 
-	res = make_result_safe(&result, escontext);
+	res = make_result_safe(&result.var, escontext);
 
-	free_var(&result);
+	free_var(&result.var);
+	free_var(&arg2.var);
+	free_var(&arg1.var);
 
 	return res;
 
@@ -3456,17 +3662,17 @@ numeric_inc(PG_FUNCTION_ARGS)
 Datum
 numeric_smaller(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 
 	/*
 	 * Use cmp_numerics so that this will agree with the comparison operators,
 	 * particularly as regards comparisons involving NaN.
 	 */
 	if (cmp_numerics(num1, num2) < 0)
-		PG_RETURN_NUMERIC(num1);
+		PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 	else
-		PG_RETURN_NUMERIC(num2);
+		PG_RETURN_DATUM(PG_GETARG_DATUM(1));
 }
 
 
@@ -3478,17 +3684,17 @@ numeric_smaller(PG_FUNCTION_ARGS)
 Datum
 numeric_larger(PG_FUNCTION_ARGS)
 {
-	Numeric		num1 = PG_GETARG_NUMERIC(0);
-	Numeric		num2 = PG_GETARG_NUMERIC(1);
+	Numeric		num1 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(0));
+	Numeric		num2 = (Numeric) PG_DETOAST_DATUM_PACKED(PG_GETARG_DATUM(1));
 
 	/*
 	 * Use cmp_numerics so that this will agree with the comparison operators,
 	 * particularly as regards comparisons involving NaN.
 	 */
 	if (cmp_numerics(num1, num2) > 0)
-		PG_RETURN_NUMERIC(num1);
+		PG_RETURN_DATUM(PG_GETARG_DATUM(0));
 	else
-		PG_RETURN_NUMERIC(num2);
+		PG_RETURN_DATUM(PG_GETARG_DATUM(1));
 }
 
 
@@ -4860,7 +5066,6 @@ do_numeric_accum(NumericAggState *state, Numeric newval)
 
 	/* The rest of this needs to work in the aggregate context */
 	old_context = MemoryContextSwitchTo(state->agg_context);
-
 	state->N++;
 
 	/* Accumulate sums */
@@ -4868,7 +5073,6 @@ do_numeric_accum(NumericAggState *state, Numeric newval)
 
 	if (state->calcSumX2)
 		accum_sum_add(&(state->sumX2), &X2);
-
 	MemoryContextSwitchTo(old_context);
 }
 
@@ -4938,7 +5142,6 @@ do_numeric_discard(NumericAggState *state, Numeric newval)
 			return false;
 		}
 	}
-
 	/* if we need X^2, calculate that in short-lived context */
 	if (state->calcSumX2)
 	{
@@ -4948,7 +5151,6 @@ do_numeric_discard(NumericAggState *state, Numeric newval)
 
 	/* The rest of this needs to work in the aggregate context */
 	old_context = MemoryContextSwitchTo(state->agg_context);
-
 	if (state->N-- > 1)
 	{
 		/* Negate X, to subtract it from the sum */
@@ -4966,14 +5168,11 @@ do_numeric_discard(NumericAggState *state, Numeric newval)
 	{
 		/* Zero the sums */
 		Assert(state->N == 0);
-
 		accum_sum_reset(&state->sumX);
 		if (state->calcSumX2)
 			accum_sum_reset(&state->sumX2);
 	}
-
 	MemoryContextSwitchTo(old_context);
-
 	return true;
 }
 
@@ -6695,6 +6894,80 @@ dump_var(const char *str, NumericVar *var)
 
 	printf("\n");
 }
+
+
+static inline int
+check_digit_overflow(const NumericVar *var)
+{
+	int			i;
+
+	for (i = 0; i < var->ndigits; i++)
+	{
+		if (var->digits[i] >= NBASE)
+		{
+			return 1;
+		}
+	}
+	return 0;
+}
+
+
+/*
+ * check_numericvar_state() -
+ *
+ * Validate internal NumericVar storage-state invariants.
+ *
+ * This is primarily intended as a debugging aid for future changes to the
+ * NumericVar storage-state machinery.
+ */
+static inline void
+check_numericvar_state(const NumericVar *var, const char *where)
+{
+	Assert(var != NULL);
+	Assert(var->ndigits >= 0);
+
+	if (var->state != NUMVAR_BORROWED)
+		Assert(var->borrow_kind == NUMVAR_BORROW_NONE);
+
+	switch (var->state)
+	{
+		case NUMVAR_EMPTY:
+			Assert(var->buf == NULL);
+			Assert(var->digits == NULL);
+			Assert(var->capacity == 0);
+			break;
+
+		case NUMVAR_BORROWED:
+			Assert(var->buf == NULL);
+			Assert(var->capacity == 0);
+			Assert(var->borrow_kind != NUMVAR_BORROW_NONE);
+
+			if (!NUMERICVAR_IS_SPECIAL(var))
+				Assert(var->digits != NULL);
+			break;
+
+		case NUMVAR_OWNED_INLINE:
+			Assert(var->inline_buf != NULL);
+			Assert(var->buf == var->inline_buf);
+			Assert(var->digits != NULL);
+			Assert(var->capacity == NUMERIC_INLINE_BUFFER_SIZE);
+			Assert(var->digits >= var->buf);
+			Assert(var->digits + var->ndigits <= var->buf + var->capacity);
+			break;
+
+		case NUMVAR_OWNED_HEAP:
+			Assert(var->buf != NULL);
+			Assert(var->digits != NULL);
+			Assert(var->capacity > 0);
+			Assert(var->digits >= var->buf);
+			Assert(var->digits + var->ndigits <= var->buf + var->capacity);
+			break;
+
+		default:
+			elog(ERROR, "unexpected NumericVar state %d at %s",
+				 (int) var->state, where);
+	}
+}
 #endif							/* NUMERIC_DEBUG */
 
 
@@ -6709,35 +6982,296 @@ dump_var(const char *str, NumericVar *var)
  * ----------------------------------------------------------------------
  */
 
+/*
+ * digitbuf_get() -
+ *
+ * Ensure that a NumericVar has owned writable digit storage with at least the
+ * requested physical capacity, including any spare leading digit required by
+ * the caller.
+ *
+ * Regardless of the variable's current state, this function returns the base
+ * of writable owned storage and leaves the variable in either
+ * NUMVAR_OWNED_INLINE or NUMVAR_OWNED_HEAP state.
+ *
+ * This function is concerned only with storage acquisition and state
+ * transition.  Callers remain responsible for maintaining the logical numeric
+ * fields and for copying digit contents when required.
+ */
+static inline NumericDigit *
+digitbuf_get(NumericVar *var, int required_capacity)
+{
+	switch (var->state)
+	{
+		case NUMVAR_EMPTY:
+			Assert(var->borrow_kind == NUMVAR_BORROW_NONE);
+			if (required_capacity <= NUMERIC_INLINE_BUFFER_SIZE && var->inline_buf)
+			{
+				var->buf = var->inline_buf;
+				var->capacity = NUMERIC_INLINE_BUFFER_SIZE;
+				var->state = NUMVAR_OWNED_INLINE;
+			}
+			else
+			{
+				var->buf = digitbuf_alloc_raw(required_capacity);
+				var->capacity = required_capacity;
+				var->state = NUMVAR_OWNED_HEAP;
+			}
+			break;
+		case NUMVAR_BORROWED:
+			if (var->borrow_kind == NUMVAR_BORROW_EXTERNAL)
+			{
+				if (required_capacity <= NUMERIC_INLINE_BUFFER_SIZE && var->inline_buf != NULL)
+				{
+					var->buf = var->inline_buf;
+					var->capacity = NUMERIC_INLINE_BUFFER_SIZE;
+					var->state = NUMVAR_OWNED_INLINE;
+				}
+				else
+				{
+					var->buf = digitbuf_alloc_raw(required_capacity);
+					var->capacity = required_capacity;
+					var->state = NUMVAR_OWNED_HEAP;
+				}
+			}
+			else
+			{
+				Assert(var->inline_buf != NULL);
+				Assert(var->borrow_kind == NUMVAR_BORROW_INLINE);
+				if (required_capacity <= NUMERIC_INLINE_BUFFER_SIZE)
+				{
+					/*
+					 * NUMVAR_BORROW_INLINE is currently used only for the
+					 * special case where the inline buffer of a
+					 * BufferedNumericVar holds a detoasted Numeric datum.
+					 *
+					 * In this case, the caller guarantees that the borrowed
+					 * buffered representation does not need to be preserved
+					 * as an independent read-only view. Therefore, when the
+					 * requested capacity fits in the inline home, we may
+					 * convert that storage to NUMVAR_OWNED_INLINE by
+					 * resetting buf to the beginning of the inline buffer and
+					 * reestablishing the normal NumericVar working-buffer
+					 * layout there.
+					 */
+					var->buf = var->inline_buf;
+					var->capacity = NUMERIC_INLINE_BUFFER_SIZE;
+					var->state = NUMVAR_OWNED_INLINE;
+				}
+				else
+				{
+					var->buf = digitbuf_alloc_raw(required_capacity);
+					var->capacity = required_capacity;
+					var->state = NUMVAR_OWNED_HEAP;
+				}
+			}
+			break;
+		case NUMVAR_OWNED_INLINE:
+			Assert(var->borrow_kind == NUMVAR_BORROW_NONE);
+			Assert(var->inline_buf != NULL);
+			if (required_capacity > var->capacity)
+			{
+				var->buf = digitbuf_alloc_raw(required_capacity);
+				var->capacity = required_capacity;
+				var->state = NUMVAR_OWNED_HEAP;
+			}
+			break;
+		case NUMVAR_OWNED_HEAP:
+			Assert(var->borrow_kind == NUMVAR_BORROW_NONE);
+			if (required_capacity > var->capacity)
+			{
+				pfree(var->buf);
+				var->buf = digitbuf_alloc_raw(required_capacity);
+				var->capacity = required_capacity;
+			}
+			break;
+		default:
+			Assert(false);
+			return NULL;		/* silence compiler warning */
+	}
+
+	var->borrow_kind = NUMVAR_BORROW_NONE;
+	var->digits = var->buf + 1;
+
+	return var->buf;
+}
+
+
+/*
+ * digitbuf_free() -
+ *
+ * Release the current active digit storage or borrowed digit view of a
+ * NumericVar and return it to NUMVAR_EMPTY storage state.
+ *
+ * Heap-backed owned storage is pfree'd.  Inline owned storage is simply
+ * detached as the active buffer and remains available as the variable's
+ * inline home.  Borrowed storage is not freed, but any active borrowed view
+ * is dropped.
+ *
+ * This function resets only storage-state fields.  It does not by itself
+ * establish a meaningful numeric value.
+ */
+static inline void
+digitbuf_free(NumericVar *var)
+{
+	switch (var->state)
+	{
+		case NUMVAR_OWNED_HEAP:
+			pfree(var->buf);
+			pg_fallthrough;
+		case NUMVAR_EMPTY:
+		case NUMVAR_BORROWED:
+		case NUMVAR_OWNED_INLINE:
+			var->buf = NULL;
+			var->capacity = 0;
+			var->digits = NULL;
+			var->state = NUMVAR_EMPTY;
+			var->borrow_kind = NUMVAR_BORROW_NONE;
+			break;
+		default:
+			Assert(false);
+	}
+}
+
+
+/*
+ * result_aliases_input() -
+ *
+ * Return true if the destination variable cannot be used directly as the
+ * output of an arithmetic operation because it aliases one of the inputs.
+ *
+ * In addition to direct pointer equality, this treats result as aliasing if
+ * its current digit pointer falls within the active digit range of either
+ * input variable.
+ */
+static bool
+result_aliases_input(const NumericVar *result,
+					 const NumericVar *a,
+					 const NumericVar *b)
+{
+	if (result == a || result == b)
+		return true;
+
+	/*
+	 * Be conservative: if result currently points into either input digit
+	 * range, treat it as aliasing as well.
+	 */
+	if (result->digits != NULL)
+	{
+		if (a->digits != NULL &&
+			result->digits >= a->digits &&
+			result->digits < a->digits + a->ndigits)
+			return true;
+
+		if (b->digits != NULL &&
+			result->digits >= b->digits &&
+			result->digits < b->digits + b->ndigits)
+			return true;
+	}
+
+	return false;
+}
+
+
+/*
+ * prepare_result_var() -
+ *
+ * Prepare a writable result variable for an arithmetic operation.
+ *
+ * If the caller's destination does not alias either input, writable storage
+ * is allocated directly in that destination and the destination is returned.
+ *
+ * If the destination aliases an input, a temporary BufferedNumericVar is
+ * initialized and allocated instead, so that the operation may read its
+ * inputs without destroying their digit storage.
+ */
+static NumericVar *
+prepare_result_var(NumericVar *result,
+				   const NumericVar *a,
+				   const NumericVar *b,
+				   int res_ndigits,
+				   BufferedNumericVar * tmp)
+{
+	if (result_aliases_input(result, a, b))
+	{
+		init_buffered_var(tmp);
+
+		alloc_var(&tmp->var, res_ndigits);
+
+		return &tmp->var;
+	}
+
+	alloc_var(result, res_ndigits);
+
+	return result;
+}
+
+
+/*
+ * finish_result_var() -
+ *
+ * Finalize a result prepared by prepare_result_var().
+ *
+ * If the arithmetic result was computed directly in the caller's destination,
+ * this function does nothing.
+ *
+ * If the result was computed in a temporary variable, copy that value back
+ * into the caller's destination and release the temporary storage.
+ */
+static void
+finish_result_var(NumericVar *work_result, NumericVar *result)
+{
+	if (work_result != result)
+	{
+		set_var_from_var(work_result, result);
+		free_var(work_result);
+	}
+}
+
 
 /*
  * alloc_var() -
  *
- *	Allocate a digit buffer of ndigits digits (plus a spare digit for rounding)
+ * Allocate owned writable digit storage for a NumericVar large enough for the
+ * requested number of logical digits plus one spare leading digit.
+ *
+ * The variable is left in an owned writable state with basic working metadata
+ * initialized, but callers remain responsible for constructing the final
+ * numeric value.
  */
 static void
 alloc_var(NumericVar *var, int ndigits)
 {
-	digitbuf_free(var->buf);
-	var->buf = digitbuf_alloc(ndigits + 1);
-	var->buf[0] = 0;			/* spare digit for rounding */
-	var->digits = var->buf + 1;
+	digitbuf_free(var);
+
+	digitbuf_get(var, ndigits + 1);
+
 	var->ndigits = ndigits;
+	var->weight = 0;
+	var->sign = NUMERIC_POS;
+	var->dscale = 0;
+	var->buf[0] = 0;			/* ensure spare digit is zeroed */
 }
 
 
 /*
  * free_var() -
  *
- *	Return the digit buffer of a variable to the free pool
+ * Release the current active storage of a NumericVar and reset its numeric
+ * metadata to an empty working state.
+ *
+ * Unlike digitbuf_free(), this is a variable-level cleanup helper: it clears
+ * both storage-state and value-level fields.
  */
 static void
 free_var(NumericVar *var)
 {
-	digitbuf_free(var->buf);
-	var->buf = NULL;
-	var->digits = NULL;
-	var->sign = NUMERIC_NAN;
+	/* Release current active storage, if any. */
+	digitbuf_free(var);
+
+	var->ndigits = 0;
+	var->weight = 0;
+	var->sign = NUMERIC_POS;
+	var->dscale = 0;
 }
 
 
@@ -6750,7 +7284,7 @@ free_var(NumericVar *var)
 static void
 zero_var(NumericVar *var)
 {
-	digitbuf_free(var->buf);
+	free_var(var);
 	var->buf = NULL;
 	var->digits = NULL;
 	var->ndigits = 0;
@@ -6929,9 +7463,11 @@ set_var_from_str(const char *str, const char *cp,
 	ndigits = (ddigits + offset + DEC_DIGITS - 1) / DEC_DIGITS;
 
 	alloc_var(dest, ndigits);
+	dest->ndigits = ndigits;
 	dest->sign = sign;
 	dest->weight = weight;
 	dest->dscale = dscale;
+	dest->digits = dest->buf + 1;
 
 	i = DEC_DIGITS - offset;
 	digits = dest->digits;
@@ -7190,6 +7726,8 @@ set_var_from_num(Numeric num, NumericVar *dest)
 	ndigits = NUMERIC_NDIGITS(num);
 
 	alloc_var(dest, ndigits);
+	dest->ndigits = ndigits;
+	dest->digits = dest->buf + 1;
 
 	dest->weight = NUMERIC_WEIGHT(num);
 	dest->sign = NUMERIC_SIGN(num);
@@ -7202,50 +7740,188 @@ set_var_from_num(Numeric num, NumericVar *dest)
 /*
  * init_var_from_num() -
  *
- *	Initialize a variable from packed db format. The digits array is not
- *	copied, which saves some cycles when the resulting var is not modified.
- *	Also, there's no need to call free_var(), as long as you don't assign any
- *	other value to it (with set_var_* functions, or by using the var as the
- *	destination of a function like add_var())
+ * Initialize a NumericVar from an input Numeric datum, detoasting the datum
+ * first if necessary.
  *
- *	CAUTION: Do not modify the digits buffer of a var initialized with this
- *	function, e.g by calling round_var() or trunc_var(), as the changes will
- *	propagate to the original Numeric! It's OK to use it as the destination
- *	argument of one of the calculational functions, though.
+ * For finite values, the resulting NumericVar is a borrowed read-only view of
+ * externally owned digit storage, with borrow kind
+ * NUMVAR_BORROW_EXTERNAL.
+ *
+ * For special values, no digit storage is borrowed; the resulting NumericVar
+ * remains in NUMVAR_EMPTY storage state, and only sign is semantically
+ * meaningful.
+ *
+ * The returned Numeric pointer is the detoasted representation actually used
+ * to initialize the borrowed view.
  */
-static void
+static Numeric
 init_var_from_num(Numeric num, NumericVar *dest)
 {
+	/* ensure the numeric is always detoasted */
+	num = (Numeric) PG_DETOAST_DATUM(NumericGetDatum(num));
+
+	init_var(dest);
+
 	dest->ndigits = NUMERIC_NDIGITS(num);
 	dest->weight = NUMERIC_WEIGHT(num);
 	dest->sign = NUMERIC_SIGN(num);
 	dest->dscale = NUMERIC_DSCALE(num);
-	dest->digits = NUMERIC_DIGITS(num);
-	dest->buf = NULL;			/* digits array is not palloc'd */
+
+	if (NUMERIC_IS_SPECIAL(num))
+	{
+		dest->state = NUMVAR_EMPTY;
+		dest->borrow_kind = NUMVAR_BORROW_NONE;
+	}
+	else
+	{
+		dest->state = NUMVAR_BORROWED;
+		dest->borrow_kind = NUMVAR_BORROW_EXTERNAL;
+
+		dest->digits = NUMERIC_DIGITS(num);
+	}
+
+	return num;
+}
+
+
+/*
+ * init_buffered_var_from_num() -
+ *
+ * Initialize a BufferedNumericVar from an input Numeric datum, using the
+ * object's inline buffer as detoast workspace when possible.
+ *
+ * For finite values, the resulting NumericVar is a borrowed read-only view.
+ * If the detoasted representation is materialized in the inline buffer, the
+ * borrow kind is recorded as NUMVAR_BORROW_INLINE; otherwise it is recorded
+ * as NUMVAR_BORROW_EXTERNAL.
+ *
+ * For special values, no digit storage is borrowed; the resulting NumericVar
+ * remains in NUMVAR_EMPTY storage state, and only sign is semantically
+ * meaningful.
+ *
+ * The returned Numeric pointer is the representation actually used to
+ * initialize the borrowed view.
+ */
+static Numeric
+init_buffered_var_from_num(Numeric num, BufferedNumericVar * dest)
+{
+	num = (Numeric) numeric_detoast_attr_to_buffer((varlena *) (num),
+												   (unsigned char *) dest->buffer,
+												   sizeof(dest->buffer));
+
+	if (NUMERIC_IS_SPECIAL(num))
+	{
+		dest->magic = BUFFERED_NUMERIC_VAR_MAGIC;
+		init_var(&dest->var);
+		dest->var.inline_buf = dest->buffer;
+		dest->var.sign = NUMERIC_SIGN(num);
+		return num;
+	}
+
+	dest->magic = BUFFERED_NUMERIC_VAR_MAGIC;
+	init_var(&dest->var);
+	dest->var.inline_buf = dest->buffer;
+
+	dest->var.state = NUMVAR_BORROWED;
+	dest->var.ndigits = NUMERIC_NDIGITS(num);
+	dest->var.weight = NUMERIC_WEIGHT(num);
+	dest->var.sign = NUMERIC_SIGN(num);
+	dest->var.dscale = NUMERIC_DSCALE(num);
+	dest->var.digits = NUMERIC_DIGITS(num);
+
+	if ((unsigned char *) num == (unsigned char *) dest->buffer)
+		dest->var.borrow_kind = NUMVAR_BORROW_INLINE;
+	else
+		dest->var.borrow_kind = NUMVAR_BORROW_EXTERNAL;
+
+	return num;
+}
+
+
+/*
+ * numeric_detoast_attr_to_buffer() -
+ *
+ * Convert a varlena datum to a detoasted representation, preferably using a
+ * caller-provided buffer when that is sufficient.
+ *
+ * This helper is intended for numeric paths.  If the input datum is in
+ * short-header form, it is expanded to ordinary 4-byte-header form, using
+ * the supplied buffer when possible and falling back to palloc'd storage
+ * otherwise.
+ *
+ * If the input datum is not in short-header form, this helper falls back to
+ * detoast_attr().
+ *
+ * The returned pointer may therefore refer either to the caller-provided
+ * buffer or to freshly allocated storage.
+ */
+static varlena *
+numeric_detoast_attr_to_buffer(varlena *attr, unsigned char *buffer,
+							   size_t buffer_size)
+{
+	Size		data_size;
+	Size		new_size;
+	varlena    *new_attr;
+
+	if (!VARATT_IS_SHORT(attr))
+		return pg_detoast_datum(attr);
+
+	/*
+	 * This is a short-header varlena --- convert to 4-byte header format
+	 */
+	data_size = VARSIZE_SHORT(attr) - VARHDRSZ_SHORT;
+	new_size = data_size + VARHDRSZ;
+
+	if (unlikely(buffer_size < new_size))
+		new_attr = (varlena *) palloc(new_size);
+	else
+		new_attr = (varlena *) buffer;
+	SET_VARSIZE(new_attr, new_size);
+	memcpy(VARDATA(new_attr), VARDATA_SHORT(attr), data_size);
+	attr = new_attr;
+
+	return attr;
 }
 
 
 /*
  * set_var_from_var() -
  *
- *	Copy one variable into another
+ * Copy one NumericVar into another.
+ *
+ * The destination receives the same numeric value as the source, but this
+ * function always constructs a destination representation that is valid for
+ * the destination's own storage state.  It does not steal storage from the
+ * source.
+ *
+ * This function must remain safe when source and destination are the same
+ * variable.
  */
 static void
 set_var_from_var(const NumericVar *value, NumericVar *dest)
 {
-	NumericDigit *newbuf;
+	if (value == dest)
+		return;
 
-	newbuf = digitbuf_alloc(value->ndigits + 1);
-	newbuf[0] = 0;				/* spare digit for rounding */
-	if (value->ndigits > 0)		/* else value->digits might be null */
-		memcpy(newbuf + 1, value->digits,
-			   value->ndigits * sizeof(NumericDigit));
+	if (NUMERICVAR_IS_SPECIAL(value))
+	{
+		free_var(dest);
+		dest->sign = value->sign;
 
-	digitbuf_free(dest->buf);
+		return;
+	}
 
-	memmove(dest, value, sizeof(NumericVar));
-	dest->buf = newbuf;
-	dest->digits = newbuf + 1;
+	/* ndigits is set in alloc_var */
+	alloc_var(dest, value->ndigits);
+
+	dest->weight = value->weight;
+	dest->dscale = value->dscale;
+	dest->sign = value->sign;
+
+	if (value->ndigits > 0)
+		memcpy(dest->digits,
+			value->digits,
+			value->ndigits * sizeof(NumericDigit));
 }
 
 
@@ -8606,6 +9282,7 @@ mul_var(const NumericVar *var1, const NumericVar *var2, NumericVar *result,
 	 */
 	result->weight = res_weight;
 	result->sign = res_sign;
+	result->ndigits = res_ndigits;
 
 	/* Round to target rscale (and set result->dscale) */
 	round_var(result, rscale);
@@ -8637,6 +9314,8 @@ mul_var_short(const NumericVar *var1, const NumericVar *var2,
 	NumericDigit *res_digits;
 	uint32		carry = 0;
 	uint32		term;
+	BufferedNumericVar tmp;
+	NumericVar *res;
 
 	/* Check preconditions */
 	Assert(var1ndigits >= 1);
@@ -8657,8 +9336,9 @@ mul_var_short(const NumericVar *var1, const NumericVar *var2,
 	res_weight = var1->weight + var2->weight + 1;
 	res_ndigits = var1ndigits + var2ndigits;
 
-	/* Allocate result digit array */
-	res_buf = digitbuf_alloc(res_ndigits + 1);
+	res = prepare_result_var(result, var1, var2, res_ndigits, &tmp);
+
+	res_buf = res->buf;
 	res_buf[0] = 0;				/* spare digit for later rounding */
 	res_digits = res_buf + 1;
 
@@ -8878,16 +9558,17 @@ mul_var_short(const NumericVar *var1, const NumericVar *var2,
 	}
 
 	/* Store the product in result */
-	digitbuf_free(result->buf);
-	result->ndigits = res_ndigits;
-	result->buf = res_buf;
-	result->digits = res_digits;
-	result->weight = res_weight;
-	result->sign = res_sign;
-	result->dscale = var1->dscale + var2->dscale;
+
+	res->ndigits = res_ndigits;
+	res->digits = res_digits;
+	res->weight = res_weight;
+	res->sign = res_sign;
+	res->dscale = var1->dscale + var2->dscale;
 
 	/* Strip leading and trailing zeroes */
-	strip_var(result);
+	strip_var(res);
+
+	finish_result_var(res, result);
 }
 
 
@@ -9463,6 +10144,8 @@ div_var_int(const NumericVar *var, int ival, int ival_weight,
 	NumericDigit *res_digits;
 	uint32		divisor;
 	int			i;
+	BufferedNumericVar tmp;
+	NumericVar *res;
 
 	/* Guard against division by zero */
 	if (ival == 0)
@@ -9496,7 +10179,9 @@ div_var_int(const NumericVar *var, int ival, int ival_weight,
 	if (round)
 		res_ndigits++;
 
-	res_buf = digitbuf_alloc(res_ndigits + 1);
+	res = prepare_result_var(result, var, var, res_ndigits, &tmp);
+
+	res_buf = res->buf;
 	res_buf[0] = 0;				/* spare digit for later rounding */
 	res_digits = res_buf + 1;
 
@@ -9538,12 +10223,14 @@ div_var_int(const NumericVar *var, int ival, int ival_weight,
 	}
 
 	/* Store the quotient in result */
-	digitbuf_free(result->buf);
-	result->ndigits = res_ndigits;
-	result->buf = res_buf;
-	result->digits = res_digits;
-	result->weight = res_weight;
-	result->sign = res_sign;
+
+	res->ndigits = res_ndigits;
+	res->digits = res_digits;
+	res->weight = res_weight;
+	res->sign = res_sign;
+	res->dscale = rscale;
+
+	finish_result_var(res, result);
 
 	/* Round or truncate to target rscale (and set result->dscale) */
 	if (round)
@@ -9579,6 +10266,8 @@ div_var_int64(const NumericVar *var, int64 ival, int ival_weight,
 	NumericDigit *res_digits;
 	uint64		divisor;
 	int			i;
+	BufferedNumericVar tmp;
+	NumericVar *res;
 
 	/* Guard against division by zero */
 	if (ival == 0)
@@ -9612,7 +10301,9 @@ div_var_int64(const NumericVar *var, int64 ival, int ival_weight,
 	if (round)
 		res_ndigits++;
 
-	res_buf = digitbuf_alloc(res_ndigits + 1);
+	res = prepare_result_var(result, var, var, res_ndigits, &tmp);
+
+	res_buf = res->buf;
 	res_buf[0] = 0;				/* spare digit for later rounding */
 	res_digits = res_buf + 1;
 
@@ -9654,12 +10345,13 @@ div_var_int64(const NumericVar *var, int64 ival, int ival_weight,
 	}
 
 	/* Store the quotient in result */
-	digitbuf_free(result->buf);
-	result->ndigits = res_ndigits;
-	result->buf = res_buf;
-	result->digits = res_digits;
-	result->weight = res_weight;
-	result->sign = res_sign;
+	res->ndigits = res_ndigits;
+	res->digits = res_digits;
+	res->weight = res_weight;
+	res->sign = res_sign;
+	res->dscale = rscale;
+
+	finish_result_var(res, result);
 
 	/* Round or truncate to target rscale (and set result->dscale) */
 	if (round)
@@ -11500,6 +12192,8 @@ add_abs(const NumericVar *var1, const NumericVar *var2, NumericVar *result)
 				i1,
 				i2;
 	int			carry = 0;
+	BufferedNumericVar tmp;
+	NumericVar *res;
 
 	/* copy these values into local vars for speed in inner loop */
 	int			var1ndigits = var1->ndigits;
@@ -11520,7 +12214,9 @@ add_abs(const NumericVar *var1, const NumericVar *var2, NumericVar *result)
 	if (res_ndigits <= 0)
 		res_ndigits = 1;
 
-	res_buf = digitbuf_alloc(res_ndigits + 1);
+	res = prepare_result_var(result, var1, var2, res_ndigits, &tmp);
+
+	res_buf = res->buf;
 	res_buf[0] = 0;				/* spare digit for later rounding */
 	res_digits = res_buf + 1;
 
@@ -11549,15 +12245,15 @@ add_abs(const NumericVar *var1, const NumericVar *var2, NumericVar *result)
 
 	Assert(carry == 0);			/* else we failed to allow for carry out */
 
-	digitbuf_free(result->buf);
-	result->ndigits = res_ndigits;
-	result->buf = res_buf;
-	result->digits = res_digits;
-	result->weight = res_weight;
-	result->dscale = res_dscale;
+	res->ndigits = res_ndigits;
+	res->digits = res_digits;
+	res->weight = res_weight;
+	res->dscale = res_dscale;
 
 	/* Remove leading/trailing zeroes */
-	strip_var(result);
+	strip_var(res);
+
+	finish_result_var(res, result);
 }
 
 
@@ -11585,6 +12281,8 @@ sub_abs(const NumericVar *var1, const NumericVar *var2, NumericVar *result)
 				i1,
 				i2;
 	int			borrow = 0;
+	BufferedNumericVar tmp;
+	NumericVar *res;
 
 	/* copy these values into local vars for speed in inner loop */
 	int			var1ndigits = var1->ndigits;
@@ -11605,7 +12303,9 @@ sub_abs(const NumericVar *var1, const NumericVar *var2, NumericVar *result)
 	if (res_ndigits <= 0)
 		res_ndigits = 1;
 
-	res_buf = digitbuf_alloc(res_ndigits + 1);
+	res = prepare_result_var(result, var1, var2, res_ndigits, &tmp);
+
+	res_buf = res->buf;
 	res_buf[0] = 0;				/* spare digit for later rounding */
 	res_digits = res_buf + 1;
 
@@ -11634,15 +12334,15 @@ sub_abs(const NumericVar *var1, const NumericVar *var2, NumericVar *result)
 
 	Assert(borrow == 0);		/* else caller gave us var1 < var2 */
 
-	digitbuf_free(result->buf);
-	result->ndigits = res_ndigits;
-	result->buf = res_buf;
-	result->digits = res_digits;
-	result->weight = res_weight;
-	result->dscale = res_dscale;
+	res->ndigits = res_ndigits;
+	res->digits = res_digits;
+	res->weight = res_weight;
+	res->dscale = res_dscale;
 
 	/* Remove leading/trailing zeroes */
-	strip_var(result);
+	strip_var(res);
+
+	finish_result_var(res, result);
 }
 
 /*
@@ -12105,7 +12805,9 @@ accum_sum_final(NumericSumAccum *accum, NumericVar *result)
 
 	/* Create NumericVars representing the positive and negative sums */
 	init_var(&pos_var);
+	alloc_var(&pos_var, accum->ndigits);
 	init_var(&neg_var);
+	alloc_var(&neg_var, accum->ndigits);
 
 	pos_var.ndigits = neg_var.ndigits = accum->ndigits;
 	pos_var.weight = neg_var.weight = accum->weight;
@@ -12113,8 +12815,8 @@ accum_sum_final(NumericSumAccum *accum, NumericVar *result)
 	pos_var.sign = NUMERIC_POS;
 	neg_var.sign = NUMERIC_NEG;
 
-	pos_var.buf = pos_var.digits = digitbuf_alloc(accum->ndigits);
-	neg_var.buf = neg_var.digits = digitbuf_alloc(accum->ndigits);
+	pos_var.buf = pos_var.digits = digitbuf_alloc_raw(accum->ndigits);
+	neg_var.buf = neg_var.digits = digitbuf_alloc_raw(accum->ndigits);
 
 	for (i = 0; i < accum->ndigits; i++)
 	{

@@ -616,9 +616,8 @@ COPY <replaceable class="parameter">count</replaceable>
     If row-level security is enabled for the table, the relevant
     <command>SELECT</command> policies will apply to <literal>COPY
     <replaceable class="parameter">table</replaceable> TO</literal> statements.
-    Currently, <command>COPY FROM</command> is not supported for tables
-    with row-level security. Use equivalent <command>INSERT</command>
-    statements instead.
+    While <command>COPY FROM</command> is supported for tables with row-level
+    security, it is not supported if the table also has rules.
    </para>
 
    <para>

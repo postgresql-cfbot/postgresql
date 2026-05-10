@@ -1,0 +1,487 @@
+select count(distinct a), sum(hashtext(a::text)) from t_1000_800 where a > b;
+ count |     sum      
+-------+--------------
+  2000 | -93674011458
+(1 row)
+
+select count(distinct a), sum(hashtext(a::text)) from t_1000_995 where a > b;
+ count |     sum     
+-------+-------------
+  2000 | 49431437020
+(1 row)
+
+select count(distinct a), sum(hashtext(a::text)) from t_1000_1000 where a > b;
+ count |     sum     
+-------+-------------
+   200 | 81596504540
+(1 row)
+
+select sum(hashtext((a+b)::text)),
+    sum(hashtext((a-b)::text)),
+    sum(hashtext((a*b)::text)),
+    sum(hashtext((a/nullif(b, 0))::text)),
+    sum(hashtext((a%nullif(b, 0))::text)),
+    sum(hashtext((a*b+b/nullif(a, 0))::text)),
+    sum(hashtext((a-b/nullif((b-a), 0))::text)),
+    sum(hashtext((a > b)::text)),
+    sum(hashtext((a < b)::text)),
+    sum(hashtext((a = b)::text)),
+    sum(hashtext(abs(a)::text)),
+    sum(hashtext(round(a)::text)),
+    sum(hashtext(trunc(a)::text))
+from t_1000_800;
+     sum      |     sum     |     sum     |     sum      |     sum     |     sum      |     sum      |      sum       |      sum       |      sum       |      sum      |      sum      |      sum      
+--------------+-------------+-------------+--------------+-------------+--------------+--------------+----------------+----------------+----------------+---------------+---------------+---------------
+ 103787738890 | 71241136711 | 91238480326 | -25880446966 | 85861504452 | 138111163668 | -64934216831 | -3883271108300 | -3883271108300 | -7965490469700 | -263811485216 | -196222417055 | -253470347100
+(1 row)
+
+select sum(hashtext((a+b)::text)),
+    sum(hashtext((a-b)::text)),
+    sum(hashtext((a*b)::text)),
+    sum(hashtext((a/nullif(b, 0))::text)),
+    sum(hashtext((a%nullif(b, 0))::text)),
+    sum(hashtext((a*b+b/nullif(a, 0))::text)),
+    sum(hashtext((a-b/nullif((b-a), 0))::text)),
+    sum(hashtext((a > b)::text)),
+    sum(hashtext((a < b)::text)),
+    sum(hashtext((a = b)::text)),
+    sum(hashtext(abs(a)::text)),
+    sum(hashtext(round(a)::text)),
+    sum(hashtext(trunc(a)::text))
+from t_1000_995;
+      sum      |     sum      |     sum     |     sum      |      sum      |     sum      |     sum      |      sum       |      sum       |      sum       |      sum      |      sum      |      sum      
+---------------+--------------+-------------+--------------+---------------+--------------+--------------+----------------+----------------+----------------+---------------+---------------+---------------
+ -168835944407 | -37026039983 | -9162875272 | 103006726746 | -108905948664 | -77309522276 | 146591765000 | -3883271108300 | -3883271108300 | -7965490469700 | -111504876460 | -183625584196 | -243750883157
+(1 row)
+
+select sum(hashtext((a+b)::text)),
+    sum(hashtext((a-b)::text)),
+    sum(hashtext((a*b)::text)),
+    sum(hashtext((a/nullif(b, 0))::text)),
+    sum(hashtext((a%nullif(b, 0))::text)),
+    sum(hashtext((a*b+b/nullif(a, 0))::text)),
+    sum(hashtext((a-b/nullif((b-a), 0))::text)),
+    sum(hashtext((a > b)::text)),
+    sum(hashtext((a < b)::text)),
+    sum(hashtext((a = b)::text)),
+    sum(hashtext(abs(a)::text)),
+    sum(hashtext(round(a)::text)),
+    sum(hashtext(trunc(a)::text))
+from t_1000_1000;
+     sum     |     sum     |      sum      | sum | sum |      sum      |     sum     |     sum      |      sum       |      sum       |     sum     |     sum      |     sum      
+-------------+-------------+---------------+-----+-----+---------------+-------------+--------------+----------------+----------------+-------------+--------------+--------------
+ 81596504540 | 81596504540 | -448199909000 |     |     | -448199909000 | 81596504540 | 153330623000 | -1995205883000 | -1995205883000 | 81596504540 | -70370694025 | -81922915700
+(1 row)
+
+select sum(hashtext((rk)::text)), sum(hashtext((rn)::text)), sum(hashtext((s)::text)) from (
+    select rank() over(partition by id2 order by a+b, a, b, id) as rk,
+        row_number() over(partition by id2 order by b, a, id) as rn,
+        sum(a) over(
+            partition by id2
+            order by a, b, id
+            rows between unbounded preceding and current row
+        ) as s
+    from t_1000_800
+) t1;
+     sum      |     sum      |      sum      
+--------------+--------------+---------------
+ 122592282760 | 122592282760 | -153072055232
+(1 row)
+
+select sum(hashtext((rk)::text)), sum(hashtext((rn)::text)), sum(hashtext((s)::text)) from (
+    select rank() over(partition by id2 order by a+b, a, b, id) as rk,
+        row_number() over(partition by id2 order by b, a, id) as rn,
+        sum(a) over(
+            partition by id2
+            order by a, b, id
+            rows between unbounded preceding and current row
+        ) as s
+    from t_1000_995
+) t1;
+     sum      |     sum      |      sum      
+--------------+--------------+---------------
+ 122592282760 | 122592282760 | -221944827430
+(1 row)
+
+select sum(hashtext((rk)::text)), sum(hashtext((rn)::text)), sum(hashtext((s)::text)) from (
+    select rank() over(partition by id2 order by a+b, a, b, id) as rk,
+        row_number() over(partition by id2 order by b, a, id) as rn,
+        sum(a) over(
+            partition by id2
+            order by a, b, id
+            rows between unbounded preceding and current row
+        ) as s
+    from t_1000_1000
+) t1;
+     sum      |     sum      |     sum      
+--------------+--------------+--------------
+ -87303812940 | -87303812940 | -36200000898
+(1 row)
+
+select a/0 from t_1000_800;
+ERROR:  division by zero
+select a/0 from t_1000_995;
+ERROR:  division by zero
+select a/0 from t_1000_1000;
+ERROR:  division by zero
+select a%0 from t_1000_800;
+ERROR:  division by zero
+select a%0 from t_1000_995;
+ERROR:  division by zero
+select a%0 from t_1000_1000;
+ERROR:  division by zero
+select (a-a)/(a-a) from t_1000_800;
+ERROR:  division by zero
+select (a-a)/(a-a) from t_1000_995;
+ERROR:  division by zero
+select (a-a)/(a-a) from t_1000_1000;
+ERROR:  division by zero
+set enable_hashjoin = on;
+set enable_nestloop = off;
+set enable_mergejoin = off;
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_800 t1 join t_1000_800 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 1dab074815e4209082cd0fff9582bf2c | 5d0bb1be149c34037fddfade54a3adf6 | 6462f616299e10ce9d30f1a9d1bbeb20
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_995 t1 join t_1000_995 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 1a5a255cc4b0646f8cb27448a2df2310 | 3c1165aed3ac2fe402386fd8bc6a7f69 | bb44d6c91ac3138f7712d7062ba1d4c0
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_1000 t1 join t_1000_1000 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ f3944f455b5fc4deb1eb3c782e38b134 | 1a5a255cc4b0646f8cb27448a2df2310 | 82295228238aae9f4eb3e7e71bb3b1d0
+(1 row)
+
+reset enable_hashjoin;
+reset enable_nestloop;
+reset enable_mergejoin;
+set enable_hashjoin = off;
+set enable_nestloop = on;
+set enable_mergejoin = off;
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_800 t1 join t_1000_800 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 1dab074815e4209082cd0fff9582bf2c | 5d0bb1be149c34037fddfade54a3adf6 | 6462f616299e10ce9d30f1a9d1bbeb20
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_995 t1 join t_1000_995 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 1a5a255cc4b0646f8cb27448a2df2310 | 3c1165aed3ac2fe402386fd8bc6a7f69 | bb44d6c91ac3138f7712d7062ba1d4c0
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_1000 t1 join t_1000_1000 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ f3944f455b5fc4deb1eb3c782e38b134 | 1a5a255cc4b0646f8cb27448a2df2310 | 82295228238aae9f4eb3e7e71bb3b1d0
+(1 row)
+
+reset enable_hashjoin;
+reset enable_nestloop;
+reset enable_mergejoin;
+set enable_hashjoin = off;
+set enable_nestloop = off;
+set enable_mergejoin = on;
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_800 t1 join t_1000_800 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 1dab074815e4209082cd0fff9582bf2c | 5d0bb1be149c34037fddfade54a3adf6 | 6462f616299e10ce9d30f1a9d1bbeb20
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_995 t1 join t_1000_995 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 1a5a255cc4b0646f8cb27448a2df2310 | 3c1165aed3ac2fe402386fd8bc6a7f69 | bb44d6c91ac3138f7712d7062ba1d4c0
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_1000 t1 join t_1000_1000 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ f3944f455b5fc4deb1eb3c782e38b134 | 1a5a255cc4b0646f8cb27448a2df2310 | 82295228238aae9f4eb3e7e71bb3b1d0
+(1 row)
+
+reset enable_hashjoin;
+reset enable_nestloop;
+reset enable_mergejoin;
+set enable_seqscan = off;
+set enable_bitmapscan = off;
+explain (costs off) select * from t_1000_800 where a > 1000 order by a;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Index Scan using idx_t_1000_800 on t_1000_800
+   Index Cond: (a > '1000'::numeric)
+(2 rows)
+
+explain (costs off) select a from t_1000_800 where a > 1000 order by a;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Index Only Scan using idx_t_1000_800 on t_1000_800
+   Index Cond: (a > '1000'::numeric)
+(2 rows)
+
+explain (costs off) select * from t_1000_995 where a > 1000 order by a;
+                  QUERY PLAN                   
+-----------------------------------------------
+ Index Scan using idx_t_1000_995 on t_1000_995
+   Index Cond: (a > '1000'::numeric)
+(2 rows)
+
+explain (costs off) select a from t_1000_995 where a > 1000 order by a;
+                     QUERY PLAN                     
+----------------------------------------------------
+ Index Only Scan using idx_t_1000_995 on t_1000_995
+   Index Cond: (a > '1000'::numeric)
+(2 rows)
+
+explain (costs off) select * from t_1000_1000 where a > 1000 order by a;
+                   QUERY PLAN                    
+-------------------------------------------------
+ Index Scan using idx_t_1000_1000 on t_1000_1000
+   Index Cond: (a > '1000'::numeric)
+(2 rows)
+
+explain (costs off) select a from t_1000_1000 where a > 1000 order by a;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Index Only Scan using idx_t_1000_1000 on t_1000_1000
+   Index Cond: (a > '1000'::numeric)
+(2 rows)
+
+reset enable_seqscan;
+reset enable_bitmapscan;
+update t_1000_800 set a = a + 1;
+update t_1000_995 set a = a + 1;
+update t_1000_1000 set a = a + 1;
+select count(distinct a), sum(hashtext(a::text)) from t_1000_800 where a > b;
+ count |     sum      
+-------+--------------
+  2001 | 187915496731
+(1 row)
+
+select count(distinct a), sum(hashtext(a::text)) from t_1000_995 where a > b;
+ count |      sum      
+-------+---------------
+  2001 | -120277609243
+(1 row)
+
+select count(distinct a), sum(hashtext(a::text)) from t_1000_1000 where a > b;
+ count |     sum     
+-------+-------------
+   200 | -6791326615
+(1 row)
+
+select sum(hashtext((a+b)::text)),
+    sum(hashtext((a-b)::text)),
+    sum(hashtext((a*b)::text)),
+    sum(hashtext((a/nullif(b, 0))::text)),
+    sum(hashtext((a%nullif(b, 0))::text)),
+    sum(hashtext((a*b+b/nullif(a, 0))::text)),
+    sum(hashtext((a-b/nullif((b-a), 0))::text)),
+    sum(hashtext((a > b)::text)),
+    sum(hashtext((a < b)::text)),
+    sum(hashtext((a = b)::text)),
+    sum(hashtext(abs(a)::text)),
+    sum(hashtext(round(a)::text)),
+    sum(hashtext(trunc(a)::text))
+from t_1000_800;
+     sum     |     sum      |     sum     |    sum     |     sum     |     sum     |     sum     |      sum       |      sum       |      sum       |     sum      |     sum      |     sum      
+-------------+--------------+-------------+------------+-------------+-------------+-------------+----------------+----------------+----------------+--------------+--------------+--------------
+ 69378299805 | -28004625396 | 69165702075 | 6495822165 | 42794676167 | 28778131261 | 23748489343 | -3668417457700 | -3883271108300 | -8180344120300 | 162788189344 | -88035415965 | -14300392972
+(1 row)
+
+select sum(hashtext((a+b)::text)),
+    sum(hashtext((a-b)::text)),
+    sum(hashtext((a*b)::text)),
+    sum(hashtext((a/nullif(b, 0))::text)),
+    sum(hashtext((a%nullif(b, 0))::text)),
+    sum(hashtext((a*b+b/nullif(a, 0))::text)),
+    sum(hashtext((a-b/nullif((b-a), 0))::text)),
+    sum(hashtext((a > b)::text)),
+    sum(hashtext((a < b)::text)),
+    sum(hashtext((a = b)::text)),
+    sum(hashtext(abs(a)::text)),
+    sum(hashtext(round(a)::text)),
+    sum(hashtext(trunc(a)::text))
+from t_1000_995;
+     sum      |    sum    |     sum      |     sum      |     sum      |    sum     |     sum      |      sum       |      sum       |      sum       |      sum      |     sum      |      sum      
+--------------+-----------+--------------+--------------+--------------+------------+--------------+----------------+----------------+----------------+---------------+--------------+---------------
+ 106142378501 | 456865251 | -40344563826 | -82057607022 | -74296237953 | 4474319379 | 111919427572 | -3668417457700 | -3883271108300 | -8180344120300 | -223137274026 | -60159164731 | -114299102966
+(1 row)
+
+select sum(hashtext((a+b)::text)),
+    sum(hashtext((a-b)::text)),
+    sum(hashtext((a*b)::text)),
+    sum(hashtext((a/nullif(b, 0))::text)),
+    sum(hashtext((a%nullif(b, 0))::text)),
+    sum(hashtext((a*b+b/nullif(a, 0))::text)),
+    sum(hashtext((a-b/nullif((b-a), 0))::text)),
+    sum(hashtext((a > b)::text)),
+    sum(hashtext((a < b)::text)),
+    sum(hashtext((a = b)::text)),
+    sum(hashtext(abs(a)::text)),
+    sum(hashtext(round(a)::text)),
+    sum(hashtext(trunc(a)::text))
+from t_1000_1000;
+     sum     |     sum     |      sum      | sum | sum |      sum      |     sum     |     sum      |      sum       |      sum       |     sum     |      sum      |     sum      
+-------------+-------------+---------------+-----+-----+---------------+-------------+--------------+----------------+----------------+-------------+---------------+--------------
+ -6791326615 | -6791326615 | -448199909000 |     |     | -448199909000 | -6791326615 | 153330623000 | -1995205883000 | -1995205883000 | -6791326615 | -116888674645 | -70370694025
+(1 row)
+
+select sum(hashtext((rk)::text)), sum(hashtext((rn)::text)), sum(hashtext((s)::text)) from (
+    select rank() over(partition by id2 order by a+b, a, b, id) as rk,
+        row_number() over(partition by id2 order by b, a, id) as rn,
+        sum(a) over(
+            partition by id2
+            order by a, b, id
+            rows between unbounded preceding and current row
+        ) as s
+    from t_1000_800
+) t1;
+     sum      |     sum      |     sum      
+--------------+--------------+--------------
+ 122592282760 | 122592282760 | -23880525307
+(1 row)
+
+select sum(hashtext((rk)::text)), sum(hashtext((rn)::text)), sum(hashtext((s)::text)) from (
+    select rank() over(partition by id2 order by a+b, a, b, id) as rk,
+        row_number() over(partition by id2 order by b, a, id) as rn,
+        sum(a) over(
+            partition by id2
+            order by a, b, id
+            rows between unbounded preceding and current row
+        ) as s
+    from t_1000_995
+) t1;
+     sum      |     sum      |     sum     
+--------------+--------------+-------------
+ 122592282760 | 122592282760 | 31543863976
+(1 row)
+
+select sum(hashtext((rk)::text)), sum(hashtext((rn)::text)), sum(hashtext((s)::text)) from (
+    select rank() over(partition by id2 order by a+b, a, b, id) as rk,
+        row_number() over(partition by id2 order by b, a, id) as rn,
+        sum(a) over(
+            partition by id2
+            order by a, b, id
+            rows between unbounded preceding and current row
+        ) as s
+    from t_1000_1000
+) t1;
+     sum      |     sum      |     sum     
+--------------+--------------+-------------
+ -87303812940 | -87303812940 | 18056325685
+(1 row)
+
+select a/0 from t_1000_800;
+ERROR:  division by zero
+select a/0 from t_1000_995;
+ERROR:  division by zero
+select a/0 from t_1000_1000;
+ERROR:  division by zero
+select a%0 from t_1000_800;
+ERROR:  division by zero
+select a%0 from t_1000_995;
+ERROR:  division by zero
+select a%0 from t_1000_1000;
+ERROR:  division by zero
+select (a-a)/(a-a) from t_1000_800;
+ERROR:  division by zero
+select (a-a)/(a-a) from t_1000_995;
+ERROR:  division by zero
+select (a-a)/(a-a) from t_1000_1000;
+ERROR:  division by zero
+set enable_hashjoin = on;
+set enable_nestloop = off;
+set enable_mergejoin = off;
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_800 t1 join t_1000_800 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 9af0d5833a5dc496ac4cd53bca6c8602 | 5d0bb1be149c34037fddfade54a3adf6 | 6462f616299e10ce9d30f1a9d1bbeb20
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_995 t1 join t_1000_995 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 11cbb4649046194d3a521054a6e9d2f1 | 3c1165aed3ac2fe402386fd8bc6a7f69 | bb44d6c91ac3138f7712d7062ba1d4c0
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_1000 t1 join t_1000_1000 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ a76cd728b4a258a8353a3288df6fa78c | 1a5a255cc4b0646f8cb27448a2df2310 | 82295228238aae9f4eb3e7e71bb3b1d0
+(1 row)
+
+reset enable_hashjoin;
+reset enable_nestloop;
+reset enable_mergejoin;
+set enable_hashjoin = off;
+set enable_nestloop = on;
+set enable_mergejoin = off;
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_800 t1 join t_1000_800 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 9af0d5833a5dc496ac4cd53bca6c8602 | 5d0bb1be149c34037fddfade54a3adf6 | 6462f616299e10ce9d30f1a9d1bbeb20
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_995 t1 join t_1000_995 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 11cbb4649046194d3a521054a6e9d2f1 | 3c1165aed3ac2fe402386fd8bc6a7f69 | bb44d6c91ac3138f7712d7062ba1d4c0
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_1000 t1 join t_1000_1000 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ a76cd728b4a258a8353a3288df6fa78c | 1a5a255cc4b0646f8cb27448a2df2310 | 82295228238aae9f4eb3e7e71bb3b1d0
+(1 row)
+
+reset enable_hashjoin;
+reset enable_nestloop;
+reset enable_mergejoin;
+set enable_hashjoin = off;
+set enable_nestloop = off;
+set enable_mergejoin = on;
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_800 t1 join t_1000_800 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 9af0d5833a5dc496ac4cd53bca6c8602 | 5d0bb1be149c34037fddfade54a3adf6 | 6462f616299e10ce9d30f1a9d1bbeb20
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_995 t1 join t_1000_995 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ 11cbb4649046194d3a521054a6e9d2f1 | 3c1165aed3ac2fe402386fd8bc6a7f69 | bb44d6c91ac3138f7712d7062ba1d4c0
+(1 row)
+
+select md5(sum(t1.a + t2.b)::text), md5(avg(t1.a * t2.b)::text), md5(stddev(t1.a - t2.b)::text) from t_1000_1000 t1 join t_1000_1000 t2 on t1.a = t2.a;
+               md5                |               md5                |               md5                
+----------------------------------+----------------------------------+----------------------------------
+ a76cd728b4a258a8353a3288df6fa78c | 1a5a255cc4b0646f8cb27448a2df2310 | 82295228238aae9f4eb3e7e71bb3b1d0
+(1 row)
+
+reset enable_hashjoin;
+reset enable_nestloop;
+reset enable_mergejoin;
+select sum(hashtext((a*rn)::text)) from (select a, row_number() over(order by a, id) as rn from t_1000_800 where a > 100) t1;
+     sum      
+--------------
+ -27571036926
+(1 row)
+
+select sum(hashtext((a*rn)::text)) from (select a, row_number() over(order by a, id) as rn from t_1000_995 where a > 100) t1;
+     sum      
+--------------
+ 142042826843
+(1 row)
+
+select sum(hashtext((a*rn)::text)) from (select a, row_number() over(order by a, id) as rn from t_1000_1000 where a > 100) t1;
+     sum      
+--------------
+ -37293091674
+(1 row)
+

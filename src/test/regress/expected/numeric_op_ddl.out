@@ -1,0 +1,167 @@
+DROP TABLE IF EXISTS t_9_2;
+NOTICE:  table "t_9_2" does not exist, skipping
+DROP TABLE IF EXISTS t_18_2;
+NOTICE:  table "t_18_2" does not exist, skipping
+DROP TABLE IF EXISTS t_38_2;
+NOTICE:  table "t_38_2" does not exist, skipping
+DROP TABLE IF EXISTS t_80_16;
+NOTICE:  table "t_80_16" does not exist, skipping
+DROP TABLE IF EXISTS t_175_35;
+NOTICE:  table "t_175_35" does not exist, skipping
+DROP TABLE IF EXISTS t_400_80;
+NOTICE:  table "t_400_80" does not exist, skipping
+DROP TABLE IF EXISTS t_1000_200;
+NOTICE:  table "t_1000_200" does not exist, skipping
+DROP TABLE IF EXISTS t_1000_800;
+NOTICE:  table "t_1000_800" does not exist, skipping
+DROP TABLE IF EXISTS t_1000_995;
+NOTICE:  table "t_1000_995" does not exist, skipping
+DROP TABLE IF EXISTS t_base;
+NOTICE:  table "t_base" does not exist, skipping
+CREATE TABLE t_9_2 (id int, id2 int, a NUMERIC(9, 2), b NUMERIC(11, 4));
+CREATE TABLE t_18_2 (id int, id2 int, a NUMERIC(18, 2), b NUMERIC(20, 4));
+CREATE TABLE t_38_2 (id int, id2 int, a NUMERIC(38, 2), b NUMERIC(40, 4));
+CREATE TABLE t_80_16 (id int, id2 int, a NUMERIC(80, 16), b NUMERIC(90, 18));
+CREATE TABLE t_175_35 (id int, id2 int, a NUMERIC(175, 35), b NUMERIC(190, 40));
+CREATE TABLE t_400_80 (id int, id2 int, a NUMERIC(400, 80), b NUMERIC(420, 100));
+CREATE TABLE t_1000_200 (id int, id2 int, a NUMERIC(1000, 200), b NUMERIC(1000, 220));
+CREATE TABLE t_1000_800 (id int, id2 int, a NUMERIC(1000, 800), b NUMERIC(1000, 900));
+CREATE TABLE t_1000_995 (id int, id2 int, a NUMERIC(1000, 995), b NUMERIC(1000, 1000));
+CREATE TABLE t_base (id int, id2 int, astr text, bstr text);
+INSERT INTO t_base
+    SELECT  g,
+            g % 20,
+            string_agg(
+                lpad(
+                    (((g * 37 + k)::bigint * 1103515245 + 12345) % 1000000007)::text,
+                    9, '0'
+                    ),
+                ''
+                ORDER BY k
+            ) AS astr,
+            string_agg(
+                lpad(
+                    (((g * 131 + k)::bigint * 1284584123 + 89247) % 998244353)::text,
+                    9, '0'
+                    ),
+                ''
+                ORDER BY k
+            ) AS bstr
+    FROM generate_series(1, 2000) g,
+        generate_series(1, 120) k
+    GROUP BY g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 7) || '.' || substr(astr, 8, 2))::numeric(9, 2) AS a,
+        (substr(bstr, 1, 7) || '.' || substr(bstr, 8, 4))::numeric(11, 4) AS b
+    FROM t_base
+)
+INSERT INTO t_9_2 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 16) || '.' || substr(astr, 17, 2))::numeric(18, 2) AS a,
+        (substr(bstr, 1, 16) || '.' || substr(bstr, 17, 4))::numeric(20, 4) AS b
+    FROM t_base
+)
+INSERT INTO t_18_2 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 36) || '.' || substr(astr, 37, 2))::numeric(38, 2) AS a,
+        (substr(bstr, 1, 36) || '.' || substr(bstr, 37, 4))::numeric(40, 4) AS b
+    FROM t_base
+)
+INSERT INTO t_38_2 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+    
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 64) || '.' || substr(astr, 65, 16))::numeric(80, 16) AS a,
+        (substr(bstr, 1, 72) || '.' || substr(bstr, 73, 18))::numeric(90, 18) AS b
+    FROM t_base
+)
+INSERT INTO t_80_16 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 140) || '.' || substr(astr, 141, 35))::numeric(175, 35) AS a,
+        (substr(bstr, 1, 150) || '.' || substr(bstr, 151, 40))::numeric(190, 40) AS b
+    FROM t_base
+)
+INSERT INTO t_175_35 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 320) || '.' || substr(astr, 321, 80))::numeric(400, 80) AS a,
+        (substr(bstr, 1, 320) || '.' || substr(bstr, 321, 100))::numeric(420, 100) AS b
+    FROM t_base
+)
+INSERT INTO t_400_80 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 800) || '.' || substr(astr, 801, 200))::numeric(1000, 200) AS a,
+        (substr(bstr, 1, 780) || '.' || substr(bstr, 781, 220))::numeric(1000, 220) AS b
+    FROM t_base
+)
+INSERT INTO t_1000_200 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 200) || '.' || substr(astr, 201, 800))::numeric(1000, 800) AS a,
+        (substr(bstr, 1, 100) || '.' || substr(bstr, 101, 900))::numeric(1000, 900) AS b
+    FROM t_base
+)
+INSERT INTO t_1000_800 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+WITH t AS (
+    SELECT id, id2,
+        (substr(astr, 1, 5) || '.' || substr(astr, 6, 995))::numeric(1000, 995) AS a,
+        ('0.' || substr(bstr, 1, 1000))::numeric(1000, 1000) AS b
+    FROM t_base
+)
+INSERT INTO t_1000_995 SELECT id, id2, a, b FROM t
+    UNION ALL SELECT id, id2, -a, -b FROM t
+    UNION ALL SELECT g AS id, g % 20 AS id2, 0 AS a, 0 AS b from generate_series(1, 100) AS g;
+CREATE INDEX idx_t_9_2 ON t_9_2 USING btree(a);
+CREATE INDEX idx_t_18_2 ON t_18_2 USING btree(a);
+CREATE INDEX idx_t_38_2 ON t_38_2 USING btree(a);
+CREATE INDEX idx_t_80_16 ON t_80_16 USING btree(a);
+CREATE INDEX idx_t_175_35 ON t_175_35 USING btree(a);
+CREATE INDEX idx_t_400_80 ON t_400_80 USING btree(a);
+CREATE INDEX idx_t_1000_200 ON t_1000_200 USING btree(a);
+CREATE INDEX idx_t_1000_800 ON t_1000_800 USING btree(a);
+CREATE INDEX idx_t_1000_995 ON t_1000_995 USING btree(a);
+VACUUM FREEZE ANALYZE t_9_2;
+VACUUM FREEZE ANALYZE t_18_2;
+VACUUM FREEZE ANALYZE t_38_2;
+VACUUM FREEZE ANALYZE t_80_16;
+VACUUM FREEZE ANALYZE t_175_35;
+VACUUM FREEZE ANALYZE t_400_80;
+VACUUM FREEZE ANALYZE t_1000_200;
+VACUUM FREEZE ANALYZE t_1000_800;
+VACUUM FREEZE ANALYZE t_1000_995;
+DROP TABLE IF EXISTS t_1000_1000;
+NOTICE:  table "t_1000_1000" does not exist, skipping
+CREATE TABLE t_1000_1000 AS
+SELECT
+gs as id,
+gs % 20 as id2,
+(
+    REPEAT('9', (gs % 200)) || '.' || REPEAT('9', 800)
+)::NUMERIC(1000, 800) AS a,
+(
+    REPEAT('0', (gs % 200)) || '.' || REPEAT('0', 800)
+)::NUMERIC(1000, 800) AS b
+FROM GENERATE_SERIES(1, 1000) AS gs;
+CREATE INDEX idx_t_1000_1000 ON t_1000_1000 USING btree(a);
+VACUUM FREEZE ANALYZE t_1000_1000;

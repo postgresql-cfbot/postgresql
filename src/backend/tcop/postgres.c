@@ -3699,6 +3699,9 @@ ProcessInterrupts(void)
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
 
+	if (ReportAnytimeStatsPending)
+		ProcessReportAnytimeStatsInterrupt();
+
 	if (ParallelApplyMessagePending)
 		ProcessParallelApplyMessages();
 

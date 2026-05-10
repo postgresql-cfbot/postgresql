@@ -675,12 +675,6 @@ SELECT pg_stat_force_next_flush();
  
 (1 row)
 
-SELECT last_seq_scan, last_idx_scan FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
- last_seq_scan | last_idx_scan 
----------------+---------------
-               | 
-(1 row)
-
 COMMIT;
 SELECT stats_reset IS NOT NULL AS has_stats_reset
   FROM pg_stat_all_tables WHERE relid = 'test_last_scan'::regclass;
@@ -2040,4 +2034,90 @@ SELECT fastpath_exceeded > :fastpath_exceeded_before FROM pg_stat_lock WHERE loc
 (1 row)
 
 DROP TABLE part_test;
+--
+-- Test in-transaction flushes
+--
+CREATE TABLE partial_flush(id int);
+INSERT INTO partial_flush VALUES (1), (2), (3);
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+-- Record counters before the explicit transaction
+SELECT seq_scan AS seq_scan_before,
+       seq_tup_read AS seq_tup_read_before,
+       n_tup_ins AS n_tup_ins_before,
+       n_tup_upd AS n_tup_upd_before
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush' \gset
+BEGIN;
+SET LOCAL stats_fetch_consistency = none;
+-- Generate both transaction-safe and transaction-unsafe counters.
+SELECT count(*) FROM partial_flush;
+ count 
+-------
+     3
+(1 row)
+
+INSERT INTO partial_flush VALUES (4), (5);
+UPDATE partial_flush SET id = id WHERE id = 1;
+-- Flush in-transaction
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+-- Transaction-safe counters should be visible in-transaction.
+-- Transaction-unsafe counters (ins, upd) should NOT be flushed yet,
+-- since their final values depend on whether the transaction commits.
+SELECT seq_scan - :seq_scan_before AS seq_scan_delta,
+       seq_tup_read - :seq_tup_read_before AS seq_tup_read_delta,
+       n_tup_ins - :n_tup_ins_before AS n_tup_ins_delta,
+       n_tup_upd - :n_tup_upd_before AS n_tup_upd_delta
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush';
+ seq_scan_delta | seq_tup_read_delta | n_tup_ins_delta | n_tup_upd_delta 
+----------------+--------------------+-----------------+-----------------
+              2 |                  8 |               0 |               0
+(1 row)
+
+-- Generate more transaction-safe activity to verify no double counting.
+SELECT count(*) FROM partial_flush;
+ count 
+-------
+     5
+(1 row)
+
+-- Flush again in-transaction
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+-- Should show cumulative totals, not double-counted.
+SELECT seq_scan - :seq_scan_before AS seq_scan_delta,
+       seq_tup_read - :seq_tup_read_before AS seq_tup_read_delta,
+       n_tup_ins - :n_tup_ins_before AS n_tup_ins_delta,
+       n_tup_upd - :n_tup_upd_before AS n_tup_upd_delta
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush';
+ seq_scan_delta | seq_tup_read_delta | n_tup_ins_delta | n_tup_upd_delta 
+----------------+--------------------+-----------------+-----------------
+              3 |                 13 |               0 |               0
+(1 row)
+
+COMMIT;
+-- After commit, the remaining counters should be flushed.
+SELECT seq_scan - :seq_scan_before AS seq_scan_delta,
+       seq_tup_read - :seq_tup_read_before AS seq_tup_read_delta,
+       n_tup_ins - :n_tup_ins_before AS n_tup_ins_delta,
+       n_tup_upd - :n_tup_upd_before AS n_tup_upd_delta
+  FROM pg_stat_user_tables WHERE relname = 'partial_flush';
+ seq_scan_delta | seq_tup_read_delta | n_tup_ins_delta | n_tup_upd_delta 
+----------------+--------------------+-----------------+-----------------
+              3 |                 13 |               2 |               1
+(1 row)
+
+DROP TABLE partial_flush;
 -- End of Stats Test

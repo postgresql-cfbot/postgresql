@@ -729,7 +729,6 @@ pgstat_report_stat(bool force)
 	bool		nowait;
 
 	pgstat_assert_is_up();
-	Assert(!IsTransactionOrTransactionBlock());
 
 	/* "absorb" the forced flush even if there's nothing to flush */
 	if (pgStatForceNextFlush)
@@ -815,12 +814,13 @@ pgstat_report_stat(bool force)
 
 	/*
 	 * If some of the pending stats could not be flushed due to lock
-	 * contention, let the caller know when to retry.
+	 * contention, or only partially flushed due to in-transaction counters
+	 * being deferred, let the caller know when to retry.
 	 */
 	if (partial_flush)
 	{
-		/* force should have prevented us from getting here */
-		Assert(!force);
+		/* with force, only active transaction state can cause a partial flush */
+		Assert(!force || IsTransactionOrTransactionBlock());
 
 		/* remember since when stats have been pending */
 		if (pending_since == 0)
@@ -842,6 +842,9 @@ pgstat_report_stat(bool force)
 void
 pgstat_force_next_flush(void)
 {
+	if (IsTransactionOrTransactionBlock())
+		pgstat_report_stat(true);
+
 	pgStatForceNextFlush = true;
 }
 
@@ -1414,7 +1417,7 @@ pgstat_flush_pending_entries(bool nowait)
 		/* flush the stats, if possible */
 		did_flush = kind_info->flush_pending_cb(entry_ref, nowait);
 
-		Assert(did_flush || nowait);
+		Assert(did_flush || nowait || IsTransactionOrTransactionBlock());
 
 		/* determine next entry, before deleting the pending entry */
 		if (dlist_has_next(&pgStatPending, cur))

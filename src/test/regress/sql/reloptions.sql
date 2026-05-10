@@ -70,6 +70,16 @@ DROP TABLE reloptions_test;
 CREATE TABLE reloptions_test(i INT) WITH (vacuum_truncate=FaLS);
 SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
 
+-- preferred "true" alias is stored in pg_class
+DROP TABLE reloptions_test;
+CREATE TABLE reloptions_test(i INT) WITH (vacuum_index_cleanup=on);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
+
+-- custom "third" value is available
+DROP TABLE reloptions_test;
+CREATE TABLE reloptions_test(i INT) WITH (vacuum_index_cleanup=auto);
+SELECT reloptions FROM pg_class WHERE oid = 'reloptions_test'::regclass;
+
 -- Test vacuum_truncate option
 DROP TABLE reloptions_test;
 

@@ -174,7 +174,29 @@ static relopt_ternary ternaryRelOpts[] =
 			"Enables vacuum to truncate empty pages at the end of this table",
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
 			ShareUpdateExclusiveLock
-		}
+		},
+		NULL,
+		PG_TERNARY_UNSET
+	},
+	{
+		{
+			"vacuum_index_cleanup",
+			"Controls index vacuuming and index cleanup",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		},
+		"auto",
+		PG_TERNARY_UNSET
+	},
+	{
+		{
+			"buffering",
+			"Enables buffering build for this GiST index",
+			RELOPT_KIND_GIST,
+			AccessExclusiveLock
+		},
+		"auto",
+		PG_TERNARY_UNSET
 	},
 	/* list terminator */
 	{
@@ -515,30 +537,6 @@ static relopt_real realRelOpts[] =
 	{{NULL}}
 };
 
-/* values from StdRdOptIndexCleanup */
-static relopt_enum_elt_def StdRdOptIndexCleanupValues[] =
-{
-	{"auto", STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO},
-	{"on", STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON},
-	{"off", STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF},
-	{"true", STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON},
-	{"false", STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF},
-	{"yes", STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON},
-	{"no", STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF},
-	{"1", STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON},
-	{"0", STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF},
-	{(const char *) NULL}		/* list terminator */
-};
-
-/* values from GistOptBufferingMode */
-static relopt_enum_elt_def gistBufferingOptValues[] =
-{
-	{"auto", GIST_OPTION_BUFFERING_AUTO},
-	{"on", GIST_OPTION_BUFFERING_ON},
-	{"off", GIST_OPTION_BUFFERING_OFF},
-	{(const char *) NULL}		/* list terminator */
-};
-
 /* values from ViewOptCheckOption */
 static relopt_enum_elt_def viewCheckOptValues[] =
 {
@@ -550,28 +548,6 @@ static relopt_enum_elt_def viewCheckOptValues[] =
 
 static relopt_enum enumRelOpts[] =
 {
-	{
-		{
-			"vacuum_index_cleanup",
-			"Controls index vacuuming and index cleanup",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		},
-		StdRdOptIndexCleanupValues,
-		STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO,
-		gettext_noop("Valid values are \"on\", \"off\", and \"auto\".")
-	},
-	{
-		{
-			"buffering",
-			"Enables buffering build for this GiST index",
-			RELOPT_KIND_GIST,
-			AccessExclusiveLock
-		},
-		gistBufferingOptValues,
-		GIST_OPTION_BUFFERING_AUTO,
-		gettext_noop("Valid values are \"on\", \"off\", and \"auto\".")
-	},
 	{
 		{
 			"check_option",
@@ -939,12 +915,14 @@ add_local_bool_reloption(local_relopts *relopts, const char *name,
  */
 static relopt_ternary *
 init_ternary_reloption(uint32 kinds, const char *name, const char *desc,
-					   LOCKMODE lockmode)
+			 pg_ternary default_val, const char* unset_alias, LOCKMODE lockmode)
 {
 	relopt_ternary *newoption;
 
 	newoption = (relopt_ternary *)
 		allocate_reloption(kinds, RELOPT_TYPE_TERNARY, name, desc, lockmode);
+	newoption->default_val = default_val;
+	newoption->unset_alias = unset_alias;
 
 	return newoption;
 }
@@ -955,12 +933,12 @@ init_ternary_reloption(uint32 kinds, const char *name, const char *desc,
  */
 void
 add_ternary_reloption(uint32 kinds, const char *name, const char *desc,
-					  LOCKMODE lockmode)
+		  pg_ternary default_val, const char* unset_alias,  LOCKMODE lockmode)
 {
 	relopt_ternary *newoption;
 
-	newoption =
-		init_ternary_reloption(kinds, name, desc, lockmode);
+	newoption = init_ternary_reloption(kinds, name, desc, default_val,
+													unset_alias, lockmode);
 
 	add_reloption((relopt_gen *) newoption);
 }
@@ -973,12 +951,13 @@ add_ternary_reloption(uint32 kinds, const char *name, const char *desc,
  */
 void
 add_local_ternary_reloption(local_relopts *relopts, const char *name,
-							const char *desc, int offset)
+							const char *desc, pg_ternary default_val,
+							const char* unset_alias, int offset)
 {
 	relopt_ternary *newoption;
 
-	newoption =
-		init_ternary_reloption(RELOPT_KIND_LOCAL, name, desc, 0);
+	newoption = init_ternary_reloption(RELOPT_KIND_LOCAL, name, desc,
+												default_val, unset_alias, 0);
 
 	add_local_reloption(relopts, (relopt_gen *) newoption, offset);
 }
@@ -1719,15 +1698,35 @@ parse_one_reloption(relopt_value *option, char *text_str, int text_len,
 		case RELOPT_TYPE_TERNARY:
 			{
 				bool		b;
+				relopt_ternary *opt = (relopt_ternary *) option->gen;
 
 				parsed = parse_bool(value, &b);
 				option->ternary_val = b ? PG_TERNARY_TRUE :
 					PG_TERNARY_FALSE;
-				if (validate && !parsed)
+
+				/* If no "unset alias" set, this option behaves almost like
+				 * boolean, so report error accordingly */
+				if (!opt->unset_alias && validate && !parsed)
 					ereport(ERROR,
 							errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 							errmsg("invalid value for boolean option \"%s\": %s",
 								   option->gen->name, value));
+
+				if (!parsed && opt->unset_alias)
+				{
+					if (pg_strcasecmp(value, opt->unset_alias) == 0)
+					{
+						option->ternary_val = PG_TERNARY_UNSET;
+						parsed = true;
+					}
+				}
+				if (validate && !parsed)
+					ereport(ERROR,
+							(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+							errmsg("invalid value for option \"%s\": %s",
+									option->gen->name, value),
+							errdetail("Valid values are \"on\", \"off\", and \"%s\".",
+										opt->unset_alias)));
 			}
 			break;
 		case RELOPT_TYPE_INT:
@@ -2020,7 +2019,7 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 		offsetof(StdRdOptions, user_catalog_table)},
 		{"parallel_workers", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, parallel_workers)},
-		{"vacuum_index_cleanup", RELOPT_TYPE_ENUM,
+		{"vacuum_index_cleanup", RELOPT_TYPE_TERNARY,
 		offsetof(StdRdOptions, vacuum_index_cleanup)},
 		{"vacuum_truncate", RELOPT_TYPE_TERNARY,
 		offsetof(StdRdOptions, vacuum_truncate)},

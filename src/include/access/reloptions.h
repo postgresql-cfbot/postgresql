@@ -98,7 +98,8 @@ typedef struct relopt_bool
 typedef struct relopt_ternary
 {
 	relopt_gen	gen;
-	/* ternaries have no default_val: otherwise they'd just be bools */
+	const char	*unset_alias; /* word that will be treated as unset value */
+	int			default_val;
 } relopt_ternary;
 
 typedef struct relopt_int
@@ -190,7 +191,8 @@ extern relopt_kind add_reloption_kind(void);
 extern void add_bool_reloption(uint32 kinds, const char *name, const char *desc,
 							   bool default_val, LOCKMODE lockmode);
 extern void add_ternary_reloption(uint32 kinds, const char *name,
-								  const char *desc, LOCKMODE lockmode);
+					const char *desc, pg_ternary default_val,
+					const char* unset_alias, LOCKMODE lockmode);
 extern void add_int_reloption(uint32 kinds, const char *name, const char *desc,
 							  int default_val, int min_val, int max_val,
 							  LOCKMODE lockmode);
@@ -211,8 +213,9 @@ extern void add_local_bool_reloption(local_relopts *relopts, const char *name,
 									 const char *desc, bool default_val,
 									 int offset);
 extern void add_local_ternary_reloption(local_relopts *relopts,
-										const char *name, const char *desc,
-										int offset);
+								const char *name, const char *desc,
+								pg_ternary default_val, const char* unset_alias,
+								int offset);
 extern void add_local_int_reloption(local_relopts *relopts, const char *name,
 									const char *desc, int default_val,
 									int min_val, int max_val, int offset);

@@ -934,6 +934,93 @@ SELECT * FROM GRAPH_TABLE (g4 MATCH (s WHERE s.id = 3)-[e]-(d) COLUMNS (s.val, e
   30 | 300 |  10
 (2 rows)
 
+-- long chain MATCH with branching between layers (stress for graph-table prefix pruning
+-- vs enumerating full cross products along the trail)
+CREATE TABLE gv5_v1 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_v2 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_v3 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_v4 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_v5 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_v6 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_v7 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_v8 (id int PRIMARY KEY, val int);
+CREATE TABLE gv5_e1 (id int PRIMARY KEY, src int, dest int);
+CREATE TABLE gv5_e2 (id int PRIMARY KEY, src int, dest int);
+CREATE TABLE gv5_e3 (id int PRIMARY KEY, src int, dest int);
+CREATE TABLE gv5_e4 (id int PRIMARY KEY, src int, dest int);
+CREATE TABLE gv5_e5 (id int PRIMARY KEY, src int, dest int);
+CREATE TABLE gv5_e6 (id int PRIMARY KEY, src int, dest int);
+CREATE TABLE gv5_e7 (id int PRIMARY KEY, src int, dest int);
+CREATE TABLE gv5_e8 (id int PRIMARY KEY, src int, dest int);
+INSERT INTO gv5_v1 VALUES (1, 100);
+INSERT INTO gv5_v2 VALUES (1, 201), (2, 202);
+INSERT INTO gv5_v3 VALUES (1, 301), (2, 302);
+INSERT INTO gv5_v4 VALUES (1, 401), (2, 402);
+INSERT INTO gv5_v5 VALUES (1, 501), (2, 502);
+INSERT INTO gv5_v6 VALUES (6, 603);
+INSERT INTO gv5_v7 VALUES (7, 704);
+INSERT INTO gv5_v8 VALUES (8, 805);
+INSERT INTO gv5_e1 VALUES (101, 1, 1), (102, 1, 2);
+INSERT INTO gv5_e2 VALUES (201, 1, 1), (202, 1, 2), (203, 2, 1), (204, 2, 2);
+INSERT INTO gv5_e3 VALUES (301, 1, 1), (302, 1, 2), (303, 2, 1), (304, 2, 2);
+INSERT INTO gv5_e4 VALUES (401, 1, 1), (402, 1, 2), (403, 2, 1), (404, 2, 2);
+INSERT INTO gv5_e5 VALUES (501, 1, 6);
+INSERT INTO gv5_e6 VALUES (601, 6, 7);
+INSERT INTO gv5_e7 VALUES (701, 7, 8);
+INSERT INTO gv5_e8 VALUES (801, 8, 1);
+CREATE PROPERTY GRAPH g5
+    VERTEX TABLES (
+        gv5_v1 LABEL vl PROPERTIES (id, val) LABEL vl2 PROPERTIES (id, val),
+        gv5_v2 LABEL vl PROPERTIES (id, val),
+        gv5_v3 LABEL vl PROPERTIES (id, val),
+        gv5_v4 LABEL vl PROPERTIES (id, val),
+        gv5_v5 LABEL vl PROPERTIES (id, val),
+        gv5_v6 LABEL vl PROPERTIES (id, val),
+        gv5_v7 LABEL vl PROPERTIES (id, val),
+        gv5_v8 LABEL vl PROPERTIES (id, val)
+    )
+    EDGE TABLES (
+        gv5_e1 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v1 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v2 (id)
+            LABEL el PROPERTIES (id),
+        gv5_e2 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v2 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v3 (id)
+            LABEL el PROPERTIES (id),
+        gv5_e3 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v3 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v4 (id)
+            LABEL el PROPERTIES (id),
+        gv5_e4 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v4 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v5 (id)
+            LABEL el PROPERTIES (id),
+        gv5_e5 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v5 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v6 (id)
+            LABEL el PROPERTIES (id),
+        gv5_e6 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v6 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v7 (id)
+            LABEL el PROPERTIES (id),
+        gv5_e7 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v7 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v8 (id)
+            LABEL el PROPERTIES (id),
+        gv5_e8 KEY (id)
+            SOURCE KEY (src) REFERENCES gv5_v8 (id)
+            DESTINATION KEY (dest) REFERENCES gv5_v1 (id)
+            LABEL el PROPERTIES (id)
+    );
+-- 16 paths along v1->v5 (2^4) with gv5_v1.id = 1
+SELECT count(*) FROM GRAPH_TABLE (g5 MATCH (a IS vl2)-[e1]->(b)-[e2]->(c)-[e3]->(d)-[e4]->(e)
+    COLUMNS (a.id AS aid));
+ count 
+-------
+    16
+(1 row)
+
 -- ruleutils reverse parsing
 -- The query in the view definition is intentionally complex to test one view with many
 -- features like label disjunction, lateral references, WHERE clauses in graph

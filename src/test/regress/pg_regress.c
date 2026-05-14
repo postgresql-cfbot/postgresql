@@ -142,6 +142,7 @@ static bool postmaster_running = false;
 
 static int	success_count = 0;
 static int	fail_count = 0;
+static bool any_test_crashed = false;
 
 static bool directory_exists(const char *dir);
 static void make_directory(const char *dir);
@@ -1425,7 +1426,6 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 	int			best_line_count;
 	int			i;
 	int			l;
-	long		startpos;
 	const char *platform_expectfile;
 
 	/*
@@ -1536,8 +1536,6 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 	difffile = fopen(difffilename, "a");
 	if (difffile)
 	{
-		startpos = ftell(difffile);
-
 		/* Write diff header */
 		fprintf(difffile,
 				"diff %s %s %s\n",
@@ -1549,67 +1547,100 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 				 "diff %s \"%s\" \"%s\" >> \"%s\"",
 				 pretty_diff_opts, best_expect_file, resultsfile, difffilename);
 		run_diff(cmd, difffilename);
-
-		/*
-		 * Reopen the file for reading to emit the diff as TAP diagnostics. We
-		 * can't keep the file open while diff appends to it, because on
-		 * Windows the file lock prevents diff from writing.
-		 */
-		difffile = fopen(difffilename, "r");
-	}
-
-	if (difffile)
-	{
-		/*
-		 * In case of a crash the diff can be huge and all of the subsequent
-		 * tests will fail with essentially useless diffs too. So to avoid
-		 * flooding the output, while still providing useful info in most
-		 * cases we output only the first 80 lines of the *combined* diff. The
-		 * number 80 is chosen so that we output less than 100 lines of
-		 * diagnostics per pg_regress run. Otherwise if meson is run with the
-		 * --quiet flag only the last 100 lines are shown and usually the most
-		 * useful information is actually in the first few lines.
-		 */
-		static int	nlines = 0;
-		const int	max_diff_lines = 80;
-		char		line[1024];
-
-		fseek(difffile, startpos, SEEK_SET);
-		while (nlines < max_diff_lines &&
-			   fgets(line, sizeof(line), difffile))
-		{
-			size_t		len = strlen(line);
-			bool		newline_found = (len > 0 && line[len - 1] == '\n');
-
-			if (newline_found)
-				line[len - 1] = '\0';
-
-			diag_detail("%s", line);
-			if (newline_found)
-			{
-				diag_end();
-				nlines++;
-			}
-		}
-
-		if (in_diag)
-		{
-			/*
-			 * If there was no final newline for some reason, we should still
-			 * end the diagnostic.
-			 */
-			diag_end();
-			nlines++;
-		}
-
-		if (nlines >= max_diff_lines)
-			diag("(diff output truncated and silencing output for further failing tests...)");
-
-		fclose(difffile);
 	}
 
 	unlink(diff);
 	return true;
+}
+
+/*
+ * Emit the head of the combined regression.diffs file as TAP diagnostics.
+ *
+ * Called once at the end of a run so that diff output appears as a single
+ * summary block after all per-test status lines, rather than interleaved with
+ * them.  We cap at max_diff_lines lines: in case of a crash the diff can be
+ * huge and all subsequent tests fail with essentially useless diffs too;
+ * truncating keeps the output digestible (and avoids the meson --quiet last-100
+ * window pushing the actually-useful lines off the screen).
+ */
+static void
+emit_diff_head(void)
+{
+	/*
+	 * Default cap on the size of the diff summary, overridable via the
+	 * PG_REGRESS_DIFF_LINES environment variable.  Reliable cross-platform
+	 * terminal-size detection (including from under meson/Perl TAP harnesses
+	 * that hide the controlling tty) is more trouble than it's worth, so we
+	 * just let the caller dial it in when the default doesn't suit them.
+	 */
+	const char *env_lines = getenv("PG_REGRESS_DIFF_LINES");
+	int			max_diff_lines = (env_lines && atoi(env_lines) > 0) ? atoi(env_lines) : 50;
+
+	/*
+	 * Assumed terminal width when accounting for line wrap. We charge each
+	 * wrapped row against the line budget so a handful of very long diff
+	 * lines doesn't blow past the budget visually. As explained in the
+	 * previous comment, we don't attempt to detect the actual terminal size,
+	 * so instead we just pick 80 as a sensible terminal width. If that
+	 * doesn't match the actual size, the visual line count will be off, but
+	 * generally not by too much.
+	 */
+	const int	term_width = 80;
+	FILE	   *difffile;
+	int			nlines = 0;
+	char		line[1024];
+
+	/*
+	 * Accumulates the content length of the current physical line across
+	 * fgets() chunks; a single line longer than sizeof(line) is split over
+	 * multiple iterations, so we can't compute its visual width until we see
+	 * the newline that ends it. Start at 2 to account for the "# " TAP diag
+	 * prefix that will be added to each line.
+	 */
+	size_t		current_line_length = 2;
+
+	difffile = fopen(difffilename, "r");
+	if (!difffile)
+		return;
+
+	while (nlines < max_diff_lines &&
+		   fgets(line, sizeof(line), difffile))
+	{
+		size_t		len = strlen(line);
+		bool		newline_found = (len > 0 && line[len - 1] == '\n');
+
+		current_line_length += len;
+
+		if (newline_found)
+			line[len - 1] = '\0';
+
+		diag_detail("%s", line);
+
+		if (newline_found)
+		{
+			/*
+			 * Total characters the line paints on screen, including the "# "
+			 * TAP diag prefix.  Ceiling-divide by terminal width to get the
+			 * number of visual rows.
+			 */
+			nlines += current_line_length / term_width + 1;
+			current_line_length = 2;
+			diag_end();
+		}
+	}
+
+	if (in_diag)
+	{
+		/* No trailing newline; still close out the diag line. */
+		diag_end();
+		nlines++;
+	}
+
+	if (nlines >= max_diff_lines)
+		diag("(diff output truncated; see \"%s\" for the full diff, or raise PG_REGRESS_DIFF_LINES to show more)",
+			 difffilename);
+
+	fclose(difffile);
 }
 
 /*
@@ -1691,8 +1722,10 @@ static void
 log_child_failure(int exitstatus)
 {
 	if (WIFEXITED(exitstatus))
+	{
 		diag("(test process exited with exit code %d)",
 			 WEXITSTATUS(exitstatus));
+	}
 	else if (WIFSIGNALED(exitstatus))
 	{
 #if defined(WIN32)
@@ -1886,6 +1919,8 @@ run_schedule(const char *schedule, test_start_function startfunc,
 			{
 				test_status_failed(tests[i], INSTR_TIME_GET_MILLISEC(stoptimes[i]), (num_tests > 1));
 				log_child_failure(statuses[i]);
+				any_test_crashed = true;
+
 			}
 			else
 			{
@@ -1966,6 +2001,8 @@ run_single_test(const char *test, test_start_function startfunc,
 	{
 		test_status_failed(test, INSTR_TIME_GET_MILLISEC(stoptime), false);
 		log_child_failure(exit_status);
+		any_test_crashed = true;
+
 	}
 	else
 	{
@@ -2712,6 +2749,19 @@ regression_main(int argc, char *argv[],
 	 * Emit a TAP compliant Plan
 	 */
 	plan(fail_count + success_count);
+
+	/*
+	 * Emit the head of the diff file if none of the test processes crashed.
+	 * When a crash occured the combined diff in that case is mostly
+	 * collateral noise from sibling tests whose backends got knocked over
+	 * too, and there's currently no good way for pg_regress to tell which
+	 * slice of the diff is actually useful. The full diff is still on disk;
+	 * the file-pointer diags below tell the user where to look.
+	 */
+	if (file_size(difffilename) > 0 && !any_test_crashed)
+	{
+		emit_diff_head();
+	}
 
 	/*
 	 * Emit nice-looking summary message

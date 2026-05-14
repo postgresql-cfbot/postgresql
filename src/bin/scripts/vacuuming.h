@@ -62,12 +62,14 @@ typedef struct vacuumingOptions
 #define OBJFILTER_TABLE				0x04	/* --table */
 #define OBJFILTER_SCHEMA			0x08	/* --schema */
 #define OBJFILTER_SCHEMA_EXCLUDE	0x10	/* --exclude-schema */
+#define OBJFILTER_DATABASE_EXCLUDE	0x20	/* --exclude-database */
 
 extern int	vacuuming_main(ConnParams *cparams, const char *dbname,
 						   const char *maintenance_db, vacuumingOptions *vacopts,
 						   SimpleStringList *objects,
 						   unsigned int tbl_count,
 						   int concurrentCons,
+						   SimpleStringList *dbsToExclude,
 						   const char *progname);
 
 extern char *escape_quotes(const char *src);

@@ -115,8 +115,8 @@ VACUUM [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <re
     <term><literal>VERBOSE</literal></term>
     <listitem>
      <para>
-      Prints a detailed vacuum activity report for each table
-      at <literal>INFO</literal> level.
+      Sends a detailed <literal>INFO</literal> message to the client
+      for each table as it is processed.
      </para>
     </listitem>
    </varlistentry>

@@ -23,6 +23,7 @@
 #include "catalog/pg_propgraph_label.h"
 #include "catalog/pg_propgraph_label_property.h"
 #include "catalog/pg_propgraph_property.h"
+#include "executor/instrument.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -179,6 +180,8 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 	int			factorpos = 0;
 	List	   *path_factors = NIL;
 	struct path_factor *prev_pf = NULL;
+	instr_time	expansion_start;
+	instr_time	expansion_elapsed;
 
 	Assert(list_length(path_pattern) > 0);
 
@@ -343,8 +346,15 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 		path_elem_lists = lappend(path_elem_lists,
 								  get_path_elements_for_path_factor(rte->relid, pf));
 
+	INSTR_TIME_SET_CURRENT(expansion_start);
 	pathqueries = generate_queries_for_path_pattern_recurse(rte, pathqueries,
 															NIL, path_elem_lists, 0);
+	INSTR_TIME_SET_CURRENT(expansion_elapsed);
+	INSTR_TIME_SUBTRACT(expansion_elapsed, expansion_start);
+	elog(LOG,
+		 "GRAPH_TABLE path expansion took %.3f ms and generated %d path queries",
+		 INSTR_TIME_GET_MILLISEC(expansion_elapsed),
+		 list_length(pathqueries));
 	if (!pathqueries)
 		pathqueries = list_make1(generate_query_for_empty_path_pattern(rte));
 

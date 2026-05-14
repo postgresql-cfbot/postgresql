@@ -7,6 +7,7 @@ endif
 injection_points_sources = files(
   'injection_points.c',
   'regress_injection.c',
+  'regress_prockill.c',
 )
 
 if host_system == 'windows'
@@ -40,6 +41,14 @@ tests += {
     'regress_args': ['--dlpath', meson.project_build_root() / 'src/test/regress'],
     # The injection points are cluster-wide, so disable installcheck
     'runningcheck': false,
+  },
+  'tap': {
+    'env': {
+      'enable_injection_points': get_option('injection_points') ? 'yes' : 'no',
+    },
+    'tests': [
+      't/001_prockill_lockgroup.pl',
+    ],
   },
   'isolation': {
     'specs': [

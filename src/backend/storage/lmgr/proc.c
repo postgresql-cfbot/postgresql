@@ -1035,9 +1035,26 @@ ProcKill(int code, Datum arg)
 			push_self = false;
 		}
 		LWLockRelease(leader_lwlock);
+
+		/*
+		 * Test hooks for src/test/modules/injection_points.  Gated by the
+		 * enclosing lockGroupLeader != NULL branch, with the leader and the
+		 * follower(s) reaching distinct points so a test can park them
+		 * independently.
+		 */
+		INJECTION_POINT("prockill-after-lockgroup-leader", NULL);
+		INJECTION_POINT("prockill-after-lockgroup-member", NULL);
 	}
 
-	/* See comment above, close to DisownLatch() */
+	/*
+	 * Test hook for src/test/modules/injection_points.  Unconditional: any
+	 * exiting backend reaches it.  Combined with a PID-scoped wait attach,
+	 * it lets a test stall a specific victim between the lock-group block
+	 * and the freelist push.  See the comment above, close to DisownLatch(),
+	 * for why DisownLatch() has been hoisted above this point.
+	 */
+	INJECTION_POINT("prockill-pre-disown-latch", NULL);
+
 	pgstat_reset_wait_event_storage();
 
 	MyProc = NULL;

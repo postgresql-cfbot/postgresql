@@ -364,6 +364,7 @@ generate_queries_for_path_pattern_recurse(RangeTblEntry *rte, List *pathqueries,
 
 	/* Guard against stack overflow due to complex path patterns. */
 	check_stack_depth();
+	CHECK_FOR_INTERRUPTS();
 
 	foreach_ptr(struct path_element, pe, path_elems)
 	{

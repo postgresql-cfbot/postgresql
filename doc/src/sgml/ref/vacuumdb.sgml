@@ -163,6 +163,24 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>-D <replaceable class="parameter">dbname</replaceable></option></term>
+      <term><option>--exclude-database=<replaceable class="parameter">dbname</replaceable></option></term>
+      <listitem>
+       <para>
+        Do not clean or analyze database
+        <replaceable class="parameter">dbname</replaceable>.
+        Multiple databases can be excluded by writing multiple
+        <option>-D</option> switches.
+       </para>
+       <note>
+        <para>
+         This option requires <option>-a</option>/<option>--all</option>.
+        </para>
+       </note>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--disable-page-skipping</option></term>
       <listitem>
        <para>
@@ -691,6 +709,13 @@ PostgreSQL documentation
     in a database named <literal>xyzzy</literal>:
 <screen>
 <prompt>$ </prompt><userinput>vacuumdb --schema='foo' --schema='bar' xyzzy</userinput>
+</screen></para>
+
+   <para>
+    To clean all databases except <literal>test_db</literal> and
+    <literal>staging_db</literal>:
+<screen>
+<prompt>$ </prompt><userinput>vacuumdb --all --exclude-database=test_db --exclude-database=staging_db</userinput>
 </screen></para>
 
 

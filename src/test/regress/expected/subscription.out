@@ -215,7 +215,8 @@ ALTER SUBSCRIPTION regress_testsub6 CONNECTION 'dbname=regress_doesnotexist pass
 ABORT;
 -- fails, cannot drop slot
 DROP SUBSCRIPTION regress_testsub6;
-ERROR:  user mapping not found for user "regress_subscription_user3", server "test_server"
+ERROR:  could not connect to publisher when attempting to drop replication slot "dummy": user mapping not found for user "regress_subscription_user3", server "test_server"
+HINT:  Use ALTER SUBSCRIPTION ... DISABLE to disable the subscription, and then use ALTER SUBSCRIPTION ... SET (slot_name = NONE) to disassociate it from the slot.
 ALTER SUBSCRIPTION regress_testsub6 DISABLE;
 ALTER SUBSCRIPTION regress_testsub6 SET (slot_name = NONE);
 DROP SUBSCRIPTION regress_testsub6; --ok

@@ -12,27 +12,12 @@
 #include "commands/trigger.h"
 #include "executor/spi.h"
 #include "utils/builtins.h"
-#include "utils/memutils.h"
 #include "utils/rel.h"
 
 PG_MODULE_MAGIC_EXT(
 					.name = "refint",
 					.version = PG_VERSION
 );
-
-typedef struct
-{
-	char	   *ident;
-	int			nplans;
-	SPIPlanPtr *splan;
-} EPlan;
-
-static EPlan *FPlans = NULL;
-static int	nFPlans = 0;
-static EPlan *PPlans = NULL;
-static int	nPPlans = 0;
-
-static EPlan *find_plan(char *ident, EPlan **eplan, int *nplans);
 
 /*
  * check_primary_key () -- check that key in tuple being inserted/updated
@@ -59,10 +44,10 @@ check_primary_key(PG_FUNCTION_ARGS)
 	Relation	rel;			/* triggered relation */
 	HeapTuple	tuple = NULL;	/* tuple to return */
 	TupleDesc	tupdesc;		/* tuple description */
-	EPlan	   *plan;			/* prepared plan */
-	Oid		   *argtypes = NULL;	/* key types to prepare execution plan */
+	SPIPlanPtr	splan;			/* prepared plan for this call */
+	Oid		   *argtypes;		/* key types to prepare execution plan */
+	StringInfoData sql;
 	bool		isnull;			/* to know is some column NULL or not */
-	char		ident[2 * NAMEDATALEN]; /* to identify myself */
 	int			ret;
 	int			i;
 
@@ -123,16 +108,7 @@ check_primary_key(PG_FUNCTION_ARGS)
 	 */
 	kvals = (Datum *) palloc(nkeys * sizeof(Datum));
 
-	/*
-	 * Construct ident string as TriggerName $ TriggeredRelationId and try to
-	 * find prepared execution plan.
-	 */
-	snprintf(ident, sizeof(ident), "%s$%u", trigger->tgname, rel->rd_id);
-	plan = find_plan(ident, &PPlans, &nPPlans);
-
-	/* if there is no plan then allocate argtypes for preparation */
-	if (plan->nplans <= 0)
-		argtypes = (Oid *) palloc(nkeys * sizeof(Oid));
+	argtypes = (Oid *) palloc(nkeys * sizeof(Oid));
 
 	/* For each column in key ... */
 	for (i = 0; i < nkeys; i++)
@@ -161,19 +137,11 @@ check_primary_key(PG_FUNCTION_ARGS)
 			return PointerGetDatum(tuple);
 		}
 
-		if (plan->nplans <= 0)	/* Get typeId of column */
-			argtypes[i] = SPI_gettypeid(tupdesc, fnumber);
+		/* Get typeId of column */
+		argtypes[i] = SPI_gettypeid(tupdesc, fnumber);
 	}
 
-	/*
-	 * If we have to prepare plan ...
-	 */
-	if (plan->nplans <= 0)
-	{
-		SPIPlanPtr	pplan;
-		StringInfoData sql;
-
-		initStringInfo(&sql);
+	initStringInfo(&sql);
 
 		/*
 		 * Construct query: SELECT 1 FROM _referenced_relation_ WHERE Pkey1 =
@@ -188,30 +156,17 @@ check_primary_key(PG_FUNCTION_ARGS)
 		}
 
 		/* Prepare plan for query */
-		pplan = SPI_prepare(sql.data, nkeys, argtypes);
-		if (pplan == NULL)
+		splan = SPI_prepare(sql.data, nkeys, argtypes);
+		if (splan == NULL)
 			/* internal error */
 			elog(ERROR, "check_primary_key: SPI_prepare returned %s", SPI_result_code_string(SPI_result));
 
-		/*
-		 * Remember that SPI_prepare places plan in current memory context -
-		 * so, we have to save plan in TopMemoryContext for later use.
-		 */
-		if (SPI_keepplan(pplan))
-			/* internal error */
-			elog(ERROR, "check_primary_key: SPI_keepplan failed");
-		plan->splan = (SPIPlanPtr *) MemoryContextAlloc(TopMemoryContext,
-														sizeof(SPIPlanPtr));
-		*(plan->splan) = pplan;
-		plan->nplans = 1;
-
 		pfree(sql.data);
-	}
 
 	/*
 	 * Ok, execute prepared plan.
 	 */
-	ret = SPI_execp(*(plan->splan), kvals, NULL, 1);
+	ret = SPI_execp(splan, kvals, NULL, 1);
 	/* we have no NULLs - so we pass   ^^^^   here */
 
 	if (ret < 0)
@@ -254,6 +209,7 @@ check_foreign_key(PG_FUNCTION_ARGS)
 	int			nargs;			/* # of args specified in CREATE TRIGGER */
 	char	  **args;			/* arguments: as described above */
 	char	  **args_temp;
+	char	  **args2;
 	int			nrefs;			/* number of references (== # of plans) */
 	char		action;			/* 'R'estrict | 'S'etnull | 'C'ascade */
 	int			nkeys;			/* # of key columns */
@@ -263,11 +219,12 @@ check_foreign_key(PG_FUNCTION_ARGS)
 	HeapTuple	trigtuple = NULL;	/* tuple to being changed */
 	HeapTuple	newtuple = NULL;	/* tuple to return */
 	TupleDesc	tupdesc;		/* tuple description */
-	EPlan	   *plan;			/* prepared plan(s) */
-	Oid		   *argtypes = NULL;	/* key types to prepare execution plan */
+	SPIPlanPtr *splan;			/* prepared plan(s) for this call */
+	SPIPlanPtr	pplan;
+	StringInfoData sql;
+	Oid		   *argtypes;		/* key types to prepare execution plan */
 	bool		isnull;			/* to know is some column NULL or not */
 	bool		isequal = true; /* are keys in both tuples equal (in UPDATE) */
-	char		ident[2 * NAMEDATALEN]; /* to identify myself */
 	int			is_update = 0;
 	int			ret;
 	int			i,
@@ -350,24 +307,7 @@ check_foreign_key(PG_FUNCTION_ARGS)
 	 */
 	kvals = (Datum *) palloc(nkeys * sizeof(Datum));
 
-	/*
-	 * Construct ident string as TriggerName $ TriggeredRelationId $
-	 * OperationType and try to find prepared execution plan(s).
-	 */
-	snprintf(ident, sizeof(ident), "%s$%u$%c", trigger->tgname, rel->rd_id, is_update ? 'U' : 'D');
-	plan = find_plan(ident, &FPlans, &nFPlans);
-
-	/* if there is no plan(s) then allocate argtypes for preparation */
-	if (plan->nplans <= 0)
-		argtypes = (Oid *) palloc(nkeys * sizeof(Oid));
-
-	/*
-	 * else - check that we have exactly nrefs plan(s) ready
-	 */
-	else if (plan->nplans != nrefs)
-		/* internal error */
-		elog(ERROR, "%s: check_foreign_key: # of plans changed in meantime",
-			 trigger->tgname);
+	argtypes = (Oid *) palloc(nkeys * sizeof(Oid));
 
 	/* For each column in key ... */
 	for (i = 0; i < nkeys; i++)
@@ -415,27 +355,18 @@ check_foreign_key(PG_FUNCTION_ARGS)
 				isequal = false;
 		}
 
-		if (plan->nplans <= 0)	/* Get typeId of column */
-			argtypes[i] = SPI_gettypeid(tupdesc, fnumber);
+		/* Get typeId of column */
+		argtypes[i] = SPI_gettypeid(tupdesc, fnumber);
 	}
 	args_temp = args;
 	nargs -= nkeys;
 	args += nkeys;
 
-	/*
-	 * If we have to prepare plans ...
-	 */
-	if (plan->nplans <= 0)
-	{
-		SPIPlanPtr	pplan;
-		char	  **args2 = args;
-
-		plan->splan = (SPIPlanPtr *) MemoryContextAlloc(TopMemoryContext,
-														nrefs * sizeof(SPIPlanPtr));
+	args2 = args;
+	splan = (SPIPlanPtr *) palloc(nrefs * sizeof(SPIPlanPtr));
 
 		for (r = 0; r < nrefs; r++)
 		{
-			StringInfoData sql;
 
 			initStringInfo(&sql);
 
@@ -531,15 +462,7 @@ check_foreign_key(PG_FUNCTION_ARGS)
 				/* internal error */
 				elog(ERROR, "check_foreign_key: SPI_prepare returned %s", SPI_result_code_string(SPI_result));
 
-			/*
-			 * Remember that SPI_prepare places plan in current memory context
-			 * - so, we have to save plan in Top memory context for later use.
-			 */
-			if (SPI_keepplan(pplan))
-				/* internal error */
-				elog(ERROR, "check_foreign_key: SPI_keepplan failed");
-
-			plan->splan[r] = pplan;
+			splan[r] = pplan;
 
 			args2 += nkeys + 1; /* to the next relation */
 
@@ -549,8 +472,6 @@ check_foreign_key(PG_FUNCTION_ARGS)
 
 			pfree(sql.data);
 		}
-		plan->nplans = nrefs;
-	}
 
 	/*
 	 * If UPDATE and key is not changed ...
@@ -574,7 +495,7 @@ check_foreign_key(PG_FUNCTION_ARGS)
 
 		relname = args[0];
 
-		ret = SPI_execp(plan->splan[r], kvals, NULL, tcount);
+		ret = SPI_execp(splan[r], kvals, NULL, tcount);
 		/* we have no NULLs - so we pass   ^^^^  here */
 
 		if (ret < 0)
@@ -612,47 +533,4 @@ check_foreign_key(PG_FUNCTION_ARGS)
 	SPI_finish();
 
 	return PointerGetDatum((newtuple == NULL) ? trigtuple : newtuple);
-}
-
-static EPlan *
-find_plan(char *ident, EPlan **eplan, int *nplans)
-{
-	EPlan	   *newp;
-	int			i;
-	MemoryContext oldcontext;
-
-	/*
-	 * All allocations done for the plans need to happen in a session-safe
-	 * context.
-	 */
-	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-
-	if (*nplans > 0)
-	{
-		for (i = 0; i < *nplans; i++)
-		{
-			if (strcmp((*eplan)[i].ident, ident) == 0)
-				break;
-		}
-		if (i != *nplans)
-		{
-			MemoryContextSwitchTo(oldcontext);
-			return (*eplan + i);
-		}
-		*eplan = (EPlan *) repalloc(*eplan, (i + 1) * sizeof(EPlan));
-		newp = *eplan + i;
-	}
-	else
-	{
-		newp = *eplan = palloc_object(EPlan);
-		(*nplans) = i = 0;
-	}
-
-	newp->ident = pstrdup(ident);
-	newp->nplans = 0;
-	newp->splan = NULL;
-	(*nplans)++;
-
-	MemoryContextSwitchTo(oldcontext);
-	return newp;
 }

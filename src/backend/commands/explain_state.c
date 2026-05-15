@@ -67,6 +67,7 @@ NewExplainState(void)
 
 	/* Set default options (most fields can be left as zeroes). */
 	es->costs = true;
+	es->show_nested = -1;	/* show all nested plans by default */
 	/* Prepare output buffer. */
 	es->str = makeStringInfo();
 
@@ -164,6 +165,17 @@ ParseExplainOptionList(ExplainState *es, List *options, ParseState *pstate)
 		}
 		else if (strcmp(opt->defname, "io") == 0)
 			es->io = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "nested_statements") == 0)
+			es->nested_statements = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "show_nested") == 0)
+		{
+			es->show_nested = defGetInt32(opt);
+			if (es->show_nested < 0)
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						 errmsg("EXPLAIN option %s must be a non-negative integer",
+								"SHOW_NESTED")));
+		}
 		else if (!ApplyExtensionExplainOption(es, opt, pstate))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -201,6 +213,19 @@ ParseExplainOptionList(ExplainState *es, List *options, ParseState *pstate)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("EXPLAIN option %s requires ANALYZE", "SERIALIZE")));
+
+	/* check that NESTED_STATEMENTS is used with EXPLAIN ANALYZE */
+	if (es->nested_statements && !es->analyze)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option %s requires ANALYZE", "NESTED_STATEMENTS")));
+
+	/* check that SHOW_NESTED is used with NESTED_STATEMENTS */
+	if (es->show_nested >= 0 && !es->nested_statements)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option %s requires %s",
+						"SHOW_NESTED", "NESTED_STATEMENTS")));
 
 	/* check that GENERIC_PLAN is not used with EXPLAIN ANALYZE */
 	if (es->generic && es->analyze)

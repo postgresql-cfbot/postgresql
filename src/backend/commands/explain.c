@@ -23,6 +23,11 @@
 #include "commands/explain_format.h"
 #include "commands/explain_state.h"
 #include "commands/prepare.h"
+#include "commands/trigger.h"
+#include "executor/executor.h"
+#include "miscadmin.h"
+#include "catalog/pg_authid_d.h"
+#include "utils/acl.h"
 #include "foreign/fdwapi.h"
 #include "jit/jit.h"
 #include "libpq/pqformat.h"
@@ -57,6 +62,71 @@ explain_get_index_name_hook_type explain_get_index_name_hook = NULL;
 /* per-plan and per-node hooks for plugins to print additional info */
 explain_per_plan_hook_type explain_per_plan_hook = NULL;
 explain_per_node_hook_type explain_per_node_hook = NULL;
+
+/*
+ * The following statics hold state for the current EXPLAIN (NESTED_STATEMENTS)
+ * execution.  They are backend-local (not shared memory), safe for
+ * single-backend use.  If EXPLAIN is ever parallelized, these would need
+ * to become per-worker structures or use shared memory.
+ */
+
+/* Nested statements tracking for EXPLAIN (NESTED_STATEMENTS) */
+typedef struct NestedPlanInfo
+{
+	int			statement_num;
+	int			nesting_level;
+	char	   *query_text;
+	char	   *plan_text;
+	double		exec_time_ms;	/* execution time in ms, -1 if unavailable */
+	bool		is_trigger;		/* true if fired by a trigger */
+	instr_time	start_time;		/* when ExecutorStart was called */
+	struct NestedPlanInfo *next;
+} NestedPlanInfo;
+
+static int	nested_exec_level = 0;
+static bool nested_tracking_active = false;
+static ExplainState *nested_parent_es = NULL;
+static int	nested_stmt_count = 0;
+static int	nested_total_count = 0;
+static int	nested_max_depth = 0;
+static double nested_total_time = 0.0;
+static double nested_slowest_time = 0.0;
+static int	nested_slowest_num = 0;
+static double nested_main_exec_time = 0.0;
+static double nested_trigger_time = 0.0;
+static int	nested_trigger_count = 0;
+static NestedPlanInfo *nested_plans_head = NULL;
+static NestedPlanInfo *nested_plans_tail = NULL;
+static MemoryContext nested_memcxt = NULL;
+static int	nested_secdef_skipped = 0;	/* statements skipped due to SECURITY DEFINER */
+
+/*
+ * Stack of start timestamps for nested statements.  Pushed in
+ * ExecutorStart, popped in ExecutorEnd.  Used for start-time ordering.
+ */
+#define NESTED_MAX_DEPTH 128
+static instr_time nested_start_stack[NESTED_MAX_DEPTH];
+static int	nested_start_stack_depth = 0;
+
+/* Threshold for emitting a NOTICE about high nested statement counts */
+#define NESTED_STMT_NOTICE_THRESHOLD 1000
+
+/* Saved executor hook values for nested statements */
+static ExecutorStart_hook_type prev_ExecutorStart_hook = NULL;
+static ExecutorRun_hook_type prev_ExecutorRun_hook = NULL;
+static ExecutorFinish_hook_type prev_ExecutorFinish_hook = NULL;
+static ExecutorEnd_hook_type prev_ExecutorEnd_hook = NULL;
+
+static void nested_ExecutorStart(QueryDesc *queryDesc, int eflags);
+static void nested_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction,
+							   uint64 count);
+static void nested_ExecutorFinish(QueryDesc *queryDesc);
+static void nested_ExecutorEnd(QueryDesc *queryDesc);
+static NestedPlanInfo *nested_plans_sort_by_start_time(NestedPlanInfo *head);
+static NestedPlanInfo *nested_plans_merge(NestedPlanInfo *a, NestedPlanInfo *b);
+static void ExplainPrintNestedPlans(ExplainState *es);
+static void ExplainInstallNestedHooks(ExplainState *es);
+static void ExplainRemoveNestedHooks(void);
 
 /*
  * Various places within need to convert bytes to kilobytes.  Round these up
@@ -206,49 +276,71 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 	 */
 	rewritten = QueryRewrite(castNode(Query, stmt->query));
 
-	/* emit opening boilerplate */
-	ExplainBeginOutput(es);
-
-	if (rewritten == NIL)
+	PG_TRY();
 	{
-		/*
-		 * In the case of an INSTEAD NOTHING, tell at least that.  But in
-		 * non-text format, the output is delimited, so this isn't necessary.
-		 */
-		if (es->format == EXPLAIN_FORMAT_TEXT)
-			appendStringInfoString(es->str, "Query rewrites to nothing\n");
-	}
-	else
-	{
-		ListCell   *l;
+		/* Install nested statement hooks if requested — inside PG_TRY so
+		 * PG_FINALLY cleanup is guaranteed if allocation fails. */
+		if (es->nested_statements)
+			ExplainInstallNestedHooks(es);
 
-		/* Explain every plan */
-		foreach(l, rewritten)
+		/* emit opening boilerplate */
+		ExplainBeginOutput(es);
+
+		if (rewritten == NIL)
 		{
-			ExplainOneQuery(lfirst_node(Query, l),
-							CURSOR_OPT_PARALLEL_OK, NULL, es,
-							pstate, params);
+			/*
+			 * In the case of an INSTEAD NOTHING, tell at least that.  But in
+			 * non-text format, the output is delimited, so this isn't necessary.
+			 */
+			if (es->format == EXPLAIN_FORMAT_TEXT)
+				appendStringInfoString(es->str, "Query rewrites to nothing\n");
+		}
+		else
+		{
+			ListCell   *l;
 
-			/* Separate plans with an appropriate separator */
-			if (lnext(rewritten, l) != NULL)
-				ExplainSeparatePlans(es);
+			/* Explain every plan */
+			foreach(l, rewritten)
+			{
+				ExplainOneQuery(lfirst_node(Query, l),
+								CURSOR_OPT_PARALLEL_OK, NULL, es,
+								pstate, params);
+
+				/* Separate plans with an appropriate separator */
+				if (lnext(rewritten, l) != NULL)
+					ExplainSeparatePlans(es);
+			}
+		}
+
+		/* emit closing boilerplate */
+		ExplainEndOutput(es);
+		Assert(es->indent == 0);
+
+		/* output tuples */
+		tstate = begin_tup_output_tupdesc(dest, ExplainResultDesc(stmt),
+										  &TTSOpsVirtual);
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+			do_text_output_multiline(tstate, es->str->data);
+		else
+			do_text_output_oneline(tstate, es->str->data);
+		end_tup_output(tstate);
+
+		pfree(es->str->data);
+	}
+	PG_FINALLY();
+	{
+		/* Always clean up nested statement hooks and memory */
+		if (es->nested_statements)
+		{
+			ExplainRemoveNestedHooks();
+			if (nested_memcxt)
+			{
+				MemoryContextDelete(nested_memcxt);
+				nested_memcxt = NULL;
+			}
 		}
 	}
-
-	/* emit closing boilerplate */
-	ExplainEndOutput(es);
-	Assert(es->indent == 0);
-
-	/* output tuples */
-	tstate = begin_tup_output_tupdesc(dest, ExplainResultDesc(stmt),
-									  &TTSOpsVirtual);
-	if (es->format == EXPLAIN_FORMAT_TEXT)
-		do_text_output_multiline(tstate, es->str->data);
-	else
-		do_text_output_oneline(tstate, es->str->data);
-	end_tup_output(tstate);
-
-	pfree(es->str->data);
+	PG_END_TRY();
 }
 
 /*
@@ -685,6 +777,15 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	if (es->summary && es->analyze)
 		ExplainPropertyFloat("Execution Time", "ms", 1000.0 * totaltime, 3,
 							 es);
+
+	/* Store main execution time for nested statements percentage calculation */
+	if (es->nested_statements && nested_tracking_active)
+		nested_main_exec_time = 1000.0 * totaltime;
+
+	/* Print nested statement plans inside the Query group so that
+	 * structured formats (JSON/XML/YAML) produce a valid document. */
+	if (es->nested_statements)
+		ExplainPrintNestedPlans(es);
 
 	ExplainCloseGroup("Query", NULL, true, es);
 }
@@ -5321,4 +5422,908 @@ ExplainFlushWorkersState(ExplainState *es)
 	pfree(wstate->worker_str);
 	pfree(wstate->worker_state_save);
 	pfree(wstate);
+}
+
+/*
+ * ExplainInstallNestedHooks - install executor hooks for nested statement
+ * tracking.
+ *
+ * This sets up hooks to intercept ExecutorStart, ExecutorRun,
+ * ExecutorFinish, and ExecutorEnd calls so we can track nesting depth
+ * and capture plans for nested statements.
+ */
+static void
+ExplainInstallNestedHooks(ExplainState *es)
+{
+	/*
+	 * Guard against reentrancy: if we're already tracking nested statements
+	 * (e.g., a function executes EXPLAIN (NESTED_STATEMENTS) internally),
+	 * skip hook installation to avoid corrupting the outer EXPLAIN's state.
+	 */
+	if (nested_tracking_active)
+	{
+		elog(DEBUG1, "NESTED_STATEMENTS disabled: already active (reentrancy)");
+		es->nested_statements = false;
+		return;
+	}
+
+	nested_tracking_active = true;
+	nested_exec_level = 0;
+	nested_stmt_count = 0;
+	nested_total_count = 0;
+	nested_max_depth = 0;
+	nested_total_time = 0.0;
+	nested_slowest_time = 0.0;
+	nested_slowest_num = 0;
+	nested_main_exec_time = 0.0;
+	nested_trigger_time = 0.0;
+	nested_trigger_count = 0;
+	nested_plans_head = NULL;
+	nested_plans_tail = NULL;
+	nested_start_stack_depth = 0;
+	nested_secdef_skipped = 0;
+	nested_parent_es = es;
+
+	/*
+	 * Create a dedicated memory context for captured plan text. This ensures
+	 * all allocations can be freed at once in the PG_FINALLY cleanup, whether
+	 * the EXPLAIN succeeds or errors out.
+	 */
+	nested_memcxt = AllocSetContextCreate(CurrentMemoryContext,
+										  "Nested EXPLAIN plans",
+										  ALLOCSET_DEFAULT_SIZES);
+
+	/* Save and install hooks */
+	prev_ExecutorStart_hook = ExecutorStart_hook;
+	ExecutorStart_hook = nested_ExecutorStart;
+	prev_ExecutorRun_hook = ExecutorRun_hook;
+	ExecutorRun_hook = nested_ExecutorRun;
+	prev_ExecutorFinish_hook = ExecutorFinish_hook;
+	ExecutorFinish_hook = nested_ExecutorFinish;
+	prev_ExecutorEnd_hook = ExecutorEnd_hook;
+	ExecutorEnd_hook = nested_ExecutorEnd;
+}
+
+/*
+ * ExplainRemoveNestedHooks - restore previous executor hooks.
+ */
+static void
+ExplainRemoveNestedHooks(void)
+{
+	ExecutorStart_hook = prev_ExecutorStart_hook;
+	ExecutorRun_hook = prev_ExecutorRun_hook;
+	ExecutorFinish_hook = prev_ExecutorFinish_hook;
+	ExecutorEnd_hook = prev_ExecutorEnd_hook;
+
+	prev_ExecutorStart_hook = NULL;
+	prev_ExecutorRun_hook = NULL;
+	prev_ExecutorFinish_hook = NULL;
+	prev_ExecutorEnd_hook = NULL;
+
+	nested_tracking_active = false;
+	nested_parent_es = NULL;
+}
+
+/*
+ * nested_ExecutorStart - ExecutorStart hook for nested statement tracking.
+ *
+ * When we're inside a nested execution (nesting_level > 0), enable
+ * instrumentation so we can capture actual execution statistics.
+ */
+static void
+nested_ExecutorStart(QueryDesc *queryDesc, int eflags)
+{
+	if (nested_tracking_active && nested_exec_level > 0 &&
+		(eflags & EXEC_FLAG_EXPLAIN_ONLY) == 0)
+	{
+		/* Enable per-node instrumentation for nested statements */
+		if (nested_parent_es->timing)
+			queryDesc->instrument_options |= INSTRUMENT_TIMER;
+		else
+			queryDesc->instrument_options |= INSTRUMENT_ROWS;
+		if (nested_parent_es->buffers)
+			queryDesc->instrument_options |= INSTRUMENT_BUFFERS;
+		if (nested_parent_es->wal)
+			queryDesc->instrument_options |= INSTRUMENT_WAL;
+		if (nested_parent_es->io)
+			queryDesc->instrument_options |= INSTRUMENT_IO;
+
+		/* Enable query-level instrumentation for execution time tracking */
+		queryDesc->query_instr_options |= INSTRUMENT_TIMER;
+
+		/* Record start time for start-time ordering */
+		if (nested_start_stack_depth < NESTED_MAX_DEPTH)
+		{
+			INSTR_TIME_SET_CURRENT(nested_start_stack[nested_start_stack_depth]);
+			nested_start_stack_depth++;
+		}
+	}
+
+	if (prev_ExecutorStart_hook)
+		prev_ExecutorStart_hook(queryDesc, eflags);
+	else
+		standard_ExecutorStart(queryDesc, eflags);
+}
+
+/*
+ * nested_ExecutorRun - ExecutorRun hook for nested statement tracking.
+ *
+ * Track nesting depth so we know when we're inside a nested execution.
+ */
+static void
+nested_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count)
+{
+	nested_exec_level++;
+	PG_TRY();
+	{
+		if (prev_ExecutorRun_hook)
+			prev_ExecutorRun_hook(queryDesc, direction, count);
+		else
+			standard_ExecutorRun(queryDesc, direction, count);
+	}
+	PG_FINALLY();
+	{
+		nested_exec_level--;
+	}
+	PG_END_TRY();
+}
+
+/*
+ * nested_ExecutorFinish - ExecutorFinish hook for nested statement tracking.
+ *
+ * Track nesting depth through ExecutorFinish as well, since some statements
+ * (e.g., those with AFTER triggers) do work here.
+ */
+static void
+nested_ExecutorFinish(QueryDesc *queryDesc)
+{
+	nested_exec_level++;
+	PG_TRY();
+	{
+		if (prev_ExecutorFinish_hook)
+			prev_ExecutorFinish_hook(queryDesc);
+		else
+			standard_ExecutorFinish(queryDesc);
+	}
+	PG_FINALLY();
+	{
+		nested_exec_level--;
+	}
+	PG_END_TRY();
+}
+
+/*
+ * nested_ExecutorEnd - ExecutorEnd hook for nested statement tracking.
+ *
+ * When a nested statement finishes execution, capture its plan text
+ * for later display.  Uses GetMyTriggerDepth() to detect whether the
+ * statement was fired by a trigger (both BEFORE and AFTER).
+ */
+static void
+nested_ExecutorEnd(QueryDesc *queryDesc)
+{
+	if (nested_tracking_active &&
+		nested_exec_level > 0 &&
+		nested_parent_es != NULL &&
+		queryDesc->plannedstmt != NULL &&
+		queryDesc->instrument_options != 0)
+	{
+		double		stmt_time = -1.0;
+		bool		is_trigger = (GetMyTriggerDepth() > 0);
+
+		/*
+		 * SECURITY DEFINER protection: if the current effective user
+		 * differs from the session user (i.e., we're inside a SECURITY
+		 * DEFINER function), skip capture entirely unless the session
+		 * user holds pg_read_all_stats privileges.  This prevents
+		 * unprivileged users from seeing query text and plan details
+		 * of functions they can execute but whose internals they
+		 * should not inspect.  Consistent with pg_stat_statements'
+		 * query text visibility model.
+		 */
+		if (GetUserId() != GetSessionUserId() &&
+			!has_privs_of_role(GetSessionUserId(), ROLE_PG_READ_ALL_STATS))
+		{
+			nested_secdef_skipped++;
+			/* Pop start time stack to maintain balance (was pushed in ExecutorStart) */
+			if (nested_start_stack_depth > 0)
+				nested_start_stack_depth--;
+			goto skip_capture;
+		}
+
+		nested_total_count++;
+		if (is_trigger)
+			nested_trigger_count++;
+
+		/* Track timing for summary (always, even if not displaying) */
+		if (queryDesc->query_instr)
+		{
+			stmt_time = INSTR_TIME_GET_MILLISEC(queryDesc->query_instr->total);
+			if (is_trigger)
+			{
+				/*
+				 * Sum ALL trigger statements into Total Trigger Time
+				 * regardless of level.  This shows total trigger overhead
+				 * even when triggers fire at deeper levels.
+				 */
+				nested_trigger_time += stmt_time;
+			}
+			else if (nested_exec_level == 1)
+			{
+				/*
+				 * Only sum level-1 direct statements into Total Nested Time.
+				 * Level-1 statements already include deeper levels' time
+				 * (inclusive timing), so summing all levels would
+				 * double-count.
+				 */
+				nested_total_time += stmt_time;
+			}
+			/* Track slowest statement across ALL levels and types */
+			if (stmt_time > nested_slowest_time)
+			{
+				nested_slowest_time = stmt_time;
+				nested_slowest_num = nested_total_count;
+			}
+		}
+
+		/* Track max depth */
+		if (nested_exec_level > nested_max_depth)
+			nested_max_depth = nested_exec_level;
+
+		/*
+		 * Pop start time from stack.  Must happen regardless of whether
+		 * we capture the plan (SHOW_NESTED limit), since we always push
+		 * in ExecutorStart.
+		 */
+		{
+			instr_time	stmt_start_time;
+
+			if (nested_start_stack_depth > 0)
+			{
+				nested_start_stack_depth--;
+				stmt_start_time = nested_start_stack[nested_start_stack_depth];
+			}
+			else
+				INSTR_TIME_SET_ZERO(stmt_start_time);
+
+		/*
+		 * Only capture plan text if under the display limit.
+		 * show_nested < 0 means show all (no limit).
+		 */
+		if (nested_parent_es->show_nested < 0 ||
+			nested_stmt_count < nested_parent_es->show_nested)
+		{
+			MemoryContext oldcxt;
+			NestedPlanInfo *plan_info;
+			ExplainState *nes;
+
+			nested_stmt_count++;
+
+			/*
+			 * Switch to the dedicated memory context so the captured plan
+			 * text survives until we print it.
+			 */
+			oldcxt = MemoryContextSwitchTo(nested_memcxt);
+
+			/* Build an ExplainState to format this nested plan */
+			nes = NewExplainState();
+			nes->analyze = true;
+			nes->verbose = nested_parent_es->verbose;
+			nes->costs = nested_parent_es->costs;
+			nes->buffers = nested_parent_es->buffers;
+			nes->wal = nested_parent_es->wal;
+			nes->timing = nested_parent_es->timing;
+			nes->io = nested_parent_es->io;
+			nes->settings = nested_parent_es->settings;
+			nes->summary = false;
+			nes->format = nested_parent_es->format;
+
+			ExplainBeginOutput(nes);
+			ExplainOpenGroup("Query", NULL, true, nes);
+			ExplainPrintPlan(nes, queryDesc);
+
+			/* Print trigger info for this nested statement (matches
+			 * what top-level EXPLAIN does for the main query) */
+			if (nes->analyze)
+				ExplainPrintTriggers(nes, queryDesc);
+
+			/* Add Execution Time inside structured output for non-TEXT */
+			if (nes->format != EXPLAIN_FORMAT_TEXT &&
+				queryDesc->query_instr &&
+				nested_parent_es->summary)
+				ExplainPropertyFloat("Execution Time", "ms", stmt_time, 3, nes);
+
+			ExplainCloseGroup("Query", NULL, true, nes);
+			ExplainEndOutput(nes);
+
+			/* Remove trailing newline if present */
+			if (nes->str->len > 0 && nes->str->data[nes->str->len - 1] == '\n')
+				nes->str->data[--nes->str->len] = '\0';
+
+			/* Allocate and fill the plan info node */
+			plan_info = (NestedPlanInfo *) palloc(sizeof(NestedPlanInfo));
+			plan_info->statement_num = nested_total_count;
+			plan_info->nesting_level = nested_exec_level;
+			plan_info->query_text = queryDesc->sourceText ?
+				pstrdup(queryDesc->sourceText) : pstrdup("<unknown>");
+			plan_info->plan_text = pstrdup(nes->str->data);
+			plan_info->exec_time_ms = stmt_time;
+			plan_info->is_trigger = is_trigger;
+			plan_info->start_time = stmt_start_time;
+			plan_info->next = NULL;
+
+			/* Append to the linked list */
+			if (nested_plans_tail == NULL)
+			{
+				nested_plans_head = plan_info;
+				nested_plans_tail = plan_info;
+			}
+			else
+			{
+				nested_plans_tail->next = plan_info;
+				nested_plans_tail = plan_info;
+			}
+
+			MemoryContextSwitchTo(oldcxt);
+		}
+		}	/* end of stmt_start_time scope */
+	}
+
+skip_capture:
+	if (prev_ExecutorEnd_hook)
+		prev_ExecutorEnd_hook(queryDesc);
+	else
+		standard_ExecutorEnd(queryDesc);
+}
+
+/*
+ * Sort nested plans linked list by start time (chronological order).
+ * Uses merge sort for O(n log n) on linked lists.
+ */
+static NestedPlanInfo *
+nested_plans_merge(NestedPlanInfo *a, NestedPlanInfo *b)
+{
+	NestedPlanInfo dummy;
+	NestedPlanInfo *tail = &dummy;
+
+	dummy.next = NULL;
+	while (a && b)
+	{
+		if (INSTR_TIME_GET_DOUBLE(a->start_time) <=
+			INSTR_TIME_GET_DOUBLE(b->start_time))
+		{
+			tail->next = a;
+			a = a->next;
+		}
+		else
+		{
+			tail->next = b;
+			b = b->next;
+		}
+		tail = tail->next;
+	}
+	tail->next = a ? a : b;
+	return dummy.next;
+}
+
+static NestedPlanInfo *
+nested_plans_sort_by_start_time(NestedPlanInfo *head)
+{
+	NestedPlanInfo *slow;
+	NestedPlanInfo *fast;
+	NestedPlanInfo *mid;
+
+	if (!head || !head->next)
+		return head;
+
+	/* Split list in half */
+	slow = head;
+	fast = head->next;
+	while (fast && fast->next)
+	{
+		slow = slow->next;
+		fast = fast->next->next;
+	}
+	mid = slow->next;
+	slow->next = NULL;
+
+	return nested_plans_merge(
+		nested_plans_sort_by_start_time(head),
+		nested_plans_sort_by_start_time(mid));
+}
+
+/*
+ * ExplainPrintNestedPlans - print collected nested statement plans.
+ *
+ * This is called after the main query plan has been printed, to append
+ * the nested statement plans to the EXPLAIN output.
+ * Statements are sorted by start time for chronological ordering.
+ */
+static void
+ExplainPrintNestedPlans(ExplainState *es)
+{
+	NestedPlanInfo *info;
+
+	if (nested_plans_head == NULL && nested_total_count == 0)
+	{
+		/* If statements were skipped due to SECURITY DEFINER, inform user */
+		if (nested_secdef_skipped > 0)
+			ereport(NOTICE,
+					(errmsg("nested statements hidden: executed inside SECURITY DEFINER function"),
+					 errhint("Only superusers and roles with pg_read_all_stats can view nested plans inside SECURITY DEFINER functions.")));
+		return;
+	}
+
+	/* Sort by start time for chronological (top-down) ordering */
+	nested_plans_head = nested_plans_sort_by_start_time(nested_plans_head);
+
+	/* Renumber statements sequentially after sorting so display numbers
+	 * match the on-screen order (1, 2, 3...) instead of completion order.
+	 * Also find the slowest among displayed statements for the summary.
+	 * When list is empty (SHOW_NESTED 0), keep original nested_slowest_num. */
+	if (nested_plans_head != NULL)
+	{
+		int		display_num = 1;
+		double	max_time = 0.0;
+
+		for (info = nested_plans_head; info != NULL; info = info->next)
+		{
+			info->statement_num = display_num;
+			if (info->exec_time_ms > max_time)
+			{
+				max_time = info->exec_time_ms;
+				nested_slowest_num = display_num;
+			}
+			display_num++;
+		}
+	}
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		appendStringInfoChar(es->str, '\n');
+		if (nested_total_count > nested_stmt_count)
+			appendStringInfo(es->str, "Nested Plans (showing %d of %d):\n",
+							 nested_stmt_count, nested_total_count);
+		else
+			appendStringInfoString(es->str, "Nested Plans:\n");
+
+		for (info = nested_plans_head; info != NULL; info = info->next)
+		{
+			appendStringInfoChar(es->str, '\n');
+			if (info->is_trigger)
+				appendStringInfo(es->str, "  Nested Statement #%d (level %d, trigger):\n",
+								 info->statement_num, info->nesting_level);
+			else
+				appendStringInfo(es->str, "  Nested Statement #%d (level %d):\n",
+								 info->statement_num, info->nesting_level);
+			appendStringInfo(es->str, "  Query Text: %s\n", info->query_text);
+
+			/* Indent the plan text */
+			{
+				char	   *line;
+				char	   *plan_copy = pstrdup(info->plan_text);
+				char	   *saveptr = NULL;
+
+				for (line = strtok_r(plan_copy, "\n", &saveptr);
+					 line != NULL;
+					 line = strtok_r(NULL, "\n", &saveptr))
+				{
+					appendStringInfo(es->str, "  %s\n", line);
+				}
+				pfree(plan_copy);
+			}
+
+			/* Print execution time (and percentage of total nested time
+			 * for level-1 statements) if summary is enabled */
+			if (info->exec_time_ms >= 0 && es->summary)
+			{
+				if (info->is_trigger)
+				{
+					/* Trigger time is included in parent's time;
+					 * header already shows "(trigger)" annotation */
+					appendStringInfo(es->str, "  Execution Time: %.3f ms\n",
+									 info->exec_time_ms);
+				}
+				else if (info->nesting_level == 1 && nested_total_time > 0)
+				{
+					/*
+					 * Only level-1 statements show percentage, since
+					 * Total Nested Time sums only level-1 times.
+					 * Deeper statements show absolute time only (their
+					 * time is already included in their level-1 parent).
+					 */
+					double pct = (info->exec_time_ms / nested_total_time) * 100.0;
+					appendStringInfo(es->str, "  Execution Time: %.3f ms (%.1f%%)\n",
+									 info->exec_time_ms, pct);
+				}
+				else
+					appendStringInfo(es->str, "  Execution Time: %.3f ms\n",
+									 info->exec_time_ms);
+			}
+		}
+	}
+	else
+	{
+		/* For structured formats (JSON, XML, YAML) — emit nested plans
+		 * as a proper array within the Query group */
+		ExplainOpenGroup("Nested Plans", "Nested Plans", false, es);
+
+		for (info = nested_plans_head; info != NULL; info = info->next)
+		{
+			ExplainOpenGroup("Nested Statement", NULL, true, es);
+
+			ExplainPropertyInteger("Statement Number", NULL,
+								   info->statement_num, es);
+			ExplainPropertyInteger("Nesting Level", NULL,
+								   info->nesting_level, es);
+			ExplainPropertyBool("Is Trigger", info->is_trigger, es);
+			ExplainPropertyText("Query Text", info->query_text, es);
+
+			/* Execution time and percentage are injected into the Query
+			 * sub-object below, next to the standard "Execution Time"
+			 * field, so they appear together like TEXT format. */
+
+			/* Embed the nested plan as a proper sub-object by injecting
+			 * the raw JSON/XML/YAML directly into the output buffer.
+			 * For level-1 non-trigger statements, inject "Execution Time
+			 * Percentage" into the plan text so it appears next to
+			 * "Execution Time" inside the Query object. */
+			if (info->plan_text)
+			{
+				/* Inject percentage into plan_text for structured formats.
+				 * Allocate in nested_memcxt so cleanup is automatic. */
+				if (!info->is_trigger && info->nesting_level == 1 &&
+					nested_total_time > 0 && info->exec_time_ms >= 0)
+				{
+					double pct = (info->exec_time_ms / nested_total_time) * 100.0;
+					MemoryContext oldcxt = MemoryContextSwitchTo(nested_memcxt);
+
+					if (es->format == EXPLAIN_FORMAT_JSON)
+					{
+						/* Find "Execution Time": <number> and append percentage after it */
+						char *et = strstr(info->plan_text, "\"Execution Time\":");
+						if (et)
+						{
+							/* Find end of the number (next \n or ,) */
+							char *numstart = et + strlen("\"Execution Time\":");
+							char *numend = numstart;
+							while (*numend && *numend != '\n' && *numend != ',')
+								numend++;
+
+							/* Build new string with percentage inserted */
+							{
+								StringInfoData newbuf;
+								initStringInfo(&newbuf);
+								appendBinaryStringInfo(&newbuf, info->plan_text,
+													   numend - info->plan_text);
+								appendStringInfo(&newbuf,
+												 ",\n    \"Execution Time Percentage\": %.1f",
+												 pct);
+								appendStringInfoString(&newbuf, numend);
+								pfree(info->plan_text);
+								info->plan_text = newbuf.data;
+							}
+						}
+					}
+					else if (es->format == EXPLAIN_FORMAT_XML)
+					{
+						/* Find </Execution-Time> and insert percentage element after it */
+						char *et_end = strstr(info->plan_text, "</Execution-Time>");
+						if (et_end)
+						{
+							StringInfoData newbuf;
+							char *after;
+
+							et_end += strlen("</Execution-Time>");
+							after = et_end;
+
+							initStringInfo(&newbuf);
+							appendBinaryStringInfo(&newbuf, info->plan_text,
+												   after - info->plan_text);
+							appendStringInfo(&newbuf,
+											 "\n    <Execution-Time-Percentage>%.1f</Execution-Time-Percentage>",
+											 pct);
+							appendStringInfoString(&newbuf, after);
+							pfree(info->plan_text);
+							info->plan_text = newbuf.data;
+						}
+					}
+					else if (es->format == EXPLAIN_FORMAT_YAML)
+					{
+						/* Find "Execution Time:" line and append percentage after it */
+						char *et = strstr(info->plan_text, "Execution Time:");
+						if (et)
+						{
+							StringInfoData newbuf;
+							/* Find end of line */
+							char *eol = et;
+							while (*eol && *eol != '\n')
+								eol++;
+
+							initStringInfo(&newbuf);
+							appendBinaryStringInfo(&newbuf, info->plan_text,
+												   eol - info->plan_text);
+							appendStringInfo(&newbuf,
+											 "\n  Execution Time Percentage: %.1f",
+											 pct);
+							appendStringInfoString(&newbuf, eol);
+							pfree(info->plan_text);
+							info->plan_text = newbuf.data;
+						}
+					}
+
+					MemoryContextSwitchTo(oldcxt);
+				}
+
+				if (es->format == EXPLAIN_FORMAT_JSON)
+				{
+					char *p = info->plan_text;
+					char *end;
+
+					/* The plan_text is "[{\n  ...}]" from ExplainBeginOutput/
+					 * ExplainEndOutput.  Strip the outer [] to get the raw
+					 * object, then inject it as the value of "Plan". */
+
+					/* Skip leading [ and whitespace */
+					while (*p == '[' || *p == '\n' || *p == ' ')
+						p++;
+					/* Find trailing ] and trim */
+					end = p + strlen(p) - 1;
+					while (end > p && (*end == ']' || *end == '\n' || *end == ' '))
+						end--;
+					*(end + 1) = '\0';
+
+					/* Emit comma if needed, then "Query": <raw JSON> */
+					if (linitial_int(es->grouping_stack) != 0)
+						appendStringInfoChar(es->str, ',');
+					else
+						linitial_int(es->grouping_stack) = 1;
+					appendStringInfoChar(es->str, '\n');
+					appendStringInfoSpaces(es->str, 2 * es->indent);
+					appendStringInfoString(es->str, "\"Query\": ");
+					appendStringInfoString(es->str, p);
+				}
+				else if (es->format == EXPLAIN_FORMAT_XML)
+				{
+					/* For XML: strip outer <explain>...</explain> wrapper
+					 * and inject the <Query>...</Query> content with proper
+					 * indentation to match the surrounding elements. */
+					char *qstart = strstr(info->plan_text, "<Query>");
+
+					if (qstart)
+					{
+						char *qend = strstr(info->plan_text, "</Query>");
+
+						if (qend)
+						{
+							char	saved;
+							char   *line;
+							char   *next;
+							char   *content;
+							int		xml_indent = es->indent * 2;
+							int		orig_indent;
+							char   *p;
+
+							qend += strlen("</Query>");
+							saved = *qend;
+							*qend = '\0';
+
+							/* Determine original base indent (spaces before <Query>) */
+							orig_indent = 0;
+							p = qstart;
+							while (p > info->plan_text && *(p - 1) == ' ')
+							{
+								p--;
+								orig_indent++;
+							}
+
+							/* Re-indent each line preserving relative structure.
+							 * Use indent+1 to nest inside the Nested-Statement group,
+							 * matching the level of sibling elements like Query-Text. */
+							content = pstrdup(qstart);
+							*qend = saved;
+
+							for (line = content; line && *line; line = next)
+							{
+								int		line_indent = 0;
+								int		new_indent;
+
+								next = strchr(line, '\n');
+								if (next)
+								{
+									*next = '\0';
+									next++;
+								}
+								/* Count leading spaces */
+								while (line[line_indent] == ' ')
+									line_indent++;
+								/* Skip empty lines */
+								if (line[line_indent] == '\0')
+								{
+									appendStringInfoChar(es->str, '\n');
+									continue;
+								}
+								/* Apply new indent: target + (original relative) */
+								new_indent = xml_indent + 2 + (line_indent - orig_indent);
+								if (new_indent < 0)
+									new_indent = 0;
+								appendStringInfoSpaces(es->str, new_indent);
+								appendStringInfoString(es->str, line + line_indent);
+								appendStringInfoChar(es->str, '\n');
+							}
+							pfree(content);
+						}
+						else
+							ExplainPropertyText("Plan Text", info->plan_text, es);
+					}
+					else
+						ExplainPropertyText("Plan Text", info->plan_text, es);
+				}
+				else
+				{
+					/* YAML: emit "Query:" key and re-indent plan text
+					 * to nest it properly under the statement entry. */
+					int		yaml_indent = es->indent * 2;
+					char   *line;
+					char   *next;
+					char   *plan_copy;
+
+					appendStringInfoChar(es->str, '\n');
+					appendStringInfoSpaces(es->str, yaml_indent);
+					appendStringInfoString(es->str, "Query:\n");
+
+					/* Re-indent each line of plan_text */
+					plan_copy = pstrdup(info->plan_text);
+					for (line = plan_copy; line && *line; line = next)
+					{
+						next = strchr(line, '\n');
+						if (next)
+						{
+							*next = '\0';
+							next++;
+						}
+						/* Skip empty lines */
+						if (*line == '\0')
+						{
+							appendStringInfoChar(es->str, '\n');
+							continue;
+						}
+						appendStringInfoSpaces(es->str, yaml_indent + 2);
+						appendStringInfoString(es->str, line);
+						appendStringInfoChar(es->str, '\n');
+					}
+					pfree(plan_copy);
+				}
+			}
+
+			ExplainCloseGroup("Nested Statement", NULL, true, es);
+		}
+
+		ExplainCloseGroup("Nested Plans", "Nested Plans", false, es);
+	}
+
+	/* Print summary if enabled */
+	if (es->summary && nested_total_count > 0)
+	{
+		int			direct_count = nested_total_count - nested_trigger_count;
+
+		if (es->format == EXPLAIN_FORMAT_TEXT)
+		{
+			appendStringInfoChar(es->str, '\n');
+			appendStringInfoString(es->str, "Nested Statements Summary:\n");
+
+			if (nested_trigger_count > 0)
+				appendStringInfo(es->str, "  Total: %d statements (%d direct, %d trigger-fired), max depth %d\n",
+								 nested_total_count, direct_count,
+								 nested_trigger_count, nested_max_depth);
+			else
+				appendStringInfo(es->str, "  Total: %d statements, max depth %d\n",
+								 nested_total_count, nested_max_depth);
+
+			if (nested_main_exec_time > 0)
+				appendStringInfo(es->str, "  Total Execution Time: %.3f ms\n",
+								 nested_main_exec_time);
+
+			if (nested_total_time > 0)
+			{
+				if (nested_main_exec_time > 0)
+				{
+					double pct = (nested_total_time / nested_main_exec_time) * 100.0;
+					appendStringInfo(es->str, "  Total Nested Time: %.3f ms (%.1f%% of total time)\n",
+									 nested_total_time, pct);
+				}
+				else
+					appendStringInfo(es->str, "  Total Nested Time: %.3f ms\n",
+									 nested_total_time);
+			}
+
+			if (nested_trigger_time > 0)
+			{
+				if (nested_total_time > 0)
+				{
+					double pct = (nested_trigger_time / nested_total_time) * 100.0;
+					appendStringInfo(es->str, "  Total Trigger Time: %.3f ms (%.1f%% of nested time)\n",
+									 nested_trigger_time, pct);
+				}
+				else
+					appendStringInfo(es->str, "  Total Trigger Time: %.3f ms\n",
+									 nested_trigger_time);
+			}
+
+			if (nested_slowest_num > 0)
+			{
+				if (nested_plans_head == NULL)
+				{
+					/* SHOW_NESTED 0: no plans displayed, omit #N */
+					if (nested_total_time > 0)
+					{
+						double pct = (nested_slowest_time / nested_total_time) * 100.0;
+						appendStringInfo(es->str, "  Slowest Statement: %.3f ms (%.1f%%)\n",
+										 nested_slowest_time, pct);
+					}
+					else
+						appendStringInfo(es->str, "  Slowest Statement: %.3f ms\n",
+										 nested_slowest_time);
+				}
+				else if (nested_total_time > 0)
+				{
+					double pct = (nested_slowest_time / nested_total_time) * 100.0;
+					appendStringInfo(es->str, "  Slowest Statement: #%d (%.3f ms, %.1f%%)\n",
+									 nested_slowest_num, nested_slowest_time, pct);
+				}
+				else
+					appendStringInfo(es->str, "  Slowest Statement: #%d (%.3f ms)\n",
+									 nested_slowest_num, nested_slowest_time);
+			}
+		}
+		else
+		{
+			/* Structured summary for JSON/XML/YAML */
+			ExplainOpenGroup("Nested Statements Summary", "Nested Statements Summary",
+							 true, es);
+			ExplainPropertyInteger("Total Statements", NULL,
+								   nested_total_count, es);
+			ExplainPropertyInteger("Direct Statements", NULL,
+								   direct_count, es);
+			ExplainPropertyInteger("Trigger-Fired Statements", NULL,
+								   nested_trigger_count, es);
+			ExplainPropertyInteger("Max Depth", NULL,
+								   nested_max_depth, es);
+			if (nested_main_exec_time > 0)
+				ExplainPropertyFloat("Total Execution Time", "ms",
+									 nested_main_exec_time, 3, es);
+			if (nested_total_time > 0)
+				ExplainPropertyFloat("Total Nested Time", "ms",
+									 nested_total_time, 3, es);
+			if (nested_trigger_time > 0)
+				ExplainPropertyFloat("Total Trigger Time", "ms",
+									 nested_trigger_time, 3, es);
+			if (nested_slowest_num > 0)
+			{
+				ExplainPropertyInteger("Slowest Statement Number", NULL,
+									   nested_slowest_num, es);
+				ExplainPropertyFloat("Slowest Statement Time", "ms",
+									 nested_slowest_time, 3, es);
+			}
+			ExplainCloseGroup("Nested Statements Summary", "Nested Statements Summary",
+							  true, es);
+		}
+	}
+
+	/* Warn if high volume of nested statements and no SHOW_NESTED limit set */
+	if (nested_total_count > NESTED_STMT_NOTICE_THRESHOLD &&
+		es->show_nested < 0)
+	{
+		ereport(NOTICE,
+				(errmsg("%d nested statements captured"
+						" (per-row SQL function calls can produce high counts)",
+						nested_total_count),
+				 errhint("Use SHOW_NESTED 0 for summary only, "
+						 "or SHOW_NESTED N to display the first N plans.")));
+	}
+
+	/* No need to free individual items — MemoryContextDelete in PG_FINALLY
+	 * will free everything in nested_memcxt at once. */
+	nested_plans_head = NULL;
+	nested_plans_tail = NULL;
 }

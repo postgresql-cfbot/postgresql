@@ -47,6 +47,8 @@ EXPLAIN [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] <rep
     SUMMARY [ <replaceable class="parameter">boolean</replaceable> ]
     MEMORY [ <replaceable class="parameter">boolean</replaceable> ]
     IO [ <replaceable class="parameter">boolean</replaceable> ]
+    NESTED_STATEMENTS [ <replaceable class="parameter">boolean</replaceable> ]
+    SHOW_NESTED <replaceable class="parameter">integer</replaceable>
     FORMAT { TEXT | XML | JSON | YAML }
 </synopsis>
  </refsynopsisdiv>
@@ -318,6 +320,66 @@ ROLLBACK;
    </varlistentry>
 
    <varlistentry>
+    <term><literal>NESTED_STATEMENTS</literal></term>
+    <listitem>
+     <para>
+      Include execution plans for SQL statements executed inside
+      server-side functions and procedures.  Any function written in
+      PL/pgSQL, PL/Perl, PL/Tcl, PL/Python, or any other procedural
+      language that executes SQL through the Server Programming Interface
+      (SPI) will have its internal queries captured and displayed after
+      the main query plan.
+     </para>
+     <para>
+      Each nested statement is shown with a sequential number, its nesting
+      level, the query text, the complete execution plan, and its execution
+      time.  The nesting level reflects the executor call stack depth:
+      statements in a function called via <literal>PERFORM</literal> or
+      <literal>SELECT ... INTO</literal> run at a deeper level than the
+      caller, while statements in a function called via expression assignment
+      (e.g., <literal>result := func()</literal>) run at the same level as
+      the caller.  Statements fired by triggers (both
+      <literal>BEFORE</literal> and <literal>AFTER</literal>) are
+      automatically detected and annotated with
+      <literal>(trigger)</literal> in the output.  Nested statements that
+      fire triggers also show trigger timing information in their plan.
+      When <literal>VERBOSE</literal> is enabled, each nested statement
+      includes its <literal>Query Identifier</literal> for correlation
+      with <structname>pg_stat_statements</structname>.
+     </para>
+     <para>
+      This option also works directly on DML statements
+      (<command>INSERT</command>, <command>UPDATE</command>,
+      <command>DELETE</command>) that fire triggers, revealing the
+      execution plans of trigger-fired statements without needing to
+      wrap the query in a function.
+      A summary section is included after the nested plans showing
+      total statement count, execution time breakdown, and the slowest
+      statement (controlled by the <literal>SUMMARY</literal> option).
+      This parameter may only be used when <literal>ANALYZE</literal> is also
+      enabled.  It defaults to <literal>FALSE</literal>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term><literal>SHOW_NESTED</literal></term>
+    <listitem>
+     <para>
+      Limit the number of nested statement plans displayed in the output.
+      When specified, only the first <replaceable>N</replaceable> nested
+      plans are shown, but all statements are still captured internally
+      for the summary statistics.  Use <literal>SHOW_NESTED 0</literal>
+      to display only the summary without any individual plans.
+      This is useful for complex functions with many nested statements
+      where the full output would be too large.
+      This parameter may only be used when <literal>NESTED_STATEMENTS</literal>
+      is also enabled.  When not specified, all nested plans are displayed.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
     <term><literal>FORMAT</literal></term>
     <listitem>
      <para>
@@ -397,6 +459,87 @@ ROLLBACK;
    for plan nodes that in themselves require very little time per
    execution, and on machines that have relatively slow operating
    system calls for obtaining the time of day.
+  </para>
+
+  <para>
+   When <literal>NESTED_STATEMENTS</literal> is enabled, the options
+   <literal>VERBOSE</literal>, <literal>COSTS</literal>,
+   <literal>BUFFERS</literal>, <literal>WAL</literal>,
+   <literal>TIMING</literal>, <literal>IO</literal>,
+   and <literal>FORMAT</literal>
+   are inherited by the nested statement plans.
+   The <literal>MEMORY</literal> option is not inherited because it
+   reports planning memory usage, and nested statement planning is
+   handled internally by SPI before the execution hooks capture the plan.
+   Each nested statement shows its execution time when
+   <literal>SUMMARY</literal> is enabled.  Level-1 statements (those
+   directly inside the called function) also show a percentage of total
+   nested time.  Deeper-level statements show only absolute time because
+   their time is already included in their level-1 parent's reported time.
+   Nested statements are displayed in chronological order (by start time)
+   and numbered sequentially.
+   When using structured output formats (JSON, XML, YAML), each nested
+   plan is emitted as a structured object matching the main plan format.
+   The <literal>Execution Time Percentage</literal> field appears inside
+   the <literal>Query</literal> object next to <literal>Execution Time</literal>
+   for level-1 non-trigger statements.
+  </para>
+
+  <para>
+   A summary section controlled by <literal>SUMMARY</literal> shows:
+   total statement count, maximum nesting depth, total nested execution
+   time (as percentage of main execution time), total trigger time
+   (as percentage of nested time), and the slowest statement.
+   Total nested time sums only level-1 statement times to avoid
+   double-counting when deeper levels are present (since level-1
+   times already include their children's execution time).
+   Use <literal>SHOW_NESTED 0</literal> to display only the summary.
+  </para>
+
+  <para>
+   Statements fired by triggers (both <literal>BEFORE</literal> and
+   <literal>AFTER</literal>) are annotated with
+   <literal>(trigger)</literal> in the output header.  Their time is
+   tracked separately as <literal>Total Trigger Time</literal> and
+   excluded from <literal>Total Nested Time</literal>.  Nested
+   statements that fire triggers also show
+   <literal>Trigger</literal> lines (name, time, call count) in their
+   plan output, matching the main query's trigger reporting format.
+  </para>
+
+  <para>
+   When a function uses dynamic SQL via <literal>EXECUTE</literal>,
+   the <literal>Query Text</literal> field shows the actual executed
+   SQL string, not the PL/pgSQL source expression.
+   When <literal>VERBOSE</literal> is enabled and
+   <varname>compute_query_id</varname> is active, each nested statement
+   shows its <literal>Query Identifier</literal>, which can be used to
+   look up the statement in
+   <structname>pg_stat_statements</structname>.
+  </para>
+
+  <para>
+   Nested statements inside <literal>SECURITY DEFINER</literal> functions
+   are hidden from unprivileged users.  When the effective user differs
+   from the session user (indicating a <literal>SECURITY DEFINER</literal>
+   context), nested statement capture is skipped entirely unless the
+   session user is a superuser or holds the
+   <literal>pg_read_all_stats</literal> role.  A
+   <literal>NOTICE</literal> is emitted explaining why nested plans are
+   not shown.  This prevents unprivileged users from inspecting query
+   text and plan details of functions whose internals they should not
+   see.
+  </para>
+
+  <para>
+   For queries that call functions per-row (e.g.,
+   <literal>SELECT func(id) FROM large_table</literal>), each function
+   invocation generates a separate nested statement capture.  Use
+   <literal>SHOW_NESTED</literal> to limit the number of plans displayed
+   while still collecting accurate summary statistics for all executions.
+   A <literal>NOTICE</literal> is emitted when more than 1000 nested
+   statements are captured without <literal>SHOW_NESTED</literal> being
+   set.
   </para>
  </refsect1>
 
@@ -581,6 +724,176 @@ EXPLAIN (GENERIC_PLAN)
     WHERE id &gt; $1::integer AND id &lt; $2::integer
     GROUP BY foo;
 </programlisting>
+  </para>
+
+  <para>
+   To display execution plans for nested statements within a function:
+
+<programlisting>
+EXPLAIN (ANALYZE, NESTED_STATEMENTS) SELECT my_function();
+
+                         QUERY PLAN
+-------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=4) (actual time=1.234..1.235 rows=1.00 loops=1)
+ Planning Time: 0.050 ms
+ Execution Time: 1.300 ms
+
+ Nested Plans:
+
+   Nested Statement #1 (level 1):
+   Query Text: SELECT count(*) FROM products
+   Aggregate  (cost=11.75..11.76 rows=1 width=8) (actual time=0.200..0.201 rows=1.00 loops=1)
+     -&gt;  Seq Scan on products  (cost=0.00..11.00 rows=500 width=0) (actual time=0.010..0.150 rows=500.00 loops=1)
+   Execution Time: 0.201 ms (20.1%)
+
+   Nested Statement #2 (level 1):
+   Query Text: UPDATE products SET price = price * 1.10 WHERE category = 'Electronics'
+   Update on products  (cost=0.00..12.50 rows=0 width=0) (actual time=0.800..0.800 rows=0.00 loops=1)
+     -&gt;  Seq Scan on products  (cost=0.00..12.50 rows=50 width=10) (actual time=0.050..0.100 rows=50.00 loops=1)
+           Filter: (category = 'Electronics'::text)
+           Rows Removed by Filter: 450
+   Execution Time: 0.800 ms (79.9%)
+
+ Nested Statements Summary:
+   Total: 2 statements, max depth 1
+   Total Execution Time: 1.300 ms
+   Total Nested Time: 1.001 ms (77.0% of total time)
+   Slowest Statement: #2 (0.800 ms, 79.9%)
+</programlisting>
+
+   This shows the main query plan followed by the execution plans for
+   each SQL statement executed inside <function>my_function()</function>.
+  </para>
+
+  <para>
+   When triggers are involved, trigger-fired statements are annotated
+   and the parent statement shows trigger timing:
+
+<programlisting>
+EXPLAIN (ANALYZE, NESTED_STATEMENTS, COSTS OFF)
+UPDATE orders SET status = 'done' WHERE id = 1;
+
+                         QUERY PLAN
+-------------------------------------------------------------
+ Update on orders (actual time=0.050..0.050 rows=0.00 loops=1)
+   -&gt;  Index Scan using orders_pkey on orders (...)
+ Trigger audit_trigger: time=0.522 calls=1
+ Execution Time: 0.600 ms
+
+ Nested Plans:
+
+   Nested Statement #1 (level 1, trigger):
+   Query Text: INSERT INTO audit_log VALUES (NEW.id, 'status changed')
+   Insert on audit_log (actual time=0.010..0.010 rows=0.00 loops=1)
+     -&gt;  Result (actual time=0.001..0.001 rows=1.00 loops=1)
+   Execution Time: 0.011 ms
+
+ Nested Statements Summary:
+   Total: 1 statements (0 direct, 1 trigger-fired), max depth 1
+   Total Execution Time: 0.600 ms
+   Total Trigger Time: 0.011 ms
+   Slowest Statement: #1 (0.011 ms)
+</programlisting>
+  </para>
+
+  <para>
+   Use <literal>SHOW_NESTED</literal> to limit the number of plans displayed
+   when a function executes many statements:
+
+<programlisting>
+EXPLAIN (ANALYZE, NESTED_STATEMENTS, SHOW_NESTED 1) SELECT my_function();
+
+                         QUERY PLAN
+-------------------------------------------------------------
+ Result  (cost=0.00..0.26 rows=1 width=4) (actual time=1.234..1.235 rows=1.00 loops=1)
+ Planning Time: 0.050 ms
+ Execution Time: 1.300 ms
+
+ Nested Plans (showing 1 of 2):
+
+   Nested Statement #1 (level 1):
+   Query Text: SELECT count(*) FROM products
+   Aggregate  (cost=11.75..11.76 rows=1 width=8) (actual time=0.200..0.201 rows=1.00 loops=1)
+     -&gt;  Seq Scan on products  (cost=0.00..11.00 rows=500 width=0) (actual time=0.010..0.150 rows=500.00 loops=1)
+   Execution Time: 0.201 ms (20.1%)
+
+ Nested Statements Summary:
+   Total: 2 statements, max depth 1
+   Total Execution Time: 1.300 ms
+   Total Nested Time: 1.001 ms (77.0% of total time)
+   Slowest Statement: #2 (0.800 ms, 79.9%)
+</programlisting>
+
+   Only the first plan is shown, but the summary still reflects all
+   statements.  Use <literal>SHOW_NESTED 0</literal> to display only
+   the summary without any individual plans.
+  </para>
+
+  <para>
+   With JSON format, the main plan is emitted as a complete JSON document,
+   followed by each nested statement's plan as a separate JSON document:
+
+<programlisting>
+EXPLAIN (ANALYZE, NESTED_STATEMENTS, FORMAT JSON) SELECT my_function();
+
+                         QUERY PLAN
+-------------------------------------------------------------
+[
+  {
+    "Plan": {
+      "Node Type": "Result",
+      "Actual Startup Time": 1.234,
+      "Actual Total Time": 1.235,
+      "Actual Rows": 1,
+      "Actual Loops": 1
+    },
+    "Planning Time": 0.050,
+    "Execution Time": 1.300,
+    "Nested Plans": [
+      {
+        "Statement Number": 1,
+        "Nesting Level": 1,
+        "Is Trigger": false,
+        "Query Text": "SELECT count(*) FROM products",
+        "Query": {
+          "Plan": {
+            "Node Type": "Aggregate",
+            "Plans": [{"Node Type": "Seq Scan", "Relation Name": "products"}]
+          },
+          "Execution Time": 0.201,
+          "Execution Time Percentage": 20.1
+        }
+      },
+      {
+        "Statement Number": 2,
+        "Nesting Level": 1,
+        "Is Trigger": false,
+        "Query Text": "UPDATE products SET price = price * 1.10 WHERE ...",
+        "Query": {
+          "Plan": {
+            "Node Type": "ModifyTable",
+            "Operation": "Update",
+            "Plans": [{"Node Type": "Seq Scan", "Relation Name": "products"}]
+          },
+          "Execution Time": 0.800,
+          "Execution Time Percentage": 79.9
+        }
+      }
+    ],
+    "Nested Statements Summary": {
+      "Total Statements": 2,
+      "Direct Statements": 2,
+      "Trigger-Fired Statements": 0,
+      "Max Depth": 1,
+      "Total Execution Time": 1.300,
+      "Total Nested Time": 1.001,
+      "Slowest Statement Number": 2,
+      "Slowest Statement Time": 0.800
+    }
+  }
+]
+</programlisting>
+
   </para>
  </refsect1>
 

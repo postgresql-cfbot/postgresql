@@ -57,6 +57,8 @@ typedef struct ExplainState
 	bool		settings;		/* print modified settings */
 	bool		io;				/* print info about IO (prefetch, ...) */
 	bool		generic;		/* generate a generic plan */
+	bool		nested_statements;	/* print nested statement plans */
+	int			show_nested;		/* how many nested plans to display (-1=all) */
 	ExplainSerializeOption serialize;	/* serialize the query's output? */
 	ExplainFormat format;		/* output format */
 	/* state for output formatting --- not reset for each new plan tree */

@@ -312,4 +312,6 @@ extern bool AfterTriggerIsActive(void);
 
 extern void AtEOXact_RI(bool isCommit);
 
+extern int GetMyTriggerDepth(void);
+
 #endif							/* TRIGGER_H */

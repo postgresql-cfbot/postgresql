@@ -1505,7 +1505,10 @@ JsonTablePathScan
 JsonTablePathSpec
 JsonTablePlan
 JsonTablePlanRowSource
+JsonTablePlanSpec
 JsonTablePlanState
+JsonTablePlanJoinType
+JsonTablePlanType
 JsonTableSiblingJoin
 JsonTokenType
 JsonTransformStringValuesAction

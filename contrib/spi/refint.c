@@ -143,25 +143,25 @@ check_primary_key(PG_FUNCTION_ARGS)
 
 	initStringInfo(&sql);
 
-		/*
-		 * Construct query: SELECT 1 FROM _referenced_relation_ WHERE Pkey1 =
-		 * $1 [AND Pkey2 = $2 [...]]
-		 */
-		appendStringInfo(&sql, "select 1 from %s where ", relname);
-		for (i = 1; i <= nkeys; i++)
-		{
-			appendStringInfo(&sql, "%s = $%d ", args[i + nkeys], i);
-			if (i < nkeys)
-				appendStringInfoString(&sql, "and ");
-		}
+	/*
+	 * Construct query: SELECT 1 FROM _referenced_relation_ WHERE Pkey1 = $1
+	 * [AND Pkey2 = $2 [...]]
+	 */
+	appendStringInfo(&sql, "select 1 from %s where ", relname);
+	for (i = 1; i <= nkeys; i++)
+	{
+		appendStringInfo(&sql, "%s = $%d ", args[i + nkeys], i);
+		if (i < nkeys)
+			appendStringInfoString(&sql, "and ");
+	}
 
-		/* Prepare plan for query */
-		splan = SPI_prepare(sql.data, nkeys, argtypes);
-		if (splan == NULL)
-			/* internal error */
-			elog(ERROR, "check_primary_key: SPI_prepare returned %s", SPI_result_code_string(SPI_result));
+	/* Prepare plan for query */
+	splan = SPI_prepare(sql.data, nkeys, argtypes);
+	if (splan == NULL)
+		/* internal error */
+		elog(ERROR, "check_primary_key: SPI_prepare returned %s", SPI_result_code_string(SPI_result));
 
-		pfree(sql.data);
+	pfree(sql.data);
 
 	/*
 	 * Ok, execute prepared plan.
@@ -365,113 +365,113 @@ check_foreign_key(PG_FUNCTION_ARGS)
 	args2 = args;
 	splan = (SPIPlanPtr *) palloc(nrefs * sizeof(SPIPlanPtr));
 
-		for (r = 0; r < nrefs; r++)
+	for (r = 0; r < nrefs; r++)
+	{
+
+		initStringInfo(&sql);
+
+		relname = args2[0];
+
+		/*---------
+		 * For 'R'estrict action we construct SELECT query:
+		 *
+		 *	SELECT 1
+		 *	FROM _referencing_relation_
+		 *	WHERE Fkey1 = $1 [AND Fkey2 = $2 [...]]
+		 *
+		 *	to check is tuple referenced or not.
+		 *---------
+		 */
+		if (action == 'r')
+			appendStringInfo(&sql, "select 1 from %s where ", relname);
+
+		/*---------
+		 * For 'C'ascade action we construct DELETE query
+		 *
+		 *	DELETE
+		 *	FROM _referencing_relation_
+		 *	WHERE Fkey1 = $1 [AND Fkey2 = $2 [...]]
+		 *
+		 * to delete all referencing tuples.
+		 *---------
+		 */
+
+		/*
+		 * Max : Cascade with UPDATE query i create update query that updates
+		 * new key values in referenced tables
+		 */
+
+
+		else if (action == 'c')
 		{
-
-			initStringInfo(&sql);
-
-			relname = args2[0];
-
-			/*---------
-			 * For 'R'estrict action we construct SELECT query:
-			 *
-			 *	SELECT 1
-			 *	FROM _referencing_relation_
-			 *	WHERE Fkey1 = $1 [AND Fkey2 = $2 [...]]
-			 *
-			 *	to check is tuple referenced or not.
-			 *---------
-			 */
-			if (action == 'r')
-				appendStringInfo(&sql, "select 1 from %s where ", relname);
-
-			/*---------
-			 * For 'C'ascade action we construct DELETE query
-			 *
-			 *	DELETE
-			 *	FROM _referencing_relation_
-			 *	WHERE Fkey1 = $1 [AND Fkey2 = $2 [...]]
-			 *
-			 * to delete all referencing tuples.
-			 *---------
-			 */
-
-			/*
-			 * Max : Cascade with UPDATE query i create update query that
-			 * updates new key values in referenced tables
-			 */
-
-
-			else if (action == 'c')
+			if (is_update == 1)
 			{
-				if (is_update == 1)
-				{
-					int			fn;
-					char	   *nv;
-					int			k;
+				int			fn;
+				char	   *nv;
+				int			k;
 
-					appendStringInfo(&sql, "update %s set ", relname);
-					for (k = 1; k <= nkeys; k++)
-					{
-						fn = SPI_fnumber(tupdesc, args_temp[k - 1]);
-						Assert(fn > 0); /* already checked above */
-						nv = SPI_getvalue(newtuple, tupdesc, fn);
-
-						appendStringInfo(&sql, " %s = %s ",
-										 args2[k],
-										 nv ? quote_literal_cstr(nv) : "NULL");
-						if (k < nkeys)
-							appendStringInfoString(&sql, ", ");
-					}
-					appendStringInfoString(&sql, " where ");
-				}
-				else
-					/* DELETE */
-					appendStringInfo(&sql, "delete from %s where ", relname);
-			}
-
-			/*
-			 * For 'S'etnull action we construct UPDATE query - UPDATE
-			 * _referencing_relation_ SET Fkey1 null [, Fkey2 null [...]]
-			 * WHERE Fkey1 = $1 [AND Fkey2 = $2 [...]] - to set key columns in
-			 * all referencing tuples to NULL.
-			 */
-			else if (action == 's')
-			{
 				appendStringInfo(&sql, "update %s set ", relname);
-				for (i = 1; i <= nkeys; i++)
+				for (k = 1; k <= nkeys; k++)
 				{
-					appendStringInfo(&sql, "%s = null", args2[i]);
-					if (i < nkeys)
+					fn = SPI_fnumber(tupdesc, args_temp[k - 1]);
+					Assert(fn > 0); /* already checked above */
+					nv = SPI_getvalue(newtuple, tupdesc, fn);
+
+					appendStringInfo(&sql, " %s = %s ",
+									 args2[k],
+									 nv ? quote_literal_cstr(nv) : "NULL");
+					if (k < nkeys)
 						appendStringInfoString(&sql, ", ");
 				}
 				appendStringInfoString(&sql, " where ");
 			}
+			else
+				/* DELETE */
+				appendStringInfo(&sql, "delete from %s where ", relname);
+		}
 
-			/* Construct WHERE qual */
+		/*
+		 * For 'S'etnull action we construct UPDATE query - UPDATE
+		 * _referencing_relation_ SET Fkey1 null [, Fkey2 null [...]] WHERE
+		 * Fkey1 = $1 [AND Fkey2 = $2 [...]] - to set key columns in all
+		 * referencing tuples to NULL.
+		 */
+		else if (action == 's')
+		{
+			appendStringInfo(&sql, "update %s set ", relname);
 			for (i = 1; i <= nkeys; i++)
 			{
-				appendStringInfo(&sql, "%s = $%d ", args2[i], i);
+				appendStringInfo(&sql, "%s = null", args2[i]);
 				if (i < nkeys)
-					appendStringInfoString(&sql, "and ");
+					appendStringInfoString(&sql, ", ");
 			}
+			appendStringInfoString(&sql, " where ");
+		}
 
-			/* Prepare plan for query */
-			pplan = SPI_prepare(sql.data, nkeys, argtypes);
-			if (pplan == NULL)
-				/* internal error */
-				elog(ERROR, "check_foreign_key: SPI_prepare returned %s", SPI_result_code_string(SPI_result));
+		/* Construct WHERE qual */
+		for (i = 1; i <= nkeys; i++)
+		{
+			appendStringInfo(&sql, "%s = $%d ", args2[i], i);
+			if (i < nkeys)
+				appendStringInfoString(&sql, "and ");
+		}
 
-			splan[r] = pplan;
+		/* Prepare plan for query */
+		pplan = SPI_prepare(sql.data, nkeys, argtypes);
+		if (pplan == NULL)
+			/* internal error */
+			elog(ERROR, "check_foreign_key: SPI_prepare returned %s", SPI_result_code_string(SPI_result));
 
-			args2 += nkeys + 1; /* to the next relation */
+		splan[r] = pplan;
+
+		args2 += nkeys + 1;		/* to the next relation */
 
 #ifdef DEBUG_QUERY
-			elog(DEBUG4, "check_foreign_key Debug Query is :  %s ", sql.data);
+		elog(DEBUG4, "check_foreign_key Debug Query is :  %s ", sql.data);
 #endif
 
-			pfree(sql.data);
-		}
+		pfree(sql.data);
+	}
 
 	/*
 	 * If UPDATE and key is not changed ...

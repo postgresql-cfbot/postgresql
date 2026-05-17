@@ -19,6 +19,7 @@
 
 #include "access/stratnum.h"
 #include "catalog/pg_opfamily.h"
+#include "catalog/pg_type.h"
 #include "fmgr.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/supportnodes.h"
@@ -41,7 +42,8 @@ static bool matches_boolean_partition_clause(RestrictInfo *rinfo,
 											 int partkeycol);
 static Var *find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle);
 static bool right_merge_direction(PlannerInfo *root, PathKey *pathkey);
-static MonotonicFunction get_expr_slope_wrt(Expr *expr, Expr *target);
+static MonotonicFunction get_expr_slope_wrt(Expr *expr, Expr *target,
+											bool target_cannan);
 static PathKey *slope_emit_pathkey(PlannerInfo *root, PathKey *pk,
 								   Expr *indexkey, bool reverse_sort,
 								   bool nulls_first);
@@ -862,6 +864,44 @@ get_variation_source(Expr *expr, Expr **inner_out, Index *relid_out)
 }
 
 /*
+ * var_type_can_nan
+ *		True if a variation-source column can hold NaN values.
+ */
+static bool
+var_type_can_nan(Var *var)
+{
+	switch (var->vartype)
+	{
+		case FLOAT4OID:
+		case FLOAT8OID:
+		case NUMERICOID:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/*
+ * finalize_slope
+ *		Apply NaN-aware restrictions to a composed monotonicity slope.
+ *
+ * Decreasing functions do not preserve sort order when the variation
+ * source can produce NaNs.  Flat functions are treated similarly, since
+ * NaNs and infinities in the source can still change the result.  An
+ * overall decreasing (or flat) result is only rejected once composition
+ * reaches the source.  For example, (1 - (1 - x)) is increasing in x even
+ * though (1 - x) is decreasing.
+ */
+static MonotonicFunction
+finalize_slope(MonotonicFunction slope, bool target_cannan)
+{
+	if (target_cannan &&
+		(slope == MONOTONICFUNC_DECREASING || slope == MONOTONICFUNC_BOTH))
+		return MONOTONICFUNC_NONE;
+	return slope;
+}
+
+/*
  * get_expr_slope_wrt
  *	  Determine the monotonicity slope of an expression with respect to
  *	  a specific target subexpression.
@@ -869,10 +909,11 @@ get_variation_source(Expr *expr, Expr **inner_out, Index *relid_out)
  * Returns the slope of 'expr' with respect to 'target'
  *   MONOTONICFUNC_INCREASING: monotonically increasing
  *   MONOTONICFUNC_DECREASING: monotonically decreasing
+ *   MONOTONICFUNC_BOTH:       independent of target
  *   MONOTONICFUNC_NONE:       cannot determine monotonicity
  */
 static MonotonicFunction
-get_expr_slope_wrt(Expr *expr, Expr *target)
+get_expr_slope_wrt(Expr *expr, Expr *target, bool target_cannan)
 {
 	MonotonicFunction slope = MONOTONICFUNC_INCREASING;
 
@@ -889,7 +930,7 @@ get_expr_slope_wrt(Expr *expr, Expr *target)
 
 		/* Check if we've reached the target */
 		if (equal(expr, target))
-			return slope;
+			return finalize_slope(slope, target_cannan);
 
 		/* Skip RelabelType (no-op coercion) */
 		if (IsA(expr, RelabelType))
@@ -944,7 +985,7 @@ get_expr_slope_wrt(Expr *expr, Expr *target)
 		if (req.slopes == NULL || req.nslopes <= 0)
 			return MONOTONICFUNC_NONE;
 
-		/* Find the single non-constant argument */
+		/* Find the single non-constant argument that can affect the result */
 		i = 0;
 		foreach(lc, args)
 		{
@@ -952,27 +993,36 @@ get_expr_slope_wrt(Expr *expr, Expr *target)
 
 			if (!IsA(arg, Const))
 			{
+				MonotonicFunction arg_slope;
+
+				if (unlikely(i >= req.nslopes))
+					return MONOTONICFUNC_NONE;
+
+				arg_slope = req.slopes[i];
+				if (arg_slope == MONOTONICFUNC_BOTH)
+				{
+					i++;
+					continue;
+				}
+				if (arg_slope == MONOTONICFUNC_DECREASING)
+					func_arg_slope = MONOTONICFUNC_DECREASING;
+				else if (arg_slope != MONOTONICFUNC_INCREASING)
+					return MONOTONICFUNC_NONE;
+
 				if (next_expr != NULL)
 				{
 					/* Multivariate - check if this is the target */
-					return equal(expr, target) ? slope : MONOTONICFUNC_NONE;
+					if (equal(expr, target))
+						return finalize_slope(slope, target_cannan);
+					return MONOTONICFUNC_NONE;
 				}
 				next_expr = arg;
-				if (likely(i < req.nslopes))
-				{
-					if (req.slopes[i] == MONOTONICFUNC_DECREASING)
-						func_arg_slope = MONOTONICFUNC_DECREASING;
-					else if (req.slopes[i] != MONOTONICFUNC_INCREASING)
-						return MONOTONICFUNC_NONE;
-				}
-				else
-					return MONOTONICFUNC_NONE;
 			}
 			i++;
 		}
 
 		if (next_expr == NULL)
-			return MONOTONICFUNC_NONE;	/* all constant */
+			return finalize_slope(MONOTONICFUNC_BOTH, target_cannan);
 
 		/* Compose slopes */
 		if (func_arg_slope == MONOTONICFUNC_DECREASING)
@@ -1007,7 +1057,8 @@ precompute_slope_pathkeys(PlannerInfo *root)
 
 		pk->pk_var = NULL;
 		pk->pk_varrelid = 0;
-		pk->pk_slope = MONOTONICFUNC_BOTH;	/* not yet computed */
+		pk->pk_slope = MONOTONICFUNC_UNKNOWN;
+		pk->pk_var_cannan = false;
 
 		if (pk->pk_eclass->ec_has_volatile ||
 			pk->pk_eclass->ec_members == NIL)
@@ -1024,6 +1075,8 @@ precompute_slope_pathkeys(PlannerInfo *root)
 		if (pk->pk_var == NULL || pk->pk_varrelid == 0 ||
 			pk->pk_var == em->em_expr)
 			pk->pk_var = NULL;
+		else if (IsA(pk->pk_var, Var))
+			pk->pk_var_cannan = var_type_can_nan((Var *) pk->pk_var);
 	}
 }
 
@@ -1188,19 +1241,21 @@ build_index_pathkeys(PlannerInfo *root,
 					{
 						PathKey    *spk;
 
-						if (qpk->pk_slope == MONOTONICFUNC_BOTH)
+						if (qpk->pk_slope == MONOTONICFUNC_UNKNOWN)
 						{
 							EquivalenceMember *em;
 
 							em = linitial(qpk->pk_eclass->ec_members);
 							qpk->pk_slope = get_expr_slope_wrt(em->em_expr,
-															   qpk->pk_var);
+															   qpk->pk_var,
+															   qpk->pk_var_cannan);
 						}
 						spk = slope_emit_pathkey(root, qpk, indexkey,
 												 reverse_sort, nulls_first);
 						if (spk && !pathkey_is_redundant(spk, retval))
 							retval = lappend(retval, spk);
-						slope_matched = true;
+						if (spk)
+							slope_matched = true;
 						continue;
 					}
 

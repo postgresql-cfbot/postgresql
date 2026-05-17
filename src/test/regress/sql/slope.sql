@@ -145,7 +145,7 @@ select floor(v_float8 + 1), count(*) from slope_src group by 1;
 -- direction and nulls agree (Forward) or both are flipped (Backward).
 -- When only one differs, a Sort is required.
 --
-CREATE TABLE slope_nulls_tmp (v float8);
+CREATE TABLE slope_nulls_tmp (v int4);
 INSERT INTO slope_nulls_tmp VALUES (1), (NULL), (2);
 ANALYZE slope_nulls_tmp;
 
@@ -193,7 +193,9 @@ BEGIN
             raise exception 'r1 <> r2';
         end if;
         node_type := plan_json->0->'Plan'->>'Node Type';
-        INSERT INTO slope_nulls_results (sign, index_order, query_order, scan_method, example) VALUES (
+        INSERT INTO slope_nulls_results 
+          (sign, index_order, query_order, scan_method, example)
+        VALUES (
             r.sign,
             r.idx_dir || ' NULLS ' || r.idx_nf,
             r.qry_dir || ' NULLS ' || r.qry_nf,
@@ -276,3 +278,113 @@ from slope_src;
 
 -- Cleanup
 RESET enable_hashagg;
+
+
+--
+-- Test special numeric values
+--
+
+CREATE UNLOGGED TABLE slope_numeric_corners (i serial, x float8);
+INSERT INTO slope_numeric_corners (x) 
+SELECT x::float8 as x FROM 
+        unnest(ARRAY['-inf', '-1', '0', '3', 'inf', 'nan', NULL]) x(x)
+ORDER BY 1;
+
+CREATE INDEX slope_numeric_corners_x_idx_nulllast ON slope_numeric_corners (x ASC NULLS LAST);
+CREATE INDEX slope_numeric_corners_x_idx_nullfirst ON slope_numeric_corners (x ASC NULLS FIRST);
+
+CREATE TEMPORARY TABLE slope_numeric_corners_results (
+    seq serial,
+    expr text COLLATE "C",
+    sort_order text COLLATE "C",
+    nulls_order text COLLATE "C",
+    result float8[],
+    expected float8[],
+    expected_seq int4[],
+    nan_values float8[],
+    plan1_json json,
+    plan2_json json
+);
+
+DO $$
+DECLARE
+    r record;
+    result float8[];
+    expected float8[];
+    expected_seq int4[];
+    nan_values float8[];
+    query text;
+    agg_query text;
+    plan_query text;
+    nan_query text;
+    expected_seq_query text;
+    plan1_json json;
+    plan2_json json;
+BEGIN
+
+    SET enable_bitmapscan = off;
+    SET enable_indexscan = off;
+    SET enable_indexonlyscan = off;
+    SET enable_seqscan = off;
+    SET enable_sort = off;
+    FOR r IN
+        SELECT replace(s, 'a', a) as expr, sort_order, nulls_order
+        FROM 
+        unnest(ARRAY['ASC', 'DESC']) WITH ORDINALITY AS so(sort_order, so_i),
+        unnest(ARRAY['FIRST', 'LAST']) WITH ORDINALITY AS nf(nulls_order, no_i),
+        unnest(ARRAY[
+        'x+a', 'x-a', 'x*a', 'x/a',
+        'a+x', 'a-x', 'a*x', '-x'
+        ]) WITH ORDINALITY AS s(s, s_i),
+        unnest(ARRAY['''inf''::float8', '''-inf''::float8', '1::float8']) WITH ORDINALITY AS a(a, a_i)
+        ORDER BY s_i, so_i, no_i
+    LOOP
+        query := 'SELECT *, ' || r.expr || ' as f ' 
+                 || 'FROM slope_numeric_corners '
+                 || 'ORDER BY f ' || r.sort_order || ' NULLS ' || r.nulls_order;
+        nan_query := 'SELECT array_agg(x) FROM slope_numeric_corners 
+        WHERE ' || r.expr || ' = ''nan''::float8 AND x != ''nan''::float8';
+        agg_query := 'SELECT array_agg(f::float8) FROM (' || query || ') tmp';
+        expected_seq_query := 'SELECT array_agg(i::int4) FROM (' || query || ') tmp';
+        plan_query := 'EXPLAIN (FORMAT JSON) ' || query;
+        -- slope optimization disabled
+        SET enable_seqscan = on;
+        SET enable_indexscan = off;
+        SET enable_sort = on;
+        EXECUTE agg_query into expected;
+        EXECUTE expected_seq_query into expected_seq;
+        EXECUTE nan_query into nan_values;
+        EXECUTE plan_query into plan1_json;
+        -- slope optimization enabled
+        SET enable_seqscan = off;
+        SET enable_indexscan = on;
+        SET enable_sort = off;
+        EXECUTE agg_query into result;
+        EXECUTE plan_query into plan2_json;
+        INSERT INTO slope_numeric_corners_results 
+        (expr, sort_order, nulls_order, result, expected, expected_seq, nan_values, plan1_json, plan2_json) 
+        VALUES (r.expr, r.sort_order, r.nulls_order, result, expected, expected_seq, nan_values, plan1_json, plan2_json);
+    END LOOP;
+END;
+$$;
+
+-- display failing test cases
+SELECT seq, expr
+, sort_order, nulls_order
+, expected, expected_seq, result, nan_values
+, plan2_json->0->'Plan'->>'Node Type' as plan2
+FROM slope_numeric_corners_results
+WHERE expected != result;
+
+-- check the number of test cases
+SELECT expected = result as passed, count(1) 
+FROM slope_numeric_corners_results
+GROUP BY 1;
+
+DROP TABLE slope_numeric_corners;
+DROP TABLE slope_numeric_corners_results;
+RESET enable_bitmapscan;
+RESET enable_indexscan;
+RESET enable_indexonlyscan;
+RESET enable_seqscan;
+RESET enable_sort;

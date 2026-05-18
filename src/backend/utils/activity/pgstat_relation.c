@@ -30,6 +30,19 @@
 #include "utils/syscache.h"
 #include "utils/timestamp.h"
 
+/* Pending rewrite operations for stats copying */
+typedef struct PgStat_PendingRewrite
+{
+	RelFileLocator old_locator;
+	RelFileLocator new_locator;
+	RelFileLocator original_locator;
+	int			nest_level;		/* Transaction nesting level where rewrite
+								 * occurred */
+	struct PgStat_PendingRewrite *next;
+} PgStat_PendingRewrite;
+
+/* The pending rewrites list for current transaction */
+static PgStat_PendingRewrite *pending_rewrites = NULL;
 
 /* Record that's written to 2PC state file when pgstat state is persisted */
 typedef struct TwoPhasePgStatRecord
@@ -43,6 +56,8 @@ typedef struct TwoPhasePgStatRecord
 	PgStat_Counter deleted_pre_truncdrop;
 	RelFileLocator locator;		/* table's rd_locator */
 	bool		truncdropped;	/* was the relation truncated/dropped? */
+	RelFileLocator rewrite_old_locator;
+	int			rewrite_nest_level;
 } TwoPhasePgStatRecord;
 
 
@@ -54,27 +69,71 @@ static void restore_truncdrop_counters(PgStat_TableXactStatus *trans);
 
 
 /*
- * Copy stats between relations. This is used for things like REINDEX
+ * Copy stats between RelFileLocator. This is used for things like REINDEX
  * CONCURRENTLY.
  */
 void
-pgstat_copy_relation_stats(Relation dst, Relation src)
+pgstat_copy_relation_stats(RelFileLocator dst, RelFileLocator src, bool increment)
 {
 	PgStat_StatTabEntry *srcstats;
 	PgStatShared_Relation *dstshstats;
 	PgStat_EntryRef *dst_ref;
 
-	srcstats = pgstat_fetch_stat_tabentry_ext(RelationGetRelid(src), NULL);
+	srcstats = (PgStat_StatTabEntry *) pgstat_fetch_entry(PGSTAT_KIND_RELATION,
+														  src.dbOid,
+														  RelFileLocatorToPgStatObjid(src),
+														  NULL);
 	if (!srcstats)
 		return;
 
 	dst_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
-										  dst->rd_rel->relisshared ? InvalidOid : MyDatabaseId,
-										  RelationGetRelid(dst),
+										  dst.dbOid,
+										  RelFileLocatorToPgStatObjid(dst),
 										  false);
 
 	dstshstats = (PgStatShared_Relation *) dst_ref->shared_stats;
-	dstshstats->stats = *srcstats;
+
+	if (!increment)
+		dstshstats->stats = *srcstats;
+	else
+	{
+		/* Increment those statistics */
+#define RELFSTAT_ACC(fld, stats_to_add) \
+		(dstshstats->stats.fld += stats_to_add->fld)
+		RELFSTAT_ACC(numscans, srcstats);
+		RELFSTAT_ACC(tuples_returned, srcstats);
+		RELFSTAT_ACC(tuples_fetched, srcstats);
+		RELFSTAT_ACC(tuples_inserted, srcstats);
+		RELFSTAT_ACC(tuples_updated, srcstats);
+		RELFSTAT_ACC(tuples_deleted, srcstats);
+		RELFSTAT_ACC(tuples_hot_updated, srcstats);
+		RELFSTAT_ACC(tuples_newpage_updated, srcstats);
+		RELFSTAT_ACC(live_tuples, srcstats);
+		RELFSTAT_ACC(dead_tuples, srcstats);
+		RELFSTAT_ACC(mod_since_analyze, srcstats);
+		RELFSTAT_ACC(ins_since_vacuum, srcstats);
+		RELFSTAT_ACC(blocks_fetched, srcstats);
+		RELFSTAT_ACC(blocks_hit, srcstats);
+		RELFSTAT_ACC(vacuum_count, srcstats);
+		RELFSTAT_ACC(autovacuum_count, srcstats);
+		RELFSTAT_ACC(analyze_count, srcstats);
+		RELFSTAT_ACC(autoanalyze_count, srcstats);
+		RELFSTAT_ACC(total_vacuum_time, srcstats);
+		RELFSTAT_ACC(total_autovacuum_time, srcstats);
+		RELFSTAT_ACC(total_analyze_time, srcstats);
+		RELFSTAT_ACC(total_autoanalyze_time, srcstats);
+#undef RELFSTAT_ACC
+
+		/* Replace those statistics */
+#define RELFSTAT_REP(fld, stats_to_rep) \
+		(dstshstats->stats.fld = stats_to_rep->fld)
+		RELFSTAT_REP(lastscan, srcstats);
+		RELFSTAT_REP(last_vacuum_time, srcstats);
+		RELFSTAT_REP(last_autovacuum_time, srcstats);
+		RELFSTAT_REP(last_analyze_time, srcstats);
+		RELFSTAT_REP(last_autoanalyze_time, srcstats);
+#undef RELFSTAT_REP
+	}
 
 	pgstat_unlock_entry(dst_ref);
 }
@@ -136,6 +195,7 @@ void
 pgstat_assoc_relation(Relation rel)
 {
 	RelFileLocator locator;
+	PgStat_TableStatus *pgstat_info;
 
 	Assert(rel->pgstat_enabled);
 	Assert(rel->pgstat_info == NULL);
@@ -164,14 +224,54 @@ pgstat_assoc_relation(Relation rel)
 		locator.relNumber = rel->rd_id;
 	}
 
+	/*
+	 * If this relation was rewritten during the current transaction we may be
+	 * reopening it with its new RelFileLocator. In that case, continue using
+	 * the stats entry associated with the old locator rather than creating a
+	 * new one. This ensures all stats from before and after the rewrite are
+	 * tracked in a single entry which will be properly copied to the new
+	 * locator at transaction commit.
+	 */
+	if (pending_rewrites != NULL)
+	{
+		PgStat_PendingRewrite *rewrite;
+
+		for (rewrite = pending_rewrites; rewrite != NULL; rewrite = rewrite->next)
+		{
+			if (locator.dbOid == rewrite->new_locator.dbOid &&
+				locator.spcOid == rewrite->new_locator.spcOid &&
+				locator.relNumber == rewrite->new_locator.relNumber)
+			{
+				pgstat_info = pgstat_prep_relation_pending(rewrite->old_locator);
+				goto found_entry;
+			}
+		}
+	}
+
 	/* Else find or make the PgStat_TableStatus entry, and update link */
-	rel->pgstat_info = pgstat_prep_relation_pending(locator);
+	pgstat_info = pgstat_prep_relation_pending(locator);
+
+found_entry:
+	rel->pgstat_info = pgstat_info;
+
+	/*
+	 * For relations stats, we key by physical file location, not by relation
+	 * OID. This means during operations like ALTER TYPE it's possible that
+	 * the relation OID changes but the relfilenode stays the same (no actual
+	 * rewrite needed). Unlink the old relation first.
+	 */
+	if (pgstat_info->relation != NULL &&
+		pgstat_info->relation != rel)
+	{
+		pgstat_info->relation->pgstat_info = NULL;
+		pgstat_info->relation = NULL;
+	}
 
 	/* don't allow link a stats to multiple relcache entries */
-	Assert(rel->pgstat_info->relation == NULL);
+	Assert(pgstat_info->relation == NULL);
 
 	/* mark this relation as the owner */
-	rel->pgstat_info->relation = rel;
+	pgstat_info->relation = rel;
 }
 
 /*
@@ -214,14 +314,37 @@ pgstat_drop_relation(Relation rel)
 {
 	int			nest_level = GetCurrentTransactionNestLevel();
 	PgStat_TableStatus *pgstat_info;
+	bool		skip_transactional_drop = false;
 
 	/* don't track stats for relations without storage */
 	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
 		return;
 
-	pgstat_drop_transactional(PGSTAT_KIND_RELATION,
-							  rel->rd_locator.dbOid,
-							  RelFileLocatorToPgStatObjid(rel->rd_locator));
+	/* Check if this drop is part of a pending rewrite */
+	if (pending_rewrites != NULL)
+	{
+		PgStat_PendingRewrite *rewrite;
+
+		for (rewrite = pending_rewrites; rewrite != NULL; rewrite = rewrite->next)
+		{
+			if (rel->rd_locator.dbOid == rewrite->old_locator.dbOid &&
+				rel->rd_locator.spcOid == rewrite->old_locator.spcOid &&
+				rel->rd_locator.relNumber == rewrite->old_locator.relNumber)
+			{
+				skip_transactional_drop = true;
+				break;
+			}
+		}
+	}
+
+	/*
+	 * If it is part of a rewrite, drop its stats later, for example in
+	 * AtEOXact_PgStat_Relations(), so skip it here.
+	 */
+	if (!skip_transactional_drop)
+		pgstat_drop_transactional(PGSTAT_KIND_RELATION,
+								  rel->rd_locator.dbOid,
+								  RelFileLocatorToPgStatObjid(rel->rd_locator));
 
 	if (!pgstat_should_count_relation(rel))
 		return;
@@ -668,6 +791,48 @@ AtEOXact_PgStat_Relations(PgStat_SubXactStatus *xact_state, bool isCommit)
 		}
 		tabstat->trans = NULL;
 	}
+
+	/* preserve the stats in case of rewrite */
+	if (isCommit && pending_rewrites != NULL)
+	{
+		PgStat_PendingRewrite *rewrite;
+		PgStat_PendingRewrite *prev = NULL;
+		PgStat_PendingRewrite *current = pending_rewrites;
+		PgStat_PendingRewrite *next;
+
+		/* reverse the rewrites list to process in chronological order */
+		while (current != NULL)
+		{
+			next = current->next;
+			current->next = prev;
+			prev = current;
+			current = next;
+		}
+
+		/* now process rewrites in chronological order */
+		for (rewrite = prev; rewrite != NULL; rewrite = rewrite->next)
+		{
+			PgStat_EntryRef *old_entry_ref;
+
+			old_entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION,
+													   rewrite->old_locator.dbOid,
+													   RelFileLocatorToPgStatObjid(rewrite->old_locator));
+
+			if (old_entry_ref && old_entry_ref->pending)
+				pgstat_relation_flush_cb(old_entry_ref, false);
+
+			pgstat_copy_relation_stats(rewrite->new_locator,
+									   rewrite->old_locator, true);
+
+			/* drop old locator's stats */
+			if (!pgstat_drop_entry(PGSTAT_KIND_RELATION,
+								   rewrite->old_locator.dbOid,
+								   RelFileLocatorToPgStatObjid(rewrite->old_locator)))
+				pgstat_request_entry_refs_gc();
+		}
+	}
+
+	pending_rewrites = NULL;
 }
 
 /*
@@ -682,6 +847,30 @@ AtEOSubXact_PgStat_Relations(PgStat_SubXactStatus *xact_state, bool isCommit, in
 {
 	PgStat_TableXactStatus *trans;
 	PgStat_TableXactStatus *next_trans;
+
+	/*
+	 * If we don't commit then remove the associated rewrites if any, to keep
+	 * the rewrite chain in sync with what will be eventually committed.
+	 */
+	if (!isCommit)
+	{
+		PgStat_PendingRewrite **rewrite_ptr = &pending_rewrites;
+
+		while (*rewrite_ptr != NULL)
+		{
+			if ((*rewrite_ptr)->nest_level >= nestDepth)
+			{
+				PgStat_PendingRewrite *to_remove = *rewrite_ptr;
+
+				*rewrite_ptr = (*rewrite_ptr)->next;
+				pfree(to_remove);
+			}
+			else
+			{
+				rewrite_ptr = &((*rewrite_ptr)->next);
+			}
+		}
+	}
 
 	for (trans = xact_state->first; trans != NULL; trans = next_trans)
 	{
@@ -762,11 +951,19 @@ void
 AtPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state)
 {
 	PgStat_TableXactStatus *trans;
+	PgStat_PendingRewrite *rewrite;
 
+	/*
+	 * For each tabstat, find its matching rewrite and remove it from the
+	 * pending rewrites list. This way, after processing all tabstats, pending
+	 * rewrites will only contain rewrite only transactions.
+	 */
 	for (trans = xact_state->first; trans != NULL; trans = trans->next)
 	{
 		PgStat_TableStatus *tabstat PG_USED_FOR_ASSERTS_ONLY;
 		TwoPhasePgStatRecord record;
+		PgStat_PendingRewrite **rewrite_ptr;
+		bool		found_rewrite = false;
 
 		Assert(trans->nest_level == 1);
 		Assert(trans->upper == NULL);
@@ -786,10 +983,83 @@ AtPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state)
 			record.locator = tabstat->locator;
 
 		record.truncdropped = trans->truncdropped;
+		record.rewrite_nest_level = 0;
+
+		/*
+		 * Look for a matching rewrite and remove it from pending rewrites. We
+		 * check three possible matches:
+		 *
+		 * The new_locator when stats have been added after the rewrite. The
+		 * old_locator when stats have been added before the rewrite but not
+		 * after. The original_locator when this tabstat is part of a rewrite
+		 * chain.
+		 */
+		rewrite_ptr = &pending_rewrites;
+		while (*rewrite_ptr != NULL)
+		{
+			rewrite = *rewrite_ptr;
+
+			if ((record.locator.dbOid == rewrite->new_locator.dbOid &&
+				 record.locator.spcOid == rewrite->new_locator.spcOid &&
+				 record.locator.relNumber == rewrite->new_locator.relNumber) ||
+				(tabstat->locator.dbOid == rewrite->old_locator.dbOid &&
+				 tabstat->locator.spcOid == rewrite->old_locator.spcOid &&
+				 tabstat->locator.relNumber == rewrite->old_locator.relNumber) ||
+				(tabstat->locator.dbOid == rewrite->original_locator.dbOid &&
+				 tabstat->locator.spcOid == rewrite->original_locator.spcOid &&
+				 tabstat->locator.relNumber == rewrite->original_locator.relNumber))
+			{
+				/*
+				 * Found matching rewrite. Record the rewrite information and
+				 * remove this rewrite from the list since it's now handled.
+				 */
+				record.rewrite_old_locator = rewrite->original_locator;
+				record.rewrite_nest_level = rewrite->nest_level;
+				record.locator = rewrite->new_locator;
+				found_rewrite = true;
+
+				/* Remove from pending_rewrites list */
+				*rewrite_ptr = rewrite->next;
+				pfree(rewrite);
+				break;
+			}
+			else
+			{
+				/* Move to next rewrite in the list */
+				rewrite_ptr = &(rewrite->next);
+			}
+		}
+
+		/* If no rewrite found, clear the rewrite fields */
+		if (!found_rewrite)
+		{
+			memset(&record.rewrite_old_locator, 0, sizeof(RelFileLocator));
+		}
 
 		RegisterTwoPhaseRecord(TWOPHASE_RM_PGSTAT_ID, 0,
 							   &record, sizeof(TwoPhasePgStatRecord));
 	}
+
+	/*
+	 * Now process any rewrites still pending. These are rewrite only
+	 * transactions. We need to preserve their stats even though there's no
+	 * tabstat entry for them.
+	 */
+	for (rewrite = pending_rewrites; rewrite != NULL; rewrite = rewrite->next)
+	{
+		TwoPhasePgStatRecord record;
+
+		memset(&record, 0, sizeof(TwoPhasePgStatRecord));
+		record.locator = rewrite->new_locator;
+		record.rewrite_old_locator = rewrite->original_locator;
+		record.rewrite_nest_level = rewrite->nest_level;
+		record.truncdropped = false;
+
+		RegisterTwoPhaseRecord(TWOPHASE_RM_PGSTAT_ID, 0,
+							   &record, sizeof(TwoPhasePgStatRecord));
+	}
+
+	pending_rewrites = NULL;
 }
 
 /*
@@ -812,6 +1082,8 @@ PostPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state)
 		tabstat = trans->parent;
 		tabstat->trans = NULL;
 	}
+
+	pending_rewrites = NULL;
 }
 
 /*
@@ -847,6 +1119,29 @@ pgstat_twophase_postcommit(FullTransactionId fxid, uint16 info,
 	pgstat_info->counts.changed_tuples +=
 		rec->tuples_inserted + rec->tuples_updated +
 		rec->tuples_deleted;
+
+	if (rec->rewrite_nest_level > 0)
+	{
+		PgStat_EntryRef *old_entry_ref;
+
+		/* Flush any pending stats for old locator first */
+		old_entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION,
+												   rec->rewrite_old_locator.dbOid,
+												   RelFileLocatorToPgStatObjid(rec->rewrite_old_locator));
+
+		if (old_entry_ref && old_entry_ref->pending)
+			pgstat_relation_flush_cb(old_entry_ref, false);
+
+		/* Copy stats from old to new locator */
+		pgstat_copy_relation_stats(rec->locator, rec->rewrite_old_locator,
+								   true);
+
+		/* Drop old locator's stats */
+		if (!pgstat_drop_entry(PGSTAT_KIND_RELATION,
+							   rec->rewrite_old_locator.dbOid,
+							   RelFileLocatorToPgStatObjid(rec->rewrite_old_locator)))
+			pgstat_request_entry_refs_gc();
+	}
 }
 
 /*
@@ -861,9 +1156,26 @@ pgstat_twophase_postabort(FullTransactionId fxid, uint16 info,
 {
 	TwoPhasePgStatRecord *rec = (TwoPhasePgStatRecord *) recdata;
 	PgStat_TableStatus *pgstat_info;
+	RelFileLocator target_locator;
+
+	/*
+	 * For aborted transactions with rewrites (like TRUNCATE), we need to
+	 * restore stats to the old locator, not the new one. The new locator
+	 * should be dropped since the rewrite is being rolled back.
+	 */
+	if (rec->rewrite_nest_level > 0)
+	{
+		/* Use the old locator */
+		target_locator = rec->rewrite_old_locator;
+	}
+	else
+	{
+		/* No rewrite, use the original locator */
+		target_locator = rec->locator;
+	}
 
 	/* Find or create a tabstat entry for the target locator */
-	pgstat_info = pgstat_prep_relation_pending(rec->locator);
+	pgstat_info = pgstat_prep_relation_pending(target_locator);
 
 	/* Same math as in AtEOXact_PgStat, abort case */
 	if (rec->truncdropped)
@@ -918,7 +1230,17 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	tabentry->numscans += lstats->counts.numscans;
 	if (lstats->counts.numscans)
 	{
-		TimestampTz t = GetCurrentTransactionStopTimestamp();
+		TimestampTz t;
+
+		/*
+		 * Checking the transaction state due to the flush call in
+		 * pgstat_twophase_postcommit() that would break the assertion on the
+		 * state in GetCurrentTransactionStopTimestamp().
+		 */
+		if (!IsTransactionState())
+			t = GetCurrentTransactionStopTimestamp();
+		else
+			t = GetCurrentTimestamp();
 
 		if (t > tabentry->lastscan)
 			tabentry->lastscan = t;
@@ -1168,4 +1490,46 @@ pgstat_reloid_to_relfilelocator(Oid reloid, RelFileLocator *locator)
 
 	ReleaseSysCache(tuple);
 	return result;
+}
+
+/*
+ * Mark that a relation rewrite has occurred, preserving the original locator
+ * so stats can be copied at transaction commit.
+ */
+void
+pgstat_mark_rewrite(RelFileLocator old_locator, RelFileLocator new_locator)
+{
+	PgStat_PendingRewrite *rewrite;
+	PgStat_PendingRewrite *existing;
+	RelFileLocator original_locator = old_locator;
+
+	for (existing = pending_rewrites; existing != NULL; existing = existing->next)
+	{
+		if (old_locator.dbOid == existing->new_locator.dbOid &&
+			old_locator.spcOid == existing->new_locator.spcOid &&
+			old_locator.relNumber == existing->new_locator.relNumber)
+		{
+			original_locator = existing->original_locator;
+			break;
+		}
+	}
+
+	/* Allocate in TopTransactionContext memory context */
+	rewrite = MemoryContextAlloc(TopTransactionContext,
+								 sizeof(PgStat_PendingRewrite));
+
+	rewrite->old_locator = old_locator;
+	rewrite->new_locator = new_locator;
+	rewrite->original_locator = original_locator;
+	rewrite->nest_level = GetCurrentTransactionNestLevel();
+
+	/* Add to the list */
+	rewrite->next = pending_rewrites;
+	pending_rewrites = rewrite;
+}
+
+void
+pgstat_clear_rewrite(void)
+{
+	pending_rewrites = NULL;
 }

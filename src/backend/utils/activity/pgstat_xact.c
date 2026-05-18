@@ -55,6 +55,8 @@ AtEOXact_PgStat(bool isCommit, bool parallel)
 	}
 	pgStatXactStack = NULL;
 
+	pgstat_clear_rewrite();
+
 	/* Make sure any stats snapshot is thrown away */
 	pgstat_clear_snapshot();
 }
@@ -360,8 +362,29 @@ create_drop_transactional_internal(PgStat_Kind kind, Oid dboid, uint64 objid, bo
 void
 pgstat_create_transactional(PgStat_Kind kind, Oid dboid, uint64 objid)
 {
-	if (pgstat_get_entry_ref(kind, dboid, objid, false, NULL))
+	PgStat_EntryRef *entry_ref;
+
+	entry_ref = pgstat_get_entry_ref(kind, dboid, objid, false, NULL);
+
+	if (entry_ref)
 	{
+		/*
+		 * For relations stats, we key by physical file location, not by
+		 * relation OID. This means during operations like ALTER TYPE where
+		 * the relation OID changes but the relfilenode stays the same (no
+		 * actual rewrite needed), we'll find an existing entry.
+		 *
+		 * This is expected behavior, we want to preserve stats across the
+		 * catalog change. Simply reset and recreate the entry for the new
+		 * relation OID without warning.
+		 */
+		if (kind == PGSTAT_KIND_RELATION)
+		{
+			pgstat_reset(kind, dboid, objid);
+			create_drop_transactional_internal(kind, dboid, objid, true);
+			return;
+		}
+
 		ereport(WARNING,
 				errmsg("resetting existing statistics for kind %s, db=%u, oid=%" PRIu64,
 					   (pgstat_get_kind_info(kind))->name, dboid,

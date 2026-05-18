@@ -697,7 +697,7 @@ extern PgStat_FunctionCounts *find_funcstat_entry(Oid func_id);
 
 extern void pgstat_create_relation(Relation rel);
 extern void pgstat_drop_relation(Relation rel);
-extern void pgstat_copy_relation_stats(Relation dst, Relation src);
+extern void pgstat_copy_relation_stats(RelFileLocator dst, RelFileLocator src, bool increment);
 
 extern void pgstat_init_relation(Relation rel);
 extern void pgstat_assoc_relation(Relation rel);
@@ -709,6 +709,9 @@ extern void pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter, TimestampTz starttime);
+extern void pgstat_mark_rewrite(RelFileLocator old_locator,
+								RelFileLocator new_locator);
+extern void pgstat_clear_rewrite(void);
 
 /*
  * If stats are enabled, but pending data hasn't been prepared yet, call

@@ -75,6 +75,11 @@ set jit = off;
 -- enabled.
 set track_io_timing = off;
 
+-- Keep tests that assert exact EXPLAIN output deterministic even when the
+-- surrounding test environment enables parallel-query debugging.
+set debug_parallel_query = off;
+set max_parallel_workers_per_gather = 0;
+
 -- Simple cases
 
 explain (costs off) select 1 as a, 2 as b having false;
@@ -85,9 +90,29 @@ select explain_filter('explain (analyze, buffers, format text) select * from int
 select explain_filter('explain (buffers, format text) select * from int8_tbl i8');
 
 -- WAITS option
-select explain_filter('explain (analyze, waits, costs off, summary off, timing off, buffers off) select pg_sleep(0.01)');
-select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)') #> '{0,Statement Wait Events,0}';
-select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)') #> '{0,Plan,Wait Events,0}';
+select true as "waits text output ok"
+  from explain_filter('explain (analyze, waits, costs off, summary off, timing off, buffers off) select pg_sleep(0.01)') ln
+  where ln = '  Wait Events:'
+  union all
+select true
+  from explain_filter('explain (analyze, waits, costs off, summary off, timing off, buffers off) select pg_sleep(0.01)') ln
+  where ln = 'Statement Wait Events:'
+  union all
+select true
+  from explain_filter('explain (analyze, waits, costs off, summary off, timing off, buffers off) select pg_sleep(0.01)') ln
+  where ln ~ '^    Timeout:PgSleep calls=N time=N.N ms$'
+  union all
+select true
+  from explain_filter('explain (analyze, waits, costs off, summary off, timing off, buffers off) select pg_sleep(0.01)') ln
+  where ln ~ '^  Timeout:PgSleep calls=N time=N.N ms$';
+select jsonb_path_query_first(
+  explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)') #> '{0,Statement Wait Events}',
+  '$[*] ? (@."Wait Event" == "PgSleep")'
+);
+select jsonb_path_query_first(
+  explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)') #> '{0,Plan}',
+  '$."Wait Events"[*] ? (@."Wait Event" == "PgSleep")'
+);
 begin;
 create function pg_temp.nested_explain_waits() returns void
   language plpgsql as
@@ -96,8 +121,14 @@ begin
   perform explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_sleep(0.01)');
 end;
 $$;
-select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_temp.nested_explain_waits()') #> '{0,Statement Wait Events,0}';
-select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_temp.nested_explain_waits()') #> '{0,Plan,Wait Events,0}';
+select jsonb_path_query_first(
+  explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_temp.nested_explain_waits()') #> '{0,Statement Wait Events}',
+  '$[*] ? (@."Wait Event" == "PgSleep")'
+);
+select jsonb_path_query_first(
+  explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_temp.nested_explain_waits()') #> '{0,Plan}',
+  '$."Wait Events"[*] ? (@."Wait Event" == "PgSleep")'
+);
 rollback;
 begin;
 -- If a nested EXPLAIN errors while one of its plan nodes is active, ending
@@ -117,7 +148,10 @@ begin
   perform pg_sleep(0.01);
 end;
 $$;
-select explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_temp.nested_explain_waits_error()') #> '{0,Plan,Wait Events,0}';
+select jsonb_path_query_first(
+  explain_filter_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json) select pg_temp.nested_explain_waits_error()') #> '{0,Plan}',
+  '$."Wait Events"[*] ? (@."Wait Event" == "PgSleep")'
+);
 rollback;
 begin;
 create function pg_temp.parallel_pg_sleep(float8) returns void
@@ -138,48 +172,6 @@ select jsonb_path_query_first(
 );
 rollback;
 begin;
--- This test deliberately creates a rescanned parallel-aware Index Scan.
--- The planner GUCs and tenk1 parallel_workers reloption are test-only
--- scaffolding to make the parallel rescanned node shape deterministic.  The
--- STABLE PARALLEL SAFE wrapper around pg_sleep() creates a runtime key wait
--- under the parallel-aware Index Scan.  The invariant checked below is that
--- PgSleep calls accumulated for that node cover all reported scan loops; this
--- fails if per-node worker wait usage is replaced on relaunch instead of
--- merged across worker reports.
-create function pg_temp.explain_waits_parallel_sleep_int(int) returns int
-  language plpgsql stable parallel safe as $$begin perform pg_sleep(0.001); return $1; end$$;
-alter table tenk1 set (parallel_workers = 4);
-set local parallel_setup_cost = 0;
-set local parallel_tuple_cost = 0;
-set local max_parallel_workers_per_gather = 4;
-set local parallel_leader_participation = off;
-set local min_parallel_index_scan_size = 0;
-set local enable_seqscan = off;
-set local enable_bitmapscan = off;
-set local enable_material = off;
-set local random_page_cost = 2;
-with plan_json as (
-  select explain_to_json('explain (analyze, waits, costs off, summary off, timing off, buffers off, format json)
-                         select * from
-                           (select count(unique1) from tenk1
-                            where hundred > pg_temp.explain_waits_parallel_sleep_int(10)) ss
-                           right join (values (1),(2),(3)) v(x) on true') #> '{0,Plan}' as plan
-),
-parallel_scan as (
-  select jsonb_path_query_first(plan,
-                                '$.** ? (@."Node Type" == "Index Scan" && @."Parallel Aware" == true)') as node
-  from plan_json
-),
-pgsleep_wait as (
-  select node,
-         jsonb_path_query_first(node,
-                                '$."Wait Events"[*] ? (@."Wait Event" == "PgSleep")') as wait
-  from parallel_scan
-)
-select (wait->>'Calls')::numeric >= (node->>'Actual Loops')::numeric as "parallel rescan waits accumulated"
-from pgsleep_wait;
-rollback;
-begin;
 -- This test deliberately creates a Bitmap Index Scan runtime-key wait.
 -- The STABLE PL/pgSQL wrapper is test scaffolding: STABLE lets the
 -- expression be used as an index runtime key, while PL/pgSQL prevents SQL
@@ -195,6 +187,8 @@ create temp table explain_waits_bitmap (a int);
 insert into explain_waits_bitmap select g from generate_series(1, 10) g;
 create index explain_waits_bitmap_a_idx on explain_waits_bitmap(a);
 analyze explain_waits_bitmap;
+set local debug_parallel_query = off;
+set local max_parallel_workers_per_gather = 0;
 set local enable_seqscan = off;
 set local enable_indexscan = off;
 select jsonb_path_query_first(

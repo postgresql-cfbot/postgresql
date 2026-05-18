@@ -17,12 +17,17 @@
 
 #include "postgres.h"
 
+#include "access/htup_details.h"
 #include "access/twophase_rmgr.h"
 #include "access/xact.h"
 #include "catalog/catalog.h"
+#include "catalog/pg_tablespace.h"
+#include "storage/lmgr.h"
 #include "utils/memutils.h"
 #include "utils/pgstat_internal.h"
 #include "utils/rel.h"
+#include "utils/relmapper.h"
+#include "utils/syscache.h"
 #include "utils/timestamp.h"
 
 
@@ -36,13 +41,12 @@ typedef struct TwoPhasePgStatRecord
 	PgStat_Counter inserted_pre_truncdrop;
 	PgStat_Counter updated_pre_truncdrop;
 	PgStat_Counter deleted_pre_truncdrop;
-	Oid			id;				/* table's OID */
-	bool		shared;			/* is it a shared catalog? */
+	RelFileLocator locator;		/* table's rd_locator */
 	bool		truncdropped;	/* was the relation truncated/dropped? */
 } TwoPhasePgStatRecord;
 
 
-static PgStat_TableStatus *pgstat_prep_relation_pending(Oid rel_id, bool isshared);
+static PgStat_TableStatus *pgstat_prep_relation_pending(RelFileLocator locator);
 static void add_tabstat_xact_level(PgStat_TableStatus *pgstat_info, int nest_level);
 static void ensure_tabstat_xact_level(PgStat_TableStatus *pgstat_info);
 static void save_truncdrop_counters(PgStat_TableXactStatus *trans, bool is_drop);
@@ -60,9 +64,7 @@ pgstat_copy_relation_stats(Relation dst, Relation src)
 	PgStatShared_Relation *dstshstats;
 	PgStat_EntryRef *dst_ref;
 
-	srcstats = pgstat_fetch_stat_tabentry_ext(src->rd_rel->relisshared,
-											  RelationGetRelid(src),
-											  NULL);
+	srcstats = pgstat_fetch_stat_tabentry_ext(RelationGetRelid(src), NULL);
 	if (!srcstats)
 		return;
 
@@ -95,8 +97,10 @@ pgstat_init_relation(Relation rel)
 
 	/*
 	 * We only count stats for relations with storage and partitioned tables
+	 * and we don't count stats generated during a rewrite.
 	 */
-	if (!RELKIND_HAS_STORAGE(relkind) && relkind != RELKIND_PARTITIONED_TABLE)
+	if ((!RELKIND_HAS_STORAGE(relkind) && relkind != RELKIND_PARTITIONED_TABLE) ||
+		OidIsValid(rel->rd_rel->relrewrite))
 	{
 		rel->pgstat_enabled = false;
 		rel->pgstat_info = NULL;
@@ -131,12 +135,37 @@ pgstat_init_relation(Relation rel)
 void
 pgstat_assoc_relation(Relation rel)
 {
+	RelFileLocator locator;
+
 	Assert(rel->pgstat_enabled);
 	Assert(rel->pgstat_info == NULL);
 
+	/*
+	 * Don't associate stats for relations without storage and non partitioned
+	 * tables.
+	 */
+	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind) &&
+		rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		return;
+
+	if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		locator = rel->rd_locator;
+	else
+	{
+		/*
+		 * Partitioned tables don't have storage, so construct a synthetic
+		 * locator for statistics tracking. Use a reserved pseudo tablespace
+		 * OID that cannot conflict with real tablespaces, and the relation
+		 * OID as relNumber. This ensures no collision with regular relations
+		 * even after OID wraparound.
+		 */
+		locator.dbOid = (rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId);
+		locator.spcOid = PSEUDO_PARTITION_TABLE_SPCOID;
+		locator.relNumber = rel->rd_id;
+	}
+
 	/* Else find or make the PgStat_TableStatus entry, and update link */
-	rel->pgstat_info = pgstat_prep_relation_pending(RelationGetRelid(rel),
-													rel->rd_rel->relisshared);
+	rel->pgstat_info = pgstat_prep_relation_pending(locator);
 
 	/* don't allow link a stats to multiple relcache entries */
 	Assert(rel->pgstat_info->relation == NULL);
@@ -168,9 +197,13 @@ pgstat_unlink_relation(Relation rel)
 void
 pgstat_create_relation(Relation rel)
 {
+	/* don't track stats for relations without storage */
+	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
+		return;
+
 	pgstat_create_transactional(PGSTAT_KIND_RELATION,
-								rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId,
-								RelationGetRelid(rel));
+								rel->rd_locator.dbOid,
+								RelFileLocatorToPgStatObjid(rel->rd_locator));
 }
 
 /*
@@ -182,9 +215,13 @@ pgstat_drop_relation(Relation rel)
 	int			nest_level = GetCurrentTransactionNestLevel();
 	PgStat_TableStatus *pgstat_info;
 
+	/* don't track stats for relations without storage */
+	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
+		return;
+
 	pgstat_drop_transactional(PGSTAT_KIND_RELATION,
-							  rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId,
-							  RelationGetRelid(rel));
+							  rel->rd_locator.dbOid,
+							  RelFileLocatorToPgStatObjid(rel->rd_locator));
 
 	if (!pgstat_should_count_relation(rel))
 		return;
@@ -214,20 +251,23 @@ pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_Relation *shtabentry;
 	PgStat_StatTabEntry *tabentry;
-	Oid			dboid = (rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId);
 	TimestampTz ts;
 	PgStat_Counter elapsedtime;
+	RelFileLocator locator;
 
 	if (!pgstat_track_counts)
 		return;
+
+	locator = rel->rd_locator;
 
 	/* Store the data in the table's hash table entry. */
 	ts = GetCurrentTimestamp();
 	elapsedtime = TimestampDifferenceMilliseconds(starttime, ts);
 
 	/* block acquiring lock for the same reason as pgstat_report_autovac() */
-	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION, dboid,
-											RelationGetRelid(rel), false);
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION, locator.dbOid,
+											RelFileLocatorToPgStatObjid(locator),
+											false);
 
 	shtabentry = (PgStatShared_Relation *) entry_ref->shared_stats;
 	tabentry = &shtabentry->stats;
@@ -286,9 +326,9 @@ pgstat_report_analyze(Relation rel,
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_Relation *shtabentry;
 	PgStat_StatTabEntry *tabentry;
-	Oid			dboid = (rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId);
 	TimestampTz ts;
 	PgStat_Counter elapsedtime;
+	RelFileLocator locator;
 
 	if (!pgstat_track_counts)
 		return;
@@ -326,9 +366,25 @@ pgstat_report_analyze(Relation rel,
 	ts = GetCurrentTimestamp();
 	elapsedtime = TimestampDifferenceMilliseconds(starttime, ts);
 
+	if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE)
+		locator = rel->rd_locator;
+	else
+	{
+		/*
+		 * Partitioned tables don't have storage, so construct a synthetic
+		 * locator for statistics tracking. Use a reserved pseudo tablespace
+		 * OID that cannot conflict with real tablespaces, and the relation
+		 * OID as relNumber. This ensures no collision with regular relations
+		 * even after OID wraparound.
+		 */
+		locator.dbOid = (rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId);
+		locator.spcOid = PSEUDO_PARTITION_TABLE_SPCOID;
+		locator.relNumber = rel->rd_id;
+	}
 	/* block acquiring lock for the same reason as pgstat_report_autovac() */
-	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION, dboid,
-											RelationGetRelid(rel),
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
+											locator.dbOid,
+											RelFileLocatorToPgStatObjid(locator),
 											false);
 	/* can't get dropped while accessed */
 	Assert(entry_ref != NULL && entry_ref->shared_stats != NULL);
@@ -469,7 +525,17 @@ pgstat_update_heap_dead_tuples(Relation rel, int delta)
 PgStat_StatTabEntry *
 pgstat_fetch_stat_tabentry(Oid relid)
 {
-	return pgstat_fetch_stat_tabentry_ext(IsSharedRelation(relid), relid, NULL);
+	return pgstat_fetch_stat_tabentry_ext(relid, NULL);
+}
+
+PgStat_StatTabEntry *
+pgstat_fetch_stat_tabentry_by_locator(RelFileLocator locator, bool *may_free)
+{
+	return (PgStat_StatTabEntry *) pgstat_fetch_entry(
+													  PGSTAT_KIND_RELATION,
+													  locator.dbOid,
+													  RelFileLocatorToPgStatObjid(locator),
+													  may_free);
 }
 
 /*
@@ -478,12 +544,14 @@ pgstat_fetch_stat_tabentry(Oid relid)
  * also returns whether the caller can pfree() the result if desired.
  */
 PgStat_StatTabEntry *
-pgstat_fetch_stat_tabentry_ext(bool shared, Oid reloid, bool *may_free)
+pgstat_fetch_stat_tabentry_ext(Oid reloid, bool *may_free)
 {
-	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
+	RelFileLocator locator;
 
-	return (PgStat_StatTabEntry *)
-		pgstat_fetch_entry(PGSTAT_KIND_RELATION, dboid, reloid, may_free);
+	if (!pgstat_reloid_to_relfilelocator(reloid, &locator))
+		return NULL;
+
+	return pgstat_fetch_stat_tabentry_by_locator(locator, may_free);
 }
 
 /*
@@ -505,14 +573,17 @@ find_tabstat_entry(Oid rel_id)
 	PgStat_TableXactStatus *trans;
 	PgStat_TableStatus *tabentry = NULL;
 	PgStat_TableStatus *tablestatus = NULL;
+	RelFileLocator locator;
 
-	entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION, MyDatabaseId, rel_id);
+	if (!pgstat_reloid_to_relfilelocator(rel_id, &locator))
+		return NULL;
+
+	entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION,
+										   locator.dbOid,
+										   RelFileLocatorToPgStatObjid(locator));
+
 	if (!entry_ref)
-	{
-		entry_ref = pgstat_fetch_pending_entry(PGSTAT_KIND_RELATION, InvalidOid, rel_id);
-		if (!entry_ref)
-			return tablestatus;
-	}
+		return tablestatus;
 
 	tabentry = (PgStat_TableStatus *) entry_ref->pending;
 	tablestatus = palloc_object(PgStat_TableStatus);
@@ -708,8 +779,12 @@ AtPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state)
 		record.inserted_pre_truncdrop = trans->inserted_pre_truncdrop;
 		record.updated_pre_truncdrop = trans->updated_pre_truncdrop;
 		record.deleted_pre_truncdrop = trans->deleted_pre_truncdrop;
-		record.id = tabstat->id;
-		record.shared = tabstat->shared;
+
+		if (tabstat->relation != NULL)
+			record.locator = tabstat->relation->rd_locator;
+		else
+			record.locator = tabstat->locator;
+
 		record.truncdropped = trans->truncdropped;
 
 		RegisterTwoPhaseRecord(TWOPHASE_RM_PGSTAT_ID, 0,
@@ -752,7 +827,7 @@ pgstat_twophase_postcommit(FullTransactionId fxid, uint16 info,
 	PgStat_TableStatus *pgstat_info;
 
 	/* Find or create a tabstat entry for the rel */
-	pgstat_info = pgstat_prep_relation_pending(rec->id, rec->shared);
+	pgstat_info = pgstat_prep_relation_pending(rec->locator);
 
 	/* Same math as in AtEOXact_PgStat, commit case */
 	pgstat_info->counts.tuples_inserted += rec->tuples_inserted;
@@ -787,8 +862,8 @@ pgstat_twophase_postabort(FullTransactionId fxid, uint16 info,
 	TwoPhasePgStatRecord *rec = (TwoPhasePgStatRecord *) recdata;
 	PgStat_TableStatus *pgstat_info;
 
-	/* Find or create a tabstat entry for the rel */
-	pgstat_info = pgstat_prep_relation_pending(rec->id, rec->shared);
+	/* Find or create a tabstat entry for the target locator */
+	pgstat_info = pgstat_prep_relation_pending(rec->locator);
 
 	/* Same math as in AtEOXact_PgStat, abort case */
 	if (rec->truncdropped)
@@ -922,17 +997,21 @@ pgstat_relation_reset_timestamp_cb(PgStatShared_Common *header, TimestampTz ts)
  * initialized if not exists.
  */
 static PgStat_TableStatus *
-pgstat_prep_relation_pending(Oid rel_id, bool isshared)
+pgstat_prep_relation_pending(RelFileLocator locator)
 {
 	PgStat_EntryRef *entry_ref;
 	PgStat_TableStatus *pending;
+	uint64		objid;
+
+	objid = RelFileLocatorToPgStatObjid(locator);
 
 	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_RELATION,
-										  isshared ? InvalidOid : MyDatabaseId,
-										  rel_id, NULL);
+										  locator.dbOid,
+										  objid, NULL);
+
 	pending = entry_ref->pending;
-	pending->id = rel_id;
-	pending->shared = isshared;
+	pending->id = objid;
+	pending->locator = locator;
 
 	return pending;
 }
@@ -1010,4 +1089,83 @@ restore_truncdrop_counters(PgStat_TableXactStatus *trans)
 		trans->tuples_updated = trans->updated_pre_truncdrop;
 		trans->tuples_deleted = trans->deleted_pre_truncdrop;
 	}
+}
+
+/*
+ * Convert a relation OID to its corresponding RelFileLocator for statistics
+ * tracking purposes.
+ *
+ * Returns true on success, false if the relation doesn't need statistics
+ * tracking.
+ *
+ * For partitioned tables, constructs a synthetic locator using the relation
+ * OID as relNumber, since they don't have storage.
+ */
+bool
+pgstat_reloid_to_relfilelocator(Oid reloid, RelFileLocator *locator)
+{
+	HeapTuple	tuple;
+	Form_pg_class relform;
+	bool		result = true;
+
+	/* get the relation's tuple from pg_class */
+	tuple = SearchSysCache1(RELOID, ObjectIdGetDatum(reloid));
+
+	if (!HeapTupleIsValid(tuple))
+		return false;
+
+	relform = (Form_pg_class) GETSTRUCT(tuple);
+
+	/* skip relations without storage and non partitioned tables */
+	if (!RELKIND_HAS_STORAGE(relform->relkind) &&
+		relform->relkind != RELKIND_PARTITIONED_TABLE)
+	{
+		ReleaseSysCache(tuple);
+		return false;
+	}
+
+	if (relform->relkind != RELKIND_PARTITIONED_TABLE)
+	{
+		/* build the RelFileLocator */
+		locator->relNumber = relform->relfilenode;
+		locator->spcOid = relform->reltablespace;
+
+		/* handle default tablespace */
+		if (!OidIsValid(locator->spcOid))
+			locator->spcOid = MyDatabaseTableSpace;
+
+		/* handle dbOid for global vs local relations */
+		if (locator->spcOid == GLOBALTABLESPACE_OID)
+			locator->dbOid = InvalidOid;
+		else
+			locator->dbOid = MyDatabaseId;
+
+		/* handle mapped relations */
+		if (!RelFileNumberIsValid(locator->relNumber))
+		{
+			locator->relNumber = RelationMapOidToFilenumber(reloid,
+															relform->relisshared);
+			if (!RelFileNumberIsValid(locator->relNumber))
+			{
+				ReleaseSysCache(tuple);
+				return false;
+			}
+		}
+	}
+	else
+	{
+		/*
+		 * Partitioned tables don't have storage, so construct a synthetic
+		 * locator for statistics tracking. Use a reserved pseudo tablespace
+		 * OID that cannot conflict with real tablespaces, and the relation
+		 * OID as relNumber. This ensures no collision with regular relations
+		 * even after OID wraparound.
+		 */
+		locator->dbOid = (relform->relisshared ? InvalidOid : MyDatabaseId);
+		locator->spcOid = PSEUDO_PARTITION_TABLE_SPCOID;
+		locator->relNumber = relform->oid;
+	}
+
+	ReleaseSysCache(tuple);
+	return result;
 }

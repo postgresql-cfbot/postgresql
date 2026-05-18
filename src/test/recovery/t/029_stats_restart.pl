@@ -55,10 +55,10 @@ trigger_funcrel_stat();
 
 # verify stats objects exist
 $sect = "initial";
-is(have_stats('database', $dboid, 0), 't', "$sect: db stats do exist");
-is(have_stats('function', $dboid, $funcoid),
+is(have_stats($connect_db, 'database', $dboid, 0), 't', "$sect: db stats do exist");
+is(have_stats($db_under_test, 'function', $dboid, $funcoid),
 	't', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
+is(have_stats($db_under_test, 'relation', $dboid, $tableoid),
 	't', "$sect: relation stats do exist");
 
 # regular shutdown
@@ -79,10 +79,10 @@ copy($og_stats, $statsfile) or die "Copy failed: $!";
 $node->start;
 
 $sect = "copy";
-is(have_stats('database', $dboid, 0), 't', "$sect: db stats do exist");
-is(have_stats('function', $dboid, $funcoid),
+is(have_stats($connect_db, 'database', $dboid, 0), 't', "$sect: db stats do exist");
+is(have_stats($db_under_test, 'function', $dboid, $funcoid),
 	't', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
+is(have_stats($db_under_test, 'relation', $dboid, $tableoid),
 	't', "$sect: relation stats do exist");
 
 $node->stop('immediate');
@@ -96,10 +96,10 @@ $node->start;
 
 # stats should have been discarded
 $sect = "post immediate";
-is(have_stats('database', $dboid, 0), 'f', "$sect: db stats do not exist");
-is(have_stats('function', $dboid, $funcoid),
+is(have_stats($connect_db, 'database', $dboid, 0), 'f', "$sect: db stats do not exist");
+is(have_stats($db_under_test, 'function', $dboid, $funcoid),
 	'f', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
+is(have_stats($db_under_test, 'relation', $dboid, $tableoid),
 	'f', "$sect: relation stats do not exist");
 
 # get rid of backup statsfile
@@ -110,10 +110,10 @@ unlink $statsfile or die "cannot unlink $statsfile $!";
 trigger_funcrel_stat();
 
 $sect = "post immediate, new";
-is(have_stats('database', $dboid, 0), 't', "$sect: db stats do exist");
-is(have_stats('function', $dboid, $funcoid),
+is(have_stats($connect_db, 'database', $dboid, 0), 't', "$sect: db stats do exist");
+is(have_stats($db_under_test, 'function', $dboid, $funcoid),
 	't', "$sect: function stats do exist");
-is(have_stats('relation', $dboid, $tableoid),
+is(have_stats($db_under_test, 'relation', $dboid, $tableoid),
 	't', "$sect: relation stats do exist");
 
 # regular shutdown
@@ -129,10 +129,10 @@ $node->start;
 
 # no stats present due to invalid stats file
 $sect = "invalid_overwrite";
-is(have_stats('database', $dboid, 0), 'f', "$sect: db stats do not exist");
-is(have_stats('function', $dboid, $funcoid),
+is(have_stats($connect_db, 'database', $dboid, 0), 'f', "$sect: db stats do not exist");
+is(have_stats($db_under_test, 'function', $dboid, $funcoid),
 	'f', "$sect: function stats do not exist");
-is(have_stats('relation', $dboid, $tableoid),
+is(have_stats($db_under_test, 'relation', $dboid, $tableoid),
 	'f', "$sect: relation stats do not exist");
 
 
@@ -145,10 +145,10 @@ append_file($og_stats, "XYZ");
 $node->start;
 
 $sect = "invalid_append";
-is(have_stats('database', $dboid, 0), 'f', "$sect: db stats do not exist");
-is(have_stats('function', $dboid, $funcoid),
+is(have_stats($connect_db, 'database', $dboid, 0), 'f', "$sect: db stats do not exist");
+is(have_stats($db_under_test, 'function', $dboid, $funcoid),
 	'f', "$sect: function stats do not exist");
-is(have_stats('relation', $dboid, $tableoid),
+is(have_stats($db_under_test, 'relation', $dboid, $tableoid),
 	'f', "$sect: relation stats do not exist");
 
 
@@ -307,9 +307,9 @@ sub trigger_funcrel_stat
 
 sub have_stats
 {
-	my ($kind, $dboid, $objid) = @_;
+	my ($db, $kind, $dboid, $objid) = @_;
 
-	return $node->safe_psql($connect_db,
+	return $node->safe_psql($db,
 		"SELECT pg_stat_have_stats('$kind', $dboid, $objid)");
 }
 

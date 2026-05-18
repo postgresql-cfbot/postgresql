@@ -21,6 +21,14 @@
 #include "catalog/genbki.h"
 #include "catalog/pg_tablespace_d.h"	/* IWYU pragma: export */
 
+/*
+ * Reserved tablespace OID for partitioned table pseudo locators.
+ * This is not an actual tablespace, just a reserved value to distinguish
+ * partitioned table statistics from regular table statistics. Ensures it does
+ * not conflict with the ones in pg_tablespace.dat.
+ */
+#define PSEUDO_PARTITION_TABLE_SPCOID 1665
+
 /* ----------------
  *		pg_tablespace definition.  cpp turns this into
  *		typedef struct FormData_pg_tablespace

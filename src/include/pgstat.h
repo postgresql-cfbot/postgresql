@@ -16,6 +16,7 @@
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
 #include "storage/locktag.h"
+#include "storage/relfilelocator.h"
 #include "utils/backend_progress.h" /* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/backend_status.h"	/* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/pgstat_kind.h"
@@ -38,6 +39,12 @@ typedef struct RelationData *Relation;
 
 /* Default directory to store temporary statistics data in */
 #define PG_STAT_TMP_DIR		"pg_stat_tmp"
+
+/*
+ * Build a pgstat key Objid based on a RelFileLocator.
+ */
+#define RelFileLocatorToPgStatObjid(locator) \
+	(((uint64) (locator).spcOid << 32) | (locator).relNumber)
 
 /* Values for track_functions GUC variable --- order is significant! */
 typedef enum TrackFunctionsLevel
@@ -179,11 +186,11 @@ typedef struct PgStat_TableCounts
  */
 typedef struct PgStat_TableStatus
 {
-	Oid			id;				/* table's OID */
-	bool		shared;			/* is it a shared catalog? */
+	uint64		id;				/* hash of relfilelocator for stats key */
 	struct PgStat_TableXactStatus *trans;	/* lowest subxact's counts */
 	PgStat_TableCounts counts;	/* event counts to be sent */
 	Relation	relation;		/* rel that is using this entry */
+	RelFileLocator locator;		/* table's relfilelocator */
 } PgStat_TableStatus;
 
 /* ----------
@@ -762,9 +769,9 @@ extern void pgstat_twophase_postabort(FullTransactionId fxid, uint16 info,
 									  void *recdata, uint32 len);
 
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
-extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(bool shared,
-														   Oid reloid,
-														   bool *may_free);
+extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_by_locator(RelFileLocator locator,
+																  bool *may_free);
+extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(Oid reloid, bool *may_free);
 extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
 
 

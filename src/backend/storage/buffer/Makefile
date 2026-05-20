@@ -14,8 +14,10 @@ include $(top_builddir)/src/Makefile.global
 
 OBJS = \
 	buf_init.o \
+	buf_resize.o \
 	buf_table.o \
 	bufmgr.o \
+	dynamic_shared_buffers.o \
 	freelist.o \
 	localbuf.o
 

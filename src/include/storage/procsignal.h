@@ -54,6 +54,7 @@ typedef enum
 	PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_ON,
 	PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_OFF,
 	PROCSIGNAL_BARRIER_CHECKSUM_ON,
+	PROCSIGNAL_BARRIER_SHBUF_RESIZE,	/* shared buffer resize barrier */
 } ProcSignalBarrierType;
 
 /*
@@ -70,6 +71,7 @@ typedef enum
  * prototypes for functions in procsignal.c
  */
 extern void ProcSignalInit(const uint8 *cancel_key, int cancel_key_len);
+extern bool IsProcSignalInitialized(void);
 extern int	SendProcSignal(pid_t pid, ProcSignalReason reason,
 						   ProcNumber procNumber);
 extern void SendCancelRequest(int backendPID, const uint8 *cancel_key, int cancel_key_len);

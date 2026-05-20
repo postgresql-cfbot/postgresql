@@ -41,6 +41,7 @@
 #include "miscadmin.h"
 #include "parser/scansup.h"
 #include "port/pg_bitutils.h"
+#include "storage/dynamic_shared_buffers.h"
 #include "storage/fd.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
@@ -5390,6 +5391,13 @@ ShowGUCOption(const struct config_generic *record, bool use_units)
 		case PGC_INT:
 			{
 				const struct config_int *conf = &record->_int;
+
+				/*
+				 * Set NBuffersGUC here so that both SHOW shared_buffers (use_units==true)
+				 * and pg_settings (use_units==false) reflect the current shared buffer pool size.
+				 */
+				if (conf->variable == &NBuffersGUC)
+					NBuffersGUC = GetLowNBuffers();
 
 				if (conf->show_hook)
 					val = conf->show_hook();

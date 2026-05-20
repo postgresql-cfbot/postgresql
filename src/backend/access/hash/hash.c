@@ -176,7 +176,7 @@ hashbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 */
 	sort_threshold = (maintenance_work_mem * (Size) 1024) / BLCKSZ;
 	if (index->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
-		sort_threshold = Min(sort_threshold, NBuffers);
+		sort_threshold = Min(sort_threshold, GetHighNBuffers());
 	else
 		sort_threshold = Min(sort_threshold, NLocBuffer);
 

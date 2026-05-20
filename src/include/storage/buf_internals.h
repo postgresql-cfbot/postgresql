@@ -584,8 +584,11 @@ extern BufferDesc *StrategyGetBuffer(BufferAccessStrategy strategy,
 extern bool StrategyRejectBuffer(BufferAccessStrategy strategy,
 								 BufferDesc *buf, bool from_ring);
 
-extern int	StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc);
+extern int	StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc,
+								  int *low_nbuffers);
 extern void StrategyNotifyBgWriter(int bgwprocno);
+
+extern void StrategyReset(int old_size, int new_size);
 
 /* buf_table.c */
 extern uint32 BufTableHashCode(BufferTag *tagPtr);

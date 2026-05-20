@@ -162,6 +162,15 @@ const ShmemCallbacks CheckpointerShmemCallbacks = {
 #define MAX_CHECKPOINT_REQUESTS 10000000
 
 /*
+ * Queue size used under dynamic_shared_buffers. Local-file fsyncs are
+ * bypassed in ForwardSyncRequest under DSB (Neon's durability is the WAL
+ * stream), so the queue does not need to scale with the buffer pool. But
+ * we still need a real queue so SYNC_UNLINK_REQUEST is not silently
+ * dropped.
+ */
+#define DSB_CHECKPOINT_REQUESTS 4096
+
+/*
  * GUC parameters
  */
 int			CheckPointTimeout = 300;
@@ -967,19 +976,29 @@ CheckpointerShmemRequest(void *arg)
 {
 	Size		size;
 
-	/*
-	 * The size of the requests[] array is arbitrarily set equal to NBuffers.
-	 * But there is a cap of MAX_CHECKPOINT_REQUESTS to prevent accumulating
-	 * too many checkpoint requests in the ring buffer.
-	 */
 	size = offsetof(CheckpointerShmemStruct, requests);
-	size = add_size(size, mul_size(Min(NBuffers,
-									   MAX_CHECKPOINT_REQUESTS),
-								   sizeof(CheckpointerRequest)));
-	ShmemRequestStruct(.name = "Checkpointer Data",
-					   .size = size,
-					   .ptr = (void **) &CheckpointerShmem,
-		);
+
+	/*
+	 * The size of the requests[] array is arbitrarily set equal to the
+	 * initial size of buffer pool.  But there is a cap of
+	 * MAX_CHECKPOINT_REQUESTS to prevent accumulating too many checkpoint
+	 * requests in the ring buffer.
+	 *
+	 * Under dynamic_shared_buffers we use a small fixed cap instead --
+	 * sizing the queue on MaxNBuffers would waste a lot of shmem under
+	 * auto-scale, but a real (non-zero) queue is still required so that
+	 * SYNC_UNLINK_REQUEST can be forwarded to the checkpointer for delayed
+	 * unlink processing.
+	 */
+	if (enable_dynamic_shared_buffers)
+		size = add_size(size, mul_size(DSB_CHECKPOINT_REQUESTS,
+									   sizeof(CheckpointerRequest)));
+	else
+		size = add_size(size, mul_size(Min(NBuffersGUC,
+										   MAX_CHECKPOINT_REQUESTS),
+									   sizeof(CheckpointerRequest)));
+
+	return size;
 }
 
 /*
@@ -1010,27 +1029,21 @@ ExecCheckpoint(ParseState *pstate, CheckPointStmt *stmt)
 
 	foreach_ptr(DefElem, opt, stmt->options)
 	{
-		if (strcmp(opt->defname, "mode") == 0)
-		{
-			char	   *mode = defGetString(opt);
+		/*
+		 * First time through, so initialize.  Note that we zero the whole
+		 * requests array; this is so that CompactCheckpointerRequestQueue can
+		 * assume that any pad bytes in the request structs are zeroes.
+		 */
+		MemSet(CheckpointerShmem, 0, size);
+		SpinLockInit(&CheckpointerShmem->ckpt_lck);
 
-			if (strcmp(mode, "spread") == 0)
-				fast = false;
-			else if (strcmp(mode, "fast") != 0)
-				ereport(ERROR,
-						(errcode(ERRCODE_SYNTAX_ERROR),
-						 errmsg("unrecognized value for %s option \"%s\": \"%s\"",
-								"CHECKPOINT", "mode", mode),
-						 parser_errposition(pstate, opt->location)));
-		}
-		else if (strcmp(opt->defname, "flush_unlogged") == 0)
-			unlogged = defGetBoolean(opt);
+		if (enable_dynamic_shared_buffers)
+			CheckpointerShmem->max_requests = DSB_CHECKPOINT_REQUESTS;
 		else
-			ereport(ERROR,
-					(errcode(ERRCODE_SYNTAX_ERROR),
-					 errmsg("unrecognized %s option \"%s\"",
-							"CHECKPOINT", opt->defname),
-					 parser_errposition(pstate, opt->location)));
+			CheckpointerShmem->max_requests = Min(NBuffersGUC,
+												  MAX_CHECKPOINT_REQUESTS);
+		ConditionVariableInit(&CheckpointerShmem->start_cv);
+		ConditionVariableInit(&CheckpointerShmem->done_cv);
 	}
 
 	if (!has_privs_of_role(GetUserId(), ROLE_PG_CHECKPOINT))
@@ -1227,6 +1240,15 @@ ForwardSyncRequest(const FileTag *ftag, SyncRequestType type)
 
 	if (AmCheckpointerProcess())
 		elog(ERROR, "ForwardSyncRequest must not be called in checkpointer");
+
+	/*
+	 * Queue unlinks and let the checkpointer drain them.
+	 *
+	 * Neon durability is provided by the WAL stream.
+	 * SYNC_FORGET_REQUEST/SYNC_FILTER_REQUEST/SYNC_REQUEST can be dropped.
+	 */
+	if (enable_dynamic_shared_buffers && type != SYNC_UNLINK_REQUEST)
+		return true;
 
 	LWLockAcquire(CheckpointerCommLock, LW_EXCLUSIVE);
 

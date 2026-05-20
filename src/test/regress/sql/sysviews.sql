@@ -81,7 +81,7 @@ select count(*) = 0 as ok from pg_stat_recovery;
 
 -- This is to record the prevailing planner enable_foo settings during
 -- a regression test run.
-select name, setting from pg_settings where name like 'enable%';
+select name, setting from pg_settings where name like 'enable%' and name <> 'enable_dynamic_shared_buffers';
 
 -- There are always wait event descriptions for various types.  InjectionPoint
 -- may be present or absent, depending on history since last postmaster start.

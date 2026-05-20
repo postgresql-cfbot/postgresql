@@ -394,7 +394,7 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	 * if you change this, consider changing that one, too.
 	 */
 	if (!RelationUsesLocalBuffers(scan->rs_base.rs_rd) &&
-		scan->rs_nblocks > NBuffers / 4)
+		scan->rs_nblocks > GetHighNBuffers() / 4)
 	{
 		allow_strat = (scan->rs_base.rs_flags & SO_ALLOW_STRAT) != 0;
 		allow_sync = (scan->rs_base.rs_flags & SO_ALLOW_SYNC) != 0;

@@ -58,6 +58,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lmgr.h"
+#include "storage/pg_shmem.h"
 #include "storage/proc.h"
 #include "storage/proclist.h"
 #include "storage/procsignal.h"
@@ -92,7 +93,7 @@
  * being dropped. For the relations with size below this threshold, we find
  * the buffers by doing lookups in BufMapping table.
  */
-#define BUF_DROP_FULL_SCAN_THRESHOLD		(uint64) (NBuffers / 32)
+#define BUF_DROP_FULL_SCAN_THRESHOLD		(uint64) (GetHighNBuffers() / 32)
 
 /*
  * This is separated out from PrivateRefCountEntry to allow for copying all
@@ -633,7 +634,9 @@ static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf);
 static void UnpinBufferNoOwner(BufferDesc *buf);
-static void BufferSync(int flags);
+static bool EvictUnpinnedBufferInternal(BufferDesc *desc, bool *buffer_flushed);
+static void BufferSync(int flags, int localNBuffers);
+static uint32 WaitBufHdrUnlocked(BufferDesc *buf);
 static int	SyncOneBuffer(int buf_id, bool skip_recently_used,
 						  WritebackContext *wb_context);
 static void WaitIO(BufferDesc *buf);
@@ -847,6 +850,12 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 	}
 	else
 	{
+		/*
+		 * Reject any recent_buffer that points above the live low watermark.
+		 */
+		if (recent_buffer > GetLowNBuffers())
+			return false;
+
 		bufHdr = GetBufferDescriptor(recent_buffer - 1);
 
 		/*
@@ -2707,6 +2716,7 @@ uint32
 GetAdditionalPinLimit(void)
 {
 	uint32		estimated_pins_held;
+	uint32		limit;
 
 	/*
 	 * We get the number of "overflowed" pins for free, but don't know the
@@ -2715,11 +2725,17 @@ GetAdditionalPinLimit(void)
 	 */
 	estimated_pins_held = PrivateRefCountOverflowed + REFCOUNT_ARRAY_ENTRIES;
 
+	/*
+	 * Consult get_pin_limit_hook so the per-backend limit tracks the live
+	 * buffer pool size.
+	 */
+	limit = enable_dynamic_shared_buffers && get_pin_limit_hook ? get_pin_limit_hook() : MaxProportionalPins;
+
 	/* Is this backend already holding more than its fair share? */
-	if (estimated_pins_held > MaxProportionalPins)
+	if (estimated_pins_held > limit)
 		return 0;
 
-	return MaxProportionalPins - estimated_pins_held;
+	return limit - estimated_pins_held;
 }
 
 /*
@@ -3558,7 +3574,7 @@ TrackNewBufferPin(Buffer buf)
  * currently have no effect here.
  */
 static void
-BufferSync(int flags)
+BufferSync(int flags, int localNBuffers)
 {
 	uint64		buf_state;
 	int			buf_id;
@@ -3599,7 +3615,7 @@ BufferSync(int flags)
 	 * certainly need to be written for the next checkpoint attempt, too.
 	 */
 	num_to_scan = 0;
-	for (buf_id = 0; buf_id < NBuffers; buf_id++)
+	for (buf_id = 0; buf_id < localNBuffers; buf_id++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(buf_id);
 		uint64		set_bits = 0;
@@ -3628,7 +3644,7 @@ BufferSync(int flags)
 						set_bits, 0,
 						0);
 
-		/* Check for barrier events in case NBuffers is large. */
+		/* Check for barrier events in case the buffer pool is large. */
 		if (ProcSignalBarrierPending)
 			ProcessProcSignalBarrier();
 	}
@@ -3638,7 +3654,7 @@ BufferSync(int flags)
 
 	WritebackContextInit(&wb_context, &checkpoint_flush_after);
 
-	TRACE_POSTGRESQL_BUFFER_SYNC_START(NBuffers, num_to_scan);
+	TRACE_POSTGRESQL_BUFFER_SYNC_START(localNBuffers, num_to_scan);
 
 	/*
 	 * Sort buffers that need to be written to reduce the likelihood of random
@@ -3822,7 +3838,7 @@ BufferSync(int flags)
 	 */
 	CheckpointStats.ckpt_bufs_written += num_written;
 
-	TRACE_POSTGRESQL_BUFFER_SYNC_DONE(NBuffers, num_written, num_to_scan);
+	TRACE_POSTGRESQL_BUFFER_SYNC_DONE(localNBuffers, num_written, num_to_scan);
 }
 
 /*
@@ -3881,10 +3897,28 @@ BgBufferSync(WritebackContext *wb_context)
 	uint32		new_recent_alloc;
 
 	/*
-	 * Find out where the clock-sweep currently is, and how many buffer
-	 * allocations have happened since our last call.
+	 * Snapshot of lowNBuffers from the previous invocation. Whenever the
+	 * value changes a buffer-pool resize has happened: the smoothed
+	 * allocation rate / clean-buffer density we accumulated for the old size
+	 * are no longer meaningful, so we invalidate saved_info_valid and start
+	 * fresh.
 	 */
-	strategy_buf_id = StrategySyncStart(&strategy_passes, &recent_alloc);
+	static int	saved_low_nbuffers = 0;
+	int			current_low_nbuffers;
+
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+
+	strategy_buf_id = StrategySyncStart(&strategy_passes, &recent_alloc,
+										&current_low_nbuffers);
+	if (current_low_nbuffers != saved_low_nbuffers)
+	{
+#ifdef BGW_DEBUG
+		elog(DEBUG2, "invalidated background writer state after pool resize: %d -> %d buffers",
+			 saved_low_nbuffers, current_low_nbuffers);
+#endif
+		saved_info_valid = false;
+		saved_low_nbuffers = current_low_nbuffers;
+	}
 
 	/* Report buffer alloc counts to pgstat */
 	PendingBgWriterStats.buf_alloc += recent_alloc;
@@ -3897,6 +3931,7 @@ BgBufferSync(WritebackContext *wb_context)
 	if (bgwriter_lru_maxpages <= 0)
 	{
 		saved_info_valid = false;
+		END_NBUFFERS_ACCESS(localNBuffers);
 		return true;
 	}
 
@@ -3913,7 +3948,7 @@ BgBufferSync(WritebackContext *wb_context)
 		int32		passes_delta = strategy_passes - prev_strategy_passes;
 
 		strategy_delta = strategy_buf_id - prev_strategy_buf_id;
-		strategy_delta += (long) passes_delta * NBuffers;
+		strategy_delta += (long) passes_delta * localNBuffers;
 
 		Assert(strategy_delta >= 0);
 
@@ -3932,7 +3967,7 @@ BgBufferSync(WritebackContext *wb_context)
 				 next_to_clean >= strategy_buf_id)
 		{
 			/* on same pass, but ahead or at least not behind */
-			bufs_to_lap = NBuffers - (next_to_clean - strategy_buf_id);
+			bufs_to_lap = localNBuffers - (next_to_clean - strategy_buf_id);
 #ifdef BGW_DEBUG
 			elog(DEBUG2, "bgwriter ahead: bgw %u-%u strategy %u-%u delta=%ld lap=%d",
 				 next_passes, next_to_clean,
@@ -3954,7 +3989,7 @@ BgBufferSync(WritebackContext *wb_context)
 #endif
 			next_to_clean = strategy_buf_id;
 			next_passes = strategy_passes;
-			bufs_to_lap = NBuffers;
+			bufs_to_lap = localNBuffers;
 		}
 	}
 	else
@@ -3970,7 +4005,7 @@ BgBufferSync(WritebackContext *wb_context)
 		strategy_delta = 0;
 		next_to_clean = strategy_buf_id;
 		next_passes = strategy_passes;
-		bufs_to_lap = NBuffers;
+		bufs_to_lap = localNBuffers;
 	}
 
 	/* Update saved info for next time */
@@ -3996,7 +4031,7 @@ BgBufferSync(WritebackContext *wb_context)
 	 * strategy point and where we've scanned ahead to, based on the smoothed
 	 * density estimate.
 	 */
-	bufs_ahead = NBuffers - bufs_to_lap;
+	bufs_ahead = localNBuffers - bufs_to_lap;
 	reusable_buffers_est = (float) bufs_ahead / smoothed_density;
 
 	/*
@@ -4034,7 +4069,7 @@ BgBufferSync(WritebackContext *wb_context)
 	 * the BGW will be called during the scan_whole_pool time; slice the
 	 * buffer pool into that many sections.
 	 */
-	min_scan_buffers = (int) (NBuffers / (scan_whole_pool_milliseconds / BgWriterDelay));
+	min_scan_buffers = (int) (localNBuffers / (scan_whole_pool_milliseconds / BgWriterDelay));
 
 	if (upcoming_alloc_est < (min_scan_buffers + reusable_buffers_est))
 	{
@@ -4062,7 +4097,7 @@ BgBufferSync(WritebackContext *wb_context)
 		int			sync_state = SyncOneBuffer(next_to_clean, true,
 											   wb_context);
 
-		if (++next_to_clean >= NBuffers)
+		if (++next_to_clean >= localNBuffers)
 		{
 			next_to_clean = 0;
 			next_passes++;
@@ -4115,6 +4150,8 @@ BgBufferSync(WritebackContext *wb_context)
 			 scans_per_alloc, smoothed_density);
 #endif
 	}
+
+	END_NBUFFERS_ACCESS(localNBuffers);
 
 	/* Return true if OK to hibernate */
 	return (bufs_to_lap == 0 && recent_alloc == 0);
@@ -4231,7 +4268,7 @@ InitBufferManagerAccess(void)
 	 * allow plenty of pins.  LimitAdditionalPins() and
 	 * GetAdditionalPinLimit() can be used to check the remaining balance.
 	 */
-	MaxProportionalPins = NBuffers / (MaxBackends + NUM_AUXILIARY_PROCS);
+	MaxProportionalPins = GetMaxNBuffers() / (MaxBackends + NUM_AUXILIARY_PROCS);
 
 	memset(&PrivateRefCountArray, 0, sizeof(PrivateRefCountArray));
 	memset(&PrivateRefCountArrayKeys, 0, sizeof(PrivateRefCountArrayKeys));
@@ -4371,6 +4408,12 @@ AssertNotCatalogBufferLock(Buffer buffer, BufferLockMode mode)
 	if (mode != BUFFER_LOCK_EXCLUSIVE)
 		return;
 
+	if (!((BufferDescPadded *) lock > BufferDescriptors &&
+		  (BufferDescPadded *) lock < BufferDescriptors + GetMaxNBuffers()))
+		return;					/* not a buffer lock */
+
+	bufHdr = (BufferDesc *)
+		((char *) lock - offsetof(BufferDesc, content_lock));
 	tag = bufHdr->tag;
 
 	/*
@@ -4440,7 +4483,9 @@ DebugPrintBufferRefcount(Buffer buffer)
 void
 CheckPointBuffers(int flags)
 {
-	BufferSync(flags);
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+	BufferSync(flags, localNBuffers);
+	END_NBUFFERS_ACCESS(localNBuffers);
 }
 
 /*
@@ -4779,6 +4824,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 	RelFileLocatorBackend rlocator;
 	BlockNumber nForkBlock[MAX_FORKNUM];
 	uint64		nBlocksToInvalidate = 0;
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
 
 	rlocator = smgr_reln->smgr_rlocator;
 
@@ -4842,7 +4888,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < localNBuffers; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 
@@ -4880,6 +4926,7 @@ DropRelationBuffers(SMgrRelation smgr_reln, ForkNumber *forkNum,
 		if (j >= nforks)
 			UnlockBufHdr(bufHdr);
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 }
 
 /* ---------------------------------------------------------------------
@@ -4901,6 +4948,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	RelFileLocator *locators;
 	bool		cached = true;
 	bool		use_bsearch;
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
 
 	if (nlocators == 0)
 		return;
@@ -5003,7 +5051,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 	if (use_bsearch)
 		qsort(locators, n, sizeof(RelFileLocator), rlocator_comparator);
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < localNBuffers; i++)
 	{
 		RelFileLocator *rlocator = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
@@ -5046,6 +5094,7 @@ DropRelationsAllBuffers(SMgrRelation *smgr_reln, int nlocators)
 		else
 			UnlockBufHdr(bufHdr);
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 
 	pfree(locators);
 	pfree(rels);
@@ -5130,7 +5179,8 @@ DropDatabaseBuffers(Oid dbid)
 	 * database isn't our own.
 	 */
 
-	for (i = 0; i < NBuffers; i++)
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+	for (i = 0; i < localNBuffers; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 
@@ -5147,6 +5197,7 @@ DropDatabaseBuffers(Oid dbid)
 		else
 			UnlockBufHdr(bufHdr);
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 }
 
 /* ---------------------------------------------------------------------
@@ -5174,7 +5225,9 @@ FlushRelationBuffers(Relation rel)
 	BufferDesc *bufHdr;
 	SMgrRelation srel = RelationGetSmgr(rel);
 
-	if (RelationUsesLocalBuffers(rel))
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+
+	if (RelationUsesLocalBuffers(rel) || am_wal_redo_postgres)
 	{
 		for (i = 0; i < NLocBuffer; i++)
 		{
@@ -5213,10 +5266,12 @@ FlushRelationBuffers(Relation rel)
 			}
 		}
 
+		END_NBUFFERS_ACCESS(localNBuffers);
+
 		return;
 	}
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < localNBuffers; i++)
 	{
 		uint64		buf_state;
 
@@ -5244,6 +5299,7 @@ FlushRelationBuffers(Relation rel)
 		else
 			UnlockBufHdr(bufHdr);
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 }
 
 /* ---------------------------------------------------------------------
@@ -5261,6 +5317,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	int			i;
 	SMgrSortArray *srels;
 	bool		use_bsearch;
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
 
 	if (nrels == 0)
 		return;
@@ -5286,7 +5343,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 	if (use_bsearch)
 		qsort(srels, nrels, sizeof(SMgrSortArray), rlocator_comparator);
 
-	for (i = 0; i < NBuffers; i++)
+	for (i = 0; i < localNBuffers; i++)
 	{
 		SMgrSortArray *srelent = NULL;
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
@@ -5339,6 +5396,7 @@ FlushRelationsAllBuffers(SMgrRelation *smgrs, int nrels)
 		else
 			UnlockBufHdr(bufHdr);
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 
 	pfree(srels);
 }
@@ -5537,7 +5595,8 @@ FlushDatabaseBuffers(Oid dbid)
 	int			i;
 	BufferDesc *bufHdr;
 
-	for (i = 0; i < NBuffers; i++)
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+	for (i = 0; i < localNBuffers; i++)
 	{
 		uint64		buf_state;
 
@@ -5565,6 +5624,7 @@ FlushDatabaseBuffers(Oid dbid)
 		else
 			UnlockBufHdr(bufHdr);
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 }
 
 /*
@@ -7991,11 +8051,13 @@ void
 EvictAllUnpinnedBuffers(int32 *buffers_evicted, int32 *buffers_flushed,
 						int32 *buffers_skipped)
 {
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+
 	*buffers_evicted = 0;
 	*buffers_skipped = 0;
 	*buffers_flushed = 0;
 
-	for (int buf = 1; buf <= NBuffers; buf++)
+	for (int buf = 1; buf <= localNBuffers; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
 		uint64		buf_state;
@@ -8020,6 +8082,7 @@ EvictAllUnpinnedBuffers(int32 *buffers_evicted, int32 *buffers_flushed,
 		if (buffer_flushed)
 			(*buffers_flushed)++;
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 }
 
 /*
@@ -8041,13 +8104,15 @@ void
 EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 						int32 *buffers_flushed, int32 *buffers_skipped)
 {
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+
 	Assert(!RelationUsesLocalBuffers(rel));
 
 	*buffers_skipped = 0;
 	*buffers_evicted = 0;
 	*buffers_flushed = 0;
 
-	for (int buf = 1; buf <= NBuffers; buf++)
+	for (int buf = 1; buf <= localNBuffers; buf++)
 	{
 		BufferDesc *desc = GetBufferDescriptor(buf - 1);
 		uint64		buf_state = pg_atomic_read_u64(&(desc->state));
@@ -8082,6 +8147,7 @@ EvictRelUnpinnedBuffers(Relation rel, int32 *buffers_evicted,
 		if (buffer_flushed)
 			(*buffers_flushed)++;
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 }
 
 /*
@@ -8965,3 +9031,87 @@ const PgAioHandleCallbacks aio_local_buffer_readv_cb = {
 	.complete_local = local_buffer_readv_complete,
 	.report = buffer_readv_report,
 };
+
+/*
+ * When shrinking the shared buffer pool, evict every buffer in the
+ * range [lowNBuffers, highNBuffers).
+ *
+ * Returns true once every buffer in the range is empty.  Returns false if
+ * any buffer was still pinned.
+ */
+bool
+EvictExtraBuffers(int lowNBuffers, int highNBuffers)
+{
+	bool		result = true;
+
+	Assert(lowNBuffers < highNBuffers);
+
+	/*
+	 * If the buffer being evicted is locked, this function will need to
+	 * wait. This function should not be called from a Postmaster since it can
+	 * not wait on a lock.
+	 */
+	Assert(IsUnderPostmaster);
+
+	for (int buf_id = lowNBuffers; buf_id < highNBuffers; buf_id++)
+	{
+		BufferDesc *desc = GetBufferDescriptor(buf_id);
+		uint32		buf_state;
+		bool		buffer_flushed;
+
+		/* Make sure we can pin the buffer (PinBuffer_Locked contract). */
+		ResourceOwnerEnlarge(CurrentResourceOwner);
+		ReservePrivateRefCountEntry();
+
+		buf_state = LockBufHdr(desc);
+
+		if (BUF_STATE_GET_REFCOUNT(buf_state) > 0)
+		{
+			UnlockBufHdr(desc, buf_state);
+			result = false;
+			continue;
+		}
+
+		if (!(buf_state & BM_VALID))
+		{
+			/*
+			 * Buffer is not valid, but it might still have a BufTable
+			 * entry: a previous read IO may have failed, or the backend
+			 * that started allocating this slot was cancelled before the
+			 * read completed (e.g. autovacuum cancellation). In that case
+			 * the descriptor is left with BM_TAG_VALID set, refcount=0,
+			 * and the hash table still mapping tag -> buf_id.
+			 *
+			 * If we leave that BufTable entry behind, a later expand that
+			 * re-initializes this slot (clearing tag to InvalidBlockNumber
+			 * and BM_TAG_VALID) will desynchronize BufTable from the
+			 * descriptor, and the next reader of the original block will
+			 * fail the BufferGetBlockNumber assertion in
+			 * CheckReadBuffersOperation. Drop the stale entry now.
+			 */
+			if (buf_state & BM_TAG_VALID)
+			{
+				PinBuffer_Locked(desc);
+				if (!InvalidateVictimBuffer(desc))
+				{
+					/* Lost a race with another pinner; retry later. */
+					result = false;
+				}
+				UnpinBuffer(desc);
+			}
+			else
+			{
+				UnlockBufHdr(desc, buf_state);
+			}
+			continue;
+		}
+
+		if (!EvictUnpinnedBufferInternal(desc, &buffer_flushed))
+		{
+			elog(WARNING, "could not evict buffer %d, it is pinned", buf_id);
+			result = false;
+		}
+	}
+
+	return result;
+}

@@ -3691,6 +3691,7 @@ config_handle
 config_var_value
 contain_aggs_of_level_context
 contain_placeholder_references_context
+contain_wholerow_context
 convert_testexpr_context
 copy_data_dest_cb
 copy_data_source_cb

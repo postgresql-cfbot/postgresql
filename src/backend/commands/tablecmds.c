@@ -797,6 +797,8 @@ static void RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterT
 												   Relation rel, AttrNumber attnum,
 												   const char *colName);
 
+static List *GetAllRelAssociatedPolicies(Relation rel);
+
 /* ----------------------------------------------------------------
  *		DefineRelation
  *				Creates a new relation.
@@ -24203,6 +24205,7 @@ RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType sub
 	ScanKeyData skey;
 	Relation	pg_index;
 	Relation	pg_constraint;
+	Relation	pg_policy;
 	SysScanDesc indscan;
 	SysScanDesc conscan;
 	HeapTuple	constrTuple;
@@ -24211,6 +24214,8 @@ RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType sub
 	char	   *exprString = NULL;
 	bool		isnull;
 	List	   *wholerow_idxoids = NIL;
+	List	   *pols = NIL;
+	Oid			reltypid;
 
 	Assert(subtype == AT_AlterColumnType || subtype == AT_DropColumn);
 
@@ -24421,4 +24426,129 @@ RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType sub
 			}
 		}
 	}
+
+	/* Now checking policy whole-row references */
+	reltypid = get_rel_type_id(RelationGetRelid(rel));
+
+	pg_policy = table_open(PolicyRelationId, AccessShareLock);
+
+	pols = GetAllRelAssociatedPolicies(rel);
+
+	foreach_oid(policyoid, pols)
+	{
+		SysScanDesc sscan;
+		HeapTuple	policy_tuple;
+		ScanKeyData polskey[1];
+
+		ScanKeyInit(&polskey[0],
+					Anum_pg_policy_oid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(policyoid));
+		sscan = systable_beginscan(pg_policy,
+								   PolicyOidIndexId,
+								   true,
+								   NULL,
+								   1,
+								   polskey);
+		while (HeapTupleIsValid(policy_tuple = systable_getnext(sscan)))
+		{
+			Form_pg_policy policy = (Form_pg_policy) GETSTRUCT(policy_tuple);
+
+			exprDatum = heap_getattr(policy_tuple, Anum_pg_policy_polqual,
+									 RelationGetDescr(pg_policy),
+									 &isnull);
+			if (!isnull)
+			{
+				exprString = TextDatumGetCString(exprDatum);
+				expr = (Node *) stringToNode(exprString);
+				pfree(exprString);
+
+				if (expr_contain_wholerow(expr, reltypid))
+				{
+					ObjectAddress pol_obj;
+
+					ObjectAddressSet(pol_obj, PolicyRelationId, policy->oid);
+
+					/*
+					 * The dependency between the policy and it's relation is
+					 * DEPENDENCY_NORMAL
+					 */
+					RememberWholeRowDependent(tab, subtype, rel, attnum,
+											  &pol_obj, DEPENDENCY_NORMAL);
+
+					continue;
+				}
+			}
+
+			exprDatum = heap_getattr(policy_tuple, Anum_pg_policy_polwithcheck,
+									 RelationGetDescr(pg_policy),
+									 &isnull);
+			if (!isnull)
+			{
+				exprString = TextDatumGetCString(exprDatum);
+				expr = (Node *) stringToNode(exprString);
+				pfree(exprString);
+
+				if (expr_contain_wholerow(expr, reltypid))
+				{
+					ObjectAddress pol_obj;
+
+					ObjectAddressSet(pol_obj, PolicyRelationId, policy->oid);
+
+					/*
+					 * The dependency between the policy and it's relation is
+					 * DEPENDENCY_NORMAL
+					 */
+					RememberWholeRowDependent(tab, subtype, rel, attnum,
+											  &pol_obj, DEPENDENCY_NORMAL);
+				}
+			}
+		}
+		systable_endscan(sscan);
+	}
+	table_close(pg_policy, AccessShareLock);
+}
+
+/*
+ * GetAllRelAssociatedPolicies
+ *
+ * Returns a list of OIDs of all row-level security policies associated with the
+ * given relation.
+ */
+static List *
+GetAllRelAssociatedPolicies(Relation rel)
+{
+	Relation	depRel;
+	ScanKeyData key[3];
+	SysScanDesc scan;
+	HeapTuple	depTup;
+	List	   *result = NIL;
+
+	depRel = table_open(DependRelationId, AccessShareLock);
+	ScanKeyInit(&key[0],
+				Anum_pg_depend_refclassid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationRelationId));
+	ScanKeyInit(&key[1],
+				Anum_pg_depend_refobjid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+	ScanKeyInit(&key[2],
+				Anum_pg_depend_refobjsubid,
+				BTEqualStrategyNumber, F_INT4EQ,
+				Int32GetDatum((int32) 0));
+
+	scan = systable_beginscan(depRel, DependReferenceIndexId, true,
+							  NULL, 3, key);
+	while (HeapTupleIsValid(depTup = systable_getnext(scan)))
+	{
+		Form_pg_depend foundDep = (Form_pg_depend) GETSTRUCT(depTup);
+
+		if (foundDep->classid == PolicyRelationId)
+			result = list_append_unique_oid(result, foundDep->objid);
+	}
+	systable_endscan(scan);
+	table_close(depRel, AccessShareLock);
+
+	return result;
 }

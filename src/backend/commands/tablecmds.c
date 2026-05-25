@@ -24383,4 +24383,42 @@ RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType sub
 	}
 	systable_endscan(indscan);
 	table_close(pg_index, AccessShareLock);
+
+	/* Now checking trigger whole-row references */
+	if (rel->trigdesc != NULL)
+	{
+		for (int i = 0; i < rel->trigdesc->numtriggers; i++)
+		{
+			Bitmapset  *expr_attrs = NULL;
+			Trigger    *trig = &rel->trigdesc->triggers[i];
+
+			if (trig->tgqual == NULL)
+				continue;
+
+			expr = stringToNode(trig->tgqual);
+
+			pull_varattnos(expr, PRS2_OLD_VARNO, &expr_attrs);
+
+			pull_varattnos(expr, PRS2_NEW_VARNO, &expr_attrs);
+
+			/*
+			 * If the triger WHEN qual contains whole-row reference then
+			 * remember it
+			 */
+			if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+							  expr_attrs))
+			{
+				ObjectAddress trig_obj;
+
+				ObjectAddressSet(trig_obj, TriggerRelationId, trig->tgoid);
+
+				/*
+				 * The dependency between the trigger and its relation is
+				 * DEPENDENCY_NORMAL
+				 */
+				RememberWholeRowDependent(tab, subtype, rel, attnum,
+										  &trig_obj, DEPENDENCY_NORMAL);
+			}
+		}
+	}
 }

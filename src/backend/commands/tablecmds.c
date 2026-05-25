@@ -793,6 +793,9 @@ static void ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab,
 static List *collectPartitionIndexExtDeps(List *partitionOids);
 static void applyPartitionIndexExtDeps(Oid newPartOid, List *extDepState);
 static void freePartitionIndexExtDeps(List *extDepState);
+static void RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
+												   Relation rel, AttrNumber attnum,
+												   const char *colName);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -9377,6 +9380,10 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 	List	   *children;
 	ObjectAddress object;
 	bool		is_expr;
+	AlteredTableInfo *tab;
+
+	/* Find or create work queue entry for this table */
+	tab = ATGetQueueEntry(wqueue, rel);
 
 	/* At top level, permission check was done in ATPrepCmd, else do it */
 	if (recursing)
@@ -9448,6 +9455,15 @@ ATExecDropColumn(List **wqueue, Relation rel, const char *colName,
 						colName, RelationGetRelationName(rel))));
 
 	ReleaseSysCache(tuple);
+
+	/*
+	 * Record dependencies between this relation and any objects containing
+	 * whole-row Var references. performMultipleDeletions will take care of
+	 * removing them dependencies later.
+	 */
+	RememberWholeRowDependentForRebuilding(tab, AT_DropColumn, rel, attnum, colName);
+
+	CommandCounterIncrement();
 
 	/*
 	 * Propagate to children as appropriate.  Unlike most other ALTER
@@ -15313,6 +15329,15 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 	 * get confused.
 	 */
 	RememberAllDependentForRebuilding(tab, AT_AlterColumnType, rel, attnum, colName);
+
+	/*
+	 * Record dependencies between this relation and any objects containing
+	 * whole-row Var references. We either error out saying such a dependency
+	 * is not allowed, or we install the dependencies.
+	 */
+	RememberWholeRowDependentForRebuilding(tab, AT_AlterColumnType, rel, attnum, colName);
+
+	CommandCounterIncrement();
 
 	/*
 	 * Now scan for dependencies of this column on other things.  The only
@@ -24128,4 +24153,234 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 	/* Restore the userid and security context. */
 	SetUserIdAndSecContext(save_userid, save_sec_context);
+}
+
+/*
+ * Record dependencies between objects contains whole-row Var references
+ * (indexes, CHECK constraints, etc.) and the relation, or report an
+ * error.
+*/
+static void
+RememberWholeRowDependent(AlteredTableInfo *tab, AlterTableType subtype,
+						  Relation rel, AttrNumber attnum,
+						  const ObjectAddress *depender,
+						  DependencyType behavior)
+{
+	if (subtype == AT_AlterColumnType)
+		ereport(ERROR,
+				errcode(ERRCODE_DATATYPE_MISMATCH),
+				errmsg("cannot alter table \"%s\" because %s uses its row type",
+					   RelationGetRelationName(rel),
+					   getObjectDescription(depender, false)),
+				errhint("You might need to drop %s first",
+						getObjectDescription(depender, false)));
+	else
+	{
+		ObjectAddress referenced;
+
+		ObjectAddressSubSet(referenced, RelationRelationId,
+							RelationGetRelid(rel), attnum);
+
+		recordDependencyOn(depender, &referenced, behavior);
+	}
+}
+
+/*
+ * Record dependencies between objects contains whole-row Var references
+ * (indexes, CHECK constraints, etc.) and the relation, or report an
+ * error.
+ *
+ * See also RememberAllDependentForRebuilding, which handles non-whole-row Var
+ * references.
+ *
+ * Currently used by ALTER COLUMN SET DATA TYPE and ALTER TABLE DROP COLUMN.
+  */
+static void
+RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
+									   Relation rel, AttrNumber attnum, const char *colName)
+{
+	Node	   *expr = NULL;
+	ScanKeyData skey;
+	Relation	pg_index;
+	Relation	pg_constraint;
+	SysScanDesc indscan;
+	SysScanDesc conscan;
+	HeapTuple	constrTuple;
+	HeapTuple	indexTuple;
+	Datum		exprDatum;
+	char	   *exprString = NULL;
+	bool		isnull;
+	List	   *wholerow_idxoids = NIL;
+
+	Assert(subtype == AT_AlterColumnType || subtype == AT_DropColumn);
+
+	/*
+	 * Checking CHECK constraint with whole-row references, now.
+	 */
+	if (RelationGetDescr(rel)->constr &&
+		RelationGetDescr(rel)->constr->num_check > 0)
+	{
+		pg_constraint = table_open(ConstraintRelationId, AccessShareLock);
+
+		ScanKeyInit(&skey,
+					Anum_pg_constraint_conrelid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(RelationGetRelid(rel)));
+
+		conscan = systable_beginscan(pg_constraint,
+									 ConstraintRelidTypidNameIndexId,
+									 true,
+									 NULL,
+									 1,
+									 &skey);
+		while (HeapTupleIsValid(constrTuple = systable_getnext(conscan)))
+		{
+			Form_pg_constraint conform = (Form_pg_constraint) GETSTRUCT(constrTuple);
+
+			if (conform->contype != CONSTRAINT_CHECK)
+				continue;
+
+			exprDatum = fastgetattr(constrTuple,
+									Anum_pg_constraint_conbin,
+									RelationGetDescr(pg_constraint),
+									&isnull);
+			if (isnull)
+				elog(WARNING, "null conbin for relation \"%s\"",
+					 RelationGetRelationName(rel));
+			else
+			{
+				Bitmapset  *expr_attrs = NULL;
+
+				exprString = TextDatumGetCString(exprDatum);
+				expr = (Node *) stringToNode(exprString);
+				pfree(exprString);
+
+				/* Find all attributes referenced */
+				pull_varattnos(expr, 1, &expr_attrs);
+
+				/*
+				 * If the CHECK constraint contains whole-row reference then
+				 * remember it
+				 */
+				if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+								  expr_attrs))
+				{
+					ObjectAddress con_obj;
+
+					ObjectAddressSet(con_obj, ConstraintRelationId, conform->oid);
+
+					/*
+					 * The dependency between the CHECK constraint and its
+					 * relation is DEPENDENCY_AUTO
+					 */
+					RememberWholeRowDependent(tab, subtype, rel, attnum,
+											  &con_obj, DEPENDENCY_AUTO);
+				}
+			}
+		}
+		systable_endscan(conscan);
+		table_close(pg_constraint, AccessShareLock);
+	}
+
+	/*
+	 * Now checking index whole-row references. Prepare to scan pg_index for
+	 * entries having indrelid = this rel
+	 */
+	ScanKeyInit(&skey,
+				Anum_pg_index_indrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+
+	pg_index = table_open(IndexRelationId, AccessShareLock);
+
+	indscan = systable_beginscan(pg_index,
+								 IndexIndrelidIndexId,
+								 true,
+								 NULL,
+								 1,
+								 &skey);
+	while (HeapTupleIsValid(indexTuple = systable_getnext(indscan)))
+	{
+		Form_pg_index index = (Form_pg_index) GETSTRUCT(indexTuple);
+
+		if (list_member_oid(wholerow_idxoids, index->indexrelid))
+			continue;
+
+		if (!heap_attisnull(indexTuple, Anum_pg_index_indexprs, NULL))
+		{
+			Bitmapset  *expr_attrs = NULL;
+
+			exprDatum = SysCacheGetAttrNotNull(INDEXRELID, indexTuple,
+											   Anum_pg_index_indexprs);
+			exprString = TextDatumGetCString(exprDatum);
+			expr = (Node *) stringToNode(exprString);
+			pfree(exprString);
+
+			/* Find all attributes referenced */
+			pull_varattnos(expr, 1, &expr_attrs);
+
+			/*
+			 * If the index expression contains whole-row reference then
+			 * remember it
+			 */
+			if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+							  expr_attrs))
+			{
+				ObjectAddress idx_obj;
+
+				ObjectAddressSet(idx_obj, RelationRelationId,
+								 index->indexrelid);
+
+				wholerow_idxoids = lappend_oid(wholerow_idxoids,
+											   index->indexrelid);
+
+				/*
+				 * The index has a DEPENDENCY_AUTO relationship with its
+				 * relation
+				 */
+				RememberWholeRowDependent(tab, subtype, rel, attnum,
+										  &idx_obj, DEPENDENCY_AUTO);
+
+				continue;
+			}
+		}
+
+		if (!heap_attisnull(indexTuple, Anum_pg_index_indpred, NULL))
+		{
+			Bitmapset  *expr_attrs = NULL;
+
+			exprDatum = SysCacheGetAttrNotNull(INDEXRELID, indexTuple,
+											   Anum_pg_index_indpred);
+			exprString = TextDatumGetCString(exprDatum);
+			expr = (Node *) stringToNode(exprString);
+			pfree(exprString);
+
+			/* Find all attributes referenced */
+			pull_varattnos(expr, 1, &expr_attrs);
+
+			/*
+			 * If the index predicate expression contains whole-row reference
+			 * then remember it
+			 */
+			if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+							  expr_attrs))
+			{
+				ObjectAddress idx_obj;
+
+				ObjectAddressSet(idx_obj, RelationRelationId, index->indexrelid);
+
+				wholerow_idxoids = lappend_oid(wholerow_idxoids,
+											   index->indexrelid);
+
+				/*
+				 * The index has a DEPENDENCY_AUTO relationship with its
+				 * relation
+				 */
+				RememberWholeRowDependent(tab, subtype, rel, attnum,
+										  &idx_obj, DEPENDENCY_AUTO);
+			}
+		}
+	}
+	systable_endscan(indscan);
+	table_close(pg_index, AccessShareLock);
 }

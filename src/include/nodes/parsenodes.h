@@ -4460,14 +4460,14 @@ typedef struct AlterTSConfigurationStmt
 	bool		missing_ok;		/* for DROP - skip error if missing? */
 } AlterTSConfigurationStmt;
 
-typedef struct PublicationTable
+typedef struct PublicationRelation
 {
 	NodeTag		type;
-	RangeVar   *relation;		/* publication relation */
-	Node	   *whereClause;	/* qualifications */
+	RangeVar   *relation;		/* publication table/sequence */
+	Node	   *whereClause;	/* qualifications for publication table */
 	List	   *columns;		/* List of columns in a publication table */
 	bool		except;			/* True if listed in the EXCEPT clause */
-} PublicationTable;
+} PublicationRelation;
 
 /*
  * Publication object type
@@ -4476,6 +4476,7 @@ typedef enum PublicationObjSpecType
 {
 	PUBLICATIONOBJ_TABLE,		/* A table */
 	PUBLICATIONOBJ_EXCEPT_TABLE,	/* A table in the EXCEPT clause */
+	PUBLICATIONOBJ_EXCEPT_SEQUENCE, /* A sequence in the EXCEPT clause */
 	PUBLICATIONOBJ_TABLES_IN_SCHEMA,	/* All tables in schema */
 	PUBLICATIONOBJ_TABLES_IN_CUR_SCHEMA,	/* All tables in first element of
 											 * search_path */
@@ -4487,7 +4488,7 @@ typedef struct PublicationObjSpec
 	NodeTag		type;
 	PublicationObjSpecType pubobjtype;	/* type of this publication object */
 	char	   *name;
-	PublicationTable *pubtable;
+	PublicationRelation *pubrelation;
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } PublicationObjSpec;
 
@@ -4504,7 +4505,9 @@ typedef struct PublicationAllObjSpec
 {
 	NodeTag		type;
 	PublicationAllObjType pubobjtype;	/* type of this publication object */
-	List	   *except_tables;	/* tables specified in the EXCEPT clause */
+	List	   *except_relations;	/* depending on the 'pubobjtype', this is
+									 * a list of either tables or sequences
+									 * specified in the EXCEPT clause */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } PublicationAllObjSpec;
 

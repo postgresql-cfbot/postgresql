@@ -49,20 +49,28 @@ typedef struct
 } published_rel;
 
 /*
- * Check if relation can be in given publication and throws appropriate
- * error if not.
+ * Check if the target relation is allowed to be specified in the given
+ * publication and throw an error if not.
+ *
+ * 'pubrelkind' is the relkind accepted by the publication clause. The relkind
+ * of the relation in 'pri' is checked for compatibility against it. Error is
+ * raised if they are not compatible.
  */
 static void
-check_publication_add_relation(PublicationRelInfo *pri)
+check_publication_add_relation(PublicationRelInfo *pri, char pubrelkind)
 {
 	Relation	targetrel = pri->relation;
+	char		targetrelkind = RelationGetForm(targetrel)->relkind;
 	const char *relname;
 	const char *errormsg;
 
 	if (pri->except)
 	{
 		relname = RelationGetQualifiedRelationName(targetrel);
-		errormsg = gettext_noop("cannot specify relation \"%s\" in the publication EXCEPT clause");
+		if (pubrelkind == RELKIND_SEQUENCE)
+			errormsg = gettext_noop("cannot specify \"%s\" in the publication EXCEPT (SEQUENCE) clause");
+		else
+			errormsg = gettext_noop("cannot specify \"%s\" in the publication EXCEPT (TABLE) clause");
 	}
 	else
 	{
@@ -77,13 +85,23 @@ check_publication_add_relation(PublicationRelInfo *pri)
 				 errmsg(errormsg, relname),
 				 errdetail("This operation is not supported for individual partitions.")));
 
-	/* Must be a regular or partitioned table */
-	if (RelationGetForm(targetrel)->relkind != RELKIND_RELATION &&
-		RelationGetForm(targetrel)->relkind != RELKIND_PARTITIONED_TABLE)
+	/*
+	 * Must be a regular or partitioned table when specified in FOR TABLE or
+	 * EXCEPT table list
+	 */
+	if (pubrelkind == RELKIND_RELATION && targetrelkind != RELKIND_RELATION &&
+		targetrelkind != RELKIND_PARTITIONED_TABLE)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg(errormsg, relname),
-				 errdetail_relkind_not_supported(RelationGetForm(targetrel)->relkind)));
+				 errdetail_relkind_not_supported(targetrelkind)));
+
+	/* Must be a sequence if specified in EXCEPT sequence list */
+	if (pubrelkind == RELKIND_SEQUENCE && targetrelkind != RELKIND_SEQUENCE)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg(errormsg, relname),
+				 errdetail_relkind_not_supported(targetrelkind)));
 
 	/* Can't be system table */
 	if (IsCatalogRelation(targetrel))
@@ -97,11 +115,15 @@ check_publication_add_relation(PublicationRelInfo *pri)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg(errormsg, relname),
+				 targetrelkind == RELKIND_SEQUENCE ?
+				 errdetail("This operation is not supported for temporary sequences.") :
 				 errdetail("This operation is not supported for temporary tables.")));
 	else if (targetrel->rd_rel->relpersistence == RELPERSISTENCE_UNLOGGED)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg(errormsg, relname),
+				 targetrelkind == RELKIND_SEQUENCE ?
+				 errdetail("This operation is not supported for unlogged sequences.") :
 				 errdetail("This operation is not supported for unlogged tables.")));
 }
 
@@ -521,7 +543,8 @@ attnumstoint2vector(Bitmapset *attrs)
  */
 ObjectAddress
 publication_add_relation(Oid pubid, PublicationRelInfo *pri,
-						 bool if_not_exists, AlterPublicationStmt *alter_stmt)
+						 bool if_not_exists, AlterPublicationStmt *alter_stmt,
+						 char pubrelkind)
 {
 	Relation	rel;
 	HeapTuple	tup;
@@ -559,7 +582,7 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 						RelationGetRelationName(targetrel), pub->name)));
 	}
 
-	check_publication_add_relation(pri);
+	check_publication_add_relation(pri, pubrelkind);
 
 	/* Validate and translate column names into a Bitmapset of attnums. */
 	attnums = pub_collist_validate(pri->relation, pri->columns);
@@ -979,15 +1002,17 @@ GetIncludedPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
 }
 
 /*
- * Gets list of table oids that were specified in the EXCEPT clause for a
- * publication.
- *
- * This should only be used FOR ALL TABLES publications.
+ * Gets list of relation oids that were specified in the EXCEPT clause for a
+ * 'FOR ALL TABLES' or a 'FOR ALL SEQUENCES' publication.
  */
 List *
-GetExcludedPublicationTables(Oid pubid, PublicationPartOpt pub_partopt)
+GetExcludedPublicationRelations(Oid pubid, PublicationPartOpt pub_partopt)
 {
-	Assert(GetPublication(pubid)->alltables);
+#ifdef USE_ASSERT_CHECKING
+	Publication *pub = GetPublication(pubid);
+
+	Assert(pub->alltables || pub->allsequences);
+#endif
 
 	return get_publication_relations(pubid, pub_partopt, true);
 }
@@ -1038,8 +1063,9 @@ GetAllTablesPublications(void)
  * root partitioned tables. This is not applicable to FOR ALL SEQUENCES
  * publication.
  *
- * For a FOR ALL TABLES publication, the returned list excludes tables mentioned
- * in the EXCEPT clause.
+ * For a FOR ALL TABLES publication, the returned list excludes tables
+ * specified in the EXCEPT clause. For a FOR ALL SEQUENCES publication,
+ * it excludes sequences specified in the EXCEPT clause.
  */
 List *
 GetAllPublicationRelations(Oid pubid, char relkind, bool pubviaroot)
@@ -1053,11 +1079,9 @@ GetAllPublicationRelations(Oid pubid, char relkind, bool pubviaroot)
 
 	Assert(!(relkind == RELKIND_SEQUENCE && pubviaroot));
 
-	/* EXCEPT filtering applies only to relations, not sequences */
-	if (relkind == RELKIND_RELATION)
-		exceptlist = GetExcludedPublicationTables(pubid, pubviaroot ?
-												  PUBLICATION_PART_ROOT :
-												  PUBLICATION_PART_LEAF);
+	exceptlist = GetExcludedPublicationRelations(pubid, pubviaroot ?
+												 PUBLICATION_PART_ROOT :
+												 PUBLICATION_PART_LEAF);
 
 	classRel = table_open(RelationRelationId, AccessShareLock);
 

@@ -1826,6 +1826,16 @@
   check_hook => 'check_stage_log_stats',
 },
 
+{ name => 'log_postmaster_stats', type => 'int', context => 'PGC_SIGHUP', group => 'LOGGING_WHAT',
+  short_desc => 'Sets the interval at which postmaster performance statistics are logged.',
+  long_desc => '0 disables logging postmaster statistics.',
+  flags => 'GUC_UNIT_S',
+  variable => 'log_postmaster_stats',
+  boot_val => '0',
+  min => '0',
+  max => '86400',
+},
+
 { name => 'log_recovery_conflict_waits', type => 'bool', context => 'PGC_SIGHUP', group => 'LOGGING_WHAT',
   short_desc => 'Logs standby recovery conflict waits.',
   variable => 'log_recovery_conflict_waits',

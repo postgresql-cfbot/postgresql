@@ -1320,6 +1320,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"FOREIGN TABLE", NULL, NULL, NULL},
 	{"FUNCTION", NULL, NULL, Query_for_list_of_functions},
 	{"GROUP", Query_for_list_of_roles},
+	{"INCREMENTAL MATERIALIZED VIEW", NULL, NULL, &Query_for_list_of_matviews, NULL, THING_NO_DROP | THING_NO_ALTER},
 	{"INDEX", NULL, NULL, &Query_for_list_of_indexes},
 	{"LANGUAGE", Query_for_list_of_languages},
 	{"LARGE OBJECT", NULL, NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
@@ -4242,28 +4243,33 @@ match_previous_words(int pattern_id,
 		COMPLETE_WITH("SELECT");
 
 /* CREATE MATERIALIZED VIEW */
-	else if (Matches("CREATE", "MATERIALIZED"))
+	else if (Matches("CREATE", "MATERIALIZED") ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED"))
 		COMPLETE_WITH("VIEW");
-	/* Complete CREATE MATERIALIZED VIEW <name> with AS or USING */
-	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny))
+
+	/* Complete CREATE [INCREMENTAL] MATERIALIZED VIEW <name> with AS or USING */
+	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny) ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED", "VIEW", MatchAny))
 		COMPLETE_WITH("AS", "USING");
-
 	/*
-	 * Complete CREATE MATERIALIZED VIEW <name> USING with list of access
-	 * methods
+	 * Complete CREATE [INCREMENTAL] MATERIALIZED VIEW <name> USING with list
+	 * of access methods
 	 */
-	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "USING"))
+	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "USING") ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED", "VIEW", MatchAny, "USING"))
 		COMPLETE_WITH_QUERY(Query_for_list_of_table_access_methods);
-	/* Complete CREATE MATERIALIZED VIEW <name> USING <access method> with AS */
-	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "USING", MatchAny))
+	/* Complete CREATE [INCREMENTAL] MATERIALIZED VIEW <name> USING <am> with AS */
+	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "USING", MatchAny) ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED", "VIEW", MatchAny, "USING", MatchAny))
 		COMPLETE_WITH("AS");
-
 	/*
-	 * Complete CREATE MATERIALIZED VIEW <name> [USING <access method> ] AS
+	 * Complete CREATE [INCREMENTAL] MATERIALIZED VIEW <name> [USING <am>] AS
 	 * with "SELECT"
 	 */
 	else if (Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "AS") ||
-			 Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "USING", MatchAny, "AS"))
+			 Matches("CREATE", "MATERIALIZED", "VIEW", MatchAny, "USING", MatchAny, "AS") ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED", "VIEW", MatchAny, "AS") ||
+			 Matches("CREATE", "INCREMENTAL", "MATERIALIZED", "VIEW", MatchAny, "USING", MatchAny, "AS"))
 		COMPLETE_WITH("SELECT");
 
 /* CREATE EVENT TRIGGER */

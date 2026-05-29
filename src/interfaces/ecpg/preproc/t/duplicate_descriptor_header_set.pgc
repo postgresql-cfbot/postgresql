@@ -1,0 +1,12 @@
+/* Test duplicate SET DESCRIPTOR header items */
+
+#include <stdlib.h>
+
+int
+main(void)
+{
+	EXEC SQL ALLOCATE DESCRIPTOR mydesc;
+	EXEC SQL SET DESCRIPTOR mydesc COUNT = 1, COUNT = 2;
+
+	return 0;
+}

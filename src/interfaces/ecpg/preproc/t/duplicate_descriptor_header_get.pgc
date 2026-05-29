@@ -1,0 +1,17 @@
+/* Test duplicate GET DESCRIPTOR header items */
+
+#include <stdlib.h>
+
+int
+main(void)
+{
+	EXEC SQL BEGIN DECLARE SECTION;
+	int desc_count1;
+	int desc_count2;
+	EXEC SQL END DECLARE SECTION;
+
+	EXEC SQL ALLOCATE DESCRIPTOR mydesc;
+	EXEC SQL GET DESCRIPTOR mydesc :desc_count1 = COUNT, :desc_count2 = COUNT;
+
+	return 0;
+}

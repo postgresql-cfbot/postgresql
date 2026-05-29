@@ -35,6 +35,7 @@
 #include "parser/parse_coerce.h"
 #include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
@@ -394,6 +395,7 @@ ProcedureCreate(const char *procedureName,
 	{
 		/* There is one; okay to replace it? */
 		Form_pg_proc oldproc = (Form_pg_proc) GETSTRUCT(oldtup);
+		Oid			oldprocid = oldproc->oid;
 		Datum		proargnames;
 		bool		isnull;
 		const char *dropcmd;
@@ -574,6 +576,25 @@ ProcedureCreate(const char *procedureName,
 				newlc = lnext(parameterDefaults, newlc);
 			}
 		}
+
+		/*
+		 * Serialize concurrent replacement of this procedure's definition.
+		 */
+		LockDatabaseObject(ProcedureRelationId, oldprocid, 0,
+						   AccessExclusiveLock);
+		ReleaseSysCache(oldtup);
+		oldtup = SearchSysCache1(PROCOID, ObjectIdGetDatum(oldprocid));
+		if (!HeapTupleIsValid(oldtup))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_FUNCTION),
+					 errmsg("function \"%s\" was concurrently dropped",
+							procedureName)));
+		oldproc = (Form_pg_proc) GETSTRUCT(oldtup);
+
+		/* Ownership might have changed while we waited. */
+		if (!object_ownercheck(ProcedureRelationId, oldproc->oid, proowner))
+			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FUNCTION,
+						   procedureName);
 
 		/*
 		 * Do not change existing oid, ownership or permissions, either.  Note

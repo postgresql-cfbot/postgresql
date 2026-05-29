@@ -62,6 +62,7 @@
 #include "parser/parse_func.h"
 #include "parser/parse_type.h"
 #include "pgstat.h"
+#include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
@@ -1426,6 +1427,33 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 									 &parallel_item) == false)
 			elog(ERROR, "option \"%s\" not recognized", defel->defname);
 	}
+
+	/*
+	 * Serialize concurrent changes to this procedure's definition, then refetch
+	 * the tuple before applying the requested changes.
+	 */
+	heap_freetuple(tup);
+	LockDatabaseObject(ProcedureRelationId, funcOid, 0, AccessExclusiveLock);
+
+	tup = SearchSysCacheCopy1(PROCOID, ObjectIdGetDatum(funcOid));
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("function \"%s\" was concurrently dropped",
+						NameListToString(stmt->func->objname))));
+
+	procForm = (Form_pg_proc) GETSTRUCT(tup);
+
+	/* Permission check: must own function */
+	if (!object_ownercheck(ProcedureRelationId, funcOid, GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER, stmt->objtype,
+					   NameListToString(stmt->func->objname));
+
+	/*
+	 * Aggregates were already rejected on the pre-lock tuple, and routine
+	 * kind cannot change for an existing pg_proc OID.
+	 */
+	Assert(procForm->prokind != PROKIND_AGGREGATE);
 
 	if (volatility_item)
 		procForm->provolatile = interpret_func_volatility(volatility_item);

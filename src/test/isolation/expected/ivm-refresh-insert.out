@@ -1,0 +1,213 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1 refresh s2 insert c1 check2 c2 mv
+step s1: SELECT;
+step refresh: REFRESH MATERIALIZED VIEW mv;
+step s2: SELECT;
+step insert: INSERT INTO a VALUES (2); <waiting ...>
+step c1: COMMIT;
+step insert: <... completed>
+step check2: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c2: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+
+
+starting permutation: s1 refresh s2 c1 insert check2 c2 mv
+step s1: SELECT;
+step refresh: REFRESH MATERIALIZED VIEW mv;
+step s2: SELECT;
+step c1: COMMIT;
+step insert: INSERT INTO a VALUES (2);
+step check2: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c2: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+
+
+starting permutation: s1 s2 refresh insert c1 check2 c2 mv
+step s1: SELECT;
+step s2: SELECT;
+step refresh: REFRESH MATERIALIZED VIEW mv;
+step insert: INSERT INTO a VALUES (2); <waiting ...>
+step c1: COMMIT;
+step insert: <... completed>
+step check2: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c2: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+
+
+starting permutation: s1 s2 insert refresh c2 check1 c1 mv
+step s1: SELECT;
+step s2: SELECT;
+step insert: INSERT INTO a VALUES (2);
+step refresh: REFRESH MATERIALIZED VIEW mv; <waiting ...>
+step c2: COMMIT;
+step refresh: <... completed>
+step check1: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c1: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+
+
+starting permutation: s1 s2 refresh c1 insert check2 c2 mv
+step s1: SELECT;
+step s2: SELECT;
+step refresh: REFRESH MATERIALIZED VIEW mv;
+step c1: COMMIT;
+step insert: INSERT INTO a VALUES (2);
+step check2: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c2: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+
+
+starting permutation: s2 insert s1 refresh c2 check1 c1 mv
+step s2: SELECT;
+step insert: INSERT INTO a VALUES (2);
+step s1: SELECT;
+step refresh: REFRESH MATERIALIZED VIEW mv; <waiting ...>
+step c2: COMMIT;
+step refresh: <... completed>
+step check1: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c1: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+
+
+starting permutation: s2 insert s1 c2 refresh check1 c1 mv
+step s2: SELECT;
+step insert: INSERT INTO a VALUES (2);
+step s1: SELECT;
+step c2: COMMIT;
+step refresh: REFRESH MATERIALIZED VIEW mv;
+step check1: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c1: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+
+
+starting permutation: s2 s1 insert c2 refresh check1 c1 mv
+step s2: SELECT;
+step s1: SELECT;
+step insert: INSERT INTO a VALUES (2);
+step c2: COMMIT;
+step refresh: REFRESH MATERIALIZED VIEW mv;
+step check1: SELECT check_mv();
+check_mv
+--------
+ok      
+(1 row)
+
+step c1: COMMIT;
+step mv: SELECT * FROM mv ORDER BY 1,2; SELECT check_mv();
+x|y
+-+-
+1|1
+2|2
+(2 rows)
+
+check_mv
+--------
+ok      
+(1 row)
+

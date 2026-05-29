@@ -15,6 +15,7 @@
 #define MATVIEW_H
 
 #include "catalog/objectaddress.h"
+#include "fmgr.h"
 #include "nodes/params.h"
 #include "nodes/parsenodes.h"
 #include "tcop/dest.h"
@@ -22,6 +23,8 @@
 
 
 extern void SetMatViewPopulatedState(Relation relation, bool newstate);
+
+extern void SetMatViewIVMState(Relation relation, bool newstate);
 
 extern ObjectAddress ExecRefreshMatView(RefreshMatViewStmt *stmt, const char *queryString,
 										QueryCompletion *qc);
@@ -32,5 +35,13 @@ extern ObjectAddress RefreshMatViewByOid(Oid matviewOid, bool is_create, bool sk
 extern DestReceiver *CreateTransientRelDestReceiver(Oid transientoid);
 
 extern bool MatViewIncrementalMaintenanceIsEnabled(void);
+
+extern Datum IVM_immediate_before(PG_FUNCTION_ARGS);
+extern Datum IVM_immediate_maintenance(PG_FUNCTION_ARGS);
+extern Datum IVM_visible_in_prestate(PG_FUNCTION_ARGS);
+extern void AtAbort_IVM(SubTransactionId subtxid);
+extern void AtPreCommit_IVM(void);
+extern void removeImmv(Oid immv_oid);
+extern bool isIvmName(const char *s);
 
 #endif							/* MATVIEW_H */

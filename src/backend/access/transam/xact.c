@@ -37,6 +37,7 @@
 #include "catalog/pg_enum.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
+#include "commands/matview.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
 #include "common/pg_prng.h"
@@ -2322,6 +2323,9 @@ CommitTransaction(void)
 	CallXactCallbacks(is_parallel_worker ? XACT_EVENT_PARALLEL_PRE_COMMIT
 					  : XACT_EVENT_PRE_COMMIT);
 
+	/* Store the transaction ID that updated the view incrementally */
+	AtPreCommit_IVM();
+
 	/*
 	 * If this xact has started any unfinished parallel operation, clean up
 	 * its workers, warning about leaked resources.  (But we don't actually
@@ -2973,6 +2977,7 @@ AbortTransaction(void)
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
 	AtAbort_Twophase();
+	AtAbort_IVM(InvalidSubTransactionId);
 
 	/*
 	 * Advertise the fact that we aborted in pg_xact (assuming that we got as
@@ -5303,6 +5308,9 @@ AbortSubTransaction(void)
 	pgaio_error_cleanup();
 
 	UnlockBuffers();
+
+	/* Clean up hash entries for incremental view maintenance */
+	AtAbort_IVM(s->subTransactionId);
 
 	/* Reset WAL record construction state */
 	XLogResetInsertion();

@@ -44,6 +44,7 @@
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/xact.h"
+#include "catalog/aclcheck_track.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
@@ -83,6 +84,10 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+
+#define ACLCHECK_TRACK_INITIAL_SIZE 64
+
+TrackAclTable *CurrentTrackAclTable = NULL;
 
 /*
  * Internal format used by ALTER DEFAULT PRIVILEGES.
@@ -3913,6 +3918,7 @@ object_aclcheck_ext(Oid classid, Oid objectid,
 					Oid roleid, AclMode mode,
 					bool *is_missing)
 {
+	aclcheck_track_record(classid, objectid, roleid, mode);
 	if (object_aclmask_ext(classid, objectid, roleid, mode, ACLMASK_ANY,
 						   is_missing) != 0)
 		return ACLCHECK_OK;
@@ -4115,6 +4121,7 @@ AclResult
 pg_class_aclcheck_ext(Oid table_oid, Oid roleid,
 					  AclMode mode, bool *is_missing)
 {
+	aclcheck_track_record(RelationRelationId, table_oid, roleid, mode);
 	if (pg_class_aclmask_ext(table_oid, roleid, mode,
 							 ACLMASK_ANY, is_missing) != 0)
 		return ACLCHECK_OK;
@@ -5057,4 +5064,29 @@ RemoveRoleFromInitPriv(Oid roleid, Oid classid, Oid objid, int32 objsubid)
 	CommandCounterIncrement();
 
 	table_close(rel, RowExclusiveLock);
+}
+
+/*
+ * Allocate a new tracking table in CurrentMemoryContext.
+ */
+TrackAclTable *
+CreateTrackAclTable(void)
+{
+	TrackAclTable *acltable = (TrackAclTable *) palloc(sizeof(TrackAclTable));
+
+	acltable->entries = (AclCheckEntry *)
+		palloc(ACLCHECK_TRACK_INITIAL_SIZE * sizeof(AclCheckEntry));
+	acltable->max = ACLCHECK_TRACK_INITIAL_SIZE;
+	acltable->count = 0;
+	return acltable;
+}
+
+/*
+ * Free a tracking table.
+ */
+void
+FreeTrackAclTable(TrackAclTable *acltable)
+{
+	pfree(acltable->entries);
+	pfree(acltable);
 }

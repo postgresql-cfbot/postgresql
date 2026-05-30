@@ -1,4 +1,4 @@
-Parsed test spec with 2 sessions
+Parsed test spec with 3 sessions
 
 starting permutation: s1_begin s1_create_function_in_schema s2_drop_schema s1_commit
 step s1_begin: BEGIN;
@@ -135,3 +135,65 @@ step s2_drop_role: DROP ROLE regress_dependency; <waiting ...>
 step s1_commit: COMMIT;
 step s2_drop_role: <... completed>
 ERROR:  role "regress_dependency" cannot be dropped because some objects depend on it
+
+starting permutation: s2_begin s2_drop_fdw_wrapper s1_create_server_as_role_user s3_revoke_role s2_rollback
+step s2_begin: BEGIN;
+step s2_drop_fdw_wrapper: DROP FOREIGN DATA WRAPPER fdw_wrapper RESTRICT;
+step s1_create_server_as_role_user: SET ROLE role_user; CREATE SERVER srv_role_revoked FOREIGN DATA WRAPPER fdw_wrapper; RESET ROLE; <waiting ...>
+step s3_revoke_role: REVOKE role_fdw FROM role_user;
+step s2_rollback: ROLLBACK;
+step s1_create_server_as_role_user: <... completed>
+ERROR:  permission denied for foreign-data wrapper fdw_wrapper
+
+starting permutation: s2_begin s2_drop_fdw_spi_func s1_create_server_spi_func s3_revoke_role s2_rollback
+step s2_begin: BEGIN;
+step s2_drop_fdw_spi_func: DROP FOREIGN DATA WRAPPER fdw_spi_func RESTRICT;
+step s1_create_server_spi_func: SET ROLE role_user; CREATE SERVER srv_spi_func FOREIGN DATA WRAPPER fdw_spi_func; RESET ROLE; <waiting ...>
+step s3_revoke_role: REVOKE role_fdw FROM role_user;
+step s2_rollback: ROLLBACK;
+step s1_create_server_spi_func: <... completed>
+ERROR:  permission denied for foreign-data wrapper fdw_spi_func
+
+starting permutation: s2_begin s2_drop_fdw_spi_rollback s1_create_server_spi_rollback s3_revoke_role s2_rollback
+step s2_begin: BEGIN;
+step s2_drop_fdw_spi_rollback: DROP FOREIGN DATA WRAPPER fdw_spi_rollback RESTRICT;
+step s1_create_server_spi_rollback: SET ROLE role_user; CREATE SERVER srv_spi_rollback FOREIGN DATA WRAPPER fdw_spi_rollback; RESET ROLE; <waiting ...>
+step s3_revoke_role: REVOKE role_fdw FROM role_user;
+step s2_rollback: ROLLBACK;
+step s1_create_server_spi_rollback: <... completed>
+ERROR:  permission denied for foreign-data wrapper fdw_spi_rollback
+
+starting permutation: s2_begin s2_drop_fdw_trigger s1_insert_trigger_ddl s3_revoke_role s2_rollback
+step s2_begin: BEGIN;
+step s2_drop_fdw_trigger: DROP FOREIGN DATA WRAPPER fdw_trigger RESTRICT;
+step s1_insert_trigger_ddl: SET ROLE role_user; INSERT INTO trigger_tbl VALUES (1); RESET ROLE; <waiting ...>
+step s3_revoke_role: REVOKE role_fdw FROM role_user;
+step s2_rollback: ROLLBACK;
+step s1_insert_trigger_ddl: <... completed>
+ERROR:  permission denied for foreign-data wrapper fdw_trigger
+
+starting permutation: s2_begin s2_drop_fdw_trigger_spi s1_insert_trigger_spi_ddl s3_revoke_role s2_rollback
+step s2_begin: BEGIN;
+step s2_drop_fdw_trigger_spi: DROP FOREIGN DATA WRAPPER fdw_trigger_spi_func RESTRICT;
+step s1_insert_trigger_spi_ddl: SET ROLE role_user; INSERT INTO trigger_spi_tbl VALUES (1); RESET ROLE; <waiting ...>
+step s3_revoke_role: REVOKE role_fdw FROM role_user;
+step s2_rollback: ROLLBACK;
+step s1_insert_trigger_spi_ddl: <... completed>
+ERROR:  permission denied for foreign-data wrapper fdw_trigger_spi_func
+
+starting permutation: s2_begin s2_drop_fdw_inner s1_create_server_nested_toctou s3_revoke_both_roles s2_rollback
+step s2_begin: BEGIN;
+step s2_drop_fdw_inner: DROP FOREIGN DATA WRAPPER fdw_inner RESTRICT;
+step s1_create_server_nested_toctou: SET ROLE role_user; CREATE SERVER srv_outer FOREIGN DATA WRAPPER fdw_outer; RESET ROLE; <waiting ...>
+step s3_revoke_both_roles: REVOKE role_fdw, role_fdw_inner FROM role_user;
+step s2_rollback: ROLLBACK;
+step s1_create_server_nested_toctou: <... completed>
+ERROR:  permission denied for foreign-data wrapper fdw_inner
+
+starting permutation: s2_begin s2_drop_fdw_inner s1_create_server_nested_rollback s3_revoke_role_inner s2_rollback
+step s2_begin: BEGIN;
+step s2_drop_fdw_inner: DROP FOREIGN DATA WRAPPER fdw_inner RESTRICT;
+step s1_create_server_nested_rollback: SET ROLE role_user; CREATE SERVER srv_outer_rollback FOREIGN DATA WRAPPER fdw_outer_rollback; RESET ROLE; <waiting ...>
+step s3_revoke_role_inner: REVOKE role_fdw_inner FROM role_user;
+step s2_rollback: ROLLBACK;
+step s1_create_server_nested_rollback: <... completed>

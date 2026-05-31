@@ -723,16 +723,8 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	shm_toc_estimate_chunk(&pcxt->estimator, paramlistinfo_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
-	/*
-	 * Estimate space for Instrumentation.
-	 *
-	 * If EXPLAIN is not in use and there are no extensions loaded that care,
-	 * we could skip this.  But we have no way of knowing whether anyone's
-	 * looking at pgBufferUsage, so do it unconditionally.
-	 */
-	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(Instrumentation), pcxt->nworkers));
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	/* Estimate space for the per-worker Instrumentation array. */
+	EstimateParallelInstrumentation(pcxt);
 
 	/* Estimate space for tuple queues. */
 	shm_toc_estimate_chunk(&pcxt->estimator,
@@ -817,18 +809,9 @@ ExecInitParallelPlan(PlanState *planstate, EState *estate,
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_PARAMLISTINFO, paramlistinfo_space);
 	SerializeParamList(estate->es_param_list_info, &paramlistinfo_space);
 
-	/*
-	 * Allocate space for each worker's Instrumentation; no need to
-	 * initialize.
-	 */
-	{
-		Instrumentation *instr;
-
-		instr = shm_toc_allocate(pcxt->toc,
-								 mul_size(sizeof(Instrumentation), pcxt->nworkers));
-		shm_toc_insert(pcxt->toc, PARALLEL_KEY_INSTRUMENTATION, instr);
-		pei->instrumentation = instr;
-	}
+	/* Allocate space for each worker's Instrumentation. */
+	pei->instrumentation = StoreParallelInstrumentation(pcxt,
+														PARALLEL_KEY_INSTRUMENTATION);
 
 	/* Set up the tuple queues that the workers will write into. */
 	pei->tqueue = ExecParallelSetupTupleQueues(pcxt, false);

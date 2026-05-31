@@ -2426,16 +2426,8 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 
 	shm_toc_estimate_keys(&pcxt->estimator, 2);
 
-	/*
-	 * Estimate space for Instrumentation -- PARALLEL_KEY_INSTRUMENTATION.
-	 *
-	 * If there are no extensions loaded that care, we could skip this.  We
-	 * have no way of knowing whether anyone's looking at pgWalUsage or
-	 * pgBufferUsage, so do it unconditionally.
-	 */
-	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(Instrumentation), pcxt->nworkers));
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	/* Estimate space for the per-worker Instrumentation array. */
+	EstimateParallelInstrumentation(pcxt);
 
 	/* Finally, estimate PARALLEL_KEY_QUERY_TEXT space */
 	if (debug_query_string)
@@ -2506,13 +2498,8 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 		shm_toc_insert(pcxt->toc, PARALLEL_KEY_QUERY_TEXT, sharedquery);
 	}
 
-	/*
-	 * Allocate space for each worker's Instrumentation; no need to
-	 * initialize.
-	 */
-	instr = shm_toc_allocate(pcxt->toc,
-							 mul_size(sizeof(Instrumentation), pcxt->nworkers));
-	shm_toc_insert(pcxt->toc, PARALLEL_KEY_INSTRUMENTATION, instr);
+	/* Allocate space for each worker's Instrumentation. */
+	instr = StoreParallelInstrumentation(pcxt, PARALLEL_KEY_INSTRUMENTATION);
 
 	/* Launch workers, saving status for leader/caller */
 	LaunchParallelWorkers(pcxt);

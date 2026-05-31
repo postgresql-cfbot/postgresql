@@ -72,6 +72,10 @@ extern void WaitForParallelWorkersToFinish(ParallelContext *pcxt);
 extern void DestroyParallelContext(ParallelContext *pcxt);
 extern bool ParallelContextActive(void);
 
+extern void EstimateParallelInstrumentation(ParallelContext *pcxt);
+extern struct Instrumentation *StoreParallelInstrumentation(ParallelContext *pcxt,
+															uint64 key);
+
 extern void HandleParallelMessageInterrupt(void);
 extern void ProcessParallelMessages(void);
 extern void AtEOXact_Parallel(bool isCommit);

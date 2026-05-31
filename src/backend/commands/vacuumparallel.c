@@ -307,7 +307,6 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	PVShared   *shared;
 	TidStore   *dead_items;
 	PVIndStats *indstats;
-	Instrumentation *instr;
 	bool	   *will_parallel_vacuum;
 	Size		est_indstats_len;
 	Size		est_shared_len;
@@ -359,17 +358,8 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	shm_toc_estimate_chunk(&pcxt->estimator, est_shared_len);
 	shm_toc_estimate_keys(&pcxt->estimator, 1);
 
-	/*
-	 * Estimate space for Instrumentation --
-	 * PARALLEL_VACUUM_KEY_INSTRUMENTATION.
-	 *
-	 * If there are no extensions loaded that care, we could skip this.  We
-	 * have no way of knowing whether anyone's looking at pgBufferUsage or
-	 * pgWalUsage, so do it unconditionally.
-	 */
-	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(Instrumentation), pcxt->nworkers));
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	/* Estimate space for the per-worker Instrumentation array. */
+	EstimateParallelInstrumentation(pcxt);
 
 	/* Finally, estimate PARALLEL_VACUUM_KEY_QUERY_TEXT space */
 	if (debug_query_string)
@@ -465,14 +455,9 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_SHARED, shared);
 	pvs->shared = shared;
 
-	/*
-	 * Allocate space for each worker's Instrumentation; no need to
-	 * initialize.
-	 */
-	instr = shm_toc_allocate(pcxt->toc,
-							 mul_size(sizeof(Instrumentation), pcxt->nworkers));
-	shm_toc_insert(pcxt->toc, PARALLEL_VACUUM_KEY_INSTRUMENTATION, instr);
-	pvs->instr = instr;
+	/* Allocate space for each worker's Instrumentation. */
+	pvs->instr = StoreParallelInstrumentation(pcxt,
+											  PARALLEL_VACUUM_KEY_INSTRUMENTATION);
 
 	/* Store query string for workers */
 	if (debug_query_string)

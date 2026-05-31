@@ -28,6 +28,7 @@
 #include "commands/async.h"
 #include "commands/vacuum.h"
 #include "executor/execParallel.h"
+#include "executor/instrument.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqmq.h"
@@ -1024,6 +1025,37 @@ DestroyParallelContext(ParallelContext *pcxt)
 	pfree(pcxt->library_name);
 	pfree(pcxt->function_name);
 	pfree(pcxt);
+}
+
+/*
+ * Helpers for managing the per-worker Instrumentation array that parallel
+ * leaders allocate in DSM.  The worker side fills in its own slot directly via
+ * InstrEndParallelQuery.
+ */
+
+/* Reserve DSM space for the per-worker Instrumentation array. */
+void
+EstimateParallelInstrumentation(ParallelContext *pcxt)
+{
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(sizeof(Instrumentation), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+}
+
+/*
+ * Allocate the per-worker Instrumentation array in DSM and publish it under
+ * the given key.  No need to initialize; each worker fills in its own slot.
+ * Returns the array for the leader's convenience.
+ */
+Instrumentation *
+StoreParallelInstrumentation(ParallelContext *pcxt, uint64 key)
+{
+	Instrumentation *instr;
+
+	instr = shm_toc_allocate(pcxt->toc,
+							 mul_size(sizeof(Instrumentation), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, key, instr);
+	return instr;
 }
 
 /*

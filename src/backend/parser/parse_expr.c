@@ -1148,6 +1148,7 @@ transformAExprIn(ParseState *pstate, A_Expr *a)
 	bool		useOr;
 	ListCell   *l;
 	bool		has_rvars = false;
+	bool		build_bool_expr = false;
 
 	/*
 	 * If the operator is <>, combine with AND not OR.
@@ -1295,12 +1296,29 @@ transformAExprIn(ParseState *pstate, A_Expr *a)
 		}
 
 		cmp = coerce_to_boolean(pstate, cmp, "IN");
-		if (result == NULL)
+
+		/*
+		 * Flatten boolean expressions generated in this loop by
+		 * appending to args.
+		 *
+		 * If a->rexpr has a single argument, assign and break;
+		 * otherwise, build a new boolean expression and set the
+		 * flag.
+		 */
+		if (build_bool_expr)
+			((BoolExpr *) result)->args = lappend(((BoolExpr *) result)->args, cmp);
+		else if (result == NULL && list_length(rexprs) == 1)
+		{
 			result = cmp;
+			break;
+		}
 		else
+		{
 			result = (Node *) makeBoolExpr(useOr ? OR_EXPR : AND_EXPR,
-										   list_make2(result, cmp),
+										   result ? list_make2(result, cmp) : list_make1(cmp),
 										   a->location);
+			build_bool_expr = true;
+		}
 	}
 
 	return result;

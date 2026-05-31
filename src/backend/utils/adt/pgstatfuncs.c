@@ -1740,7 +1740,7 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_lock(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_LOCK_COLS	5
+#define PG_STAT_LOCK_COLS	6
 	ReturnSetInfo *rsinfo;
 	PgStat_Lock *lock_stats;
 
@@ -1751,23 +1751,39 @@ pg_stat_get_lock(PG_FUNCTION_ARGS)
 
 	for (int lcktype = 0; lcktype <= LOCKTAG_LAST_TYPE; lcktype++)
 	{
-		const char *locktypename;
-		Datum		values[PG_STAT_LOCK_COLS] = {0};
-		bool		nulls[PG_STAT_LOCK_COLS] = {0};
-		PgStat_LockEntry *lck_stats = &lock_stats->stats[lcktype];
-		int			i = 0;
+		const char *locktypename = LockTagTypeNames[lcktype];
 
-		locktypename = LockTagTypeNames[lcktype];
+		for (LOCKMODE mode = 1; mode <= MaxLockMode; mode++)
+		{
+			Datum		values[PG_STAT_LOCK_COLS] = {0};
+			bool		nulls[PG_STAT_LOCK_COLS] = {0};
+			PgStat_LockEntry *lck_stats = &lock_stats->stats[lcktype][mode];
+			int			i = 0;
 
-		values[i++] = CStringGetTextDatum(locktypename);
-		values[i++] = Int64GetDatum(lck_stats->waits);
-		values[i++] = Int64GetDatum(lck_stats->wait_time);
-		values[i++] = Int64GetDatum(lck_stats->fastpath_exceeded);
-		values[i] = TimestampTzGetDatum(lock_stats->stat_reset_timestamp);
+			/*
+			 * Skip cells with no recorded activity to keep the view
+			 * sparse.  Combinations of (locktype, mode) that never occur
+			 * in practice (e.g. AccessExclusiveLock on transactionid)
+			 * would otherwise appear as noise rows.
+			 */
+			if (lck_stats->waits == 0 &&
+				lck_stats->wait_time == 0 &&
+				lck_stats->fastpath_exceeded == 0)
+				continue;
 
-		Assert(i + 1 == PG_STAT_LOCK_COLS);
+			values[i++] = CStringGetTextDatum(locktypename);
+			values[i++] = CStringGetTextDatum(GetLockmodeName(DEFAULT_LOCKMETHOD,
+															  mode));
+			values[i++] = Int64GetDatum(lck_stats->waits);
+			values[i++] = Int64GetDatum(lck_stats->wait_time);
+			values[i++] = Int64GetDatum(lck_stats->fastpath_exceeded);
+			values[i] = TimestampTzGetDatum(lock_stats->stat_reset_timestamp);
 
-		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+			Assert(i + 1 == PG_STAT_LOCK_COLS);
+
+			tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc,
+								 values, nulls);
+		}
 	}
 
 	return (Datum) 0;

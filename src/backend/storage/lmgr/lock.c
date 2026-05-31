@@ -1021,7 +1021,7 @@ LockAcquireExtended(const LOCKTAG *locktag,
 			 * Increment the lock statistics counter if lock could not be
 			 * acquired via the fast-path.
 			 */
-			pgstat_count_lock_fastpath_exceeded(locallock->tag.lock.locktag_type);
+			pgstat_count_lock_fastpath_exceeded(locallock->tag.lock.locktag_type, lockmode);
 		}
 	}
 
@@ -1113,6 +1113,50 @@ LockAcquireExtended(const LOCKTAG *locktag,
 	}
 	else
 	{
+		/*
+		 * Take a snapshot of the conflicting lock mode that is causing us
+		 * to wait, for pg_stat_lock attribution.  Prefer modes that are
+		 * currently held over those that are merely queued ahead of us, so
+		 * that the recorded blocker reflects an actual current holder when
+		 * one exists.  Walk from the strongest mode down so that the first
+		 * match is the strongest conflicting mode.
+		 *
+		 * This is done under the partition lock so the snapshot is
+		 * consistent.  If JoinWaitQueue() ends up not making us wait, the
+		 * snapshot will simply not be read by pgstat_count_lock_waits().
+		 */
+		LOCKMASK	conflict_mask = lockMethodTable->conflictTab[lockmode];
+		LOCKMODE	blocker = 0;
+
+		/* Phase 1: prefer an actual current holder. */
+		for (LOCKMODE i = MaxLockMode; i >= 1; i--)
+		{
+			if ((conflict_mask & LOCKBIT_ON(i)) && lock->granted[i] > 0)
+			{
+				blocker = i;
+				break;
+			}
+		}
+
+		/*
+		 * Phase 2: if no held mode conflicts, the wait is caused only by
+		 * queue priority against another waiter.  Attribute to the
+		 * strongest queued mode that conflicts with us.
+		 */
+		if (blocker == 0)
+		{
+			for (LOCKMODE i = MaxLockMode; i >= 1; i--)
+			{
+				if ((conflict_mask & LOCKBIT_ON(i)) &&
+					(lock->waitMask & LOCKBIT_ON(i)))
+				{
+					blocker = i;
+					break;
+				}
+			}
+		}
+		locallock->blocker_mode = blocker;
+
 		/*
 		 * Join the lock's wait queue.  We call this even in the dontWait
 		 * case, because JoinWaitQueue() may discover that we can acquire the

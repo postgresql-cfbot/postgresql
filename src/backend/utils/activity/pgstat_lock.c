@@ -66,12 +66,15 @@ pgstat_lock_flush_cb(bool nowait)
 
 	for (int i = 0; i <= LOCKTAG_LAST_TYPE; i++)
 	{
+		for (int j = 0; j <= MaxLockMode; j++)
+		{
 #define LOCKSTAT_ACC(fld) \
-	(shstats->stats.stats[i].fld += PendingLockStats.stats[i].fld)
-		LOCKSTAT_ACC(waits);
-		LOCKSTAT_ACC(wait_time);
-		LOCKSTAT_ACC(fastpath_exceeded);
+		(shstats->stats.stats[i][j].fld += PendingLockStats.stats[i][j].fld)
+			LOCKSTAT_ACC(waits);
+			LOCKSTAT_ACC(wait_time);
+			LOCKSTAT_ACC(fastpath_exceeded);
 #undef LOCKSTAT_ACC
+		}
 	}
 
 	LWLockRelease(lckstat_lock);
@@ -118,33 +121,43 @@ pgstat_lock_snapshot_cb(void)
 }
 
 /*
- * Increment counter for lock not acquired with the fast-path, per lock
- * type, due to the fast-path slot limit reached.
+ * Increment counter for lock not acquired with the fast-path, per
+ * (lock type, mode), due to the fast-path slot limit reached.
+ *
+ * The "mode" dimension is the requested lock mode (fast-path only
+ * applies to weak modes on relations); there is no "blocker" concept
+ * for slot exhaustion.
  *
  * Note: This function should not be called in performance-sensitive paths,
  * like lock acquisitions.
  */
 void
-pgstat_count_lock_fastpath_exceeded(uint8 locktag_type)
+pgstat_count_lock_fastpath_exceeded(uint8 locktag_type, LOCKMODE lockmode)
 {
 	Assert(locktag_type <= LOCKTAG_LAST_TYPE);
-	PendingLockStats.stats[locktag_type].fastpath_exceeded++;
+	Assert(lockmode > 0 && lockmode <= MaxLockMode);
+	PendingLockStats.stats[locktag_type][lockmode].fastpath_exceeded++;
 	have_lockstats = true;
 	pgstat_report_fixed = true;
 }
 
 /*
- * Increment the number of waits and wait time, per lock type.
+ * Increment the number of waits and wait time, per (lock type, mode).
+ *
+ * The "mode" dimension is the mode the wait should be attributed to.
+ * Callers typically pass the strongest conflicting lock mode captured
+ * at queue join time (see LockAcquireExtended()).
  *
  * Note: This function should not be called in performance-sensitive paths,
  * like lock acquisitions.
  */
 void
-pgstat_count_lock_waits(uint8 locktag_type, long msecs)
+pgstat_count_lock_waits(uint8 locktag_type, LOCKMODE lockmode, long msecs)
 {
 	Assert(locktag_type <= LOCKTAG_LAST_TYPE);
-	PendingLockStats.stats[locktag_type].waits++;
-	PendingLockStats.stats[locktag_type].wait_time += (PgStat_Counter) msecs;
+	Assert(lockmode > 0 && lockmode <= MaxLockMode);
+	PendingLockStats.stats[locktag_type][lockmode].waits++;
+	PendingLockStats.stats[locktag_type][lockmode].wait_time += (PgStat_Counter) msecs;
 	have_lockstats = true;
 	pgstat_report_fixed = true;
 }

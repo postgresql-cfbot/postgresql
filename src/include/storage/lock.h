@@ -269,6 +269,10 @@ typedef struct LOCALLOCK
 	LOCALLOCKOWNER *lockOwners; /* dynamically resizable array */
 	bool		holdsStrongLockCount;	/* bumped FastPathStrongRelationLocks */
 	bool		lockCleared;	/* we read all sinval msgs for lock */
+	LOCKMODE	blocker_mode;	/* snapshot of the conflicting lock mode that
+								 * caused us to wait when we last joined the
+								 * wait queue. 0 if not currently waiting /
+								 * never waited. */
 } LOCALLOCK;
 
 #define LOCALLOCK_LOCKMETHOD(llock) ((llock).tag.lock.locktag_lockmethodid)

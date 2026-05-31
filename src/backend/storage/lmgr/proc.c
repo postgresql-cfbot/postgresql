@@ -1613,7 +1613,8 @@ ProcSleep(LOCALLOCK *locallock)
 
 			/* Increment the lock statistics counters if done waiting. */
 			if (myWaitStatus == PROC_WAIT_STATUS_OK)
-				pgstat_count_lock_waits(locallock->tag.lock.locktag_type, msecs);
+				pgstat_count_lock_waits(locallock->tag.lock.locktag_type,
+										locallock->blocker_mode, msecs);
 
 			if (log_lock_waits)
 			{

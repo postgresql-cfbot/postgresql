@@ -79,7 +79,8 @@ extern void ResolveRecoveryConflictWithTablespace(Oid tsid);
 extern void ResolveRecoveryConflictWithDatabase(Oid dbid);
 
 extern void ResolveRecoveryConflictWithLock(LOCKTAG locktag, bool logging_conflict);
-extern void ResolveRecoveryConflictWithBufferPin(void);
+extern void ResolveRecoveryConflictWithBufferPin(TimestampTz waitStart,
+												 bool *logged_recovery_conflict);
 extern void CheckRecoveryConflictDeadlock(void);
 extern void StandbyDeadLockHandler(void);
 extern void StandbyTimeoutHandler(void);

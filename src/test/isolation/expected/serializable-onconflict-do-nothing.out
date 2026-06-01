@@ -1,0 +1,68 @@
+Parsed test spec with 3 sessions
+
+starting permutation: reset s1read s2r2 s1w2 s2w1 s1c s2c ck
+step reset: DELETE FROM noc; INSERT INTO noc VALUES (1, 0), (2, 0);
+step s1read: SELECT v FROM noc WHERE k = 1;
+v
+-
+0
+(1 row)
+
+step s2r2: SELECT v FROM noc WHERE k = 2;
+v
+-
+0
+(1 row)
+
+step s1w2: UPDATE noc SET v = 1 WHERE k = 2;
+step s2w1: DELETE FROM noc WHERE k = 1;
+step s1c: COMMIT;
+step s2c: COMMIT;
+ERROR:  could not serialize access due to read/write dependencies among transactions
+step ck: SELECT k, v FROM noc ORDER BY k;
+             SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM noc WHERE k = 1)
+                          AND (SELECT v FROM noc WHERE k = 2) = 1
+                         THEN 'bad_both_committed'
+                         ELSE 'ok_aborted_or_serial' END AS invariant;
+k|v
+-+-
+1|0
+2|1
+(2 rows)
+
+invariant           
+--------------------
+ok_aborted_or_serial
+(1 row)
+
+
+starting permutation: reset s1noop s2r2 s1w2 s2w1 s1c s2c ck
+step reset: DELETE FROM noc; INSERT INTO noc VALUES (1, 0), (2, 0);
+step s1noop: INSERT INTO noc(k, v) VALUES (1, 99) ON CONFLICT (k) DO NOTHING;
+step s2r2: SELECT v FROM noc WHERE k = 2;
+v
+-
+0
+(1 row)
+
+step s1w2: UPDATE noc SET v = 1 WHERE k = 2;
+step s2w1: DELETE FROM noc WHERE k = 1;
+step s1c: COMMIT;
+step s2c: COMMIT;
+ERROR:  could not serialize access due to read/write dependencies among transactions
+step ck: SELECT k, v FROM noc ORDER BY k;
+             SELECT CASE WHEN NOT EXISTS (SELECT 1 FROM noc WHERE k = 1)
+                          AND (SELECT v FROM noc WHERE k = 2) = 1
+                         THEN 'bad_both_committed'
+                         ELSE 'ok_aborted_or_serial' END AS invariant;
+k|v
+-+-
+1|0
+2|1
+(2 rows)
+
+invariant           
+--------------------
+ok_aborted_or_serial
+(1 row)
+

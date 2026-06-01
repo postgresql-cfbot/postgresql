@@ -108,12 +108,14 @@
 
 #include "access/genam.h"
 #include "access/relscan.h"
+#include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/index.h"
 #include "executor/executor.h"
 #include "nodes/nodeFuncs.h"
 #include "storage/lmgr.h"
+#include "storage/predicate.h"
 #include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/multirangetypes.h"
@@ -906,9 +908,39 @@ retry:
 		 */
 		if (violationOK)
 		{
+			Datum		xminDatum;
+			bool		xminIsnull;
+			TransactionId xmin;
+
 			conflict = true;
 			if (conflictTid)
 				*conflictTid = existing_slot->tts_tid;
+
+			/*
+			 * This conflicting row determined the outcome of the INSERT ...
+			 * ON CONFLICT, so for serializability it was read just as a SELECT
+			 * of it would be.  Record an SIREAD lock so that a concurrent
+			 * modification of the row creates the necessary rw-antidependency,
+			 * even when ON CONFLICT writes no tuple (DO NOTHING, or DO UPDATE
+			 * with an unsatisfied WHERE).  A no-op outside SERIALIZABLE.
+			 *
+			 * XXX A reviewer familiar with predicate.c should confirm the
+			 * xmin handling here.  slot_getsysattr() returns the raw xmin
+			 * (HeapTupleHeaderGetRawXmin), while the other PredicateLockTID()
+			 * call sites pass the frozen-aware HeapTupleHeaderGetXmin().  This
+			 * value only feeds the "did this xact write the tuple" early-out
+			 * in PredicateLockTID(), and a frozen tuple can never belong to the
+			 * current transaction, so the raw value should be equivalent here
+			 * -- but the inconsistency with the other call sites is worth a
+			 * second look.
+			 */
+			xminDatum = slot_getsysattr(existing_slot,
+										MinTransactionIdAttributeNumber,
+										&xminIsnull);
+			Assert(!xminIsnull);
+			xmin = DatumGetTransactionId(xminDatum);
+			PredicateLockTID(heap, &existing_slot->tts_tid,
+							 estate->es_snapshot, xmin);
 			break;
 		}
 

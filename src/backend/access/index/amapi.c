@@ -58,6 +58,7 @@ GetIndexAmRoutine(Oid amhandler)
 	/* Assert that AM doesn't have an invalid combination of callbacks */
 	Assert((routine->amgetbatch != NULL) == (routine->amunguardbatch != NULL));
 	Assert(routine->amkillitemsbatch == NULL || routine->amgetbatch != NULL);
+	Assert(routine->amgettransform == NULL || routine->amgetbatch != NULL);
 	Assert(routine->amgetbatch != NULL || routine->amposreset == NULL);
 
 	return routine;

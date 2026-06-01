@@ -67,14 +67,15 @@ gistRedoClearFollowRight(XLogReaderState *record, uint8 block_id)
  * redo any page update (except page split)
  */
 static void
-gistRedoPageUpdateRecord(XLogReaderState *record)
+gistRedoPageUpdateRecord(XLogReaderState *record, bool get_cleanup_lock)
 {
 	XLogRecPtr	lsn = record->EndRecPtr;
 	gistxlogPageUpdate *xldata = (gistxlogPageUpdate *) XLogRecGetData(record);
 	Buffer		buffer;
 	Page		page;
 
-	if (XLogReadBufferForRedo(record, 0, &buffer) == BLK_NEEDS_REDO)
+	if (XLogReadBufferForRedoExtended(record, 0, RBM_NORMAL, get_cleanup_lock,
+									  &buffer) == BLK_NEEDS_REDO)
 	{
 		char	   *begin;
 		char	   *data;
@@ -407,7 +408,10 @@ gist_redo(XLogReaderState *record)
 	switch (info)
 	{
 		case XLOG_GIST_PAGE_UPDATE:
-			gistRedoPageUpdateRecord(record);
+			gistRedoPageUpdateRecord(record, false);
+			break;
+		case XLOG_GIST_PAGE_VACUUM:
+			gistRedoPageUpdateRecord(record, true);
 			break;
 		case XLOG_GIST_DELETE:
 			gistRedoDeleteRecord(record);
@@ -633,6 +637,33 @@ gistXLogUpdate(Buffer buffer,
 		XLogRegisterBuffer(1, leftchildbuf, REGBUF_STANDARD);
 
 	recptr = XLogInsert(RM_GIST_ID, XLOG_GIST_PAGE_UPDATE);
+
+	return recptr;
+}
+
+/*
+ * Write XLOG record describing a VACUUM deletion of leaf index tuples.
+ *
+ * This uses the same on-page representation as gistXLogUpdate() (the deletion
+ * of a set of items from a single leaf page), but is logged under a distinct
+ * record type so that replay knows to take a cleanup lock on the target page.
+ */
+XLogRecPtr
+gistXLogVacuum(Buffer buffer, OffsetNumber *todelete, int ntodelete)
+{
+	gistxlogPageUpdate xlrec;
+	XLogRecPtr	recptr;
+
+	xlrec.ntodelete = ntodelete;
+	xlrec.ntoinsert = 0;
+
+	XLogBeginInsert();
+	XLogRegisterData(&xlrec, sizeof(gistxlogPageUpdate));
+
+	XLogRegisterBuffer(0, buffer, REGBUF_STANDARD);
+	XLogRegisterBufData(0, todelete, sizeof(OffsetNumber) * ntodelete);
+
+	recptr = XLogInsert(RM_GIST_ID, XLOG_GIST_PAGE_VACUUM);
 
 	return recptr;
 }

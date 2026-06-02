@@ -541,6 +541,9 @@ drop_local_obsolete_slots(List *remote_slot_list)
 		/* Drop the local slot if it is not required to be retained. */
 		if (!local_sync_slot_required(local_slot, remote_slot_list))
 		{
+			bool		dropped = false;
+			NameData	slot_name = {0};
+			Oid			slot_database = local_slot->data.database;
 			bool		synced_slot;
 
 			/*
@@ -548,8 +551,8 @@ drop_local_obsolete_slots(List *remote_slot_list)
 			 * ReplicationSlotsDropDBSlots(), trying to drop the same slot
 			 * during a drop-database operation.
 			 */
-			LockSharedObject(DatabaseRelationId, local_slot->data.database,
-							 0, AccessShareLock);
+			LockSharedObject(DatabaseRelationId, slot_database, 0,
+							 AccessShareLock);
 
 			/*
 			 * In the small window between getting the slot to drop and
@@ -562,6 +565,8 @@ drop_local_obsolete_slots(List *remote_slot_list)
 			 */
 			SpinLockAcquire(&local_slot->mutex);
 			synced_slot = local_slot->in_use && local_slot->data.synced;
+			if (synced_slot)
+				slot_name = local_slot->data.name;
 			SpinLockRelease(&local_slot->mutex);
 
 			if (synced_slot)
@@ -572,17 +577,19 @@ drop_local_obsolete_slots(List *remote_slot_list)
 				 * a standby, which derives its logical decoding state from
 				 * the primary, it would be wrong to do so.
 				 */
-				ReplicationSlotAcquire(NameStr(local_slot->data.name), true, false);
+				ReplicationSlotAcquire(NameStr(slot_name), true, false);
 				ReplicationSlotDropAcquired(false);
+				dropped = true;
 			}
 
-			UnlockSharedObject(DatabaseRelationId, local_slot->data.database,
-							   0, AccessShareLock);
+			UnlockSharedObject(DatabaseRelationId, slot_database, 0,
+							   AccessShareLock);
 
-			ereport(LOG,
-					errmsg("dropped replication slot \"%s\" of database with OID %u",
-						   NameStr(local_slot->data.name),
-						   local_slot->data.database));
+			if (dropped)
+				ereport(LOG,
+						errmsg("dropped replication slot \"%s\" of database with OID %u",
+							   NameStr(slot_name),
+							   slot_database));
 		}
 	}
 }

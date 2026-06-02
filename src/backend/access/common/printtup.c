@@ -393,17 +393,19 @@ printtup(TupleTableSlot *slot, DestReceiver *self)
 		else
 		{
 			/* Binary output */
+			Datum		outputdatum;
 			bytea	   *outputbytes;
 
-			outputbytes = DatumGetByteaP(FunctionCallInvoke(thisState->outstate));
+			outputdatum = FunctionCallInvoke(thisState->outstate);
 			Assert(!thisState->outstate->isnull);
 
 			/*
-			 * If outputbytes == NULL, the send function directly appended a
+			 * If outputdatum == 0, the send function directly appended a
 			 * correctly formatted message.
 			 */
-			if (outputbytes)
+			if (outputdatum)
 			{
+				outputbytes = DatumGetByteaP(outputdatum);
 				pq_sendint32(buf, VARSIZE(outputbytes) - VARHDRSZ);
 				pq_sendbytes(buf, VARDATA(outputbytes),
 							 VARSIZE(outputbytes) - VARHDRSZ);

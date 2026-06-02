@@ -808,11 +808,16 @@ numeric_out(PG_FUNCTION_ARGS)
 	if (NUMERIC_IS_SPECIAL(num))
 	{
 		if (NUMERIC_IS_PINF(num))
-			PG_RETURN_CSTRING(pstrdup("Infinity"));
+			str = "Infinity";
 		else if (NUMERIC_IS_NINF(num))
-			PG_RETURN_CSTRING(pstrdup("-Infinity"));
+			str = "-Infinity";
 		else
-			PG_RETURN_CSTRING(pstrdup("NaN"));
+			str = "NaN";
+
+		if (pg_send_inout_text(fcinfo, str, strlen(str)))
+			PG_RETURN_VOID();
+
+		PG_RETURN_CSTRING(pstrdup(str));
 	}
 
 	/*
@@ -821,6 +826,9 @@ numeric_out(PG_FUNCTION_ARGS)
 	init_var_from_num(num, &x);
 
 	str = get_str_from_var(&x);
+
+	if (pg_send_inout_text(fcinfo, str, strlen(str)))
+		PG_RETURN_VOID();
 
 	PG_RETURN_CSTRING(str);
 }
@@ -1147,21 +1155,37 @@ numeric_send(PG_FUNCTION_ARGS)
 {
 	Numeric		num = PG_GETARG_NUMERIC(0);
 	NumericVar	x;
-	StringInfoData buf;
+	StringInfo	buf;
+	StringInfoData localbuf;
+	bool		inout;
 	int			i;
 
 	init_var_from_num(num, &x);
 
-	pq_begintypsend(&buf);
+	buf = pg_get_inout_context_buf(fcinfo);
+	inout = buf != NULL;
+	if (inout)
+	{
+		/* length of data */
+		pq_sendint32(buf, (4 + x.ndigits) * sizeof(int16));
+	}
+	else
+	{
+		pq_begintypsend(&localbuf);
+		buf = &localbuf;
+	}
 
-	pq_sendint16(&buf, x.ndigits);
-	pq_sendint16(&buf, x.weight);
-	pq_sendint16(&buf, x.sign);
-	pq_sendint16(&buf, x.dscale);
+	pq_sendint16(buf, x.ndigits);
+	pq_sendint16(buf, x.weight);
+	pq_sendint16(buf, x.sign);
+	pq_sendint16(buf, x.dscale);
 	for (i = 0; i < x.ndigits; i++)
-		pq_sendint16(&buf, x.digits[i]);
+		pq_sendint16(buf, x.digits[i]);
 
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (inout)
+		PG_RETURN_VOID();
+	else
+		PG_RETURN_BYTEA_P(pq_endtypsend(&localbuf));
 }
 
 

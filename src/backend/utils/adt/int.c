@@ -74,10 +74,27 @@ Datum
 int2out(PG_FUNCTION_ARGS)
 {
 	int16		arg1 = PG_GETARG_INT16(0);
-	char	   *result = (char *) palloc(7);	/* sign, 5 digits, '\0' */
+	int			maxlen = 7;		/* sign, 5 digits, '\0' */
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pg_itoa(arg1, result);
-	PG_RETURN_CSTRING(result);
+	if (buf)
+	{
+		int			offset;
+		int			len;
+
+		len = pg_itoa(arg1, pq_begincountedfield(buf, maxlen, &offset));
+		buf->len += len;
+		pq_endcountedfield(buf, offset);
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		char	   *result = (char *) palloc(maxlen);
+
+		pg_itoa(arg1, result);
+		PG_RETURN_CSTRING(result);
+	}
 }
 
 /*
@@ -98,11 +115,21 @@ Datum
 int2send(PG_FUNCTION_ARGS)
 {
 	int16		arg1 = PG_GETARG_INT16(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendint16(&buf, arg1);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendint16_field(buf, arg1);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendint16(&buf, arg1);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 /*
@@ -328,40 +355,22 @@ int4out(PG_FUNCTION_ARGS)
 {
 	int32		arg1 = PG_GETARG_INT32(0);
 	int			maxlen = 12;	/* sign, 10 digits, '\0' */
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	if (fcinfo->context && IsA(fcinfo->context, InOutContext))
+	if (buf)
 	{
-		/*
-		 * Optimized path for output functions called as part of a larger
-		 * ouput.
-		 *
-		 * FIXME: A good chunk of this should obviously be in helper
-		 * functions.
-		 */
-		InOutContext *inout = castNode(InOutContext, fcinfo->context);
-		StringInfo	buf = inout->buf;
-		int			prev_buflen;
+		/* Optimized path for output functions called as part of a larger output. */
+		int			offset;
 		int			len;
-		uint32		len_net;
-
-		/* reserve space for length and the max string length */
-		enlargeStringInfo(buf, sizeof(uint32) + maxlen);
-
-		/* reserve space for length, to be filled out later */
-		prev_buflen = buf->len;
-		buf->len += sizeof(uint32);
 
 		/*
 		 * Construct string directly in buffer, we don't have to care about
 		 * encoding conversions, because we assume that every encoding
 		 * embodies ascii (XXX: Is that actually true with client encodings?).
 		 */
-		len = pg_ltoa(arg1, buf->data + buf->len);
+		len = pg_ltoa(arg1, pq_begincountedfield(buf, maxlen, &offset));
 		buf->len += len;
-
-		/* update the previously reserved length */
-		len_net = pg_hton32(len);
-		memcpy(&buf->data[prev_buflen], &len_net, sizeof(uint32));
+		pq_endcountedfield(buf, offset);
 
 		PG_RETURN_VOID();
 	}
@@ -395,16 +404,11 @@ Datum
 int4send(PG_FUNCTION_ARGS)
 {
 	int32		arg1 = PG_GETARG_INT32(0);
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	if (fcinfo->context && IsA(fcinfo->context, InOutContext))
+	if (buf)
 	{
-		InOutContext *inout = castNode(InOutContext, fcinfo->context);
-
-		/* length of data */
-		pq_sendint32(inout->buf, 4);
-		/* data itself */
-		pq_sendint32(inout->buf, arg1);
-
+		pq_sendint32_field(buf, arg1);
 		PG_RETURN_VOID();
 	}
 	else

@@ -793,6 +793,9 @@ static void ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab,
 static List *collectPartitionIndexExtDeps(List *partitionOids);
 static void applyPartitionIndexExtDeps(Oid newPartOid, List *extDepState);
 static void freePartitionIndexExtDeps(List *extDepState);
+static void RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
+												   Relation rel, AttrNumber attnum,
+												   const char *colName);
 
 /* ----------------------------------------------------------------
  *		DefineRelation
@@ -8815,6 +8818,13 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 	 * and record enough information to let us recreate the objects.
 	 */
 	RememberAllDependentForRebuilding(tab, AT_SetExpression, rel, attnum, colName);
+
+	/*
+	 * Find whole-row referenced objects that depend on the column
+	 * (constraints, indexes, etc.), and record enough information to let us
+	 * recreate the objects.
+	 */
+	RememberWholeRowDependentForRebuilding(tab, AT_SetExpression, rel, attnum, colName);
 
 	/*
 	 * Drop the dependency records of the GENERATED expression, in particular
@@ -24213,4 +24223,179 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 	/* Restore the userid and security context. */
 	SetUserIdAndSecContext(save_userid, save_sec_context);
+}
+
+/*
+ * Record dependencies between objects with whole-row Var references
+ * (indexes, CHECK constraints, etc.) and the relation.
+ *
+ * See also RememberAllDependentForRebuilding, which handles non-whole-row
+ * Var references.
+ *
+ * This function currently applies only to ALTER COLUMN SET EXPRESSION.
+ */
+static void
+RememberWholeRowDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
+									   Relation rel, AttrNumber attnum, const char *colName)
+{
+	Node	   *expr = NULL;
+	ScanKeyData skey;
+	Relation	pg_constraint;
+	Relation	pg_index;
+	SysScanDesc conscan;
+	SysScanDesc indscan;
+	HeapTuple	constrTuple;
+	HeapTuple	indexTuple;
+	Datum		exprDatum;
+	char	   *exprString;
+	bool		isnull;
+
+	Assert(subtype == AT_SetExpression);
+
+	/*
+	 * Check CHECK constraints with whole-row references first.
+	 */
+	if (RelationGetDescr(rel)->constr &&
+		RelationGetDescr(rel)->constr->num_check > 0)
+	{
+		pg_constraint = table_open(ConstraintRelationId, AccessShareLock);
+
+		ScanKeyInit(&skey,
+					Anum_pg_constraint_conrelid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(RelationGetRelid(rel)));
+
+		conscan = systable_beginscan(pg_constraint,
+									 ConstraintRelidTypidNameIndexId,
+									 true,
+									 NULL,
+									 1,
+									 &skey);
+		while (HeapTupleIsValid(constrTuple = systable_getnext(conscan)))
+		{
+			Form_pg_constraint conform = (Form_pg_constraint) GETSTRUCT(constrTuple);
+
+			if (conform->contype != CONSTRAINT_CHECK)
+				continue;
+
+			exprDatum = fastgetattr(constrTuple,
+									Anum_pg_constraint_conbin,
+									RelationGetDescr(pg_constraint),
+									&isnull);
+			if (isnull)
+				elog(ERROR, "null conbin for relation \"%s\"",
+					 RelationGetRelationName(rel));
+			else
+			{
+				Bitmapset  *expr_attrs = NULL;
+
+				exprString = TextDatumGetCString(exprDatum);
+				expr = (Node *) stringToNode(exprString);
+				pfree(exprString);
+
+				/* Find all attributes referenced */
+				pull_varattnos(expr, 1, &expr_attrs);
+
+				/*
+				 * If the CHECK constraint contains whole-row reference then
+				 * remember it.
+				 */
+				if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+								  expr_attrs))
+				{
+					RememberConstraintForRebuilding(conform->oid, tab);
+				}
+			}
+		}
+		systable_endscan(conscan);
+		table_close(pg_constraint, AccessShareLock);
+	}
+
+	/*
+	 * Now check indexes with whole-row references. Prepare to scan pg_index
+	 * for entries having indrelid matching this relation.
+	 */
+	ScanKeyInit(&skey,
+				Anum_pg_index_indrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+
+	pg_index = table_open(IndexRelationId, AccessShareLock);
+
+	indscan = systable_beginscan(pg_index,
+								 IndexIndrelidIndexId,
+								 true,
+								 NULL,
+								 1,
+								 &skey);
+	while (HeapTupleIsValid(indexTuple = systable_getnext(indscan)))
+	{
+		Form_pg_index index = (Form_pg_index) GETSTRUCT(indexTuple);
+
+		if (!heap_attisnull(indexTuple, Anum_pg_index_indexprs, NULL))
+		{
+			Bitmapset  *expr_attrs = NULL;
+
+			exprDatum = SysCacheGetAttrNotNull(INDEXRELID, indexTuple,
+											   Anum_pg_index_indexprs);
+			exprString = TextDatumGetCString(exprDatum);
+			expr = (Node *) stringToNode(exprString);
+			pfree(exprString);
+
+			/* Find all attributes referenced */
+			pull_varattnos(expr, 1, &expr_attrs);
+
+			/*
+			 * If the index expression contains a whole-row reference then
+			 * remember it.
+			 */
+			if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+							  expr_attrs))
+			{
+				RememberIndexForRebuilding(index->indexrelid, tab);
+				continue;
+			}
+		}
+
+		if (!heap_attisnull(indexTuple, Anum_pg_index_indpred, NULL))
+		{
+			Bitmapset  *expr_attrs = NULL;
+
+			exprDatum = SysCacheGetAttrNotNull(INDEXRELID, indexTuple,
+											   Anum_pg_index_indpred);
+			exprString = TextDatumGetCString(exprDatum);
+			expr = (Node *) stringToNode(exprString);
+			pfree(exprString);
+
+			/* Find all attributes referenced */
+			pull_varattnos(expr, 1, &expr_attrs);
+
+			/*
+			 * If the index predicate expression contains a whole-row
+			 * reference then remember it.
+			 */
+			if (bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+							  expr_attrs))
+			{
+				RememberIndexForRebuilding(index->indexrelid, tab);
+			}
+		}
+	}
+	systable_endscan(indscan);
+	table_close(pg_index, AccessShareLock);
+
+	/*
+	 * For ALTER TABLE SET EXPRESSION:
+	 *
+	 * 1.No need to check trigger with whole-row references. Creation of
+	 * BEFORE triggers with whole-row Vars referencing (some column is
+	 * generated column) is disallowed; see CreateTriggerFiringOn().
+	 * Additionally, there is no need to worry about AFTER triggers; even if
+	 * the trigger were recreated (which it is not), its WHEN qualification
+	 * would remain unchanged.
+	 *
+	 * 2. No need to recheck policies with whole-row references, since we do
+	 * not recreate and re-evaluate the policy condition when a dependent
+	 * column's generated expression changes.
+	 */
 }

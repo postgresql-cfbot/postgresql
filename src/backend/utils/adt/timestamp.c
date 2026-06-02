@@ -227,7 +227,6 @@ Datum
 timestamp_out(PG_FUNCTION_ARGS)
 {
 	Timestamp	timestamp = PG_GETARG_TIMESTAMP(0);
-	char	   *result;
 	struct pg_tm tt,
 			   *tm = &tt;
 	fsec_t		fsec;
@@ -242,8 +241,10 @@ timestamp_out(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
 				 errmsg("timestamp out of range")));
 
-	result = pstrdup(buf);
-	PG_RETURN_CSTRING(result);
+	if (pg_send_inout_text(fcinfo, buf, strlen(buf)))
+		PG_RETURN_VOID();
+	else
+		PG_RETURN_CSTRING(pstrdup(buf));
 }
 
 /*
@@ -286,11 +287,21 @@ Datum
 timestamp_send(PG_FUNCTION_ARGS)
 {
 	Timestamp	timestamp = PG_GETARG_TIMESTAMP(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendint64(&buf, timestamp);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendint64_field(buf, timestamp);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendint64(&buf, timestamp);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 Datum
@@ -773,7 +784,6 @@ Datum
 timestamptz_out(PG_FUNCTION_ARGS)
 {
 	TimestampTz dt = PG_GETARG_TIMESTAMPTZ(0);
-	char	   *result;
 	int			tz;
 	struct pg_tm tt,
 			   *tm = &tt;
@@ -790,8 +800,10 @@ timestamptz_out(PG_FUNCTION_ARGS)
 				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
 				 errmsg("timestamp out of range")));
 
-	result = pstrdup(buf);
-	PG_RETURN_CSTRING(result);
+	if (pg_send_inout_text(fcinfo, buf, strlen(buf)))
+		PG_RETURN_VOID();
+	else
+		PG_RETURN_CSTRING(pstrdup(buf));
 }
 
 /*
@@ -835,11 +847,21 @@ Datum
 timestamptz_send(PG_FUNCTION_ARGS)
 {
 	TimestampTz timestamp = PG_GETARG_TIMESTAMPTZ(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendint64(&buf, timestamp);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendint64_field(buf, timestamp);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendint64(&buf, timestamp);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 Datum

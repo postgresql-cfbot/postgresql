@@ -722,6 +722,16 @@ typedef enum QueryMode
 static QueryMode querymode = QUERY_SIMPLE;
 static const char *const QUERYMODE[] = {"simple", "extended", "prepared"};
 
+typedef enum ResultFormat
+{
+	RESULT_FORMAT_TEXT,
+	RESULT_FORMAT_BINARY,
+	NUM_RESULT_FORMAT
+} ResultFormat;
+
+static ResultFormat result_format = RESULT_FORMAT_TEXT;
+static const char *const RESULT_FORMAT[] = {"text", "binary"};
+
 /*
  * struct Command represents one command in a script.
  *
@@ -965,6 +975,8 @@ usage(void)
 		   "  --max-tries=NUM          max number of tries to run transaction (default: 1)\n"
 		   "  --progress-timestamp     use Unix epoch timestamps for progress\n"
 		   "  --random-seed=SEED       set random seed (\"time\", \"rand\", integer)\n"
+		   "  --result-format=text|binary\n"
+		   "                           result format for extended/prepared protocol (default: text)\n"
 		   "  --sampling-rate=NUM      fraction of transactions to log (e.g., 0.01 for 1%%)\n"
 		   "  --show-script=NAME       show builtin script code, then exit\n"
 		   "  --verbose-errors         print messages of all errors\n"
@@ -3173,7 +3185,7 @@ sendCommand(CState *st, Command *command)
 
 		pg_log_debug("client %d sending %s", st->id, sql);
 		r = PQsendQueryParams(st->con, sql, command->argc - 1,
-							  NULL, params, NULL, NULL, 0);
+							  NULL, params, NULL, NULL, result_format);
 	}
 	else if (querymode == QUERY_PREPARED)
 	{
@@ -3184,7 +3196,7 @@ sendCommand(CState *st, Command *command)
 
 		pg_log_debug("client %d sending %s", st->id, command->prepname);
 		r = PQsendQueryPrepared(st->con, command->prepname, command->argc - 1,
-								params, NULL, NULL, 0);
+								params, NULL, NULL, result_format);
 	}
 	else						/* unknown sql mode */
 		r = 0;
@@ -6464,6 +6476,7 @@ printResults(StatsData *total,
 		printf("partition method: %s\npartitions: %d\n",
 			   PARTITION_METHOD[partition_method], partitions);
 	printf("query mode: %s\n", QUERYMODE[querymode]);
+	printf("result format: %s\n", RESULT_FORMAT[result_format]);
 	printf("number of clients: %d\n", nclients);
 	printf("number of threads: %d\n", nthreads);
 
@@ -6772,6 +6785,7 @@ main(int argc, char **argv)
 		{"exit-on-abort", no_argument, NULL, 16},
 		{"debug", no_argument, NULL, 17},
 		{"continue-on-error", no_argument, NULL, 18},
+		{"result-format", required_argument, NULL, 19},
 		{NULL, 0, NULL, 0}
 	};
 
@@ -7132,6 +7146,14 @@ main(int argc, char **argv)
 				benchmarking_option_set = true;
 				continue_on_error = true;
 				break;
+			case 19:			/* result-format */
+				benchmarking_option_set = true;
+				for (result_format = 0; result_format < NUM_RESULT_FORMAT; result_format++)
+					if (strcmp(optarg, RESULT_FORMAT[result_format]) == 0)
+						break;
+				if (result_format >= NUM_RESULT_FORMAT)
+					pg_fatal("invalid result format: \"%s\"", optarg);
+				break;
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -7162,6 +7184,9 @@ main(int argc, char **argv)
 
 	if (total_weight == 0 && !is_init_mode)
 		pg_fatal("total script weight must not be zero");
+
+	if (result_format == RESULT_FORMAT_BINARY && querymode == QUERY_SIMPLE)
+		pg_fatal("binary result format requires extended or prepared query mode");
 
 	/* show per script stats if several scripts are used */
 	if (num_scripts > 1)

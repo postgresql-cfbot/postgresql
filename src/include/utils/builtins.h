@@ -15,11 +15,35 @@
 #define BUILTINS_H
 
 #include "fmgr.h"
+#include "libpq/pqformat.h"
+#include "nodes/miscnodes.h"
 #include "nodes/nodes.h"
 #include "utils/fmgrprotos.h"
 
 /* Sign + the most decimal digits an 8-byte number could have */
 #define MAXINT8LEN 20
+
+/* Helpers for output/send functions using InOutContext. */
+static inline StringInfo
+pg_get_inout_context_buf(FunctionCallInfo fcinfo)
+{
+	if (fcinfo->context && IsA(fcinfo->context, InOutContext))
+		return castNode(InOutContext, fcinfo->context)->buf;
+
+	return NULL;
+}
+
+static inline bool
+pg_send_inout_text(FunctionCallInfo fcinfo, const char *str, int slen)
+{
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
+
+	if (!buf)
+		return false;
+
+	pq_sendcountedtext(buf, str, slen);
+	return true;
+}
 
 /* bool.c */
 extern bool parse_bool(const char *value, bool *result);

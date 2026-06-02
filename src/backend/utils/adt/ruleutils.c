@@ -23,6 +23,7 @@
 #include "access/htup_details.h"
 #include "access/relation.h"
 #include "access/table.h"
+#include "catalog/namespace.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_am.h"
 #include "catalog/pg_authid.h"
@@ -370,7 +371,7 @@ static void make_propgraphdef_elements(StringInfo buf, Oid pgrelid, char pgekind
 static void make_propgraphdef_labels(StringInfo buf, Oid elid, const char *elalias, Oid elrelid);
 static void make_propgraphdef_properties(StringInfo buf, Oid ellabelid, Oid elrelid);
 static char *pg_get_statisticsobj_worker(Oid statextid, bool columns_only,
-										 bool missing_ok);
+										 bool missing_ok, int prettyFlags);
 static char *pg_get_partkeydef_worker(Oid relid, int prettyFlags,
 									  bool attrsOnly, bool missing_ok);
 static char *pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
@@ -601,6 +602,19 @@ pg_get_ruledef_ext(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 
 	PG_RETURN_TEXT_P(string_to_text(res));
+}
+
+/*
+ * pg_get_ruledef_ddl
+ *		Like pg_get_ruledef but uses the active search_path to decide
+ *		whether to schema-qualify the rule's target relation name.
+ *		For use by pg_get_table_ddl which has already set search_path
+ *		to the base schema when schema_qualified=false.
+ */
+char *
+pg_get_ruledef_ddl(Oid ruleoid)
+{
+	return pg_get_ruledef_worker(ruleoid, PRETTYFLAG_INDENT | PRETTYFLAG_SCHEMA);
 }
 
 
@@ -1239,6 +1253,22 @@ pg_get_indexdef_string(Oid indexrelid)
 								  false, false,
 								  true, true,
 								  0, false);
+}
+
+/*
+ * pg_get_indexdef_ddl
+ *		Like pg_get_indexdef_string but uses the active search_path to
+ *		decide whether to schema-qualify the indexed relation name.
+ *		For use by pg_get_table_ddl which has already set search_path
+ *		to the base schema when schema_qualified=false.
+ */
+char *
+pg_get_indexdef_ddl(Oid indexrelid)
+{
+	return pg_get_indexdef_worker(indexrelid, 0, NULL,
+								  false, false,
+								  true, true,
+								  PRETTYFLAG_SCHEMA, false);
 }
 
 /* Internal version that just reports the key-column definitions */
@@ -1969,7 +1999,7 @@ pg_get_statisticsobjdef(PG_FUNCTION_ARGS)
 	Oid			statextid = PG_GETARG_OID(0);
 	char	   *res;
 
-	res = pg_get_statisticsobj_worker(statextid, false, true);
+	res = pg_get_statisticsobj_worker(statextid, false, true, 0);
 
 	if (res == NULL)
 		PG_RETURN_NULL();
@@ -1984,7 +2014,20 @@ pg_get_statisticsobjdef(PG_FUNCTION_ARGS)
 char *
 pg_get_statisticsobjdef_string(Oid statextid)
 {
-	return pg_get_statisticsobj_worker(statextid, false, false);
+	return pg_get_statisticsobj_worker(statextid, false, false, 0);
+}
+
+/*
+ * pg_get_statisticsobjdef_ddl
+ *		Like pg_get_statisticsobjdef_string but uses the active search_path
+ *		to decide whether to schema-qualify the statistics object name.
+ *		For use by pg_get_table_ddl which has already set search_path
+ *		to the base schema when schema_qualified=false.
+ */
+char *
+pg_get_statisticsobjdef_ddl(Oid statextid)
+{
+	return pg_get_statisticsobj_worker(statextid, false, false, PRETTYFLAG_SCHEMA);
 }
 
 /*
@@ -1997,7 +2040,7 @@ pg_get_statisticsobjdef_columns(PG_FUNCTION_ARGS)
 	Oid			statextid = PG_GETARG_OID(0);
 	char	   *res;
 
-	res = pg_get_statisticsobj_worker(statextid, true, true);
+	res = pg_get_statisticsobj_worker(statextid, true, true, 0);
 
 	if (res == NULL)
 		PG_RETURN_NULL();
@@ -2009,7 +2052,8 @@ pg_get_statisticsobjdef_columns(PG_FUNCTION_ARGS)
  * Internal workhorse to decompile an extended statistics object.
  */
 static char *
-pg_get_statisticsobj_worker(Oid statextid, bool columns_only, bool missing_ok)
+pg_get_statisticsobj_worker(Oid statextid, bool columns_only, bool missing_ok,
+							int prettyFlags)
 {
 	Form_pg_statistic_ext statextrec;
 	HeapTuple	statexttup;
@@ -2069,10 +2113,18 @@ pg_get_statisticsobj_worker(Oid statextid, bool columns_only, bool missing_ok)
 
 	if (!columns_only)
 	{
-		nsp = get_namespace_name_or_temp(statextrec->stxnamespace);
-		appendStringInfo(&buf, "CREATE STATISTICS %s",
-						 quote_qualified_identifier(nsp,
-													NameStr(statextrec->stxname)));
+		if ((prettyFlags & PRETTYFLAG_SCHEMA) &&
+			StatisticsObjIsVisible(statextid))
+			appendStringInfo(&buf, "CREATE STATISTICS %s",
+							 quote_identifier(NameStr(statextrec->stxname)));
+		else
+		{
+			nsp = get_namespace_name_or_temp(statextrec->stxnamespace);
+			appendStringInfo(&buf, "CREATE STATISTICS %s",
+							 quote_qualified_identifier(nsp,
+														NameStr(statextrec->stxname)));
+			pfree(nsp);
+		}
 
 		/*
 		 * Decode the stxkind column so that we know which stats types to
@@ -2163,10 +2215,9 @@ pg_get_statisticsobj_worker(Oid statextid, bool columns_only, bool missing_ok)
 	{
 		Node	   *expr = (Node *) lfirst(lc);
 		char	   *str;
-		int			prettyFlags = PRETTYFLAG_PAREN;
 
 		str = deparse_expression_pretty(expr, context, false, false,
-										prettyFlags, 0);
+										PRETTYFLAG_PAREN, 0);
 
 		if (colno > 0)
 			appendStringInfoString(&buf, ", ");
@@ -2542,6 +2593,20 @@ char *
 pg_get_constraintdef_command(Oid constraintId)
 {
 	return pg_get_constraintdef_worker(constraintId, true, 0, false);
+}
+
+/*
+ * pg_get_constraintdef_body
+ *		Returns the constraint definition body without the
+ *		"ALTER TABLE name ADD CONSTRAINT cname" prefix.
+ *		FK target relation names in the body already use
+ *		generate_relation_name (search_path-aware).  For use by
+ *		pg_get_table_ddl which builds the ALTER TABLE prefix itself.
+ */
+char *
+pg_get_constraintdef_body(Oid constraintId)
+{
+	return pg_get_constraintdef_worker(constraintId, false, 0, false);
 }
 
 /*

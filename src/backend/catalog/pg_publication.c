@@ -555,7 +555,7 @@ publication_add_relation(Oid pubid, PublicationRelInfo *pri,
 
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("relation \"%s\" is already member of publication \"%s\"",
+				 errmsg("relation \"%s\" is already a member of publication \"%s\"",
 						RelationGetRelationName(targetrel), pub->name)));
 	}
 
@@ -816,7 +816,7 @@ publication_add_schema(Oid pubid, Oid schemaid, bool if_not_exists)
 
 		ereport(ERROR,
 				(errcode(ERRCODE_DUPLICATE_OBJECT),
-				 errmsg("schema \"%s\" is already member of publication \"%s\"",
+				 errmsg("schema \"%s\" is already a member of publication \"%s\"",
 						get_namespace_name(schemaid), pub->name)));
 	}
 

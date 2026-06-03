@@ -45,12 +45,10 @@ my $orig_conninfo = $node_primary->connstr();
 my $table1 = "vac_horizon_floor_table";
 
 # Long-running Primary Session A
-my $psql_primaryA =
-  $node_primary->background_psql($test_db, on_error_stop => 1);
+my $session_primaryA = PostgreSQL::Test::Session->new(node => $node_primary, dbname => $test_db);
 
 # Long-running Primary Session B
-my $psql_primaryB =
-  $node_primary->background_psql($test_db, on_error_stop => 1);
+my $session_primaryB = PostgreSQL::Test::Session->new(node => $node_primary, dbname => $test_db);
 
 # Our test relies on two rounds of index vacuuming for reasons elaborated
 # later. To trigger two rounds of index vacuuming, we must fill up the
@@ -123,7 +121,7 @@ $node_replica->poll_query_until(
 # Now insert and update a tuple which will be visible to the vacuum on the
 # primary but which will have xmax newer than the oldest xmin on the standby
 # that was recently disconnected.
-my $res = $psql_primaryA->query_safe(
+my $res = $session_primaryA->query(
 	qq[
 		INSERT INTO $table1 VALUES (99);
 		UPDATE $table1 SET col1 = 100 WHERE col1 = 99;
@@ -132,7 +130,7 @@ my $res = $psql_primaryA->query_safe(
 );
 
 # Make sure the UPDATE finished
-like($res, qr/^after_update$/m, "UPDATE occurred on primary session A");
+like($res->{psqlout}, qr/^after_update$/m, "UPDATE occurred on primary session A");
 
 # Open a cursor on the primary whose pin will keep VACUUM from getting a
 # cleanup lock on the first page of the relation. We want VACUUM to be able to
@@ -145,7 +143,7 @@ my $primary_cursor1 = "vac_horizon_floor_cursor1";
 # The first value inserted into the table was a 7, so FETCH FORWARD should
 # return a 7. That's how we know the cursor has a pin.
 # Disable index scans so the cursor pins heap pages and not index pages.
-$res = $psql_primaryB->query_safe(
+$res = $session_primaryB->query(
 	qq[
 	BEGIN;
 	SET enable_bitmapscan = off;
@@ -156,11 +154,11 @@ $res = $psql_primaryB->query_safe(
 	]
 );
 
-is($res, 7, qq[Cursor query returned $res. Expected value 7.]);
+is($res->{psqlout}, 7, qq[Cursor query returned $res->{psqlout}. Expected value 7.]);
 
 # Get the PID of the session which will run the VACUUM FREEZE so that we can
 # use it to filter pg_stat_activity later.
-my $vacuum_pid = $psql_primaryA->query_safe("SELECT pg_backend_pid();");
+my $vacuum_pid = $session_primaryA->query_oneval("SELECT pg_backend_pid();");
 
 # Now start a VACUUM FREEZE on the primary. It will call vacuum_get_cutoffs()
 # and establish values of OldestXmin and GlobalVisState which are newer than
@@ -176,14 +174,8 @@ my $vacuum_pid = $psql_primaryA->query_safe("SELECT pg_backend_pid();");
 # pages of the heap must be processed in order by a single worker to ensure
 # test stability (PARALLEL 0 shouldn't be necessary but guards against the
 # possibility of parallel heap vacuuming).
-$psql_primaryA->{stdin} .= qq[
-		SET maintenance_io_concurrency = 0;
-		VACUUM (VERBOSE, FREEZE, PARALLEL 0) $table1;
-		\\echo VACUUM
-        ];
-
-# Make sure the VACUUM command makes it to the server.
-$psql_primaryA->{run}->pump_nb();
+$session_primaryA->do('SET maintenance_io_concurrency = 0;');
+$session_primaryA->do_async("VACUUM (VERBOSE, FREEZE, PARALLEL 0) $table1;");
 
 # Make sure that the VACUUM has already called vacuum_get_cutoffs() and is
 # just waiting on the lock to start vacuuming. We don't want the standby to
@@ -229,7 +221,7 @@ $node_primary->poll_query_until(
 # expect that a round of index vacuuming has happened and that the vacuum is
 # now waiting for the cursor to release its pin on the last page of the
 # relation.
-$res = $psql_primaryB->query_safe("FETCH $primary_cursor1");
+$res = $session_primaryB->query_oneval("FETCH $primary_cursor1");
 is($res, 7,
 	qq[Cursor query returned $res from second fetch. Expected value 7.]);
 
@@ -243,13 +235,7 @@ $node_primary->poll_query_until(
 	], 't');
 
 # Commit the transaction with the open cursor so that the VACUUM can finish.
-$psql_primaryB->query_until(
-	qr/^commit$/m,
-	qq[
-			COMMIT;
-			\\echo commit
-        ]
-);
+$session_primaryB->do('COMMIT');
 
 # VACUUM proceeds with pruning and does a visibility check on each tuple. In
 # older versions of Postgres, pruning found our final dead tuple
@@ -281,8 +267,8 @@ $node_primary->safe_psql($test_db, "INSERT INTO $table1 VALUES (1);");
 $node_primary->wait_for_catchup($node_replica, 'replay', $primary_lsn);
 
 ## Shut down psqls
-$psql_primaryA->quit;
-$psql_primaryB->quit;
+$session_primaryA->close;
+$session_primaryB->close;
 
 $node_replica->stop();
 $node_primary->stop();

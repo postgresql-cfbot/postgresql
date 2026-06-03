@@ -5,6 +5,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -91,41 +92,38 @@ is($node->psql('postgres', 'DROP DATABASE regression_invalid'),
 # dropping the database, making it a suitable point to wait.  Since relcache
 # init reads pg_tablespace, establish each connection before locking.  This
 # avoids a connection-time hang with debug_discard_caches.
-my $cancel = $node->background_psql('postgres', on_error_stop => 1);
-my $bgpsql = $node->background_psql('postgres', on_error_stop => 0);
-my $pid = $bgpsql->query('SELECT pg_backend_pid()');
+my $cancel = PostgreSQL::Test::Session->new(node=>$node);
+my $bgpsql = PostgreSQL::Test::Session->new(node=>$node);
+my $pid = $bgpsql->query_oneval('SELECT pg_backend_pid()');
 
 # create the database, prevent drop database via lock held by a 2PC transaction
-$bgpsql->query_safe(
-	qq(
-  CREATE DATABASE regression_invalid_interrupt;
-  BEGIN;
+is (1,  $bgpsql->do(
+		qq(
+  CREATE DATABASE regression_invalid_interrupt;),
+  qq(BEGIN;
   LOCK pg_tablespace;
-  PREPARE TRANSACTION 'lock_tblspc';));
+  PREPARE TRANSACTION 'lock_tblspc';)));
 
 # Try to drop. This will wait due to the still held lock.
-$bgpsql->query_until(qr//, "DROP DATABASE regression_invalid_interrupt;\n");
+$bgpsql->do_async("DROP DATABASE regression_invalid_interrupt;");
 
 
 # Once the DROP DATABASE is waiting for the lock, interrupt it.
-ok( $cancel->query_safe(
-		qq(
+my $cancel_res = $cancel->query(
+		qq[
 	DO \$\$
 	BEGIN
 		WHILE NOT EXISTS(SELECT * FROM pg_locks WHERE NOT granted AND relation = 'pg_tablespace'::regclass AND mode = 'AccessShareLock') LOOP
 			PERFORM pg_sleep(.1);
 		END LOOP;
 	END\$\$;
-	SELECT pg_cancel_backend($pid);)),
-	"canceling DROP DATABASE");
-$cancel->quit();
+	SELECT pg_cancel_backend($pid)]);
+is($cancel_res->{status}, PGRES_TUPLES_OK, "canceling DROP DATABASE");
+$cancel->close();
 
+$bgpsql->wait_for_completion;
 # wait for cancellation to be processed
-ok( pump_until(
-		$bgpsql->{run}, $bgpsql->{timeout},
-		\$bgpsql->{stderr}, qr/canceling statement due to user request/),
-	"cancel processed");
-$bgpsql->{stderr} = '';
+pass("cancel processed");
 
 # Verify that connections to the database aren't allowed.  The backend checks
 # this before relcache init, so the lock won't interfere.
@@ -134,9 +132,12 @@ is($node->psql('regression_invalid_interrupt', ''),
 
 # To properly drop the database, we need to release the lock previously preventing
 # doing so.
-$bgpsql->query_safe(qq(ROLLBACK PREPARED 'lock_tblspc'));
-$bgpsql->query_safe(qq(DROP DATABASE regression_invalid_interrupt));
+is($bgpsql->do(qq(ROLLBACK PREPARED 'lock_tblspc')),
+	PGRES_COMMAND_OK, "unblock DROP DATABASE");
 
-$bgpsql->quit();
+is($bgpsql->do(qq(DROP DATABASE regression_invalid_interrupt)),
+	PGRES_COMMAND_OK, "DROP DATABASE invalid_interrupt");
+
+$bgpsql->close();
 
 done_testing();

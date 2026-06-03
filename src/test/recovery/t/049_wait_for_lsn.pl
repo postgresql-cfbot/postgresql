@@ -5,6 +5,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -221,20 +222,15 @@ ok($output eq "timeout", "WAIT FOR returns correct status after timeout");
 my $subxact_lsn = $node_primary->safe_psql('postgres',
 	"SELECT pg_current_wal_insert_lsn() + 10000000000");
 my $subxact_appname = 'wait_for_lsn_subxact_cleanup';
-my $subxact_session =
-  $node_primary->background_psql('postgres', on_error_stop => 0);
-$subxact_session->query_until(
-	qr/start/, qq[
-	SET application_name = '$subxact_appname';
-	BEGIN;
-	SAVEPOINT wait_cleanup;
-	\\echo start
-	WAIT FOR LSN '${subxact_lsn}' WITH (MODE 'primary_flush');
-	ROLLBACK TO wait_cleanup;
-	WAIT FOR LSN '${subxact_lsn}'
-		WITH (MODE 'primary_flush', timeout '10ms', no_throw);
-	COMMIT;
-]);
+my $subxact_session = PostgreSQL::Test::Session->new(node => $node_primary);
+# Send the setup statements individually so the first WAIT FOR LSN can be
+# issued asynchronously: it blocks (the target LSN is unreachable) and will
+# be canceled below.
+$subxact_session->do("SET application_name = '$subxact_appname'");
+$subxact_session->do("BEGIN");
+$subxact_session->do("SAVEPOINT wait_cleanup");
+$subxact_session->do_async(
+	"WAIT FOR LSN '${subxact_lsn}' WITH (MODE 'primary_flush')");
 $node_primary->poll_query_until(
 	'postgres',
 	"SELECT count(*) = 1 FROM pg_stat_activity
@@ -248,18 +244,30 @@ my $subxact_cancelled = $node_primary->safe_psql(
 	   AND wait_event = 'WaitForWalFlush'"
 );
 is($subxact_cancelled, 't', "canceled WAIT FOR LSN in subtransaction");
-$subxact_session->quit;
-chomp($subxact_session->{stdout});
+
+# The cancel interrupts the blocking WAIT FOR LSN, leaving the transaction
+# in an aborted state.
+my $subxact_cancel_res = $subxact_session->get_async_result();
 like(
-	$subxact_session->{stderr},
+	$subxact_cancel_res->{error_message},
 	qr/canceling statement due to user request/,
 	"query cancel interrupted WAIT FOR LSN in subtransaction");
-is($subxact_session->{stdout},
+
+# Roll back to the savepoint so a second WAIT FOR LSN can register again in
+# the same backend; with no_throw it returns 'timeout' rather than erroring.
+$subxact_session->do("ROLLBACK TO wait_cleanup");
+my $subxact_timeout = $subxact_session->query_oneval(
+	"WAIT FOR LSN '${subxact_lsn}'
+		WITH (MODE 'primary_flush', timeout '10ms', no_throw)");
+is($subxact_timeout,
 	"timeout", "second WAIT FOR LSN timed out after savepoint rollback");
-unlike(
-	$subxact_session->{stderr},
-	qr/server closed the connection unexpectedly/,
+
+# The backend survived the cancel without disconnecting: the connection is
+# still usable.
+is($subxact_session->query_oneval('SELECT 1'), '1',
 	"WAIT FOR LSN after savepoint rollback did not disconnect");
+$subxact_session->do("COMMIT");
+$subxact_session->close;
 
 # 5. Check mode validation: standby modes error on primary, primary mode errors
 # on standby, and primary_flush works on primary.  Also check that WAIT FOR
@@ -467,10 +475,8 @@ for (my $i = 0; $i < 5; $i++)
 	my $lsn =
 	  $node_primary->safe_psql('postgres',
 		"SELECT pg_current_wal_insert_lsn()");
-	$psql_sessions[$i] = $node_standby->background_psql('postgres');
-	$psql_sessions[$i]->query_until(
-		qr/start/, qq[
-		\\echo start
+	$psql_sessions[$i] = PostgreSQL::Test::Session->new(node => $node_standby);
+	$psql_sessions[$i]->do_async(qq[
 		WAIT FOR LSN '${lsn}';
 		SELECT log_count(${i});
 	]);
@@ -481,7 +487,8 @@ $node_standby->safe_psql('postgres', "SELECT pg_wal_replay_resume();");
 for (my $i = 0; $i < 5; $i++)
 {
 	$node_standby->wait_for_log("count ${i}", $log_offset);
-	$psql_sessions[$i]->quit;
+	$psql_sessions[$i]->wait_for_completion;
+	$psql_sessions[$i]->close;
 }
 
 ok(1, 'multiple standby_replay waiters reported consistent data');
@@ -505,10 +512,8 @@ for (my $i = 0; $i < 5; $i++)
 my @write_sessions;
 for (my $i = 0; $i < 5; $i++)
 {
-	$write_sessions[$i] = $node_standby->background_psql('postgres');
-	$write_sessions[$i]->query_until(
-		qr/start/, qq[
-		\\echo start
+	$write_sessions[$i] = PostgreSQL::Test::Session->new(node => $node_standby);
+	$write_sessions[$i]->do_async(qq[
 		WAIT FOR LSN '$write_lsns[$i]' WITH (MODE 'standby_write', timeout '1d');
 		SELECT log_wait_done('write_done', $i);
 	]);
@@ -527,7 +532,8 @@ resume_walreceiver($node_standby);
 for (my $i = 0; $i < 5; $i++)
 {
 	$node_standby->wait_for_log("write_done $i", $write_log_offset);
-	$write_sessions[$i]->quit;
+	$write_sessions[$i]->wait_for_completion;
+	$write_sessions[$i]->close;
 }
 
 # Verify on standby that WAL was written up to the target LSN
@@ -557,10 +563,8 @@ for (my $i = 0; $i < 5; $i++)
 my @flush_sessions;
 for (my $i = 0; $i < 5; $i++)
 {
-	$flush_sessions[$i] = $node_standby->background_psql('postgres');
-	$flush_sessions[$i]->query_until(
-		qr/start/, qq[
-		\\echo start
+	$flush_sessions[$i] = PostgreSQL::Test::Session->new(node => $node_standby);
+	$flush_sessions[$i]->do_async(qq[
 		WAIT FOR LSN '$flush_lsns[$i]' WITH (MODE 'standby_flush', timeout '1d');
 		SELECT log_wait_done('flush_done', $i);
 	]);
@@ -579,7 +583,8 @@ resume_walreceiver($node_standby);
 for (my $i = 0; $i < 5; $i++)
 {
 	$node_standby->wait_for_log("flush_done $i", $flush_log_offset);
-	$flush_sessions[$i]->quit;
+	$flush_sessions[$i]->wait_for_completion;
+	$flush_sessions[$i]->close;
 }
 
 # Verify on standby that WAL was flushed up to the target LSN
@@ -615,10 +620,8 @@ my @mixed_sessions;
 my @mixed_modes = ('standby_replay', 'standby_write', 'standby_flush');
 for (my $i = 0; $i < 6; $i++)
 {
-	$mixed_sessions[$i] = $node_standby->background_psql('postgres');
-	$mixed_sessions[$i]->query_until(
-		qr/start/, qq[
-		\\echo start
+	$mixed_sessions[$i] = PostgreSQL::Test::Session->new(node => $node_standby);
+	$mixed_sessions[$i]->do_async(qq[
 		WAIT FOR LSN '${mixed_target_lsn}' WITH (MODE '$mixed_modes[$i % 3]', timeout '1d');
 		SELECT log_wait_done('mixed_done', $i);
 	]);
@@ -642,7 +645,8 @@ resume_walreceiver($node_standby);
 for (my $i = 0; $i < 6; $i++)
 {
 	$node_standby->wait_for_log("mixed_done $i", $mixed_log_offset);
-	$mixed_sessions[$i]->quit;
+	$mixed_sessions[$i]->wait_for_completion;
+	$mixed_sessions[$i]->close;
 }
 
 # Verify all modes reached the target LSN
@@ -675,10 +679,8 @@ my $primary_flush_log_offset = -s $node_primary->logfile;
 my @primary_flush_sessions;
 for (my $i = 0; $i < 5; $i++)
 {
-	$primary_flush_sessions[$i] = $node_primary->background_psql('postgres');
-	$primary_flush_sessions[$i]->query_until(
-		qr/start/, qq[
-		\\echo start
+	$primary_flush_sessions[$i] = PostgreSQL::Test::Session->new(node => $node_primary);
+	$primary_flush_sessions[$i]->do_async(qq[
 		WAIT FOR LSN '$primary_flush_lsns[$i]' WITH (MODE 'primary_flush', timeout '1d');
 		SELECT log_wait_done('primary_flush_done', $i);
 	]);
@@ -689,7 +691,8 @@ for (my $i = 0; $i < 5; $i++)
 {
 	$node_primary->wait_for_log("primary_flush_done $i",
 		$primary_flush_log_offset);
-	$primary_flush_sessions[$i]->quit;
+	$primary_flush_sessions[$i]->wait_for_completion;
+	$primary_flush_sessions[$i]->close;
 }
 
 # Verify on primary that WAL was flushed up to the target LSN
@@ -717,10 +720,8 @@ my @wait_modes = ('standby_replay', 'standby_write', 'standby_flush');
 my @wait_sessions;
 for (my $i = 0; $i < 3; $i++)
 {
-	$wait_sessions[$i] = $node_standby->background_psql('postgres');
-	$wait_sessions[$i]->query_until(
-		qr/start/, qq[
-		\\echo start
+	$wait_sessions[$i] = PostgreSQL::Test::Session->new(node => $node_standby);
+	$wait_sessions[$i]->do_async(qq[
 		WAIT FOR LSN '${lsn4}' WITH (MODE '$wait_modes[$i]');
 	]);
 }
@@ -758,12 +759,7 @@ ok($output eq "not in recovery",
 $node_standby->stop;
 $node_primary->stop;
 
-# If we send \q with $session->quit the command can be sent to the session
-# already closed. So \q is in initial script, here we only finish IPC::Run.
-for (my $i = 0; $i < 3; $i++)
-{
-	$wait_sessions[$i]->{run}->finish;
-}
+# Sessions will be cleaned up automatically when they go out of scope.
 
 # 9. Archive-only standby tests: verify standby_write/standby_flush work
 # without a walreceiver.  These exercises the replay-position floor in
@@ -862,18 +858,14 @@ $arc_primary->poll_query_until('postgres',
 # Start background waiters.  With replay paused, target > replay, so they
 # will sleep on WaitLatch.  They can only be woken by the replay-loop
 # WaitLSNWakeup calls.
-my $arc_write_session = $arc_standby->background_psql('postgres');
-$arc_write_session->query_until(
-	qr/start/, qq[
-	\\echo start
+my $arc_write_session = PostgreSQL::Test::Session->new(node => $arc_standby);
+$arc_write_session->do_async(qq[
 	WAIT FOR LSN '${arc_target_lsn2}'
 		WITH (MODE 'standby_write', timeout '1d', no_throw);
 ]);
 
-my $arc_flush_session = $arc_standby->background_psql('postgres');
-$arc_flush_session->query_until(
-	qr/start/, qq[
-	\\echo start
+my $arc_flush_session = PostgreSQL::Test::Session->new(node => $arc_standby);
+$arc_flush_session->do_async(qq[
 	WAIT FOR LSN '${arc_target_lsn2}'
 		WITH (MODE 'standby_flush', timeout '1d', no_throw);
 ]);
@@ -887,15 +879,15 @@ $arc_standby->poll_query_until('postgres',
 # STANDBY_FLUSH waiters as it replays past arc_target_lsn2.
 $arc_standby->safe_psql('postgres', "SELECT pg_wal_replay_resume()");
 
-$arc_write_session->quit;
-$arc_flush_session->quit;
-chomp($arc_write_session->{stdout});
-chomp($arc_flush_session->{stdout});
+my $arc_write_out = $arc_write_session->get_async_result();
+my $arc_flush_out = $arc_flush_session->get_async_result();
+$arc_write_session->close;
+$arc_flush_session->close;
 
-is($arc_write_session->{stdout},
+is($arc_write_out->{psqlout},
 	'success',
 	"standby_write waiter woken by replay on archive-only standby");
-is($arc_flush_session->{stdout},
+is($arc_flush_out->{psqlout},
 	'success',
 	"standby_flush waiter woken by replay on archive-only standby");
 
@@ -1035,10 +1027,8 @@ check_wait_for_lsn_fencepost($rcv_standby, 'standby_flush', $flush_lsn,
 $rcv_primary->safe_psql('postgres',
 	"INSERT INTO rcv_test VALUES (generate_series(200, 210))");
 
-my $boundary_session = $rcv_standby->background_psql('postgres');
-$boundary_session->query_until(
-	qr/start/, qq[
-	\\echo start
+my $boundary_session = PostgreSQL::Test::Session->new(node => $rcv_standby);
+$boundary_session->do_async(qq[
 	WAIT FOR LSN '${replay_lsn_plus}'
 		WITH (MODE 'standby_replay', timeout '1d', no_throw);
 ]);
@@ -1049,9 +1039,9 @@ $rcv_standby->poll_query_until('postgres',
 
 $rcv_standby->safe_psql('postgres', "SELECT pg_wal_replay_resume()");
 resume_walreceiver($rcv_standby);
-$boundary_session->quit;
-chomp($boundary_session->{stdout});
-is($boundary_session->{stdout},
+my $boundary_out = $boundary_session->get_async_result();
+$boundary_session->close;
+is($boundary_out->{psqlout},
 	'success',
 	"standby_replay: waiter at current + 1 wakes when replay advances");
 
@@ -1101,10 +1091,8 @@ $tl_standby2->poll_query_until('postgres',
 	"SELECT pg_get_wal_replay_pause_state() = 'paused'")
   or die "Timed out waiting for tl_standby2 replay to pause";
 
-my $tl_session = $tl_standby2->background_psql('postgres');
-$tl_session->query_until(
-	qr/start/, qq[
-	\\echo start
+my $tl_session = PostgreSQL::Test::Session->new(node => $tl_standby2);
+$tl_session->do_async(qq[
 	WAIT FOR LSN '${tl_target}'
 		WITH (MODE 'standby_replay', timeout '1d', no_throw);
 ]);
@@ -1126,9 +1114,9 @@ $tl_standby2->poll_query_until('postgres',
 	"SELECT received_tli > 1 FROM pg_stat_wal_receiver")
   or die "tl_standby2 did not follow upstream timeline switch";
 
-$tl_session->quit;
-chomp($tl_session->{stdout});
-is($tl_session->{stdout}, 'success',
+my $tl_out = $tl_session->get_async_result();
+$tl_session->close;
+is($tl_out->{psqlout}, 'success',
 	"WAIT FOR LSN survives upstream promotion and timeline switch on cascade standby"
 );
 

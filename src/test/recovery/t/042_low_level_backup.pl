@@ -10,6 +10,7 @@ use warnings FATAL => 'all';
 use File::Copy qw(copy);
 use File::Path qw(rmtree);
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -20,10 +21,9 @@ $node_primary->start;
 
 # Start backup.
 my $backup_name = 'backup1';
-my $psql = $node_primary->background_psql('postgres');
+my $psql = PostgreSQL::Test::Session->new(node => $node_primary);
 
-$psql->query_safe("SET client_min_messages TO WARNING");
-$psql->set_query_timer_restart;
+$psql->do("SET client_min_messages TO WARNING");
 $psql->query_safe("select pg_backup_start('test label')");
 
 # Copy files.
@@ -81,9 +81,9 @@ my $stop_segment_name = $node_primary->safe_psql('postgres',
 
 # Stop backup and get backup_label, the last segment is archived.
 my $backup_label =
-  $psql->query_safe("select labelfile from pg_backup_stop()");
+  $psql->query_oneval("select labelfile from pg_backup_stop()");
 
-$psql->quit;
+$psql->close;
 
 # Rather than writing out backup_label, try to recover the backup without
 # backup_label to demonstrate that recovery will not work correctly without it,

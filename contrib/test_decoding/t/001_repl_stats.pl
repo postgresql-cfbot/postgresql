@@ -7,6 +7,7 @@ use strict;
 use warnings FATAL => 'all';
 use File::Path qw(rmtree);
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -129,11 +130,11 @@ $node->safe_psql('postgres',
 );
 
 # Look at slot data, with a persistent connection.
-my $bpgsql = $node->background_psql('postgres', on_error_stop => 1);
+my $bgsession = PostgreSQL::Test::Session->new(node=>$node);
 
 # Launch query and look at slot data, incrementing the refcount of the
 # stats entry.
-$bpgsql->query_safe(
+$bgsession->query_safe(
 	"SELECT pg_logical_slot_peek_binary_changes('$slot_name_restart', NULL, NULL)"
 );
 
@@ -150,7 +151,7 @@ $node->safe_psql('postgres',
 
 # Look again at the slot data.  The local stats reference should be refreshed
 # to the reinitialized entry.
-$bpgsql->query_safe(
+$bgsession->query_safe(
 	"SELECT pg_logical_slot_peek_binary_changes('$slot_name_restart', NULL, NULL)"
 );
 # Drop again the slot, the entry is not dropped yet as the previous session
@@ -176,6 +177,6 @@ command_like(
 my $stats_file = "$datadir/pg_stat/pgstat.stat";
 ok(-f "$stats_file", "stats file must exist after shutdown");
 
-$bpgsql->quit;
+$bgsession->close;
 
 done_testing();

@@ -13,6 +13,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 use Time::HiRes qw(usleep);
@@ -51,47 +52,38 @@ ALTER TABLE test.tblexpr SET (parallel_workers=0);
 ############################################################################
 note('Test: REINDEX CONCURRENTLY + UPSERT (wakeup at set-dead phase)');
 
-# Create sessions with on_error_stop => 0 so psql doesn't exit on SQL errors.
-# This allows us to collect stderr and detect errors after the test completes.
-my $s1 = $node->background_psql('postgres', on_error_stop => 0);
-my $s2 = $node->background_psql('postgres', on_error_stop => 0);
-my $s3 = $node->background_psql('postgres', on_error_stop => 0);
+# Create sessions for concurrent operations
+my $s1 = PostgreSQL::Test::Session->new(node => $node);
+my $s2 = PostgreSQL::Test::Session->new(node => $node);
+my $s3 = PostgreSQL::Test::Session->new(node => $node);
 
 # Setup injection points for each session
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-set-dead', 'wait');
 ]);
 
 # s3 starts REINDEX (will block on reindex-relation-concurrently-before-set-dead)
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tblpk_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tblpk_pkey;]);
 
 # Wait for s3 to hit injection point
 ok_injection_point($node, 'reindex-relation-concurrently-before-set-dead');
 
 # s1 starts UPSERT (will block on check-exclusion-or-unique-constraint-no-conflict)
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 # Wait for s1 to hit injection point
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
@@ -101,11 +93,7 @@ wakeup_injection_point($node,
 	'reindex-relation-concurrently-before-set-dead');
 
 # s2 starts UPSERT (will block on exec-insert-before-insert-speculative)
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 # Wait for s2 to hit injection point
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
@@ -125,51 +113,39 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblpk');
 ############################################################################
 note('Test: REINDEX CONCURRENTLY + UPSERT (wakeup at swap phase)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-swap', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tblpk_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tblpk_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-swap');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 wakeup_injection_point($node, 'reindex-relation-concurrently-before-swap');
 
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -184,50 +160,38 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblpk');
 ############################################################################
 note('Test: REINDEX CONCURRENTLY + UPSERT (s1 wakes before reindex)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-set-dead', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tblpk_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tblpk_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-set-dead');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 # Start s2 BEFORE waking reindex (key difference from permutation 1)
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -245,52 +209,40 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblpk');
 ############################################################################
 note('Test: REINDEX + UPSERT ON CONSTRAINT (set-dead phase)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-set-dead', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tblpk_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tblpk_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-set-dead');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 wakeup_injection_point($node,
 	'reindex-relation-concurrently-before-set-dead');
 
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -305,51 +257,39 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblpk');
 ############################################################################
 note('Test: REINDEX + UPSERT ON CONSTRAINT (swap phase)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-swap', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tblpk_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tblpk_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-swap');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 wakeup_injection_point($node, 'reindex-relation-concurrently-before-swap');
 
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -364,50 +304,38 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblpk');
 ############################################################################
 note('Test: REINDEX + UPSERT ON CONSTRAINT (s1 wakes before reindex)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-set-dead', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tblpk_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tblpk_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-set-dead');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 # Start s2 BEFORE waking reindex
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblpk VALUES (13, now()) ON CONFLICT ON CONSTRAINT tblpk_pkey DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -425,52 +353,40 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblpk');
 ############################################################################
 note('Test: REINDEX on partitioned table (set-dead phase)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-set-dead', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-set-dead');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 wakeup_injection_point($node,
 	'reindex-relation-concurrently-before-set-dead');
 
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -485,51 +401,39 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblparted');
 ############################################################################
 note('Test: REINDEX on partitioned table (swap phase)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-swap', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-swap');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 wakeup_injection_point($node, 'reindex-relation-concurrently-before-swap');
 
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -544,50 +448,38 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblparted');
 ############################################################################
 note('Test: REINDEX on partitioned table (s1 wakes before reindex)');
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-set-dead', 'wait');
 ]);
 
-$s3->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;
-]);
+$s3->do_async(q[REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-set-dead');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'check-exclusion-or-unique-constraint-no-conflict');
 
 # Start s2 BEFORE waking reindex
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -607,35 +499,27 @@ note(
 	'Test: REINDEX on partitioned table, cache inval between two get_partition_ancestors'
 );
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-init-partition-after-get-partition-ancestors', 'wait');
 ]);
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('reindex-relation-concurrently-before-swap', 'wait');
 ]);
 
-$s2->query_until(
-	qr/starting_reindex/, q[
-\echo starting_reindex
-REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;
-]);
+$s2->do_async(q[REINDEX INDEX CONCURRENTLY test.tbl_partition_pkey;]);
 
 ok_injection_point($node, 'reindex-relation-concurrently-before-swap');
 
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblparted VALUES (13, now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node,
 	'exec-init-partition-after-get-partition-ancestors');
@@ -654,26 +538,24 @@ note('Test: CREATE INDEX CONCURRENTLY + UPSERT');
 # Uses invalidate-catalog-snapshot-end to test catalog invalidation
 # during UPSERT
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-my $s1_pid = $s1->query_safe('SELECT pg_backend_pid()');
+# Get the session's backend PID before attaching injection points
+my $s1_pid = $s1->query_oneval('SELECT pg_backend_pid()');
 
 # s1 attaches BOTH injection points - the unique constraint check AND catalog snapshot
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s1->query_until(
-	qr/attaching_injection_point/, q[
-\echo attaching_injection_point
-SELECT injection_points_attach('invalidate-catalog-snapshot-end', 'wait');
-]);
-
 # In cases of cache clobbering, s1 may hit the injection point during attach.
+# Start attach asynchronously so we can check if it blocks.
+$s1->do_async(q[SELECT injection_points_attach('invalidate-catalog-snapshot-end', 'wait');]);
+
 # Wait for that session to become idle (attach completed), or wake it up if
 # it becomes stuck on injection point.
 if (!wait_for_idle($node, $s1_pid))
@@ -687,34 +569,28 @@ if (!wait_for_idle($node, $s1_pid))
 		SELECT injection_points_wakeup('invalidate-catalog-snapshot-end');
 	]);
 }
+# Wait for async command to complete
+$s1->wait_for_completion;
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('define-index-before-set-valid', 'wait');
 ]);
 
 # s3: Start CREATE INDEX CONCURRENTLY (blocks on define-index-before-set-valid)
-$s3->query_until(
-	qr/starting_create_index/, q[
-\echo starting_create_index
-CREATE UNIQUE INDEX CONCURRENTLY tbl_pkey_duplicate ON test.tblpk(i);
-]);
+$s3->do_async(q[CREATE UNIQUE INDEX CONCURRENTLY tbl_pkey_duplicate ON test.tblpk(i);]);
 
 ok_injection_point($node, 'define-index-before-set-valid');
 
 # s1: Start UPSERT (blocks on invalidate-catalog-snapshot-end)
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'invalidate-catalog-snapshot-end');
 
@@ -722,11 +598,7 @@ ok_injection_point($node, 'invalidate-catalog-snapshot-end');
 wakeup_injection_point($node, 'define-index-before-set-valid');
 
 # s2: Start UPSERT (blocks on exec-insert-before-insert-speculative)
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblpk VALUES (13,now()) ON CONFLICT (i) DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 
@@ -747,24 +619,20 @@ $node->safe_psql('postgres', 'TRUNCATE TABLE test.tblparted');
 note('Test: CREATE INDEX CONCURRENTLY on partial index + UPSERT');
 # Uses invalidate-catalog-snapshot-end to test catalog invalidation during UPSERT
 
-$s1 = $node->background_psql('postgres', on_error_stop => 0);
-$s2 = $node->background_psql('postgres', on_error_stop => 0);
-$s3 = $node->background_psql('postgres', on_error_stop => 0);
+$s1 = PostgreSQL::Test::Session->new(node => $node);
+$s2 = PostgreSQL::Test::Session->new(node => $node);
+$s3 = PostgreSQL::Test::Session->new(node => $node);
 
-$s1_pid = $s1->query_safe('SELECT pg_backend_pid()');
+$s1_pid = $s1->query_oneval('SELECT pg_backend_pid()');
 
 # s1 attaches BOTH injection points - the unique constraint check AND catalog snapshot
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('check-exclusion-or-unique-constraint-no-conflict', 'wait');
 ]);
 
-$s1->query_until(
-	qr/attaching_injection_point/, q[
-\echo attaching_injection_point
-SELECT injection_points_attach('invalidate-catalog-snapshot-end', 'wait');
-]);
+$s1->do(q[SELECT injection_points_attach('invalidate-catalog-snapshot-end', 'wait');]);
 
 # In cases of cache clobbering, s1 may hit the injection point during attach.
 # Wait for that session to become idle (attach completed), or wake it up if
@@ -781,33 +649,25 @@ if (!wait_for_idle($node, $s1_pid))
 	]);
 }
 
-$s2->query_safe(
+$s2->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('exec-insert-before-insert-speculative', 'wait');
 ]);
 
-$s3->query_safe(
+$s3->do(
 	q[
 SELECT injection_points_set_local();
 SELECT injection_points_attach('define-index-before-set-valid', 'wait');
 ]);
 
 # s3: Start CREATE INDEX CONCURRENTLY (blocks on define-index-before-set-valid)
-$s3->query_until(
-	qr/starting_create_index/, q[
-\echo starting_create_index
-CREATE UNIQUE INDEX CONCURRENTLY tbl_pkey_special_duplicate ON test.tblexpr(abs(i)) WHERE i < 10000;
-]);
+$s3->do_async(q[CREATE UNIQUE INDEX CONCURRENTLY tbl_pkey_special_duplicate ON test.tblexpr(abs(i)) WHERE i < 10000;]);
 
 ok_injection_point($node, 'define-index-before-set-valid');
 
 # s1: Start UPSERT (blocks on invalidate-catalog-snapshot-end)
-$s1->query_until(
-	qr/starting_upsert_s1/, q[
-\echo starting_upsert_s1
-INSERT INTO test.tblexpr VALUES(13,now()) ON CONFLICT (abs(i)) WHERE i < 100 DO UPDATE SET updated_at = now();
-]);
+$s1->do_async(q[INSERT INTO test.tblexpr VALUES(13,now()) ON CONFLICT (abs(i)) WHERE i < 100 DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'invalidate-catalog-snapshot-end');
 
@@ -815,11 +675,7 @@ ok_injection_point($node, 'invalidate-catalog-snapshot-end');
 wakeup_injection_point($node, 'define-index-before-set-valid');
 
 # s2: Start UPSERT (blocks on exec-insert-before-insert-speculative)
-$s2->query_until(
-	qr/starting_upsert_s2/, q[
-\echo starting_upsert_s2
-INSERT INTO test.tblexpr VALUES(13,now()) ON CONFLICT (abs(i)) WHERE i < 100 DO UPDATE SET updated_at = now();
-]);
+$s2->do_async(q[INSERT INTO test.tblexpr VALUES(13,now()) ON CONFLICT (abs(i)) WHERE i < 100 DO UPDATE SET updated_at = now();]);
 
 ok_injection_point($node, 'exec-insert-before-insert-speculative');
 wakeup_injection_point($node, 'invalidate-catalog-snapshot-end');
@@ -920,33 +776,23 @@ SELECT injection_points_wakeup('$point_name');
 ]);
 }
 
-# Wait for any pending query to complete, capture stderr, and close the session.
-# Returns the stderr output (excluding internal markers).
+# Wait for any pending query to complete and close the session.
+# Returns empty string on success, error message on failure.
 sub safe_quit
 {
 	my ($session) = @_;
 
-	# Send a marker and wait for it to ensure any pending query completes
-	my $banner = "safe_quit_marker";
-	my $banner_match = qr/(^|\n)$banner\r?\n/;
+	# Wait for any async queries to complete
+	$session->wait_for_completion;
 
-	$session->{stdin} .= "\\echo $banner\n\\warn $banner\n";
-
-	pump_until(
-		$session->{run}, $session->{timeout},
-		\$session->{stdout}, $banner_match);
-	pump_until(
-		$session->{run}, $session->{timeout},
-		\$session->{stderr}, $banner_match);
-
-	# Capture stderr (excluding the banner)
-	my $stderr = $session->{stderr};
-	$stderr =~ s/$banner_match//;
+	# Check connection status
+	my $status = $session->conn_status;
 
 	# Close the session
-	$session->quit;
+	$session->close;
 
-	return $stderr;
+	# Return empty string if connection was OK, otherwise return error
+	return ($status == CONNECTION_OK) ? '' : 'connection error';
 }
 
 # Helper function: verify that the given sessions exit cleanly.

@@ -5,6 +5,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -30,18 +31,17 @@ sub test_streaming
 	# Interleave a pair of transactions, each exceeding the 64kB limit.
 	my $offset = 0;
 
-	my $h = $node_publisher->background_psql('postgres', on_error_stop => 0);
+	my $h = PostgreSQL::Test::Session->new(node=>$node_publisher);
 
 	# Check the subscriber log from now on.
 	$offset = -s $node_subscriber->logfile;
 
-	$h->query_safe(
-		q{
-	BEGIN;
-	INSERT INTO test_tab SELECT i, sha256(i::text::bytea) FROM generate_series(3, 5000) s(i);
-	UPDATE test_tab SET b = sha256(b) WHERE mod(a,2) = 0;
-	DELETE FROM test_tab WHERE mod(a,3) = 0;
-	});
+	$h->do(
+		'BEGIN',
+		'INSERT INTO test_tab SELECT i, sha256(i::text::bytea) FROM generate_series(3, 5000) s(i)',
+		'UPDATE test_tab SET b = sha256(b) WHERE mod(a,2) = 0',
+		'DELETE FROM test_tab WHERE mod(a,3) = 0',
+	);
 
 	$node_publisher->safe_psql(
 		'postgres', q{
@@ -51,9 +51,9 @@ sub test_streaming
 	COMMIT;
 	});
 
-	$h->query_safe('COMMIT');
+	$h->do('COMMIT');
 	# errors make the next test fail, so ignore them here
-	$h->quit;
+	$h->close;
 
 	$node_publisher->wait_for_catchup($appname);
 
@@ -211,14 +211,14 @@ $node_subscriber->reload;
 $node_subscriber->safe_psql('postgres', q{SELECT 1});
 
 # Interleave a pair of transactions, each exceeding the 64kB limit.
-my $h = $node_publisher->background_psql('postgres', on_error_stop => 0);
+my $h = PostgreSQL::Test::Session->new(node => $node_publisher);
 
 # Confirm if a deadlock between the leader apply worker and the parallel apply
 # worker can be detected.
 
 my $offset = -s $node_subscriber->logfile;
 
-$h->query_safe(
+$h->do(
 	q{
 BEGIN;
 INSERT INTO test_tab_2 SELECT i FROM generate_series(1, 5000) s(i);
@@ -232,8 +232,8 @@ $node_subscriber->wait_for_log(
 
 $node_publisher->safe_psql('postgres', "INSERT INTO test_tab_2 values(1)");
 
-$h->query_safe('COMMIT');
-$h->quit;
+$h->do('COMMIT');
+$h->close;
 
 $node_subscriber->wait_for_log(qr/ERROR: ( [A-Z0-9]+:)? deadlock detected/,
 	$offset);
@@ -260,7 +260,8 @@ $node_subscriber->safe_psql('postgres',
 # Check the subscriber log from now on.
 $offset = -s $node_subscriber->logfile;
 
-$h->query_safe(
+$h->reconnect;
+$h->do(
 	q{
 BEGIN;
 INSERT INTO test_tab_2 SELECT i FROM generate_series(1, 5000) s(i);
@@ -275,8 +276,8 @@ $node_subscriber->wait_for_log(
 $node_publisher->safe_psql('postgres',
 	"INSERT INTO test_tab_2 SELECT i FROM generate_series(1, 5000) s(i)");
 
-$h->query_safe('COMMIT');
-$h->quit;
+$h->do('COMMIT');
+$h->close;
 
 $node_subscriber->wait_for_log(qr/ERROR: ( [A-Z0-9]+:)? deadlock detected/,
 	$offset);

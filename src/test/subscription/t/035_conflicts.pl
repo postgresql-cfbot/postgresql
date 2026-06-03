@@ -4,6 +4,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -455,17 +456,14 @@ if ($injection_points_supported != 0)
 
 	# Start a background session on the publisher node to perform an update and
 	# pause at the injection point.
-	my $pub_session = $node_B->background_psql('postgres');
-	$pub_session->query_until(
-		qr/starting_bg_psql/,
-		q{
-			\echo starting_bg_psql
-			BEGIN;
-			UPDATE tab SET b = 2 WHERE a = 1;
-			PREPARE TRANSACTION 'txn_with_later_commit_ts';
-			COMMIT PREPARED 'txn_with_later_commit_ts';
-		}
+	my $pub_session = PostgreSQL::Test::Session->new(node => $node_B);
+	$pub_session->do(
+		q{BEGIN},
+		q{UPDATE tab SET b = 2 WHERE a = 1},
+		q{PREPARE TRANSACTION 'txn_with_later_commit_ts'}
 	);
+	# COMMIT PREPARED will block on the injection point
+	$pub_session->do_async(q{COMMIT PREPARED 'txn_with_later_commit_ts'});
 
 	# Wait until the backend enters the injection point
 	$node_B->wait_for_event('client backend',
@@ -516,8 +514,9 @@ if ($injection_points_supported != 0)
 		 SELECT injection_points_detach('commit-after-delay-checkpoint');"
 	);
 
-	# Close the background session on the publisher node
-	ok($pub_session->quit, "close publisher session");
+	# Wait for the async query to complete and close the background session
+	$pub_session->wait_for_completion;
+	$pub_session->close;
 
 	# Confirm that the transaction committed
 	$result = $node_B->safe_psql('postgres', 'SELECT * FROM tab WHERE a = 1');

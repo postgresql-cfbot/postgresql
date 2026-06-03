@@ -8,6 +8,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 
 use Test::More;
@@ -52,13 +53,10 @@ $node->safe_psql('postgres',
 $node->safe_psql('postgres', q{checkpoint});
 
 # Generate some transactions to get RUNNING_XACTS.
-my $xacts = $node->background_psql('postgres');
-$xacts->query_until(
-	qr/run_xacts/,
-	q(\echo run_xacts
-SELECT 1 \watch 0.1
-\q
-));
+for (my $i = 0; $i < 10; $i++)
+{
+	$node->safe_psql('postgres', 'SELECT 1');
+}
 
 $node->advance_wal(20);
 
@@ -72,16 +70,11 @@ $node->advance_wal(20);
 # removing old WAL segments.
 note('starting checkpoint');
 
-my $checkpoint = $node->background_psql('postgres');
-$checkpoint->query_safe(
+$node->safe_psql('postgres',
 	q(select injection_points_attach('checkpoint-before-old-wal-removal','wait'))
 );
-$checkpoint->query_until(
-	qr/starting_checkpoint/,
-	q(\echo starting_checkpoint
-checkpoint;
-\q
-));
+my $checkpoint = PostgreSQL::Test::Session->new(node => $node);
+$checkpoint->do_async(q(CHECKPOINT;));
 
 # Wait until the checkpoint stops right before removing WAL segments.
 note('waiting for injection_point');
@@ -90,17 +83,21 @@ note('injection_point is reached');
 
 # Try to advance the logical slot, but make it stop when it moves to the next
 # WAL segment (this has to happen in the background, too).
-my $logical = $node->background_psql('postgres');
-$logical->query_safe(
+# We need to call pg_logical_slot_get_changes repeatedly until the slot
+# advances to the next segment and hits the injection point.
+my $logical = PostgreSQL::Test::Session->new(node => $node);
+$logical->do(
 	q{select injection_points_attach('logical-replication-slot-advance-segment','wait');}
 );
-$logical->query_until(
-	qr/get_changes/,
-	q(
-\echo get_changes
-select count(*) from pg_logical_slot_get_changes('slot_logical', null, null) \watch 1
-\q
-));
+$logical->do_async(
+	q{DO $$
+	BEGIN
+		LOOP
+			PERFORM count(*) FROM pg_logical_slot_get_changes('slot_logical', null, null);
+			PERFORM pg_sleep(0.1);
+		END LOOP;
+	END $$;}
+);
 
 # Wait until the slot's restart_lsn points to the next WAL segment.
 note('waiting for injection_point');
@@ -138,12 +135,8 @@ eval {
 };
 is($@, '', "Logical slot still valid");
 
-# If we send \q with $<psql_session>->quit the command can be sent to the
-# session already closed. So \q is in initial script, here we only finish
-# IPC::Run
-$xacts->{run}->finish;
-$checkpoint->{run}->finish;
-$logical->{run}->finish;
+# Sessions were terminated by the server crash and will be cleaned up
+# automatically when they go out of scope.
 
 # Verify that the synchronized slots won't be invalidated immediately after
 # synchronization in the presence of a concurrent checkpoint.
@@ -185,15 +178,11 @@ $primary->wait_for_replay_catchup($standby);
 # checkpoint stops right before invalidating replication slots.
 note('starting checkpoint');
 
-$checkpoint = $standby->background_psql('postgres');
-$checkpoint->query_safe(
+$standby->safe_psql('postgres',
 	q(select injection_points_attach('restartpoint-before-slot-invalidation','wait'))
 );
-$checkpoint->query_until(
-	qr/starting_checkpoint/,
-	q(\echo starting_checkpoint
-checkpoint;
-));
+$checkpoint = PostgreSQL::Test::Session->new(node => $standby);
+$checkpoint->do_async(q(CHECKPOINT;));
 
 # Wait until the checkpoint stops right before invalidating slots
 note('waiting for injection_point');
@@ -216,7 +205,8 @@ $standby->safe_psql(
 	q{select injection_points_wakeup('restartpoint-before-slot-invalidation');
 	  select injection_points_detach('restartpoint-before-slot-invalidation')});
 
-$checkpoint->quit;
+$checkpoint->wait_for_completion;
+$checkpoint->close;
 
 # Confirm that the slot is not invalidated
 is( $standby->safe_psql(

@@ -146,7 +146,7 @@ ok( pump_until(
 $killme2->finish;
 
 # Wait till server finishes restarting
-$node->poll_query_until('postgres', undef, '');
+$node->poll_until_connection('postgres');
 
 # Check for temporary files
 is( $node->safe_psql(
@@ -253,7 +253,7 @@ ok( pump_until(
 $killme2->finish;
 
 # Wait till server finishes restarting
-$node->poll_query_until('postgres', undef, '');
+$node->poll_until_connection('postgres');
 
 # Check for temporary files -- should be there
 is( $node->safe_psql(

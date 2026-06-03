@@ -12,6 +12,7 @@ use warnings FATAL => 'all';
 use JSON::PP     qw(encode_json);
 use MIME::Base64 qw(encode_base64);
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -57,7 +58,7 @@ $node->safe_psql('postgres', 'CREATE USER testalt;');
 $node->safe_psql('postgres', 'CREATE USER testparam;');
 
 # Save a background connection for later configuration changes.
-my $bgconn = $node->background_psql('postgres');
+my $bgconn = PostgreSQL::Test::Session->new(node => $node);
 
 my $webserver = OAuth::Server->new();
 $webserver->run();
@@ -124,11 +125,11 @@ $log_start =
   $node->wait_for_log(qr/reloading configuration files/, $log_start);
 
 # Check pg_hba_file_rules() support.
-my $contents = $bgconn->query_safe(
+my $contents = $bgconn->query(
 	qq(SELECT rule_number, auth_method, options
 		 FROM pg_hba_file_rules
 		 ORDER BY rule_number;));
-is( $contents,
+is( $contents->{psqlout},
 	qq{1|oauth|\{issuer=$issuer,"scope=openid postgres",validator=validator\}
 2|oauth|\{issuer=$issuer/.well-known/oauth-authorization-server/alternate,"scope=openid postgres alt",validator=validator\}
 3|oauth|\{issuer=$issuer/param,"scope=openid postgres",validator=validator\}},
@@ -564,7 +565,7 @@ $common_connstr =
   "dbname=postgres oauth_issuer=$issuer/.well-known/openid-configuration oauth_scope='' oauth_client_id=f02c6361-0635";
 
 # Misbehaving validators must fail shut.
-$bgconn->query_safe("ALTER SYSTEM SET oauth_validator.authn_id TO ''");
+$bgconn->do("ALTER SYSTEM SET oauth_validator.authn_id TO ''");
 $node->reload;
 $log_start =
   $node->wait_for_log(qr/reloading configuration files/, $log_start);
@@ -575,15 +576,15 @@ $node->connect_fails(
 	expected_stderr => qr/OAuth bearer authentication failed/,
 	log_like => [
 		qr/connection authenticated: identity=""/,
-		qr/FATAL:\s+OAuth bearer authentication failed/,
+		qr/FATAL: ( [A-Z0-9]+:)? OAuth bearer authentication failed/,
 		qr/DETAIL:\s+Validator provided no identity/,
 	]);
 
 # Even if a validator authenticates the user, if the token isn't considered
 # valid, the connection fails.
-$bgconn->query_safe(
+$bgconn->do(
 	"ALTER SYSTEM SET oauth_validator.authn_id TO 'test\@example.org'");
-$bgconn->query_safe(
+$bgconn->do(
 	"ALTER SYSTEM SET oauth_validator.authorize_tokens TO false");
 $node->reload;
 $log_start =
@@ -595,7 +596,7 @@ $node->connect_fails(
 	expected_stderr => qr/OAuth bearer authentication failed/,
 	log_like => [
 		qr/connection authenticated: identity="test\@example\.org"/,
-		qr/FATAL:\s+OAuth bearer authentication failed/,
+		qr/FATAL: ( [A-Z0-9]+:)? OAuth bearer authentication failed/,
 		qr/DETAIL:\s+Validator failed to authorize the provided token/,
 	]);
 
@@ -677,8 +678,8 @@ local all testparam oauth issuer="$issuer" scope="" delegate_ident_mapping=1
 });
 
 # To start, have the validator use the role names as authn IDs.
-$bgconn->query_safe("ALTER SYSTEM RESET oauth_validator.authn_id");
-$bgconn->query_safe("ALTER SYSTEM RESET oauth_validator.authorize_tokens");
+$bgconn->do("ALTER SYSTEM RESET oauth_validator.authn_id");
+$bgconn->do("ALTER SYSTEM RESET oauth_validator.authorize_tokens");
 
 $node->reload;
 $log_start =
@@ -695,7 +696,7 @@ $node->connect_fails(
 	expected_stderr => qr/OAuth bearer authentication failed/);
 
 # Have the validator identify the end user as user@example.com.
-$bgconn->query_safe(
+$bgconn->do(
 	"ALTER SYSTEM SET oauth_validator.authn_id TO 'user\@example.com'");
 $node->reload;
 $log_start =
@@ -719,7 +720,7 @@ $node->connect_ok(
 	expected_stderr =>
 	  qr@Visit https://example\.com/ and enter the code: postgresuser@);
 
-$bgconn->query_safe("ALTER SYSTEM RESET oauth_validator.authn_id");
+$bgconn->do("ALTER SYSTEM RESET oauth_validator.authn_id");
 $node->reload;
 $log_start =
   $node->wait_for_log(qr/reloading configuration files/, $log_start);
@@ -842,7 +843,7 @@ $user = "testalt";
 $node->connect_fails(
 	"user=$user dbname=postgres oauth_issuer=$issuer/.well-known/oauth-authorization-server/alternate oauth_client_id=f02c6361-0636",
 	"fail_validator is used for $user",
-	expected_stderr => qr/FATAL:\s+fail_validator: sentinel error/);
+	expected_stderr => qr/FATAL: ( [A-Z0-9]+:)? fail_validator: sentinel error/);
 
 #
 # Test ABI compatibility magic marker
@@ -862,7 +863,7 @@ $node->connect_fails(
 	"user=test dbname=postgres oauth_issuer=$issuer/.well-known/oauth-authorization-server/alternate oauth_client_id=f02c6361-0636",
 	"magic_validator is used for $user",
 	expected_stderr =>
-	  qr/FATAL:\s+OAuth validator module "magic_validator": magic number mismatch/
+	  qr/FATAL: ( [A-Z0-9]+:)? OAuth validator module "magic_validator": magic number mismatch/
 );
 $node->stop;
 

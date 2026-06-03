@@ -6,6 +6,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -331,11 +332,10 @@ $cur_primary->stop;
 $cur_standby->restart;
 
 # Acquire a snapshot in standby, before we commit the prepared transaction
-my $standby_session =
-  $cur_standby->background_psql('postgres', on_error_die => 1);
-$standby_session->query_safe("BEGIN ISOLATION LEVEL REPEATABLE READ");
+my $standby_session = PostgreSQL::Test::Session->new(node => $cur_standby);
+$standby_session->do("BEGIN ISOLATION LEVEL REPEATABLE READ");
 $psql_out =
-  $standby_session->query_safe("SELECT count(*) FROM t_009_tbl_standby_mvcc");
+  $standby_session->query_oneval("SELECT count(*) FROM t_009_tbl_standby_mvcc");
 is($psql_out, '0',
 	"Prepared transaction not visible in standby before commit");
 
@@ -349,17 +349,17 @@ COMMIT PREPARED 'xact_009_standby_mvcc';
 
 # Still not visible to the old snapshot
 $psql_out =
-  $standby_session->query_safe("SELECT count(*) FROM t_009_tbl_standby_mvcc");
+  $standby_session->query_oneval("SELECT count(*) FROM t_009_tbl_standby_mvcc");
 is($psql_out, '0',
 	"Committed prepared transaction not visible to old snapshot in standby");
 
 # Is visible to a new snapshot
-$standby_session->query_safe("COMMIT");
+$standby_session->do("COMMIT");
 $psql_out =
-  $standby_session->query_safe("SELECT count(*) FROM t_009_tbl_standby_mvcc");
+  $standby_session->query_oneval("SELECT count(*) FROM t_009_tbl_standby_mvcc");
 is($psql_out, '2',
 	"Committed prepared transaction is visible to new snapshot in standby");
-$standby_session->quit;
+$standby_session->close;
 
 ###############################################################################
 # Check for a lock conflict between prepared transaction with DDL inside and

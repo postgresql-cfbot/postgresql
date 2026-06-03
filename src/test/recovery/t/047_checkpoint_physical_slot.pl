@@ -8,6 +8,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 
 use Test::More;
@@ -69,16 +70,11 @@ note("restart lsn before checkpoint: $restart_lsn_init");
 # removing old WAL segments.
 note('starting checkpoint');
 
-my $checkpoint = $node->background_psql('postgres');
-$checkpoint->query_safe(
+my $checkpoint = PostgreSQL::Test::Session->new(node => $node);
+$checkpoint->do(
 	q{select injection_points_attach('checkpoint-before-old-wal-removal','wait')}
 );
-$checkpoint->query_until(
-	qr/starting_checkpoint/,
-	q(\echo starting_checkpoint
-checkpoint;
-\q
-));
+$checkpoint->do_async('checkpoint');
 
 # Wait until the checkpoint stops right before removing WAL segments.
 note('waiting for injection_point');
@@ -104,7 +100,11 @@ my $restart_lsn_old = $node->safe_psql('postgres',
 chomp($restart_lsn_old);
 note("restart lsn before stop: $restart_lsn_old");
 
-# Abruptly stop the server.
+$checkpoint->wait_for_completion();
+$checkpoint->close();
+
+# Abruptly stop the server (1 second should be enough for the checkpoint
+# to finish; it would be better).
 $node->stop('immediate');
 
 $node->start;

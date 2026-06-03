@@ -8,6 +8,7 @@ use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
+use PostgreSQL::Test::Session;
 use Test::More;
 
 use FindBin;
@@ -44,8 +45,8 @@ SKIP:
 	#
 	# This is a similar test to the synthetic variant in 005_injection.pl
 	# which fakes this scenario.
-	my $bsession = $node->background_psql('postgres');
-	$bsession->query_safe('CREATE TEMPORARY TABLE tt (a integer);');
+	my $bsession = PostgreSQL::Test::Session->new(node => $node);
+	$bsession->do('CREATE TEMPORARY TABLE tt (a integer);');
 
 	# In another session, make sure we can see the blocking temp table but
 	# start processing anyways and check that we are blocked with a proper
@@ -85,7 +86,7 @@ SKIP:
 	# session first since the brief period between closing and stopping might
 	# be enough for checksums to get enabled.
 	$node->stop;
-	$bsession->quit;
+	$bsession->close;
 	$node->start;
 
 	# Ensure the checksums aren't enabled across the restart.  This leaves the

@@ -7,6 +7,7 @@ use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
+use PostgreSQL::Test::Session;
 
 use Test::More;
 
@@ -36,29 +37,42 @@ $node->safe_psql('postgres', q(CREATE TABLE tbl(i int, j jsonb)));
 # statements.
 #
 
-my $main_h = $node->background_psql('postgres');
+my $main_h = PostgreSQL::Test::Session->new(node=>$node);
 
-$main_h->query_safe(
+$main_h->do_async(
 	q(
 BEGIN;
 INSERT INTO tbl VALUES(0, '[[14,2,3]]');
 ));
 
-my $cic_h = $node->background_psql('postgres');
+my $cic_h = PostgreSQL::Test::Session->new(node=>$node);
 
-$cic_h->query_until(
-	qr/start/, q(
-\echo start
-CREATE INDEX CONCURRENTLY idx ON tbl(i);
-CREATE INDEX CONCURRENTLY ginidx ON tbl USING gin(j);
+$cic_h->setnonblocking(1);
+
+$cic_h->enterPipelineMode();
+
+$cic_h->do_pipeline(
+	q(
+CREATE INDEX CONCURRENTLY idx ON tbl(i)
 ));
 
-$main_h->query_safe(
+$cic_h->pipelineSync();
+
+$cic_h->do_pipeline(
+	q(
+CREATE INDEX CONCURRENTLY ginidx ON tbl USING gin(j)
+));
+
+$cic_h->pipelineSync();
+
+$main_h->wait_for_completion;
+$main_h->do_async(
 	q(
 PREPARE TRANSACTION 'a';
 ));
 
-$main_h->query_safe(
+$main_h->wait_for_completion;
+$main_h->do_async(
 	q(
 BEGIN;
 INSERT INTO tbl VALUES(0, '[[14,2,3]]');
@@ -66,7 +80,8 @@ INSERT INTO tbl VALUES(0, '[[14,2,3]]');
 
 $node->safe_psql('postgres', q(COMMIT PREPARED 'a';));
 
-$main_h->query_safe(
+$main_h->wait_for_completion;
+$main_h->do_async(
 	q(
 PREPARE TRANSACTION 'b';
 BEGIN;
@@ -75,14 +90,17 @@ INSERT INTO tbl VALUES(0, '"mary had a little lamb"');
 
 $node->safe_psql('postgres', q(COMMIT PREPARED 'b';));
 
-$main_h->query_safe(
-	q(
-PREPARE TRANSACTION 'c';
-COMMIT PREPARED 'c';
-));
+$main_h->wait_for_completion;
+$main_h->do(
+	q(PREPARE TRANSACTION 'c';),
+	q(COMMIT PREPARED 'c';));
 
-$main_h->quit;
-$cic_h->quit;
+$main_h->close;
+
+# called twice out of an abundance of caution about pipeline mode
+$cic_h->wait_for_completion;
+$cic_h->wait_for_completion;
+$cic_h->close;
 
 $result = $node->psql('postgres', q(SELECT bt_index_check('idx',true)));
 is($result, '0', 'bt_index_check after overlapping 2PC');
@@ -106,10 +124,9 @@ PREPARE TRANSACTION 'persists_forever';
 ));
 $node->restart;
 
-my $reindex_h = $node->background_psql('postgres');
-$reindex_h->query_until(
-	qr/start/, q(
-\echo start
+my $reindex_h = PostgreSQL::Test::Session->new(node => $node);
+$reindex_h->do_async(
+	q(
 DROP INDEX CONCURRENTLY idx;
 CREATE INDEX CONCURRENTLY idx ON tbl(i);
 DROP INDEX CONCURRENTLY ginidx;
@@ -117,7 +134,8 @@ CREATE INDEX CONCURRENTLY ginidx ON tbl USING gin(j);
 ));
 
 $node->safe_psql('postgres', "COMMIT PREPARED 'spans_restart'");
-$reindex_h->quit;
+$reindex_h->wait_for_completion;
+$reindex_h->close;
 $result = $node->psql('postgres', q(SELECT bt_index_check('idx',true)));
 is($result, '0', 'bt_index_check after 2PC and restart');
 $result = $node->psql('postgres', q(SELECT gin_index_check('ginidx')));

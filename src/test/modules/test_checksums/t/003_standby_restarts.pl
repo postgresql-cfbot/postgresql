@@ -7,6 +7,7 @@ use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
+use PostgreSQL::Test::Session;
 use Test::More;
 
 use FindBin;
@@ -255,11 +256,11 @@ $node_primary->wait_for_catchup($node_standby, 'replay');
 
 # Open a background psql connection on the primary and inject a barrier to
 # block progress on to keep the state from advancing past inprogress-on
-my $node_primary_bpsql = $node_primary->background_psql('postgres');
-$node_primary_bpsql->query_safe('CREATE TEMPORARY TABLE tt (a integer);');
+my $node_primary_bpsql = PostgreSQL::Test::Session->new(node => $node_primary);
+$node_primary_bpsql->do('CREATE TEMPORARY TABLE tt (a integer);');
 # Also open a background psql connection to the standby to make sure we have
 # an active backend during promotion.
-my $node_standby_bpsql = $node_standby->background_psql('postgres');
+my $node_standby_bpsql = PostgreSQL::Test::Session->new(node => $node_standby);
 
 # Start to enable checksums and wait until both primary and standby have moved
 # to the inprogress-on state.  Processing will block here as the temporary rel
@@ -281,7 +282,11 @@ $result = $node_standby_bpsql->query_safe("SHOW data_checksums;");
 is($result, 'off',
 	'ensure checksums are set to off after promotion during inprogress-on');
 
-$node_standby_bpsql->quit;
+# The primary's session was kept open only to hold the blocking temp table;
+# close it explicitly (its backend is already gone after the crash) so it is
+# not left to be torn down at global destruction.
+$node_primary_bpsql->close;
+$node_standby_bpsql->close;
 $node_standby->stop;
 
 done_testing();

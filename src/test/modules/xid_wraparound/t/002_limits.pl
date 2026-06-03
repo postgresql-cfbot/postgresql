@@ -10,6 +10,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 use Time::HiRes qw(usleep);
@@ -29,6 +30,8 @@ $node->append_conf(
 	'postgresql.conf', qq[
 autovacuum_naptime = 1s
 log_autovacuum_min_duration = 0
+log_connections = on
+log_statement = 'all'
 ]);
 $node->start;
 $node->safe_psql('postgres', 'CREATE EXTENSION xid_wraparound');
@@ -41,16 +44,12 @@ CREATE TABLE wraparoundtest(t text) WITH (autovacuum_enabled = off);
 INSERT INTO wraparoundtest VALUES ('start');
 ]);
 
-# Bump the query timeout to avoid false negatives on slow test systems.
-my $psql_timeout_secs = 4 * $PostgreSQL::Test::Utils::timeout_default;
-
 # Start a background session, which holds a transaction open, preventing
-# autovacuum from advancing relfrozenxid and datfrozenxid.
-my $background_psql = $node->background_psql(
-	'postgres',
-	on_error_stop => 0,
-	timeout => $psql_timeout_secs);
-$background_psql->query_safe(
+# autovacuum from advancing relfrozenxid and datfrozenxid.  Bump the query
+# timeout to avoid false negatives on slow test systems.
+my $background_session = PostgreSQL::Test::Session->new(node => $node,
+	timeout => 4 * $PostgreSQL::Test::Utils::timeout_default);
+$background_session->do(
 	qq[
 	BEGIN;
 	INSERT INTO wraparoundtest VALUES ('oldxact');
@@ -108,8 +107,8 @@ like(
 
 # Finish the old transaction, to allow vacuum freezing to advance
 # relfrozenxid and datfrozenxid again.
-$background_psql->query_safe(qq[COMMIT]);
-$background_psql->quit;
+$background_session->do(qq[COMMIT;]);
+$background_session->close;
 
 # VACUUM, to freeze the tables and advance datfrozenxid.
 #
@@ -122,8 +121,8 @@ $node->safe_psql('postgres', 'VACUUM');
 # the system-wide oldest-XID.
 $ret =
   $node->poll_query_until('postgres',
-	qq[INSERT INTO wraparoundtest VALUES ('after VACUUM')],
-	'INSERT 0 1');
+	qq[INSERT INTO wraparoundtest VALUES ('after VACUUM') RETURNING true],
+						 );
 
 # Check the table contents
 $ret = $node->safe_psql('postgres', qq[SELECT * from wraparoundtest]);

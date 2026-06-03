@@ -4,6 +4,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -768,17 +769,13 @@ $primary->safe_psql('postgres',
 	"SELECT pg_create_logical_replication_slot('test_slot', 'test_decoding', false, false, true);"
 );
 
-my $back_q = $primary->background_psql(
-	'postgres',
-	on_error_stop => 0,
-	timeout => $PostgreSQL::Test::Utils::timeout_default);
+my $back_q = PostgreSQL::Test::Session->new(node=>$primary);
 
 # pg_logical_slot_get_changes will be blocked until the standby catches up,
 # hence it needs to be executed in a background session.
 $offset = -s $primary->logfile;
-$back_q->query_until(
-	qr/logical_slot_get_changes/, q(
-   \echo logical_slot_get_changes
+$back_q->do_async(
+	q(
    SELECT pg_logical_slot_get_changes('test_slot', NULL, NULL);
 ));
 
@@ -796,7 +793,8 @@ $primary->reload;
 # Since there are no slots in synchronized_standby_slots, the function
 # pg_logical_slot_get_changes should now return, and the session can be
 # stopped.
-$back_q->quit;
+$back_q->wait_for_completion;
+$back_q->close;
 
 $primary->safe_psql('postgres',
 	"SELECT pg_drop_replication_slot('test_slot');");
@@ -1059,13 +1057,8 @@ $standby2->reload;
 # synchronization until the remote slot catches up.
 # The API will not return until this happens, to be able to make
 # further calls, call the API in a background process.
-my $h = $standby2->background_psql('postgres', on_error_stop => 0);
-
-$h->query_until(
-	qr/start/, q(
-	\echo start
-	SELECT pg_sync_replication_slots();
-	));
+my $h = PostgreSQL::Test::Session->new(node => $standby2);
+$h->do_async(q(SELECT pg_sync_replication_slots();));
 
 # Confirm that the slot sync is skipped due to the remote slot lagging behind
 $standby2->wait_for_log(
@@ -1104,6 +1097,7 @@ $standby2->wait_for_log(
 	qr/newly created replication slot \"lsub1_slot\" is sync-ready now/,
 	$log_offset);
 
-$h->quit;
+$h->wait_for_completion;
+$h->close;
 
 done_testing();

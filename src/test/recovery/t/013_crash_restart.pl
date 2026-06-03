@@ -149,7 +149,7 @@ ok( pump_until(
 $monitor->finish;
 
 # Wait till server restarts
-is($node->poll_query_until('postgres', undef, ''),
+is($node->poll_until_connection('postgres'),
 	"1", "reconnected after SIGQUIT");
 
 
@@ -238,7 +238,7 @@ ok( pump_until(
 $monitor->finish;
 
 # Wait till server restarts
-is($node->poll_query_until('postgres', undef, ''),
+is($node->poll_until_connection('postgres'),
 	"1", "reconnected after SIGKILL");
 
 # Make sure the committed rows survived, in-progress ones not

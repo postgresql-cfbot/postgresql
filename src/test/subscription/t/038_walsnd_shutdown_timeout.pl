@@ -164,16 +164,20 @@ $node_standby->append_conf(
 	hot_standby_feedback = on));
 $node_standby->start;
 
+# Wait for replication to start
+$node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (-1);");
+$node_standby->poll_query_until('postgres',
+ "SELECT EXISTS (SELECT 1 FROM test_tab WHERE id = -1)");
+$node_subscriber->poll_query_until('postgres',
+ "SELECT EXISTS (SELECT 1 FROM test_tab WHERE id = -1)");
+
 # Cause the logical apply worker to block on a lock by running conflicting
 # transactions on the publisher and subscriber, stalling logical replication.
-$node_publisher->wait_for_catchup('test_sub');
 $sub_session->query_safe("BEGIN; LOCK TABLE test_tab IN EXCLUSIVE MODE;");
-$node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (-1); ");
+$node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (-2); ");
 
 # Cause the standby's walreceiver to be blocked with SIGSTOP signal,
 # stalling physical replication.
-$node_standby->poll_query_until('postgres',
-	"SELECT EXISTS(SELECT 1 FROM pg_stat_wal_receiver)");
 my $receiverpid = $node_standby->safe_psql('postgres',
 	"SELECT pid FROM pg_stat_wal_receiver");
 like($receiverpid, qr/^[0-9]+$/, "have walreceiver pid $receiverpid");
@@ -184,7 +188,7 @@ $log_offset = -s $node_publisher->logfile;
 # Verify that the walsender exits due to wal_sender_shutdown_timeout
 # even when both physical and logical replication are stalled.
 # wal_sender_shutdown_timeout.
-$node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (-2);");
+$node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (-3);");
 $node_publisher->stop('fast');
 ok( $node_publisher->log_contains(
 		qr/WARNING: .* terminating walsender process due to replication shutdown timeout/,

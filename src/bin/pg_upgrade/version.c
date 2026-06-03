@@ -30,7 +30,8 @@ jsonb_9_4_check_applicable(ClusterInfo *cluster)
 
 /*
  * Older servers can't support newer protocol versions, so their connection
- * strings will need to lock max_protocol_version to 3.0.
+ * strings will need to lock max_protocol_version to 3.0 and disable prepared
+ * statement deallocation reports.
  */
 bool
 protocol_negotiation_supported(const ClusterInfo *cluster)

@@ -112,6 +112,7 @@ use Socket;
 use Test::More;
 use PostgreSQL::Test::Utils          ();
 use PostgreSQL::Test::BackgroundPsql ();
+use PostgreSQL::Test::Session;
 use Text::ParseWords                 qw(shellwords);
 use Time::HiRes                      qw(usleep);
 use Scalar::Util                     qw(blessed);
@@ -2070,20 +2071,66 @@ sub safe_psql
 
 	my ($stdout, $stderr);
 
-	my $ret = $self->psql(
-		$dbname, $sql,
-		%params,
-		stdout => \$stdout,
-		stderr => \$stderr,
-		on_error_die => 1,
-		on_error_stop => 1);
-
-	# psql can emit stderr from NOTICEs etc
-	if ($stderr ne "")
+	# For now only use a Session object for single statement sql without any
+	# special params.  The "$sql !~ /\\bind|;.*\w/s" test conservatively hands
+	# anything that looks like multiple statements or a psql backslash command
+	# to psql; a false match (e.g. a ";" inside a string literal) just takes
+	# the slower psql path, which is harmless.
+	#
+	# Also fall back to psql when PGOPTIONS is set: it injects connection-time
+	# GUCs that the caller is relying on (e.g. compute_query_id for
+	# auto_explain), and a libpq loaded via FFI does not reliably see a
+	# PGOPTIONS that was set in %ENV at run time on Windows (separate C runtime
+	# from perl), whereas a spawned psql inherits it.
+	if (   $sql =~ /\w/
+		&& $sql !~ /\\bind|;.*\w/s
+		&& !scalar(keys(%params))
+		&& !$ENV{PGOPTIONS})
 	{
-		print "#### Begin standard error\n";
-		print $stderr;
-		print "\n#### End standard error\n";
+
+		my $session = PostgreSQL::Test::Session->new(node=> $self,
+													 dbname => $dbname,
+													 nofail => 1);
+		defined $session
+		  or die "connection failure: "
+		  . ($PostgreSQL::Test::Session::connect_error // '')
+		  . "while running '$sql'";
+		my $res = $session->query($sql);
+		my $status = $res->{status};
+		$stdout = $res->{psqlout} // "";
+		$stderr = $res->{error_message} // "";
+		die "error: status = $status stderr: '$stderr'\nwhile running '$sql'"
+		  if ($status != 1 && $status != 2); # COMMAND_OK or COMMAND_TUPLES
+
+		# Like the psql path below, surface any NOTICE/WARNING output so it
+		# shows up in the test log.
+		my $notices = $session->get_notices_str();
+		if ($notices ne "")
+		{
+			print "#### Begin standard error\n";
+			print $notices;
+			print "\n#### End standard error\n";
+		}
+	}
+	else
+	{
+		# diag "safe_psql call has params or multiple statements";
+
+		my $ret = $self->psql(
+			$dbname, $sql,
+			%params,
+			stdout => \$stdout,
+			stderr => \$stderr,
+			on_error_die => 1,
+			on_error_stop => 1);
+
+		# psql can emit stderr from NOTICEs etc
+		if ($stderr ne "")
+		{
+			print "#### Begin standard error\n";
+			print $stderr;
+			print "\n#### End standard error\n";
+		}
 	}
 
 	return $stdout;
@@ -2186,6 +2233,9 @@ sub psql
 	my ($self, $dbname, $sql, %params) = @_;
 
 	local %ENV = $self->_get_env();
+
+	# uncomment to get a count of calls to psql
+	# note("counting psql");
 
 	my $stdout = $params{stdout};
 	my $stderr = $params{stderr};
@@ -2760,32 +2810,33 @@ sub poll_query_until
 {
 	my ($self, $dbname, $query, $expected) = @_;
 
-	local %ENV = $self->_get_env();
-
 	$expected = 't' unless defined($expected);    # default value
 
-	my $cmd = [
-		$self->installed_command('psql'), '--no-psqlrc',
-		'--no-align', '--tuples-only',
-		'--dbname' => $self->connstr($dbname)
-	];
-	my ($stdout, $stderr);
 	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
 	my $attempts = 0;
 
+	my $session;
+	my $query_value = '';
+
 	while ($attempts < $max_attempts)
 	{
-		my $result = IPC::Run::run $cmd,
-		  '<' => \$query,
-		  '>' => \$stdout,
-		  '2>' => \$stderr;
+		# (Re)establish the connection if we don't have a live one.  Like the
+		# psql-per-attempt implementation this replaced, this tolerates a
+		# server that is not yet accepting connections, and one whose
+		# connection drops mid-poll (e.g. across a restart or a
+		# recovery-conflict backend termination).
+		$session = PostgreSQL::Test::Session->new(node => $self,
+												  dbname => $dbname,
+												  nofail => 1)
+		  unless defined $session && $session->connected;
 
-		chomp($stdout);
-		chomp($stderr);
-
-		if ($stdout eq $expected && $stderr eq '')
+		if (defined $session)
 		{
-			return 1;
+			my $result = $session->query($query);
+			$query_value = ($result->{psqlout} // "");
+			return 1
+			  if !exists $result->{error_message}
+			  && $query_value eq $expected;
 		}
 
 		# Wait 0.1 second before retrying.
@@ -2801,9 +2852,41 @@ $query
 expecting this output:
 $expected
 last actual query output:
-$stdout
-with stderr:
-$stderr);
+$query_value
+);
+	return 0;
+}
+
+=pod
+
+=item $node->poll_until_connection($dbname)
+
+Try to connect repeatedly, until it we succeed.
+Times out after $PostgreSQL::Test::Utils::timeout_default seconds.
+Returns 1 if successful, 0 if timed out.
+
+=cut
+
+sub poll_until_connection
+{
+	my ($self, $dbname) = @_;
+
+	my $max_attempts = 10 * $PostgreSQL::Test::Utils::timeout_default;
+	my $attempts = 0;
+
+	while ($attempts < $max_attempts)
+	{
+		my $session = PostgreSQL::Test::Session->new(node => $self,
+													 dbname => $dbname,
+													 nofail => 1);
+		return 1 if $session;
+
+		# Wait 0.1 second before retrying.
+		usleep(100_000);
+
+		$attempts++;
+	}
+
 	return 0;
 }
 

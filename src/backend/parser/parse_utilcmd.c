@@ -40,12 +40,14 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_statistic_ext.h"
+#include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
+#include "commands/trigger.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -1316,7 +1318,8 @@ transformTableLikeClause(CreateStmtContext *cxt, TableLikeClause *table_like_cla
 		 CREATE_TABLE_LIKE_GENERATED |
 		 CREATE_TABLE_LIKE_CONSTRAINTS |
 		 CREATE_TABLE_LIKE_INDEXES |
-		 CREATE_TABLE_LIKE_STATISTICS))
+		 CREATE_TABLE_LIKE_STATISTICS |
+		 CREATE_TABLE_LIKE_TRIGGERS))
 	{
 		table_like_clause->relationOid = RelationGetRelid(relation);
 		cxt->likeclauses = lappend(cxt->likeclauses, table_like_clause);
@@ -1618,6 +1621,55 @@ expandTableLikeClause(RangeVar *heapRel, TableLikeClause *table_like_clause)
 		}
 
 		list_free(parent_extstats);
+	}
+
+	/* Process triggers if required */
+	if ((table_like_clause->options & CREATE_TABLE_LIKE_TRIGGERS) &&
+		(relation->trigdesc != NULL) &&
+		(relation->rd_rel->relkind == RELKIND_RELATION ||
+		 relation->rd_rel->relkind == RELKIND_PARTITIONED_TABLE ||
+		 relation->rd_rel->relkind == RELKIND_FOREIGN_TABLE))
+	{
+		bool		include_comments;
+
+		include_comments = (table_like_clause->options & CREATE_TABLE_LIKE_COMMENTS);
+
+		for (int nt = 0; nt < relation->trigdesc->numtriggers; nt++)
+		{
+			CreateTrigStmt *trig_stmt;
+			Trigger    *trig = relation->trigdesc->triggers + nt;
+			Oid			trigoid = trig->tgoid;
+
+			/* We do not copy internal trigger to the new table */
+			if (trig->tgisinternal)
+				continue;
+
+			/*
+			 * Foreign table cannot have constraint trigger or triggers with
+			 * transition table
+			 */
+			if (childrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
+			{
+				if (OidIsValid(trig->tgconstraint))
+					continue;
+
+				if (trig->tgoldtable != NULL || trig->tgnewtable != NULL)
+					continue;
+			}
+
+			trig_stmt = generateClonedTriggerStmt(heapRel, trigoid,
+												  relation, attmap);
+
+			/* Copy comment on trigger, if requested */
+			if (include_comments)
+			{
+				comment = GetComment(trigoid, TriggerRelationId, 0);
+
+				/* We make use of CreateTrigStmt's trigcomment option */
+				trig_stmt->trigcomment = comment;
+			}
+			result = lappend(result, trig_stmt);
+		}
 	}
 
 	/* Done with child rel */

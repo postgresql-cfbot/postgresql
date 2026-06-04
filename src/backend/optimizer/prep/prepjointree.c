@@ -90,6 +90,10 @@ typedef struct reduce_outer_joins_pass1_state
 	bool		contains_outer; /* does subtree contain outer join(s)? */
 	Relids		nullable_rels;	/* base relids that are nullable within this
 								 * subtree */
+	List	   *safe_quals;		/* quals (implicit-AND) that are applied to
+								 * every output row of this subtree, and so
+								 * can be used to prove non-nullability of its
+								 * outputs */
 	List	   *sub_states;		/* List of states for subtree components */
 } reduce_outer_joins_pass1_state;
 
@@ -3232,15 +3236,16 @@ flatten_simple_union_all(PlannerInfo *root)
  *
  * Another transformation we apply here is to recognize cases like
  *		SELECT ... FROM a LEFT JOIN b ON (a.x = b.y) WHERE b.z IS NULL;
- * If we can prove that b.z must be non-null for any matching row, either
- * because the join clause is strict for b.z and b.z happens to be the join
- * key b.y, or because b.z is defined NOT NULL by table constraints and is
- * not nullable due to lower-level outer joins, then only null-extended rows
- * could pass the upper WHERE, and we can conclude that what the query is
- * really specifying is an anti-semijoin.  We change the join type from
- * JOIN_LEFT to JOIN_ANTI.  The IS NULL clause then becomes redundant, and
- * must be removed to prevent bogus selectivity calculations, but we leave
- * it to distribute_qual_to_rels to get rid of such clauses.
+ * If we can prove that b.z must be non-null for any matching row, because
+ * the join clause is strict for b.z and b.z happens to be the join key b.y,
+ * because a strict qual within b's own subtree forces b.z non-null, or
+ * because b.z is defined NOT NULL by table constraints and is not nullable
+ * due to lower-level outer joins, then only null-extended rows could pass
+ * the upper WHERE, and we can conclude that what the query is really
+ * specifying is an anti-semijoin.  We change the join type from JOIN_LEFT
+ * to JOIN_ANTI.  The IS NULL clause then becomes redundant, and must be
+ * removed to prevent bogus selectivity calculations, but we leave it to
+ * distribute_qual_to_rels to get rid of such clauses.
  *
  * Also, we get rid of JOIN_RIGHT cases by flipping them around to become
  * JOIN_LEFT.  This saves some code here and in some later planner routines;
@@ -3335,6 +3340,7 @@ reduce_outer_joins_pass1(Node *jtnode)
 	result->relids = NULL;
 	result->contains_outer = false;
 	result->nullable_rels = NULL;
+	result->safe_quals = NIL;
 	result->sub_states = NIL;
 
 	if (jtnode == NULL)
@@ -3360,8 +3366,15 @@ reduce_outer_joins_pass1(Node *jtnode)
 			result->contains_outer |= sub_state->contains_outer;
 			result->nullable_rels = bms_add_members(result->nullable_rels,
 													sub_state->nullable_rels);
+			/* All of a FROM item's safe quals are safe at this level too */
+			result->safe_quals = list_concat(result->safe_quals,
+											 sub_state->safe_quals);
 			result->sub_states = lappend(result->sub_states, sub_state);
 		}
+		/* ... and so are this FromExpr's own WHERE quals */
+		if (f->quals)
+			result->safe_quals = list_concat(result->safe_quals,
+											 (List *) f->quals);
 	}
 	else if (IsA(jtnode, JoinExpr))
 	{
@@ -3379,7 +3392,13 @@ reduce_outer_joins_pass1(Node *jtnode)
 		/* Store children's states for pass 2 */
 		result->sub_states = list_make2(left_state, right_state);
 
-		/* Collect outer join information */
+		/*
+		 * Collect outer join information.  For safe_quals we gather the quals
+		 * that hold for every output row of the subtree: at an inner or semi
+		 * join that's both children's safe quals plus our own ON quals, while
+		 * at an outer join we must exclude its ON quals and its nullable
+		 * side(s).
+		 */
 		switch (j->jointype)
 		{
 			case JOIN_INNER:
@@ -3389,6 +3408,12 @@ reduce_outer_joins_pass1(Node *jtnode)
 					right_state->contains_outer;
 				result->nullable_rels = bms_union(left_state->nullable_rels,
 												  right_state->nullable_rels);
+				/* Both children's quals, plus our own ON quals, are safe */
+				result->safe_quals = list_concat_copy(left_state->safe_quals,
+													  right_state->safe_quals);
+				if (j->quals)
+					result->safe_quals = list_concat(result->safe_quals,
+													 (List *) j->quals);
 				break;
 			case JOIN_LEFT:
 			case JOIN_ANTI:
@@ -3396,18 +3421,21 @@ reduce_outer_joins_pass1(Node *jtnode)
 				result->contains_outer = true;
 				result->nullable_rels = bms_union(left_state->nullable_rels,
 												  right_state->relids);
+				result->safe_quals = left_state->safe_quals;
 				break;
 			case JOIN_RIGHT:
 				/* LHS is nullable; RHS keeps existing status */
 				result->contains_outer = true;
 				result->nullable_rels = bms_union(left_state->relids,
 												  right_state->nullable_rels);
+				result->safe_quals = right_state->safe_quals;
 				break;
 			case JOIN_FULL:
 				/* Both sides are nullable */
 				result->contains_outer = true;
 				result->nullable_rels = bms_union(left_state->relids,
 												  right_state->relids);
+				/* safe_quals stays NIL */
 				break;
 			default:
 				elog(ERROR, "unrecognized join type: %d",
@@ -3566,21 +3594,29 @@ reduce_outer_joins_pass2(Node *jtnode,
 		/*
 		 * See if we can reduce JOIN_LEFT to JOIN_ANTI.  This is the case if
 		 * any var from the RHS was forced null by higher qual levels, but is
-		 * known to be non-nullable.  We detect this either by seeing if the
-		 * join's own quals are strict for the var, or by checking if the var
-		 * is defined NOT NULL by table constraints (being careful to exclude
-		 * vars that are nullable due to lower-level outer joins).  In either
-		 * case, the only way the higher qual clause's requirement for NULL
-		 * can be met is if the join fails to match, producing a null-extended
-		 * row.  Thus, we can treat this as an anti-join.
+		 * known to be non-nullable in any matching row.  We can prove that in
+		 * any of these ways: the join's own quals are strict for the var;
+		 * strict quals applied within the RHS subtree prove it; or the var is
+		 * defined NOT NULL by table constraints (being careful to exclude
+		 * vars that are nullable due to lower-level outer joins).  In each
+		 * such case, the only way the higher qual clause's requirement for
+		 * NULL can be met is if the join fails to match, producing a
+		 * null-extended row.  Thus, we can treat this as an anti-join.
 		 */
 		if (jointype == JOIN_LEFT && forced_null_vars != NIL)
 		{
 			List	   *nonnullable_vars;
+			List	   *all_quals;
 			Bitmapset  *overlap;
 
-			/* Find Vars in j->quals that must be non-null in joined rows */
-			nonnullable_vars = find_nonnullable_vars(j->quals);
+			/*
+			 * Find Vars that must be non-null in matching rows: those made
+			 * non-null by this join's own quals, plus those the RHS subtree
+			 * guarantees non-null in all of its output rows.
+			 */
+			all_quals = list_concat_copy(right_state->safe_quals,
+										 (List *) j->quals);
+			nonnullable_vars = find_nonnullable_vars((Node *) all_quals);
 
 			/*
 			 * It's not sufficient to check whether nonnullable_vars and

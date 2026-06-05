@@ -336,7 +336,12 @@ typedef struct spgConfigOut
       <structfield>longValuesOK</structfield> should be set true only when the
       <structfield>attType</structfield> is of variable length and the operator
       class is capable of segmenting long values by repeated suffixing
-      (see <xref linkend="spgist-limits"/>).
+      (see <xref linkend="spgist-limits"/>).  Setting it true disables
+      index-only scans for the operator class, even if
+      <structfield>canReturnData</structfield> is also set: reconstructing the
+      indexed value can then require materializing an arbitrarily large prefix
+      (a long value is stored by spreading its prefix across many inner tuples),
+      so such queries are executed as regular index scans instead.
      </para>
 
      <para>

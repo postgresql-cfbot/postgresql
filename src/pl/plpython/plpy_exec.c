@@ -22,22 +22,13 @@
 #include "utils/fmgrprotos.h"
 #include "utils/rel.h"
 
-/* saved state for a set-returning function */
-typedef struct PLySRFState
-{
-	PyObject   *iter;			/* Python iterator producing results */
-	PLySavedArgs *savedargs;	/* function argument values */
-	MemoryContextCallback callback; /* for releasing refcounts when done */
-} PLySRFState;
-
 static PyObject *PLy_function_build_args(FunctionCallInfo fcinfo, PLyProcedure *proc);
-static PLySavedArgs *PLy_function_save_args(PLyProcedure *proc);
+static PLySavedArgs *PLy_function_save_args(MemoryContext mctx, PLyProcedure *proc);
 static void PLy_function_restore_args(PLyProcedure *proc, PLySavedArgs *savedargs);
-static void PLy_function_drop_args(PLySavedArgs *savedargs);
 static void PLy_global_args_push(PLyProcedure *proc);
 static void PLy_global_args_pop(PLyProcedure *proc);
-static void plpython_srf_cleanup_callback(void *arg);
 static void plpython_return_error_callback(void *arg);
+static void ShutdownPLyFunction(Datum arg);
 
 static PyObject *PLy_trigger_build_args(FunctionCallInfo fcinfo, PLyProcedure *proc,
 										HeapTuple *rv);
@@ -51,14 +42,15 @@ static void PLy_abort_open_subtransactions(int save_subxact_level);
 
 /* function subhandler */
 Datum
-PLy_exec_function(FunctionCallInfo fcinfo, PLyProcedure *proc)
+PLy_exec_function(FunctionCallInfo fcinfo, PLyProcedureCache *pcache)
 {
+	PLyProcedure *proc = pcache->proc;
 	bool		is_setof = proc->is_setof;
 	Datum		rv;
 	PyObject   *volatile plargs = NULL;
 	PyObject   *volatile plrv = NULL;
-	FuncCallContext *volatile funcctx = NULL;
 	PLySRFState *volatile srfstate = NULL;
+	ReturnSetInfo *rsi = NULL;
 	ErrorContextCallback plerrcontext;
 
 	/*
@@ -72,25 +64,42 @@ PLy_exec_function(FunctionCallInfo fcinfo, PLyProcedure *proc)
 	{
 		if (is_setof)
 		{
-			/* First Call setup */
-			if (SRF_IS_FIRSTCALL())
+			rsi = (ReturnSetInfo *) fcinfo->resultinfo;
+
+			/*
+			 * PL/Python returns a set in ValuePerCall mode, so the handler is
+			 * invoked once per result row.  Across those calls we keep the
+			 * iterator and saved arguments in the per-call-site cache
+			 * (pcache->srfstate); a NULL srfstate means this is the first
+			 * call of a new iteration, so we set that state up here.
+			 */
+			if (pcache->srfstate == NULL)
 			{
-				funcctx = SRF_FIRSTCALL_INIT();
-				srfstate = (PLySRFState *)
-					MemoryContextAllocZero(funcctx->multi_call_memory_ctx,
-										   sizeof(PLySRFState));
-				/* Immediately register cleanup callback */
-				srfstate->callback.func = plpython_srf_cleanup_callback;
-				srfstate->callback.arg = srfstate;
-				MemoryContextRegisterResetCallback(funcctx->multi_call_memory_ctx,
-												   &srfstate->callback);
-				funcctx->user_fctx = srfstate;
+				if (!rsi || !IsA(rsi, ReturnSetInfo) ||
+					(rsi->allowedModes & SFRM_ValuePerCall) == 0)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("unsupported set function return mode"),
+							 errdetail("PL/Python set-returning functions only support returning one value per call.")));
+				}
+				rsi->returnMode = SFRM_ValuePerCall;
+
+				pcache->srfstate = (PLySRFState *)
+					MemoryContextAllocZero(pcache->fcontext, sizeof(PLySRFState));
+
+				/*
+				 * Register a shutdown callback so that the iterator state is
+				 * released if execution is abandoned before the iterator is
+				 * exhausted. We unregister it again on normal completion.
+				 */
+				RegisterExprContextCallback(rsi->econtext,
+											ShutdownPLyFunction,
+											PointerGetDatum(pcache));
+				pcache->shutdown_reg = true;
 			}
-			/* Every call setup */
-			funcctx = SRF_PERCALL_SETUP();
-			Assert(funcctx != NULL);
-			srfstate = (PLySRFState *) funcctx->user_fctx;
-			Assert(srfstate != NULL);
+
+			srfstate = pcache->srfstate;
 		}
 
 		if (srfstate == NULL || srfstate->iter == NULL)
@@ -127,20 +136,7 @@ PLy_exec_function(FunctionCallInfo fcinfo, PLyProcedure *proc)
 		{
 			if (srfstate->iter == NULL)
 			{
-				/* first time -- do checks and setup */
-				ReturnSetInfo *rsi = (ReturnSetInfo *) fcinfo->resultinfo;
-
-				if (!rsi || !IsA(rsi, ReturnSetInfo) ||
-					(rsi->allowedModes & SFRM_ValuePerCall) == 0)
-				{
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("unsupported set function return mode"),
-							 errdetail("PL/Python set-returning functions only support returning one value per call.")));
-				}
-				rsi->returnMode = SFRM_ValuePerCall;
-
-				/* Make iterator out of returned object */
+				/* first time -- make iterator out of returned object */
 				srfstate->iter = PyObject_GetIter(plrv);
 
 				Py_DECREF(plrv);
@@ -177,7 +173,7 @@ PLy_exec_function(FunctionCallInfo fcinfo, PLyProcedure *proc)
 				 * this again each time in case the iterator is changing those
 				 * values.
 				 */
-				srfstate->savedargs = PLy_function_save_args(proc);
+				srfstate->savedargs = PLy_function_save_args(pcache->fcontext, proc);
 			}
 		}
 
@@ -260,21 +256,16 @@ PLy_exec_function(FunctionCallInfo fcinfo, PLyProcedure *proc)
 		Py_XDECREF(plrv);
 
 		/*
-		 * If there was an error within a SRF, the iterator might not have
-		 * been exhausted yet.  Clear it so the next invocation of the
-		 * function will start the iteration again.  (This code is probably
-		 * unnecessary now; plpython_srf_cleanup_callback should take care of
-		 * cleanup.  But it doesn't hurt anything to do it here.)
+		 * If the error was thrown within a SRF, clean up its state here. This
+		 * is the only cleanup hook that runs for an error thrown during the
+		 * function's own execution: ShutdownPLyFunction is not called on
+		 * abort, and the memory-context callback only fires once the
+		 * FmgrInfo's context is torn down.  Releasing the Python references
+		 * promptly avoids leaking them if teardown is delayed, and clearing
+		 * pcache->srfstate ensures a reused cache won't mistake this for an
+		 * iteration still in progress.
 		 */
-		if (srfstate)
-		{
-			Py_XDECREF(srfstate->iter);
-			srfstate->iter = NULL;
-			/* And drop any saved args; we won't need them */
-			if (srfstate->savedargs)
-				PLy_function_drop_args(srfstate->savedargs);
-			srfstate->savedargs = NULL;
-		}
+		PLy_function_cleanup_srfstate(pcache);
 
 		PG_RE_THROW();
 	}
@@ -290,20 +281,57 @@ PLy_exec_function(FunctionCallInfo fcinfo, PLyProcedure *proc)
 
 	if (srfstate)
 	{
-		/* We're in a SRF, exit appropriately */
+		/* We're in a SRF, signal via rsi->isDone */
 		if (srfstate->iter == NULL)
 		{
-			/* Iterator exhausted, so we're done */
-			SRF_RETURN_DONE(funcctx);
+			/*
+			 * Iterator exhausted.  Unregister the shutdown callback since
+			 * we're done normally, then clean up srfstate.  (srfstate->iter
+			 * is already NULL here, so the cleanup just frees the struct.)
+			 */
+			if (pcache->shutdown_reg)
+			{
+				UnregisterExprContextCallback(rsi->econtext,
+											  ShutdownPLyFunction,
+											  PointerGetDatum(pcache));
+				pcache->shutdown_reg = false;
+			}
+			PLy_function_cleanup_srfstate(pcache);
+
+			rsi->isDone = ExprEndResult;
+			fcinfo->isnull = true;
+			return (Datum) 0;
 		}
-		else if (fcinfo->isnull)
-			SRF_RETURN_NEXT_NULL(funcctx);
 		else
-			SRF_RETURN_NEXT(funcctx, rv);
+		{
+			rsi->isDone = ExprMultipleResult;
+			return rv;
+		}
 	}
 
 	/* Plain function, just return the Datum value (possibly null) */
 	return rv;
+}
+
+/*
+ * ExprContext shutdown callback, invoked when the expression context that ran
+ * a SRF is rescanned or freed at end of query.  This handles in-query
+ * cancellation, e.g. a LIMIT that stops fetching before the iterator is
+ * exhausted, or a rescan of the owning plan node.
+ *
+ * NB: this is not called during an error abort (see ShutdownExprContext()).
+ * The companion memory-context callback RemovePLyProcedureCache() covers that
+ * case, since memory-context reset/delete callbacks do run during abort.
+ */
+static void
+ShutdownPLyFunction(Datum arg)
+{
+	PLyProcedureCache *pcache = (PLyProcedureCache *) DatumGetPointer(arg);
+
+	/* execUtils.c will deregister the callback after we return */
+	pcache->shutdown_reg = false;
+
+	PLy_function_cleanup_srfstate(pcache);
 }
 
 /*
@@ -536,13 +564,13 @@ PLy_function_build_args(FunctionCallInfo fcinfo, PLyProcedure *proc)
  * available via the proc's globals :-( ... but we're stuck with that now.
  */
 static PLySavedArgs *
-PLy_function_save_args(PLyProcedure *proc)
+PLy_function_save_args(MemoryContext mctx, PLyProcedure *proc)
 {
 	PLySavedArgs *result;
 
 	/* saved args are always allocated in procedure's context */
 	result = (PLySavedArgs *)
-		MemoryContextAllocZero(proc->mcxt,
+		MemoryContextAllocZero(mctx,
 							   offsetof(PLySavedArgs, namedargs) +
 							   proc->nargs * sizeof(PyObject *));
 	result->nargs = proc->nargs;
@@ -619,28 +647,6 @@ PLy_function_restore_args(PLyProcedure *proc, PLySavedArgs *savedargs)
 }
 
 /*
- * Free a PLySavedArgs struct without restoring the values.
- */
-static void
-PLy_function_drop_args(PLySavedArgs *savedargs)
-{
-	int			i;
-
-	/* Drop references for named args */
-	for (i = 0; i < savedargs->nargs; i++)
-	{
-		Py_XDECREF(savedargs->namedargs[i]);
-	}
-
-	/* Drop refs to the "args" and "TD" objects, too */
-	Py_XDECREF(savedargs->args);
-	Py_XDECREF(savedargs->td);
-
-	/* And free the PLySavedArgs struct */
-	pfree(savedargs);
-}
-
-/*
  * Save away any existing arguments for the given procedure, so that we can
  * install new values for a recursive call.  This should be invoked before
  * doing PLy_function_build_args() or PLy_trigger_build_args().
@@ -659,7 +665,7 @@ PLy_global_args_push(PLyProcedure *proc)
 		PLySavedArgs *node;
 
 		/* Build a struct containing current argument values */
-		node = PLy_function_save_args(proc);
+		node = PLy_function_save_args(proc->mcxt, proc);
 
 		/*
 		 * Push the saved argument values into the procedure's stack.  Once we
@@ -711,25 +717,6 @@ PLy_global_args_pop(PLyProcedure *proc)
 		 * overwrite those dict entries.  So don't bother with that.
 		 */
 	}
-}
-
-/*
- * Memory context deletion callback for cleaning up a PLySRFState.
- * We need this in case execution of the SRF is terminated early,
- * due to error or the caller simply not running it to completion.
- */
-static void
-plpython_srf_cleanup_callback(void *arg)
-{
-	PLySRFState *srfstate = (PLySRFState *) arg;
-
-	/* Release refcount on the iter, if we still have one */
-	Py_XDECREF(srfstate->iter);
-	srfstate->iter = NULL;
-	/* And drop any saved args; we won't need them */
-	if (srfstate->savedargs)
-		PLy_function_drop_args(srfstate->savedargs);
-	srfstate->savedargs = NULL;
 }
 
 static void

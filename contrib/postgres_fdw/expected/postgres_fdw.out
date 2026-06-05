@@ -10092,16 +10092,16 @@ CREATE TABLE import_source.t4_part2 PARTITION OF import_source.t4
 CREATE SCHEMA import_dest1;
 IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest1;
 \det+ import_dest1.*
-                                     List of foreign tables
-    Schema    | Table |  Server  |                   FDW options                   | Description 
---------------+-------+----------+-------------------------------------------------+-------------
- import_dest1 | t1    | loopback | (schema_name 'import_source', table_name 't1')  | 
- import_dest1 | t2    | loopback | (schema_name 'import_source', table_name 't2')  | 
- import_dest1 | t3    | loopback | (schema_name 'import_source', table_name 't3')  | 
- import_dest1 | t4    | loopback | (schema_name 'import_source', table_name 't4')  | 
- import_dest1 | x 4   | loopback | (schema_name 'import_source', table_name 'x 4') | 
- import_dest1 | x 5   | loopback | (schema_name 'import_source', table_name 'x 5') | 
- import_dest1 | x 6   | loopback | (schema_name 'import_source', table_name 'x 6') | 
+                                                  List of foreign tables
+    Schema    | Table |  Server  |                                FDW options                                | Description 
+--------------+-------+----------+---------------------------------------------------------------------------+-------------
+ import_dest1 | t1    | loopback | (schema_name 'import_source', table_name 't1')                            | 
+ import_dest1 | t2    | loopback | (schema_name 'import_source', table_name 't2')                            | 
+ import_dest1 | t3    | loopback | (schema_name 'import_source', table_name 't3')                            | 
+ import_dest1 | t4    | loopback | (schema_name 'import_source', table_name 't4', remotely_inherited 'true') | 
+ import_dest1 | x 4   | loopback | (schema_name 'import_source', table_name 'x 4')                           | 
+ import_dest1 | x 5   | loopback | (schema_name 'import_source', table_name 'x 5')                           | 
+ import_dest1 | x 6   | loopback | (schema_name 'import_source', table_name 'x 6')                           | 
 (7 rows)
 
 \d import_dest1.*
@@ -10135,7 +10135,7 @@ FDW options: (schema_name 'import_source', table_name 't3')
 --------+---------+-----------+----------+---------+--------------------
  c1     | integer |           |          |         | (column_name 'c1')
 Server: loopback
-FDW options: (schema_name 'import_source', table_name 't4')
+FDW options: (schema_name 'import_source', table_name 't4', remotely_inherited 'true')
 
                            Foreign table "import_dest1.x 4"
  Column |         Type          | Collation | Nullable | Default |     FDW options     
@@ -10165,16 +10165,16 @@ CREATE SCHEMA import_dest2;
 IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest2
   OPTIONS (import_default 'true');
 \det+ import_dest2.*
-                                     List of foreign tables
-    Schema    | Table |  Server  |                   FDW options                   | Description 
---------------+-------+----------+-------------------------------------------------+-------------
- import_dest2 | t1    | loopback | (schema_name 'import_source', table_name 't1')  | 
- import_dest2 | t2    | loopback | (schema_name 'import_source', table_name 't2')  | 
- import_dest2 | t3    | loopback | (schema_name 'import_source', table_name 't3')  | 
- import_dest2 | t4    | loopback | (schema_name 'import_source', table_name 't4')  | 
- import_dest2 | x 4   | loopback | (schema_name 'import_source', table_name 'x 4') | 
- import_dest2 | x 5   | loopback | (schema_name 'import_source', table_name 'x 5') | 
- import_dest2 | x 6   | loopback | (schema_name 'import_source', table_name 'x 6') | 
+                                                  List of foreign tables
+    Schema    | Table |  Server  |                                FDW options                                | Description 
+--------------+-------+----------+---------------------------------------------------------------------------+-------------
+ import_dest2 | t1    | loopback | (schema_name 'import_source', table_name 't1')                            | 
+ import_dest2 | t2    | loopback | (schema_name 'import_source', table_name 't2')                            | 
+ import_dest2 | t3    | loopback | (schema_name 'import_source', table_name 't3')                            | 
+ import_dest2 | t4    | loopback | (schema_name 'import_source', table_name 't4', remotely_inherited 'true') | 
+ import_dest2 | x 4   | loopback | (schema_name 'import_source', table_name 'x 4')                           | 
+ import_dest2 | x 5   | loopback | (schema_name 'import_source', table_name 'x 5')                           | 
+ import_dest2 | x 6   | loopback | (schema_name 'import_source', table_name 'x 6')                           | 
 (7 rows)
 
 \d import_dest2.*
@@ -10208,7 +10208,7 @@ FDW options: (schema_name 'import_source', table_name 't3')
 --------+---------+-----------+----------+---------+--------------------
  c1     | integer |           |          |         | (column_name 'c1')
 Server: loopback
-FDW options: (schema_name 'import_source', table_name 't4')
+FDW options: (schema_name 'import_source', table_name 't4', remotely_inherited 'true')
 
                            Foreign table "import_dest2.x 4"
  Column |         Type          | Collation | Nullable | Default |     FDW options     
@@ -10237,16 +10237,16 @@ CREATE SCHEMA import_dest3;
 IMPORT FOREIGN SCHEMA import_source FROM SERVER loopback INTO import_dest3
   OPTIONS (import_collate 'false', import_generated 'false', import_not_null 'false');
 \det+ import_dest3.*
-                                     List of foreign tables
-    Schema    | Table |  Server  |                   FDW options                   | Description 
---------------+-------+----------+-------------------------------------------------+-------------
- import_dest3 | t1    | loopback | (schema_name 'import_source', table_name 't1')  | 
- import_dest3 | t2    | loopback | (schema_name 'import_source', table_name 't2')  | 
- import_dest3 | t3    | loopback | (schema_name 'import_source', table_name 't3')  | 
- import_dest3 | t4    | loopback | (schema_name 'import_source', table_name 't4')  | 
- import_dest3 | x 4   | loopback | (schema_name 'import_source', table_name 'x 4') | 
- import_dest3 | x 5   | loopback | (schema_name 'import_source', table_name 'x 5') | 
- import_dest3 | x 6   | loopback | (schema_name 'import_source', table_name 'x 6') | 
+                                                  List of foreign tables
+    Schema    | Table |  Server  |                                FDW options                                | Description 
+--------------+-------+----------+---------------------------------------------------------------------------+-------------
+ import_dest3 | t1    | loopback | (schema_name 'import_source', table_name 't1')                            | 
+ import_dest3 | t2    | loopback | (schema_name 'import_source', table_name 't2')                            | 
+ import_dest3 | t3    | loopback | (schema_name 'import_source', table_name 't3')                            | 
+ import_dest3 | t4    | loopback | (schema_name 'import_source', table_name 't4', remotely_inherited 'true') | 
+ import_dest3 | x 4   | loopback | (schema_name 'import_source', table_name 'x 4')                           | 
+ import_dest3 | x 5   | loopback | (schema_name 'import_source', table_name 'x 5')                           | 
+ import_dest3 | x 6   | loopback | (schema_name 'import_source', table_name 'x 6')                           | 
 (7 rows)
 
 \d import_dest3.*
@@ -10280,7 +10280,7 @@ FDW options: (schema_name 'import_source', table_name 't3')
 --------+---------+-----------+----------+---------+--------------------
  c1     | integer |           |          |         | (column_name 'c1')
 Server: loopback
-FDW options: (schema_name 'import_source', table_name 't4')
+FDW options: (schema_name 'import_source', table_name 't4', remotely_inherited 'true')
 
                            Foreign table "import_dest3.x 4"
  Column |         Type          | Collation | Nullable | Default |     FDW options     
@@ -10320,16 +10320,16 @@ IMPORT FOREIGN SCHEMA import_source LIMIT TO (t1, nonesuch, t4_part)
 IMPORT FOREIGN SCHEMA import_source EXCEPT (t1, "x 4", nonesuch, t4_part)
   FROM SERVER loopback INTO import_dest4;
 \det+ import_dest4.*
-                                        List of foreign tables
-    Schema    |  Table  |  Server  |                     FDW options                     | Description 
---------------+---------+----------+-----------------------------------------------------+-------------
- import_dest4 | t1      | loopback | (schema_name 'import_source', table_name 't1')      | 
- import_dest4 | t2      | loopback | (schema_name 'import_source', table_name 't2')      | 
- import_dest4 | t3      | loopback | (schema_name 'import_source', table_name 't3')      | 
- import_dest4 | t4      | loopback | (schema_name 'import_source', table_name 't4')      | 
- import_dest4 | t4_part | loopback | (schema_name 'import_source', table_name 't4_part') | 
- import_dest4 | x 5     | loopback | (schema_name 'import_source', table_name 'x 5')     | 
- import_dest4 | x 6     | loopback | (schema_name 'import_source', table_name 'x 6')     | 
+                                                   List of foreign tables
+    Schema    |  Table  |  Server  |                                FDW options                                | Description 
+--------------+---------+----------+---------------------------------------------------------------------------+-------------
+ import_dest4 | t1      | loopback | (schema_name 'import_source', table_name 't1')                            | 
+ import_dest4 | t2      | loopback | (schema_name 'import_source', table_name 't2')                            | 
+ import_dest4 | t3      | loopback | (schema_name 'import_source', table_name 't3')                            | 
+ import_dest4 | t4      | loopback | (schema_name 'import_source', table_name 't4', remotely_inherited 'true') | 
+ import_dest4 | t4_part | loopback | (schema_name 'import_source', table_name 't4_part')                       | 
+ import_dest4 | x 5     | loopback | (schema_name 'import_source', table_name 'x 5')                           | 
+ import_dest4 | x 6     | loopback | (schema_name 'import_source', table_name 'x 6')                           | 
 (7 rows)
 
 -- Assorted error cases
@@ -10363,6 +10363,49 @@ QUERY:  CREATE FOREIGN TABLE t5 (
 OPTIONS (schema_name 'import_source', table_name 't5');
 CONTEXT:  importing foreign table "t5"
 ROLLBACK;
+-- Check that the remotely_inherited option is set when needed.
+CREATE TABLE import_source.inhchild (c1 int);
+CREATE TABLE import_source.t6 (c1 int);
+ALTER TABLE import_source.inhchild INHERIT import_source.t6;
+CREATE TABLE import_source.t7 (c1 int);
+ALTER TABLE import_source.inhchild INHERIT import_source.t7;
+ALTER TABLE import_source.inhchild NO INHERIT import_source.t7;
+CREATE FOREIGN TABLE import_source.t8 (c1 int) SERVER loopback
+  OPTIONS (remotely_inherited 'true');
+CREATE SCHEMA import_dest6;
+IMPORT FOREIGN SCHEMA import_source LIMIT TO (t6, t7, t8)
+  FROM SERVER loopback INTO import_dest6;
+\det+ import_dest6.*
+                                                  List of foreign tables
+    Schema    | Table |  Server  |                                FDW options                                | Description 
+--------------+-------+----------+---------------------------------------------------------------------------+-------------
+ import_dest6 | t6    | loopback | (schema_name 'import_source', table_name 't6', remotely_inherited 'true') | 
+ import_dest6 | t7    | loopback | (schema_name 'import_source', table_name 't7')                            | 
+ import_dest6 | t8    | loopback | (schema_name 'import_source', table_name 't8', remotely_inherited 'true') | 
+(3 rows)
+
+\d import_dest6.*
+                    Foreign table "import_dest6.t6"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ c1     | integer |           |          |         | (column_name 'c1')
+Server: loopback
+FDW options: (schema_name 'import_source', table_name 't6', remotely_inherited 'true')
+
+                    Foreign table "import_dest6.t7"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ c1     | integer |           |          |         | (column_name 'c1')
+Server: loopback
+FDW options: (schema_name 'import_source', table_name 't7')
+
+                    Foreign table "import_dest6.t8"
+ Column |  Type   | Collation | Nullable | Default |    FDW options     
+--------+---------+-----------+----------+---------+--------------------
+ c1     | integer |           |          |         | (column_name 'c1')
+Server: loopback
+FDW options: (schema_name 'import_source', table_name 't8', remotely_inherited 'true')
+
 BEGIN;
 CREATE SERVER fetch101 FOREIGN DATA WRAPPER postgres_fdw OPTIONS( fetch_size '101' );
 SELECT count(*)

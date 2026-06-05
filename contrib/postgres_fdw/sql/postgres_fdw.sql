@@ -3275,8 +3275,23 @@ IMPORT FOREIGN SCHEMA import_source LIMIT TO (t5)
 
 ROLLBACK;
 
-BEGIN;
+-- Check that the remotely_inherited option is set when needed.
+CREATE TABLE import_source.inhchild (c1 int);
+CREATE TABLE import_source.t6 (c1 int);
+ALTER TABLE import_source.inhchild INHERIT import_source.t6;
+CREATE TABLE import_source.t7 (c1 int);
+ALTER TABLE import_source.inhchild INHERIT import_source.t7;
+ALTER TABLE import_source.inhchild NO INHERIT import_source.t7;
+CREATE FOREIGN TABLE import_source.t8 (c1 int) SERVER loopback
+  OPTIONS (remotely_inherited 'true');
 
+CREATE SCHEMA import_dest6;
+IMPORT FOREIGN SCHEMA import_source LIMIT TO (t6, t7, t8)
+  FROM SERVER loopback INTO import_dest6;
+\det+ import_dest6.*
+\d import_dest6.*
+
+BEGIN;
 
 CREATE SERVER fetch101 FOREIGN DATA WRAPPER postgres_fdw OPTIONS( fetch_size '101' );
 

@@ -1778,6 +1778,34 @@ DROP FOREIGN TABLE remt2;
 DROP TABLE loct1;
 DROP TABLE loct2;
 
+-- Test UPDATE/DELETE on remotely-inherited foreign tables
+CREATE TABLE ritest_pt (a int, b int) PARTITION BY LIST(a);
+CREATE TABLE ritest_pt_p1 PARTITION OF ritest_pt FOR VALUES IN (1);
+CREATE TABLE ritest_pt_p2 PARTITION OF ritest_pt FOR VALUES IN (2);
+CREATE FOREIGN TABLE ritest_ft (a int, b int) SERVER loopback OPTIONS (table_name 'ritest_pt', remotely_inherited 'true');
+INSERT INTO ritest_ft VALUES (1, 10), (2, 20);
+
+-- Use random() so that UPDATE/DELETE is not pushed down to the remote
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ritest_ft SET b = 100 WHERE a = 1 AND random() < 1.0;
+UPDATE ritest_ft SET b = 100 WHERE a = 1 AND random() < 1.0;   -- should fail
+
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ritest_ft SET b = 300 WHERE b = 30 AND random() < 1.0;
+UPDATE ritest_ft SET b = 300 WHERE b = 30 AND random() < 1.0;  -- should work
+
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM ritest_ft WHERE a = 1 AND random() < 1.0;
+DELETE FROM ritest_ft WHERE a = 1 AND random() < 1.0;          -- should fail
+
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM ritest_ft WHERE b = 30 AND random() < 1.0;
+DELETE FROM ritest_ft WHERE b = 30 AND random() < 1.0;         -- should work
+
+-- Cleanup
+DROP FOREIGN TABLE ritest_ft;
+DROP TABLE ritest_pt;
+
 -- ===================================================================
 -- test check constraints
 -- ===================================================================

@@ -207,6 +207,9 @@ typedef struct PgFdwModifyState
 	int			p_nums;			/* number of parameters to transmit */
 	FmgrInfo   *p_flinfo;		/* output conversion functions for them */
 
+	/* update/delete operation stuff */
+	bool		resultRelValid;	/* have we checked the result relation? */
+
 	/* batch operation stuff */
 	int			num_slots;		/* number of slots to insert */
 
@@ -654,6 +657,7 @@ static TupleTableSlot **execute_foreign_modify(EState *estate,
 											   TupleTableSlot **planSlots,
 											   int *numSlots);
 static void prepare_foreign_modify(PgFdwModifyState *fmstate);
+static void check_result_rel(PgFdwModifyState *fmstate, CmdType operation);
 static const char **convert_prep_stmt_params(PgFdwModifyState *fmstate,
 											 ItemPointer tupleid,
 											 TupleTableSlot **slots,
@@ -4237,6 +4241,9 @@ create_foreign_modify(EState *estate,
 	{
 		Assert(subplan != NULL);
 
+		/* Initialize valid flag for the result relation */
+		fmstate->resultRelValid = false;
+
 		/* Find the ctid resjunk column in the subplan's result */
 		fmstate->ctidAttno = ExecFindJunkAttributeInTlist(subplan->targetlist,
 														  "ctid");
@@ -4308,6 +4315,11 @@ execute_foreign_modify(EState *estate,
 	Assert(operation == CMD_INSERT ||
 		   operation == CMD_UPDATE ||
 		   operation == CMD_DELETE);
+
+	/* For UPDATE/DELETE, check the result relation if not yet done. */
+	if ((operation == CMD_UPDATE || operation == CMD_DELETE) &&
+		!fmstate->resultRelValid)
+		check_result_rel(fmstate, operation);
 
 	/* First, process a pending asynchronous request, if any. */
 	if (fmstate->conn_state->pendingAreq)
@@ -4447,6 +4459,52 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 
 	/* This action shows that the prepare has been done. */
 	fmstate->p_name = p_name;
+}
+
+/*
+ * check_result_rel
+ *		Check if the target foreign table is safe to update/delete via
+ *		ExecForeignUpdate/ExecForeignDelete.
+ */
+static void
+check_result_rel(PgFdwModifyState *fmstate, CmdType operation)
+{
+	bool		remotely_inherited;
+	ForeignTable *table;
+	ListCell   *lc;
+
+	Assert(!fmstate->resultRelValid);
+	Assert(operation == CMD_UPDATE || operation == CMD_DELETE);
+
+	/*
+	 * By default, any postgres_fdw foreign table isn't assumed
+	 * remotely-inherited.
+	 */
+	remotely_inherited = false;
+
+	table = GetForeignTable(RelationGetRelid(fmstate->rel));
+
+	foreach(lc, table->options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "remotely_inherited") == 0)
+			remotely_inherited = defGetBoolean(def);
+	}
+
+	/*
+	 * It's unsafe to update/delete remotely-inherited foreign tables via
+	 * ExecForeignUpdate/ExecForeignDelete.
+	 */
+	if (remotely_inherited)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg((operation == CMD_UPDATE) ?
+						"cannot update remotely-inherited foreign table \"%s\"" :
+						"cannot delete from remotely-inherited foreign table \"%s\"",
+						RelationGetRelationName(fmstate->rel))));
+
+	fmstate->resultRelValid = true;
 }
 
 /*

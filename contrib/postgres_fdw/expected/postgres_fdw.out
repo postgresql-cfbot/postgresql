@@ -7197,6 +7197,70 @@ RESET enable_material;
 DROP FOREIGN TABLE remt2;
 DROP TABLE loct1;
 DROP TABLE loct2;
+-- Test UPDATE/DELETE on remotely-inherited foreign tables
+CREATE TABLE ritest_pt (a int, b int) PARTITION BY LIST(a);
+CREATE TABLE ritest_pt_p1 PARTITION OF ritest_pt FOR VALUES IN (1);
+CREATE TABLE ritest_pt_p2 PARTITION OF ritest_pt FOR VALUES IN (2);
+CREATE FOREIGN TABLE ritest_ft (a int, b int) SERVER loopback OPTIONS (table_name 'ritest_pt', remotely_inherited 'true');
+INSERT INTO ritest_ft VALUES (1, 10), (2, 20);
+-- Use random() so that UPDATE/DELETE is not pushed down to the remote
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ritest_ft SET b = 100 WHERE a = 1 AND random() < 1.0;
+                                       QUERY PLAN                                       
+----------------------------------------------------------------------------------------
+ Update on public.ritest_ft
+   Remote SQL: UPDATE public.ritest_pt SET b = $2 WHERE ctid = $1
+   ->  Foreign Scan on public.ritest_ft
+         Output: 100, ctid, ritest_ft.*
+         Filter: (random() < '1'::double precision)
+         Remote SQL: SELECT a, b, ctid FROM public.ritest_pt WHERE ((a = 1)) FOR UPDATE
+(6 rows)
+
+UPDATE ritest_ft SET b = 100 WHERE a = 1 AND random() < 1.0;   -- should fail
+ERROR:  cannot update remotely-inherited foreign table "ritest_ft"
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ritest_ft SET b = 300 WHERE b = 30 AND random() < 1.0;
+                                       QUERY PLAN                                        
+-----------------------------------------------------------------------------------------
+ Update on public.ritest_ft
+   Remote SQL: UPDATE public.ritest_pt SET b = $2 WHERE ctid = $1
+   ->  Foreign Scan on public.ritest_ft
+         Output: 300, ctid, ritest_ft.*
+         Filter: (random() < '1'::double precision)
+         Remote SQL: SELECT a, b, ctid FROM public.ritest_pt WHERE ((b = 30)) FOR UPDATE
+(6 rows)
+
+UPDATE ritest_ft SET b = 300 WHERE b = 30 AND random() < 1.0;  -- should work
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM ritest_ft WHERE a = 1 AND random() < 1.0;
+                                    QUERY PLAN                                    
+----------------------------------------------------------------------------------
+ Delete on public.ritest_ft
+   Remote SQL: DELETE FROM public.ritest_pt WHERE ctid = $1
+   ->  Foreign Scan on public.ritest_ft
+         Output: ctid
+         Filter: (random() < '1'::double precision)
+         Remote SQL: SELECT ctid FROM public.ritest_pt WHERE ((a = 1)) FOR UPDATE
+(6 rows)
+
+DELETE FROM ritest_ft WHERE a = 1 AND random() < 1.0;          -- should fail
+ERROR:  cannot delete from remotely-inherited foreign table "ritest_ft"
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM ritest_ft WHERE b = 30 AND random() < 1.0;
+                                    QUERY PLAN                                     
+-----------------------------------------------------------------------------------
+ Delete on public.ritest_ft
+   Remote SQL: DELETE FROM public.ritest_pt WHERE ctid = $1
+   ->  Foreign Scan on public.ritest_ft
+         Output: ctid
+         Filter: (random() < '1'::double precision)
+         Remote SQL: SELECT ctid FROM public.ritest_pt WHERE ((b = 30)) FOR UPDATE
+(6 rows)
+
+DELETE FROM ritest_ft WHERE b = 30 AND random() < 1.0;         -- should work
+-- Cleanup
+DROP FOREIGN TABLE ritest_ft;
+DROP TABLE ritest_pt;
 -- ===================================================================
 -- test check constraints
 -- ===================================================================

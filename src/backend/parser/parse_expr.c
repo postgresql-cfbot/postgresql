@@ -4199,10 +4199,21 @@ transformJsonParseArg(ParseState *pstate, Node *jsexpr, JsonFormat *format,
 
 		if (*exprtype == UNKNOWNOID || typcategory == TYPCATEGORY_STRING)
 		{
-			expr = coerce_to_target_type(pstate, expr, *exprtype,
+			Node	   *coerced_expr;
+
+			coerced_expr = coerce_to_target_type(pstate, expr, *exprtype,
 										 TEXTOID, -1,
 										 COERCION_IMPLICIT,
 										 COERCE_IMPLICIT_CAST, -1);
+			if (coerced_expr == NULL)
+				ereport(ERROR,
+						(errcode(ERRCODE_CANNOT_COERCE),
+						 errmsg("cannot cast type %s to %s",
+								format_type_be(*exprtype),
+								format_type_be(TEXTOID)),
+						 parser_errposition(pstate, exprLocation(expr))));
+
+			expr = coerced_expr;
 			*exprtype = TEXTOID;
 		}
 

@@ -37,4 +37,14 @@ command_checks_all(
 	],
 	'ecpg with errors and warnings');
 
+command_fails_like(
+	[ 'ecpg', 't/duplicate_descriptor_header_get.pgc' ],
+	qr/syntax error at or near ","/,
+	'ecpg rejects duplicate GET DESCRIPTOR header items');
+
+command_fails_like(
+	[ 'ecpg', 't/duplicate_descriptor_header_set.pgc' ],
+	qr/syntax error at or near ","/,
+	'ecpg rejects duplicate SET DESCRIPTOR header items');
+
 done_testing();

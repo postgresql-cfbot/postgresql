@@ -736,3 +736,505 @@ ALTER INDEX btree_part_idx ALTER COLUMN id SET (n_distinct=100);
 ERROR:  ALTER action ALTER COLUMN ... SET cannot be performed on relation "btree_part_idx"
 DETAIL:  This operation is not supported for partitioned indexes.
 DROP TABLE btree_part;
+--
+-- Test btree skip scan support for types that currently lack test coverage
+-- (exercises btXXXskipsupport, XXX_decrement, XXX_increment functions)
+--
+SET enable_seqscan = off;
+SET enable_bitmapscan = off;
+-- int8: btint8skipsupport, int8_decrement, int8_increment
+CREATE TABLE skip_int8 (a int8, b int4);
+INSERT INTO skip_int8 SELECT i / 10, i % 10 FROM generate_series(1, 100) i;
+CREATE INDEX ON skip_int8 (a, b);
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_int8 WHERE b = 5 ORDER BY a;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Index Only Scan using skip_int8_a_b_idx on skip_int8
+   Index Cond: (b = 5)
+(2 rows)
+
+SELECT a, b FROM skip_int8 WHERE b = 5 ORDER BY a;
+ a | b 
+---+---
+ 0 | 5
+ 1 | 5
+ 2 | 5
+ 3 | 5
+ 4 | 5
+ 5 | 5
+ 6 | 5
+ 7 | 5
+ 8 | 5
+ 9 | 5
+(10 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_int8 WHERE b = 5 ORDER BY a DESC;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Index Only Scan Backward using skip_int8_a_b_idx on skip_int8
+   Index Cond: (b = 5)
+(2 rows)
+
+SELECT a, b FROM skip_int8 WHERE b = 5 ORDER BY a DESC;
+ a | b 
+---+---
+ 9 | 5
+ 8 | 5
+ 7 | 5
+ 6 | 5
+ 5 | 5
+ 4 | 5
+ 3 | 5
+ 2 | 5
+ 1 | 5
+ 0 | 5
+(10 rows)
+
+DROP TABLE skip_int8;
+-- oid8: btoid8skipsupport, oid8_decrement, oid8_increment
+CREATE TABLE skip_oid8 (a oid8, b int4);
+INSERT INTO skip_oid8 SELECT (i / 10)::int8::oid8, i % 10 FROM generate_series(1, 100) i;
+CREATE INDEX ON skip_oid8 (a, b);
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_oid8 WHERE b = 5 ORDER BY a;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Index Only Scan using skip_oid8_a_b_idx on skip_oid8
+   Index Cond: (b = 5)
+(2 rows)
+
+SELECT a, b FROM skip_oid8 WHERE b = 5 ORDER BY a;
+ a | b 
+---+---
+ 0 | 5
+ 1 | 5
+ 2 | 5
+ 3 | 5
+ 4 | 5
+ 5 | 5
+ 6 | 5
+ 7 | 5
+ 8 | 5
+ 9 | 5
+(10 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_oid8 WHERE b = 5 ORDER BY a DESC;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Index Only Scan Backward using skip_oid8_a_b_idx on skip_oid8
+   Index Cond: (b = 5)
+(2 rows)
+
+SELECT a, b FROM skip_oid8 WHERE b = 5 ORDER BY a DESC;
+ a | b 
+---+---
+ 9 | 5
+ 8 | 5
+ 7 | 5
+ 6 | 5
+ 5 | 5
+ 4 | 5
+ 3 | 5
+ 2 | 5
+ 1 | 5
+ 0 | 5
+(10 rows)
+
+DROP TABLE skip_oid8;
+-- bool: btboolskipsupport, bool_decrement, bool_increment
+CREATE TABLE skip_bool (a bool, b int4);
+INSERT INTO skip_bool SELECT (i % 2 = 0), i FROM generate_series(1, 100) i;
+CREATE INDEX ON skip_bool (a, b);
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_bool WHERE b = 50 ORDER BY a;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Index Only Scan using skip_bool_a_b_idx on skip_bool
+   Index Cond: (b = 50)
+(2 rows)
+
+SELECT a, b FROM skip_bool WHERE b = 50 ORDER BY a;
+ a | b  
+---+----
+ t | 50
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_bool WHERE b = 50 ORDER BY a DESC;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Index Only Scan Backward using skip_bool_a_b_idx on skip_bool
+   Index Cond: (b = 50)
+(2 rows)
+
+SELECT a, b FROM skip_bool WHERE b = 50 ORDER BY a DESC;
+ a | b  
+---+----
+ t | 50
+(1 row)
+
+DROP TABLE skip_bool;
+-- "char": btcharskipsupport, char_decrement, char_increment
+CREATE TABLE skip_char (a "char", b int4);
+INSERT INTO skip_char SELECT chr(ascii('a') + (i % 26))::"char", i FROM generate_series(1, 100) i;
+CREATE INDEX ON skip_char (a, b);
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_char WHERE b = 50 ORDER BY a;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Index Only Scan using skip_char_a_b_idx on skip_char
+   Index Cond: (b = 50)
+(2 rows)
+
+SELECT a, b FROM skip_char WHERE b = 50 ORDER BY a;
+ a | b  
+---+----
+ y | 50
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_char WHERE b = 50 ORDER BY a DESC;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Index Only Scan Backward using skip_char_a_b_idx on skip_char
+   Index Cond: (b = 50)
+(2 rows)
+
+SELECT a, b FROM skip_char WHERE b = 50 ORDER BY a DESC;
+ a | b  
+---+----
+ y | 50
+(1 row)
+
+DROP TABLE skip_char;
+-- oid: btoidskipsupport, oid_decrement, oid_increment
+CREATE TABLE skip_oid (a oid, b int4);
+INSERT INTO skip_oid SELECT (i / 10)::oid, i % 10 FROM generate_series(1, 100) i;
+CREATE INDEX ON skip_oid (a, b);
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_oid WHERE b = 5 ORDER BY a DESC;
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Index Only Scan Backward using skip_oid_a_b_idx on skip_oid
+   Index Cond: (b = 5)
+(2 rows)
+
+SELECT a, b FROM skip_oid WHERE b = 5 ORDER BY a DESC;
+ a | b 
+---+---
+ 9 | 5
+ 8 | 5
+ 7 | 5
+ 6 | 5
+ 5 | 5
+ 4 | 5
+ 3 | 5
+ 2 | 5
+ 1 | 5
+ 0 | 5
+(10 rows)
+
+DROP TABLE skip_oid;
+-- int2: btint2skipsupport, int2_decrement, int2_increment
+CREATE TABLE skip_int2 (a int2, b int4);
+INSERT INTO skip_int2 SELECT (i / 10)::int2, i % 10 FROM generate_series(1, 100) i;
+CREATE INDEX ON skip_int2 (a, b);
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_int2 WHERE b = 5 ORDER BY a;
+                      QUERY PLAN                      
+------------------------------------------------------
+ Index Only Scan using skip_int2_a_b_idx on skip_int2
+   Index Cond: (b = 5)
+(2 rows)
+
+SELECT a, b FROM skip_int2 WHERE b = 5 ORDER BY a;
+ a | b 
+---+---
+ 0 | 5
+ 1 | 5
+ 2 | 5
+ 3 | 5
+ 4 | 5
+ 5 | 5
+ 6 | 5
+ 7 | 5
+ 8 | 5
+ 9 | 5
+(10 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT a, b FROM skip_int2 WHERE b = 5 ORDER BY a DESC;
+                          QUERY PLAN                           
+---------------------------------------------------------------
+ Index Only Scan Backward using skip_int2_a_b_idx on skip_int2
+   Index Cond: (b = 5)
+(2 rows)
+
+SELECT a, b FROM skip_int2 WHERE b = 5 ORDER BY a DESC;
+ a | b 
+---+---
+ 9 | 5
+ 8 | 5
+ 7 | 5
+ 6 | 5
+ 5 | 5
+ 4 | 5
+ 3 | 5
+ 2 | 5
+ 1 | 5
+ 0 | 5
+(10 rows)
+
+DROP TABLE skip_int2;
+--
+-- Boundary cases: exercise the *_increment overflow / *_decrement
+-- underflow branches in skip-scan helpers.
+--
+-- int2 boundaries (int2_increment overflow at INT2_MAX, int2_decrement
+-- underflow at INT2_MIN)
+CREATE TABLE skip_int2_max (a int2, b int4);
+INSERT INTO skip_int2_max VALUES (32765::int2, 1), (32766::int2, 1), (32767::int2, 1);
+CREATE INDEX ON skip_int2_max (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_int2_max WHERE b = 1 ORDER BY a;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Index Only Scan using skip_int2_max_a_b_idx on skip_int2_max
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_int2_max WHERE b = 1 ORDER BY a;
+   a   | b 
+-------+---
+ 32765 | 1
+ 32766 | 1
+ 32767 | 1
+(3 rows)
+
+DROP TABLE skip_int2_max;
+CREATE TABLE skip_int2_min (a int2, b int4);
+INSERT INTO skip_int2_min VALUES ((-32766)::int2, 1), ((-32767)::int2, 1), ((-32768)::int2, 1);
+CREATE INDEX ON skip_int2_min (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_int2_min WHERE b = 1 ORDER BY a DESC;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Index Only Scan Backward using skip_int2_min_a_b_idx on skip_int2_min
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_int2_min WHERE b = 1 ORDER BY a DESC;
+   a    | b 
+--------+---
+ -32766 | 1
+ -32767 | 1
+ -32768 | 1
+(3 rows)
+
+DROP TABLE skip_int2_min;
+-- int4 boundaries
+CREATE TABLE skip_int4_max (a int4, b int4);
+INSERT INTO skip_int4_max VALUES (2147483645, 1), (2147483646, 1), (2147483647, 1);
+CREATE INDEX ON skip_int4_max (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_int4_max WHERE b = 1 ORDER BY a;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Index Only Scan using skip_int4_max_a_b_idx on skip_int4_max
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_int4_max WHERE b = 1 ORDER BY a;
+     a      | b 
+------------+---
+ 2147483645 | 1
+ 2147483646 | 1
+ 2147483647 | 1
+(3 rows)
+
+DROP TABLE skip_int4_max;
+CREATE TABLE skip_int4_min (a int4, b int4);
+INSERT INTO skip_int4_min VALUES (-2147483646, 1), (-2147483647, 1), (-2147483648, 1);
+CREATE INDEX ON skip_int4_min (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_int4_min WHERE b = 1 ORDER BY a DESC;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Index Only Scan Backward using skip_int4_min_a_b_idx on skip_int4_min
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_int4_min WHERE b = 1 ORDER BY a DESC;
+      a      | b 
+-------------+---
+ -2147483646 | 1
+ -2147483647 | 1
+ -2147483648 | 1
+(3 rows)
+
+DROP TABLE skip_int4_min;
+-- int8 boundaries
+CREATE TABLE skip_int8_max (a int8, b int4);
+INSERT INTO skip_int8_max VALUES (9223372036854775805::int8, 1),
+                                  (9223372036854775806::int8, 1),
+                                  (9223372036854775807::int8, 1);
+CREATE INDEX ON skip_int8_max (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_int8_max WHERE b = 1 ORDER BY a;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Index Only Scan using skip_int8_max_a_b_idx on skip_int8_max
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_int8_max WHERE b = 1 ORDER BY a;
+          a          | b 
+---------------------+---
+ 9223372036854775805 | 1
+ 9223372036854775806 | 1
+ 9223372036854775807 | 1
+(3 rows)
+
+DROP TABLE skip_int8_max;
+CREATE TABLE skip_int8_min (a int8, b int4);
+INSERT INTO skip_int8_min VALUES ((-9223372036854775806)::int8, 1),
+                                  ((-9223372036854775807)::int8, 1),
+                                  ((-9223372036854775808)::int8, 1);
+CREATE INDEX ON skip_int8_min (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_int8_min WHERE b = 1 ORDER BY a DESC;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Index Only Scan Backward using skip_int8_min_a_b_idx on skip_int8_min
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_int8_min WHERE b = 1 ORDER BY a DESC;
+          a           | b 
+----------------------+---
+ -9223372036854775806 | 1
+ -9223372036854775807 | 1
+ -9223372036854775808 | 1
+(3 rows)
+
+DROP TABLE skip_int8_min;
+-- oid boundaries (oid_increment overflow at OID_MAX, oid_decrement underflow at 0)
+CREATE TABLE skip_oid_max (a oid, b int4);
+INSERT INTO skip_oid_max VALUES (4294967293::oid, 1), (4294967294::oid, 1), (4294967295::oid, 1);
+CREATE INDEX ON skip_oid_max (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_oid_max WHERE b = 1 ORDER BY a;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ Index Only Scan using skip_oid_max_a_b_idx on skip_oid_max
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_oid_max WHERE b = 1 ORDER BY a;
+     a      | b 
+------------+---
+ 4294967293 | 1
+ 4294967294 | 1
+ 4294967295 | 1
+(3 rows)
+
+DROP TABLE skip_oid_max;
+CREATE TABLE skip_oid_min (a oid, b int4);
+INSERT INTO skip_oid_min VALUES (0::oid, 1), (1::oid, 1), (2::oid, 1);
+CREATE INDEX ON skip_oid_min (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_oid_min WHERE b = 1 ORDER BY a DESC;
+                             QUERY PLAN                              
+---------------------------------------------------------------------
+ Index Only Scan Backward using skip_oid_min_a_b_idx on skip_oid_min
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_oid_min WHERE b = 1 ORDER BY a DESC;
+ a | b 
+---+---
+ 2 | 1
+ 1 | 1
+ 0 | 1
+(3 rows)
+
+DROP TABLE skip_oid_min;
+-- oid8 boundaries (uint64 range)
+CREATE TABLE skip_oid8_max (a oid8, b int4);
+INSERT INTO skip_oid8_max VALUES ('18446744073709551613'::oid8, 1),
+                                  ('18446744073709551614'::oid8, 1),
+                                  ('18446744073709551615'::oid8, 1);
+CREATE INDEX ON skip_oid8_max (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_oid8_max WHERE b = 1 ORDER BY a;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Index Only Scan using skip_oid8_max_a_b_idx on skip_oid8_max
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_oid8_max WHERE b = 1 ORDER BY a;
+          a           | b 
+----------------------+---
+ 18446744073709551613 | 1
+ 18446744073709551614 | 1
+ 18446744073709551615 | 1
+(3 rows)
+
+DROP TABLE skip_oid8_max;
+CREATE TABLE skip_oid8_min (a oid8, b int4);
+INSERT INTO skip_oid8_min VALUES (0::oid8, 1), (1::oid8, 1), (2::oid8, 1);
+CREATE INDEX ON skip_oid8_min (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_oid8_min WHERE b = 1 ORDER BY a DESC;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Index Only Scan Backward using skip_oid8_min_a_b_idx on skip_oid8_min
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_oid8_min WHERE b = 1 ORDER BY a DESC;
+ a | b 
+---+---
+ 2 | 1
+ 1 | 1
+ 0 | 1
+(3 rows)
+
+DROP TABLE skip_oid8_min;
+-- "char" boundaries (uint8 byte range: char_increment overflow at 255,
+-- char_decrement underflow at 0).  "char" input cast accepts -128..127 for
+-- a signed int1, so bytes 254 and 255 are written as -2 and -1.
+CREATE TABLE skip_char_max (a "char", b int4);
+INSERT INTO skip_char_max VALUES ((-3)::"char", 1), ((-2)::"char", 1), ((-1)::"char", 1);
+CREATE INDEX ON skip_char_max (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_char_max WHERE b = 1 ORDER BY a;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Index Only Scan using skip_char_max_a_b_idx on skip_char_max
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_char_max WHERE b = 1 ORDER BY a;
+  a   | b 
+------+---
+ \375 | 1
+ \376 | 1
+ \377 | 1
+(3 rows)
+
+DROP TABLE skip_char_max;
+CREATE TABLE skip_char_min (a "char", b int4);
+INSERT INTO skip_char_min VALUES (0::"char", 1), (1::"char", 1), (2::"char", 1);
+CREATE INDEX ON skip_char_min (a, b);
+EXPLAIN (COSTS OFF) SELECT a, b FROM skip_char_min WHERE b = 1 ORDER BY a DESC;
+                              QUERY PLAN                               
+-----------------------------------------------------------------------
+ Index Only Scan Backward using skip_char_min_a_b_idx on skip_char_min
+   Index Cond: (b = 1)
+(2 rows)
+
+SELECT a, b FROM skip_char_min WHERE b = 1 ORDER BY a DESC;
+  a   | b 
+------+---
+ \x02 | 1
+ \x01 | 1
+      | 1
+(3 rows)
+
+DROP TABLE skip_char_min;
+RESET enable_seqscan;
+RESET enable_bitmapscan;

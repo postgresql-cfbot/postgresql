@@ -31,7 +31,7 @@ pgstat_fetch_stat_lock(void)
 }
 
 /*
- * Simpler wrapper of pgstat_lock_flush_cb()
+ * Simple wrapper around pgstat_lock_flush_cb()
  */
 void
 pgstat_lock_flush(bool nowait)
@@ -44,7 +44,7 @@ pgstat_lock_flush(bool nowait)
  *
  * If no stats have been recorded, this function returns false.
  *
- * If nowait is true, this function returns true if the lock could not be
+ * If nowait is true, this function returns true if the stats lock could not be
  * acquired. Otherwise, return false.
  */
 bool

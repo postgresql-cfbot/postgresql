@@ -1496,7 +1496,7 @@ FormPartitionKeyDatum(PartitionDispatch pd,
 		Datum		datum;
 		bool		isNull;
 
-		if (keycol != 0)
+		if (keycol != 0 && !attrIsVirtualGenerated(pd->reldesc, keycol))
 		{
 			/* Plain column; get the value directly from the heap tuple */
 			datum = slot_getattr(slot, keycol, &isNull);

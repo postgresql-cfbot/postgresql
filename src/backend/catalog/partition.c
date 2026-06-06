@@ -274,6 +274,9 @@ has_partition_attrs(Relation rel, Bitmapset *attnums, bool *used_in_expr)
 
 		if (partattno != 0)
 		{
+			if (attrIsVirtualGenerated(rel, partattno))
+				partexprs_item = lnext(partexprs, partexprs_item);
+
 			if (bms_is_member(partattno - FirstLowInvalidHeapAttributeNumber,
 							  attnums))
 			{

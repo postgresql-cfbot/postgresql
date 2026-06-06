@@ -557,12 +557,135 @@ ALTER TABLE gtest_parent ALTER COLUMN f3 SET EXPRESSION AS (f2 * 2);
 SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1, 2, 3;
 -- we leave these tables around for purposes of testing dump/reload/upgrade
 
--- generated columns in partition key (not allowed)
-CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE (f3);
-CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE ((f3));
-CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE ((f3 * 3));
+-- generated columns in partition key
+-- wholerow with virtual generated column is not supported
 CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE ((gtest_part_key));
 CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE ((gtest_part_key is not null));
+
+-- unique/primary key interact with partition key will fail
+CREATE TABLE gtest_idxpart (a int PRIMARY KEY, b int GENERATED ALWAYS AS (a) ) PARTITION BY RANGE ((b));
+CREATE TABLE gtest_idxpart (a int UNIQUE, b int GENERATED ALWAYS AS (a) ) PARTITION BY RANGE ((b));
+CREATE TABLE gtest_idxpart (a int UNIQUE, b int GENERATED ALWAYS AS (a) ) PARTITION BY RANGE (a, b);
+CREATE TABLE gtest_idxpart (a int UNIQUE, b int GENERATED ALWAYS AS (a) ) PARTITION BY RANGE (a); -- ok
+
+-- partition key expression over virtual generated column is not supported
+CREATE TABLE gtest_part_key (f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE ((f3 * 3));
+-- constant virtual generated column expression is not supported
+CREATE TABLE gtest_part_key (f3 bigint GENERATED ALWAYS AS (2)) PARTITION BY RANGE (f3); -- error
+
+CREATE TABLE gtest_part_keyxx (f2 text, f3 TEXT COLLATE "POSIX" GENERATED ALWAYS AS ( (upper(f2)) COLLATE "C")  VIRTUAL) PARTITION BY RANGE (f3, f3, f2, f3, (upper(f2)));
+
+SELECT pg_get_partkeydef('gtest_part_keyxx'::regclass);
+SELECT  partrelid::regclass, partnatts, partattrs,  partcollation[0]::regcollation
+FROM    pg_partitioned_table
+WHERE   partrelid = 'gtest_part_keyxx'::regclass;
+DROP TABLE gtest_part_keyxx;
+
+-- tests for virtual generated columns in partition key
+CREATE TABLE gtest_part_key  (f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE (f3); -- ok
+CREATE TABLE gtest_part_key1 (f1 date, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL) PARTITION BY RANGE ((f3)); -- ok
+
+-- Once a virtual generated column is used as a partition key, its data type and
+-- generation expression can no longer be changed. All below should result
+-- error.
+ALTER TABLE gtest_part_key1 ALTER COLUMN f3 SET EXPRESSION AS (f2 * 2);
+ALTER TABLE gtest_part_key1 ALTER COLUMN f3 SET DATA TYPE INT;
+ALTER TABLE gtest_part_key1 ALTER COLUMN f3 DROP EXPRESSION;
+
+CREATE TABLE gtest_part_key1_0(f2 bigint, f1 date, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED);
+-- error: The partition's generation kind must match the parent partitioned table
+ALTER TABLE gtest_part_key1 ATTACH PARTITION gtest_part_key1_0 FOR VALUES FROM (20) TO (30);
+DROP TABLE gtest_part_key1_0;
+
+CREATE TABLE gtest_part_key1_2(f2 bigint, f1 date, f3 bigint GENERATED ALWAYS AS (f2 * 3) VIRTUAL);
+-- error: The partition's generation expression must match the parent partitioned table
+ALTER TABLE gtest_part_key1 ATTACH PARTITION gtest_part_key1_2 FOR VALUES FROM (20) TO (30);
+DROP TABLE gtest_part_key1_2;
+
+CREATE TABLE gtest_part_key1_0(f2 bigint, f1 date, f3 bigint GENERATED ALWAYS AS (f2 * 2) VIRTUAL);
+ALTER TABLE gtest_part_key1 ATTACH PARTITION gtest_part_key1_0 FOR VALUES FROM (20) TO (30); -- ok
+
+ALTER TABLE gtest_part_key1_0 ALTER COLUMN f3 SET EXPRESSION AS (f2 * 2); -- error
+
+CREATE TABLE gtest_part_key1_1 PARTITION OF gtest_part_key1 FOR VALUES FROM (30) TO (50);
+CREATE TABLE gtest_part_key1_2 PARTITION OF gtest_part_key1 FOR VALUES FROM (50) TO (100);
+
+\d+ gtest_part_key1
+
+INSERT INTO gtest_part_key1(f2) VALUES (9);     -- error
+INSERT INTO gtest_part_key1_2(f2) VALUES (50);  -- error
+INSERT INTO gtest_part_key1(f2) VALUES (10), (12), (25), (30), (20) RETURNING tableoid::regclass, *; -- ok
+
+UPDATE gtest_part_key1 SET f2 = 50 WHERE f2 = 30; -- error
+UPDATE gtest_part_key1 SET f2 = 13 WHERE f2 = 20 RETURNING new.tableoid::regclass, old.tableoid::regclass, OLD.*, NEW.*;
+
+SET max_parallel_workers_per_gather TO 0;
+SET enable_incremental_sort TO off;
+
+SET enable_partition_pruning TO true;
+EXPLAIN(COSTS OFF) SELECT * FROM gtest_part_key1 WHERE f3 < 50;
+
+SET enable_partition_pruning TO false;
+EXPLAIN(COSTS OFF) SELECT * FROM gtest_part_key1 WHERE f3 < 50;
+
+SET enable_partitionwise_aggregate TO true;
+EXPLAIN (COSTS OFF) SELECT f3, count(*) FROM gtest_part_key1 GROUP BY f3 ORDER BY 1;
+
+SET enable_partitionwise_aggregate TO false;
+EXPLAIN (COSTS OFF) SELECT f3, count(*) FROM gtest_part_key1 GROUP BY f3 ORDER BY 1;
+
+SET enable_partitionwise_join TO true;
+EXPLAIN (COSTS OFF)
+SELECT t1.f3, count(t2.f3) FROM gtest_part_key1 t1 JOIN gtest_part_key1 t2 ON t1.f3 = t2.f3 GROUP BY 1 ORDER BY 1;
+
+SET enable_partitionwise_join TO false;
+EXPLAIN (COSTS OFF)
+SELECT t1.f3, count(t2.f3) FROM gtest_part_key1 t1 JOIN gtest_part_key1 t2 ON t1.f3 = t2.f3 GROUP BY 1 ORDER BY 1;
+
+RESET enable_partitionwise_join;
+RESET enable_partition_pruning;
+RESET enable_partitionwise_aggregate;
+RESET max_parallel_workers_per_gather;
+RESET enable_incremental_sort;
+
+CREATE OR REPLACE FUNCTION gtest_trigger_info() RETURNS trigger
+  LANGUAGE plpgsql
+AS $$
+BEGIN
+	RAISE INFO 'TG_WHEN: % TG_RELNAME: % trigger name: % tg_op: %', TG_WHEN, TG_relname, TG_NAME, tg_op;
+  IF tg_op IN ('DELETE') THEN
+    RAISE INFO 'old = %', OLD;
+    RETURN OLD;
+  ELSIF tg_op IN ('INSERT') THEN
+    RAISE INFO 'new = %', NEW;
+    RETURN NEW;
+  ELSIF tg_op IN ('UPDATE') THEN
+    RAISE INFO 'old = %; new = %', OLD, NEW;
+    RETURN NEW;
+  ELSE
+    RETURN NEW;
+  END IF;
+END
+$$;
+
+CREATE TRIGGER gtest_part_key1_trigger BEFORE INSERT OR UPDATE ON gtest_part_key1 FOR EACH ROW EXECUTE PROCEDURE gtest_trigger_info();
+
+SELECT * FROM gtest_part_key1 ORDER BY f2;
+
+-- error
+MERGE INTO gtest_part_key1
+  USING (VALUES (10, 100), (12, 25), (14, 30)) AS s(sid, delta)
+ON gtest_part_key1.f2 = s.sid
+  WHEN MATCHED AND f2 = 14 THEN UPDATE SET f2 = 30
+  WHEN MATCHED AND f2 = 12 THEN UPDATE SET f2 = 50;
+
+MERGE INTO gtest_part_key1
+  USING (VALUES (10, 100), (12, 25), (14, 30)) AS s(sid, delta)
+ON gtest_part_key1.f2 = s.sid
+  WHEN MATCHED AND f2 = 12 THEN UPDATE SET f2 = 20
+  WHEN MATCHED AND f2 = 10 THEN UPDATE SET f2 = 30
+  WHEN NOT MATCHED THEN INSERT(f2) VALUES (s.sid)
+  RETURNING merge_action(), tableoid::regclass, old.f2, old.f3, new.f2, new.f3;
 
 -- ALTER TABLE ... ADD COLUMN
 CREATE TABLE gtest25 (a int PRIMARY KEY);

@@ -61,6 +61,7 @@ extern List *RelationGetIndexExpressions(Relation relation);
 extern List *RelationGetDummyIndexExpressions(Relation relation);
 extern List *RelationGetIndexPredicate(Relation relation);
 extern bytea **RelationGetIndexAttOptions(Relation relation, bool copy);
+extern bool attrIsVirtualGenerated(Relation rel, AttrNumber attnum);
 
 /*
  * Which set of columns to return by RelationGetIndexAttrBitmap.

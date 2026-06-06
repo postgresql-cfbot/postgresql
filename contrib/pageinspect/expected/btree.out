@@ -183,6 +183,17 @@ tids       |
 
 SELECT * FROM bt_page_items(get_raw_page('test1_a_idx', 2));
 ERROR:  block number 2 is out of range for relation "test1_a_idx"
+--- test index over virtual generated column
+CREATE TABLE test4(a int, b int GENERATED ALWAYS AS (a + 1), c text);
+INSERT INTO test4(a,c) VALUES (10,11), (10,11);
+CREATE INDEX test4_b_idx ON test4 USING btree (b);
+CREATE INDEX test4_a_1_idx ON test4 USING btree ((a+1));
+-- expect return zero row
+SELECT * FROM bt_page_items('test4_b_idx', 1)
+EXCEPT ALL
+SELECT * FROM bt_page_items('test4_a_1_idx', 1);
+(0 rows)
+
 -- Failure when using a non-btree index.
 CREATE INDEX test1_a_hash ON test1 USING hash(a);
 SELECT bt_metap('test1_a_hash');

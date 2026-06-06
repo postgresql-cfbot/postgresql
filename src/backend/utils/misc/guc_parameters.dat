@@ -1054,6 +1054,12 @@
   boot_val => 'true',
 },
 
+{ name => 'listen_mptcp', type => 'bool', context => 'PGC_POSTMASTER', group => 'CONN_AUTH_SETTINGS',
+  short_desc => 'Whether to enable MPTCP on the listening socket',
+  variable => 'ListenMPTCP',
+  boot_val => 'false',
+},
+
 { name => 'exit_on_error', type => 'bool', context => 'PGC_USERSET', group => 'ERROR_HANDLING_OPTIONS',
   short_desc => 'Terminate session on any error.',
   variable => 'ExitOnAnyError',

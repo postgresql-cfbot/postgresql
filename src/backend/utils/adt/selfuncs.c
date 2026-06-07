@@ -4776,42 +4776,7 @@ estimate_multivariate_ndistinct(PlannerInfo *root, RelOptInfo *rel,
 		}
 
 		/* Find the specific item that exactly matches the combination */
-		for (uint32 i = 0; i < stats->nitems; i++)
-		{
-			MVNDistinctItem *tmpitem = &stats->items[i];
-
-			if (tmpitem->nattributes != bms_num_members(matched))
-				continue;
-
-			/* assume it's the right item */
-			item = tmpitem;
-
-			/* check that all item attributes/expressions fit the match */
-			for (int j = 0; j < tmpitem->nattributes; j++)
-			{
-				AttrNumber	attnum = tmpitem->attributes[j];
-
-				/*
-				 * Thanks to how we constructed the matched bitmap above, we
-				 * can just offset all attnums the same way.
-				 */
-				attnum = attnum + attnum_offset;
-
-				if (!bms_is_member(attnum, matched))
-				{
-					/* nah, it's not this item */
-					item = NULL;
-					break;
-				}
-			}
-
-			/*
-			 * If the item has all the matched attributes, we know it's the
-			 * right one - there can't be a better one. matching more.
-			 */
-			if (item)
-				break;
-		}
+		item = mvndistinct_find_item(stats, matched, attnum_offset);
 
 		/*
 		 * Make sure we found an item. There has to be one, because ndistinct

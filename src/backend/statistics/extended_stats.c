@@ -1763,6 +1763,48 @@ mcv_can_cap(StatisticExtInfo *stat, Bitmapset *covered_attnums, List *stat_claus
 }
 
 /*
+ * get_ndistinct_for_keys
+ *		Return the ndistinct estimate for the full set of columns identified by
+ *		keys, using a matching STATS_EXT_NDISTINCT object from the relation's
+ *		statlist.
+ *
+ * Accepts both exact-match and superset statistics objects.  Returns -1.0
+ * if no matching ndistinct statistics object or item is found.
+ */
+static double
+get_ndistinct_for_keys(List *statlist, Bitmapset *keys, bool inh)
+{
+	ListCell   *lc;
+
+	foreach(lc, statlist)
+	{
+		StatisticExtInfo *info = (StatisticExtInfo *) lfirst(lc);
+		MVNDistinct *mvnd;
+		MVNDistinctItem *item;
+
+		if (info->kind != STATS_EXT_NDISTINCT || info->inherit != inh)
+			continue;
+		if (!bms_is_subset(keys, info->keys))
+			continue;
+
+		mvnd = statext_ndistinct_load(info->statOid, inh);
+		item = mvndistinct_find_item(mvnd, keys, 0);
+
+		if (item)
+		{
+			double		ndistinct = item->ndistinct;
+
+			statext_ndistinct_free(mvnd);
+			return ndistinct;
+		}
+
+		statext_ndistinct_free(mvnd);
+	}
+
+	return -1.0;
+}
+
+/*
  * statext_mcv_clauselist_selectivity
  *		Estimate clauses using the best multi-column statistics.
  *
@@ -2050,12 +2092,14 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 		else					/* Implicitly-ANDed list of clauses */
 		{
 			bool		can_cap;
+			bool		mcv_matched;
 			Selectivity simple_sel,
 						mcv_sel,
 						mcv_basesel,
 						mcv_totalsel,
 						mcv_cap,
 						stat_sel;
+			uint32		mcv_nitems;
 
 			can_cap = mcv_can_cap(stat, covered_attnums, stat_clauses);
 			bms_free(covered_attnums);
@@ -2076,7 +2120,9 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 												 varRelid, jointype, sjinfo,
 												 rel, &mcv_basesel,
 												 &mcv_totalsel,
-												 &mcv_cap);
+												 &mcv_cap,
+												 &mcv_nitems,
+												 &mcv_matched);
 
 			/* Combine the simple and multi-column estimates. */
 			stat_sel = mcv_combine_selectivities(simple_sel,
@@ -2084,9 +2130,30 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 												 mcv_basesel,
 												 mcv_totalsel);
 
-			/* Cap to the least common MCV item when no MCV items matched. */
-			if (can_cap && stat_sel > mcv_cap)
-				stat_sel = mcv_cap;
+			/* Cap when no MCV items matched. */
+			if (can_cap && !mcv_matched)
+			{
+				double		ndistinct;
+
+				/* Cap to the least common MCV item. */
+				if (stat_sel > mcv_cap)
+					stat_sel = mcv_cap;
+
+				ndistinct = get_ndistinct_for_keys(rel->statlist, stat->keys, rte->inh);
+
+				if (ndistinct > (double) mcv_nitems)
+				{
+					double		non_mcv_sel = (1.0 - mcv_totalsel) / (ndistinct - (double) mcv_nitems);
+
+					/*
+					 * Cap to uniform distribution among the non-MCV
+					 * combinations. This is similar to what var_eq_const()
+					 * does for single-column MCV stats.
+					 */
+					if (stat_sel > non_mcv_sel)
+						stat_sel = non_mcv_sel;
+				}
+			}
 
 			/* Factor this into the overall result */
 			sel *= stat_sel;

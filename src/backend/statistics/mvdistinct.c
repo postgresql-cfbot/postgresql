@@ -335,6 +335,51 @@ statext_ndistinct_free(MVNDistinct *ndistinct)
 }
 
 /*
+ * mvndistinct_find_item
+ *		Search an MVNDistinct for the item whose attribute set exactly matches
+ *		the supplied keys bitmap.
+ *
+ * attnum_offset is added to each item attribute number before the bitmap
+ * membership check.  Pass 0 when keys contains plain attribute numbers.
+ * Pass the offset used when building keys when expression-based statistics
+ * are involved (as in estimate_multivariate_ndistinct).
+ *
+ * Returns a pointer to the matching MVNDistinctItem, or NULL if not found.
+ */
+MVNDistinctItem *
+mvndistinct_find_item(MVNDistinct *stats, Bitmapset *keys,
+					  AttrNumber attnum_offset)
+{
+	int			nkeys = bms_num_members(keys);
+
+	for (uint32 i = 0; i < stats->nitems; i++)
+	{
+		MVNDistinctItem *item = &stats->items[i];
+
+		if (item->nattributes != nkeys)
+			continue;
+
+		/* assume it's the right item */
+		for (int j = 0; j < item->nattributes; j++)
+		{
+			AttrNumber	attnum = item->attributes[j] + attnum_offset;
+
+			if (!bms_is_member(attnum, keys))
+			{
+				/* nah, it's not this item */
+				item = NULL;
+				break;
+			}
+		}
+
+		if (item)
+			return item;
+	}
+
+	return NULL;
+}
+
+/*
  * Validate a set of MVNDistincts against the extended statistics object
  * definition.
  *

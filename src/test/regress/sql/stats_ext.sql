@@ -1483,10 +1483,16 @@ ANALYZE mcv_cap;
 -- no MCV
 SELECT * FROM check_estimated_rows($$SELECT * FROM mcv_cap WHERE a = 0 AND b = 0 AND c = TRUE AND d = '{1, 2}'$$);
 
-CREATE STATISTICS mcv_cap_stats (mcv) ON a, b, c, d FROM mcv_cap;
+CREATE STATISTICS mcv_cap_stats_mcv (mcv) ON a, b, c, d FROM mcv_cap;
 ANALYZE mcv_cap;
 
 -- MCV
+SELECT * FROM check_estimated_rows($$SELECT * FROM mcv_cap WHERE a = 0 AND b = 0 AND c = TRUE AND d = '{1, 2}'$$);
+
+CREATE STATISTICS mcv_cap_stats_nd (ndistinct) ON a, b, c, d FROM mcv_cap;
+ANALYZE mcv_cap;
+
+-- MCV + ndistinct
 SELECT * FROM check_estimated_rows($$SELECT * FROM mcv_cap WHERE a = 0 AND b = 0 AND c = TRUE AND d = '{1, 2}'$$);
 
 -- When a value IS in the MCV list, no cap path runs
@@ -1497,6 +1503,12 @@ SELECT * FROM check_estimated_rows($$SELECT * FROM mcv_cap WHERE a >= 0 AND b = 
 
 -- Capping does not apply when the query does not cover all MCV columns
 SELECT * FROM check_estimated_rows($$SELECT * FROM mcv_cap WHERE a = 0 AND b = 0 AND c = TRUE$$);
+
+-- MCV + superset ndistinct
+DROP STATISTICS mcv_cap_stats_nd;
+CREATE STATISTICS mcv_cap_stats_nd (ndistinct) ON a, b, c, d, e FROM mcv_cap;
+ANALYZE mcv_cap;
+SELECT * FROM check_estimated_rows($$SELECT * FROM mcv_cap WHERE a = 0 AND b = 0 AND c = TRUE AND d = '{1, 2}'$$);
 
 DROP TABLE mcv_cap;
 

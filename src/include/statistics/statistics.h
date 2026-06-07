@@ -95,6 +95,9 @@ typedef struct MCVList
 } MCVList;
 
 extern MVNDistinct *statext_ndistinct_load(Oid mvoid, bool inh);
+extern MVNDistinctItem *mvndistinct_find_item(MVNDistinct *stats,
+											  Bitmapset *keys,
+											  AttrNumber attnum_offset);
 extern MVDependencies *statext_dependencies_load(Oid mvoid, bool inh);
 extern MCVList *statext_mcv_load(Oid mvoid, bool inh);
 

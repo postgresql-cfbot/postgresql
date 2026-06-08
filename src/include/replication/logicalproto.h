@@ -259,6 +259,8 @@ extern void logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecP
 extern void logicalrep_write_rel(StringInfo out, TransactionId xid,
 								 Relation rel, Bitmapset *columns,
 								 PublishGencolsType include_gencols_type);
+extern void logicalrep_write_internal_rel(StringInfo out,
+										  LogicalRepRelation *rel);
 extern LogicalRepRelation *logicalrep_read_rel(StringInfo in);
 extern void logicalrep_write_typ(StringInfo out, TransactionId xid,
 								 Oid typoid);

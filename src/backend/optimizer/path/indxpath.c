@@ -1845,6 +1845,7 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
         bool               *elem_nulls = NULL;
         Bitmapset          *suitable_indexes = NULL;
         List               *per_saop_paths = NIL;
+        List               *base_proof_clauses = NIL;
         int                 nelems;
         Oid                 elem_type;
         int16               elem_typlen;
@@ -1905,6 +1906,43 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
         if (bms_is_empty(suitable_indexes))
             continue;
 
+        /*
+         * Build the clause set used for partial-index predicate proof.
+         *
+         * We must not attempt to prove a partial index predicate using
+         * only the synthesized equality clause generated from a single
+         * SAOP element.  Partial-index predicates are often implied by
+         * other query restrictions.
+         *
+         * Example:
+         *
+         *      WHERE x IN (1,2,3)
+         *        AND status = 'active'
+         *
+         * with:
+         *
+         *      CREATE INDEX ... WHERE status = 'active';
+         *
+         * Therefore construct a base proof clause list containing all
+         * query restriction clauses except the SAOP currently being
+         * expanded.  The per-element equality clause will be appended
+         * during processing below.
+         */
+        {
+            ListCell *proof_lc;
+
+            foreach(proof_lc, clauses)
+            {
+                RestrictInfo *proof_rinfo =
+                    lfirst_node(RestrictInfo, proof_lc);
+
+                if (proof_rinfo != rinfo)
+                    base_proof_clauses =
+                        lappend(base_proof_clauses,
+                                proof_rinfo);
+            }
+        }
+
         elem_type = ARR_ELEMTYPE(arrayval);
         get_typlenbyvalalign(elem_type,
                             &elem_typlen,
@@ -1959,6 +1997,7 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
             OpExpr     *opclause;
             RestrictInfo *new_rinfo;
             List       *paths_for_elem = NIL;
+            List       *proof_clauses;
             Bitmapset  *to_remove = NULL;
             int         index_pos = -1;
 
@@ -1984,8 +2023,16 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
                                      saop->inputcollid,
                                      saop->inputcollid);
 
+            /*
+             * Partial-index applicability may depend on the synthesized equality
+             * clause for the current SAOP element (e.g. a predicate such as
+             * "x = 1"), so predicate implication must be evaluated per element
+             * rather than once per index.
+             */
             new_rinfo = make_simple_restrictinfo(root,
                                                  (Expr *) opclause);
+            proof_clauses = lappend(list_copy(base_proof_clauses),
+                                              new_rinfo);
 
             while ((index_pos =
                         bms_next_member(suitable_indexes,
@@ -1997,11 +2044,15 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
                 List *indexpaths;
 
                 /*
-                 * Element-specific predicate check.
-                 * Do NOT prune index here.
+                 * For partial indexes that have not already been proven
+                 * usable by check_index_predicates(), test implication
+                 * against the full restriction environment rather than
+                 * just the synthesized equality clause.
                  */
-                if (!predicate_implied_by(index->indpred,
-                                          list_make1(new_rinfo),
+                if (!index->predOK &&
+                    index->indpred != NIL &&
+                    !predicate_implied_by(index->indpred,
+                                          proof_clauses,
                                           false))
                     continue;
 
@@ -2071,6 +2122,8 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
 
                 per_saop_paths = lappend(per_saop_paths, cheapest);
             }
+
+            list_free(proof_clauses);
         }
 
         pfree(base_clausesets);

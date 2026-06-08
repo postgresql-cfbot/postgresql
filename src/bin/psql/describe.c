@@ -3189,7 +3189,7 @@ describeOneTableDetails(const char *schemaname,
 								  "WHERE pc.oid ='%s' and pg_catalog.pg_relation_is_publishable('%s')\n"
 								  "UNION\n"
 								  "SELECT pubname\n"
-								  "     , pg_get_expr(pr.prqual, c.oid)\n"
+								  "     , pg_catalog.pg_get_expr(pr.prqual, c.oid)\n"
 								  "     , (CASE WHEN pr.prattrs IS NOT NULL THEN\n"
 								  "         (SELECT string_agg(attname, ', ')\n"
 								  "           FROM pg_catalog.generate_series(0, pg_catalog.array_upper(pr.prattrs::pg_catalog.int2[], 1)) s,\n"
@@ -6995,7 +6995,7 @@ describePublications(const char *pattern)
 			if (pset.sversion >= 150000)
 			{
 				appendPQExpBufferStr(&buf,
-									 ", pg_get_expr(pr.prqual, c.oid)");
+									 ", pg_catalog.pg_get_expr(pr.prqual, c.oid)");
 				appendPQExpBufferStr(&buf,
 									 ", (CASE WHEN pr.prattrs IS NOT NULL THEN\n"
 									 "     pg_catalog.array_to_string("

@@ -2434,6 +2434,66 @@ SELECT statname, (stats).*
 FROM stats_import.pg_stats_ext_exprs_get_difference('test_mr_stat', 'test_mr_stat_clone')
 \gx
 
+-- Test import of extended statistics on virtual generated columns.
+-- Virtual gen cols are stored as Var nodes in stxexprs but treated as
+-- expressions during ANALYZE (they receive per-expression stats in stxdexpr).
+CREATE TABLE stats_import.test_vgencol(
+    a int,
+    b int,
+    c int GENERATED ALWAYS AS (a + b) VIRTUAL
+);
+INSERT INTO stats_import.test_vgencol(a, b)
+    SELECT mod(i, 10), mod(i, 7) FROM generate_series(1, 1000) s(i);
+CREATE STATISTICS stats_import.stat_vgencol ON a, c
+    FROM stats_import.test_vgencol;
+ANALYZE stats_import.test_vgencol;
+CREATE TABLE stats_import.test_vgencol_clone(
+    a int,
+    b int,
+    c int GENERATED ALWAYS AS (a + b) VIRTUAL
+);
+CREATE STATISTICS stats_import.stat_vgencol_clone ON a, c
+    FROM stats_import.test_vgencol_clone;
+-- Import stats from stat_vgencol to stat_vgencol_clone
+SELECT e.statistics_name,
+  pg_catalog.pg_restore_extended_stats(
+    'schemaname', e.statistics_schemaname::text,
+    'relname', 'test_vgencol_clone',
+    'statistics_schemaname', e.statistics_schemaname::text,
+    'statistics_name', 'stat_vgencol_clone',
+    'inherited', e.inherited,
+    'n_distinct', e.n_distinct,
+    'dependencies', e.dependencies,
+    'most_common_vals', e.most_common_vals,
+    'most_common_freqs', e.most_common_freqs,
+    'most_common_base_freqs', e.most_common_base_freqs,
+    'exprs', x.exprs)
+FROM pg_stats_ext AS e
+CROSS JOIN LATERAL (
+  SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object(
+            'null_frac', ee.null_frac::text,
+            'avg_width', ee.avg_width::text,
+            'n_distinct', ee.n_distinct::text,
+            'most_common_vals', ee.most_common_vals::text,
+            'most_common_freqs', ee.most_common_freqs::text,
+            'histogram_bounds', ee.histogram_bounds::text,
+            'correlation', ee.correlation::text)))
+    FROM pg_stats_ext_exprs AS ee
+    WHERE ee.statistics_schemaname = e.statistics_schemaname AND
+      ee.statistics_name = e.statistics_name AND
+      ee.inherited = e.inherited
+    ) AS x(exprs)
+WHERE e.statistics_schemaname = 'stats_import'
+AND e.statistics_name = 'stat_vgencol';
+
+SELECT statname, (stats).*
+FROM stats_import.pg_stats_ext_get_difference('stat_vgencol', 'stat_vgencol_clone')
+\gx
+
+SELECT statname, (stats).*
+FROM stats_import.pg_stats_ext_exprs_get_difference('stat_vgencol', 'stat_vgencol_clone')
+\gx
+
 -- range_length_histogram, range_empty_frac, and range_bounds_histogram
 -- have been added to pg_stats_ext_exprs in PostgreSQL 19.  When dumping
 -- expression statistics in a cluster with an older version, these fields

@@ -73,7 +73,7 @@ extern MVNDistinct *statext_ndistinct_build(double totalrows, StatsBuildData *da
 extern bytea *statext_ndistinct_serialize(MVNDistinct *ndistinct);
 extern MVNDistinct *statext_ndistinct_deserialize(bytea *data);
 extern bool statext_ndistinct_validate(const MVNDistinct *ndistinct,
-									   const int2vector *stxkeys,
+									   Bitmapset *keys,
 									   int numexprs, int elevel);
 extern void statext_ndistinct_free(MVNDistinct *ndistinct);
 
@@ -81,9 +81,12 @@ extern MVDependencies *statext_dependencies_build(StatsBuildData *data);
 extern bytea *statext_dependencies_serialize(MVDependencies *dependencies);
 extern MVDependencies *statext_dependencies_deserialize(bytea *data);
 extern bool statext_dependencies_validate(const MVDependencies *dependencies,
-										  const int2vector *stxkeys,
+										  Bitmapset *keys,
 										  int numexprs, int elevel);
 extern void statext_dependencies_free(MVDependencies *dependencies);
+
+extern bool statext_is_valid_attnum(AttrNumber attnum, Bitmapset *keys,
+									int numexprs);
 
 extern MCVList *statext_mcv_build(StatsBuildData *data,
 								  double totalrows, int stattarget);

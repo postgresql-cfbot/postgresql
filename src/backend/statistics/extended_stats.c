@@ -448,6 +448,77 @@ statext_is_kind_built(HeapTuple htup, char type)
 }
 
 /*
+ * statext_decode_stxexprs
+ *		Decode the stxexprs field of a pg_statistic_ext tuple.
+ *
+ * Deserializes the expression list, expands virtual generated columns,
+ * separates simple Var references (into keys Bitmapset) from complex
+ * expressions (into exprs list), and const-folds the expressions (as
+ * RelationGetIndexExpressions does).
+ */
+void
+statext_decode_stxexprs(HeapTuple htup, Relation rel,
+						Bitmapset **keys, List **exprs)
+{
+	Datum		datum;
+	char	   *exprsString;
+	List	   *allexprs;
+	ListCell   *lc;
+
+	datum = SysCacheGetAttrNotNull(STATEXTOID, htup,
+								   Anum_pg_statistic_ext_stxexprs);
+	exprsString = TextDatumGetCString(datum);
+	allexprs = (List *) stringToNode(exprsString);
+	pfree(exprsString);
+
+	/* Expand virtual generated columns in the expressions */
+	allexprs = (List *) expand_generated_columns_in_expr((Node *) allexprs, rel, 1);
+
+	foreach(lc, allexprs)
+	{
+		Node	   *expr = (Node *) lfirst(lc);
+
+		if (IsA(expr, Var) && ((Var *) expr)->varattno > 0)
+			*keys = bms_add_member(*keys, ((Var *) expr)->varattno);
+		else
+			*exprs = lappend(*exprs, expr);
+	}
+
+	if (*exprs != NIL)
+	{
+		/*
+		 * Run the expressions through eval_const_expressions. This is not
+		 * just an optimization, but is necessary, because the planner will be
+		 * comparing them to similarly-processed qual clauses, and may fail to
+		 * detect valid matches without this.  We must not use
+		 * canonicalize_qual, however, since these aren't qual expressions.
+		 */
+		*exprs = (List *) eval_const_expressions(NULL, (Node *) *exprs);
+
+		/* May as well fix opfuncids too */
+		fix_opfuncids((Node *) *exprs);
+	}
+}
+
+/*
+ * statext_is_valid_attnum
+ *		Is attnum a valid reference within an extended statistics object?
+ *
+ * A positive attnum is a simple column and must be a member of the object's
+ * keys; a negative attnum references an expression and must be within the
+ * range [-numexprs, -1].  Used to validate imported stats against the object
+ * definition.
+ */
+bool
+statext_is_valid_attnum(AttrNumber attnum, Bitmapset *keys, int numexprs)
+{
+	if (attnum > 0)
+		return bms_is_member(attnum, keys);
+
+	return (attnum < 0) && (attnum >= 0 - numexprs);
+}
+
+/*
  * Return a list (of StatExtEntry) of statistics objects for the given relation.
  */
 static List *
@@ -487,11 +558,6 @@ fetch_statentries_for_relation(Relation pg_statext, Relation rel)
 		entry->statOid = staForm->oid;
 		entry->schema = get_namespace_name(staForm->stxnamespace);
 		entry->name = pstrdup(NameStr(staForm->stxname));
-		for (i = 0; i < staForm->stxkeys.dim1; i++)
-		{
-			entry->columns = bms_add_member(entry->columns,
-											staForm->stxkeys.values[i]);
-		}
 
 		datum = SysCacheGetAttr(STATEXTOID, htup, Anum_pg_statistic_ext_stxstattarget, &isnull);
 		entry->stattarget = isnull ? -1 : DatumGetInt16(datum);
@@ -514,35 +580,8 @@ fetch_statentries_for_relation(Relation pg_statext, Relation rel)
 			entry->types = lappend_int(entry->types, (int) enabled[i]);
 		}
 
-		/* decode expression (if any) */
-		datum = SysCacheGetAttr(STATEXTOID, htup,
-								Anum_pg_statistic_ext_stxexprs, &isnull);
-
-		if (!isnull)
-		{
-			char	   *exprsString;
-
-			exprsString = TextDatumGetCString(datum);
-			exprs = (List *) stringToNode(exprsString);
-
-			pfree(exprsString);
-
-			/* Expand virtual generated columns in the expressions */
-			exprs = (List *) expand_generated_columns_in_expr((Node *) exprs, rel, 1);
-
-			/*
-			 * Run the expressions through eval_const_expressions. This is not
-			 * just an optimization, but is necessary, because the planner
-			 * will be comparing them to similarly-processed qual clauses, and
-			 * may fail to detect valid matches without this.  We must not use
-			 * canonicalize_qual, however, since these aren't qual
-			 * expressions.
-			 */
-			exprs = (List *) eval_const_expressions(NULL, (Node *) exprs);
-
-			/* May as well fix opfuncids too */
-			fix_opfuncids((Node *) exprs);
-		}
+		/* Decode stxexprs into entry->columns and exprs (const-folded) */
+		statext_decode_stxexprs(htup, rel, &entry->columns, &exprs);
 
 		entry->exprs = exprs;
 

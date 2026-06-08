@@ -393,7 +393,7 @@ statext_dependencies_build(StatsBuildData *data)
 			d = (MVDependency *) palloc0(offsetof(MVDependency, attributes)
 										 + k * sizeof(AttrNumber));
 
-			/* copy the dependency (and keep the indexes into stxkeys) */
+			/* copy the dependency */
 			d->degree = degree;
 			d->nattributes = k;
 			for (i = 0; i < k; i++)
@@ -596,17 +596,15 @@ statext_dependencies_free(MVDependencies *dependencies)
  * attributes list correspond to attnums/expressions defined by the
  * extended statistics object.
  *
- * Positive attnums are attributes which must be found in the stxkeys, while
- * negative attnums correspond to an expression number, no attribute number
- * can be below (0 - numexprs).
+ * Positive attnums correspond to table columns (excluding virtual generated
+ * columns), while negative attnums correspond to expressions.  No attribute
+ * number can be below (0 - numexprs).
  */
 bool
 statext_dependencies_validate(const MVDependencies *dependencies,
-							  const int2vector *stxkeys,
+							  Bitmapset *keys,
 							  int numexprs, int elevel)
 {
-	int			attnum_expr_lowbound = 0 - numexprs;
-
 	/* Scan through each dependency entry */
 	for (uint32 i = 0; i < dependencies->ndeps; i++)
 	{
@@ -619,27 +617,8 @@ statext_dependencies_validate(const MVDependencies *dependencies,
 		for (int j = 0; j < dep->nattributes; j++)
 		{
 			AttrNumber	attnum = dep->attributes[j];
-			bool		ok = false;
 
-			if (attnum > 0)
-			{
-				/* attribute number in stxkeys */
-				for (int k = 0; k < stxkeys->dim1; k++)
-				{
-					if (attnum == stxkeys->values[k])
-					{
-						ok = true;
-						break;
-					}
-				}
-			}
-			else if ((attnum < 0) && (attnum >= attnum_expr_lowbound))
-			{
-				/* attribute number for an expression */
-				ok = true;
-			}
-
-			if (!ok)
+			if (!statext_is_valid_attnum(attnum, keys, numexprs))
 			{
 				ereport(elevel,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),

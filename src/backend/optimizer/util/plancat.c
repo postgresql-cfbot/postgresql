@@ -1748,28 +1748,18 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 	foreach(l, statoidlist)
 	{
 		Oid			statOid = lfirst_oid(l);
-		Form_pg_statistic_ext staForm;
 		HeapTuple	htup;
 		Bitmapset  *keys = NULL;
 		List	   *exprs = NIL;
-		int			i;
 
 		htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statOid));
 		if (!HeapTupleIsValid(htup))
 			elog(ERROR, "cache lookup failed for statistics object %u", statOid);
-		staForm = (Form_pg_statistic_ext) GETSTRUCT(htup);
 
 		/*
-		 * First, build the array of columns covered.  This is ultimately
-		 * wasted if no stats within the object have actually been built, but
-		 * it doesn't seem worth troubling over that case.
-		 */
-		for (i = 0; i < staForm->stxkeys.dim1; i++)
-			keys = bms_add_member(keys, staForm->stxkeys.values[i]);
-
-		/*
-		 * Preprocess expressions (if any). We read the expressions, fix the
-		 * varnos, and run them through eval_const_expressions.
+		 * Preprocess stxexprs.  We read all entries, separate simple column
+		 * references (into the keys Bitmapset) from complex expressions, fix
+		 * the varnos, and run expressions through eval_const_expressions.
 		 *
 		 * XXX We don't know yet if there are any data for this stats object,
 		 * with either stxdinherit value. But it's reasonable to assume there
@@ -1777,44 +1767,30 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 		 * keys and expressions here.
 		 */
 		{
-			bool		isnull;
-			Datum		datum;
+			statext_decode_stxexprs(htup, relation, &keys, &exprs);
 
-			/* decode expression (if any) */
-			datum = SysCacheGetAttr(STATEXTOID, htup,
-									Anum_pg_statistic_ext_stxexprs, &isnull);
+			/*
+			 * Modify the copies we obtain from the relcache to have the
+			 * correct varno for the parent relation, so that they match up
+			 * correctly against qual clauses.
+			 *
+			 * This must be done before const-simplification because
+			 * eval_const_expressions reduces NullTest for Vars based on
+			 * varno.
+			 */
+			if (exprs != NIL && varno != 1)
+				ChangeVarNodes((Node *) exprs, 1, varno, 0);
 
-			if (!isnull)
+			/*
+			 * Run the expressions through eval_const_expressions. This is not
+			 * just an optimization, but is necessary, because the planner
+			 * will be comparing them to similarly-processed qual clauses, and
+			 * may fail to detect valid matches without this. We must not use
+			 * canonicalize_qual, however, since these aren't qual
+			 * expressions.
+			 */
+			if (exprs != NIL)
 			{
-				char	   *exprsString;
-
-				exprsString = TextDatumGetCString(datum);
-				exprs = (List *) stringToNode(exprsString);
-				pfree(exprsString);
-
-				/* Expand virtual generated columns in the expressions */
-				exprs = (List *) expand_generated_columns_in_expr((Node *) exprs, relation, 1);
-
-				/*
-				 * Modify the copies we obtain from the relcache to have the
-				 * correct varno for the parent relation, so that they match
-				 * up correctly against qual clauses.
-				 *
-				 * This must be done before const-simplification because
-				 * eval_const_expressions reduces NullTest for Vars based on
-				 * varno.
-				 */
-				if (varno != 1)
-					ChangeVarNodes((Node *) exprs, 1, varno, 0);
-
-				/*
-				 * Run the expressions through eval_const_expressions. This is
-				 * not just an optimization, but is necessary, because the
-				 * planner will be comparing them to similarly-processed qual
-				 * clauses, and may fail to detect valid matches without this.
-				 * We must not use canonicalize_qual, however, since these
-				 * aren't qual expressions.
-				 */
 				exprs = (List *) eval_const_expressions(root, (Node *) exprs);
 
 				/* May as well fix opfuncids too */

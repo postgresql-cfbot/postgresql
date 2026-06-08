@@ -127,5 +127,7 @@ extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												List **clause_exprs,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, bool inh, int idx);
+extern void statext_decode_stxexprs(HeapTuple htup, Relation rel,
+									Bitmapset **keys, List **exprs);
 
 #endif							/* STATISTICS_H */

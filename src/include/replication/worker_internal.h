@@ -18,6 +18,7 @@
 #include "miscadmin.h"
 #include "replication/logicalrelation.h"
 #include "replication/walreceiver.h"
+#include "replication/logicalproto.h"
 #include "storage/buffile.h"
 #include "storage/fileset.h"
 #include "storage/shm_mq.h"
@@ -254,6 +255,9 @@ extern PGDLLIMPORT bool in_remote_transaction;
 extern PGDLLIMPORT bool InitializingApplyWorker;
 
 extern PGDLLIMPORT List *table_states_not_ready;
+
+typedef void (*LogicalRepMessageHandle_hook_type) (LogicalRepMessageData *msg);
+extern PGDLLIMPORT LogicalRepMessageHandle_hook_type LogicalRepMessageHandle_hook;
 
 extern void logicalrep_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(LogicalRepWorkerType wtype,

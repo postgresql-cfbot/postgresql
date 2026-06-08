@@ -549,6 +549,9 @@ typedef struct ApplySubXactData
 
 static ApplySubXactData subxact_data = {0, 0, InvalidTransactionId, NULL};
 
+/* Hook for plugins to get control in handling logical decoding messages */
+LogicalRepMessageHandle_hook_type LogicalRepMessageHandle_hook = NULL;
+
 static inline void subxact_filename(char *path, Oid subid, TransactionId xid);
 static inline void changes_filename(char *path, Oid subid, TransactionId xid);
 
@@ -1692,6 +1695,34 @@ apply_handle_origin(StringInfo s)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("ORIGIN message sent out of order")));
+}
+
+/*
+ * Handle MESSAGE message.
+ *
+ * Invoke a hook function if set.
+ */
+static void
+apply_handle_message(StringInfo s)
+{
+	LogicalRepMessageData msg;
+
+	if (!LogicalRepMessageHandle_hook)
+		return;
+
+	/*
+	 * Logical messages are handled only the (parallel) apply workers
+	 */
+	if (am_tablesync_worker() || am_sequencesync_worker())
+		return;
+
+	if (is_skipping_changes() ||
+		handle_streamed_transaction(LOGICAL_REP_MSG_MESSAGE, s))
+		return;
+
+	logicalrep_read_message(s, &msg);
+
+	(*LogicalRepMessageHandle_hook) (&msg);
 }
 
 /*
@@ -3846,12 +3877,7 @@ apply_dispatch(StringInfo s)
 			break;
 
 		case LOGICAL_REP_MSG_MESSAGE:
-
-			/*
-			 * Logical replication does not use generic logical messages yet.
-			 * Although, it could be used by other applications that use this
-			 * output plugin.
-			 */
+			apply_handle_message(s);
 			break;
 
 		case LOGICAL_REP_MSG_STREAM_START:
@@ -5128,7 +5154,8 @@ maybe_reread_subscription(void)
 		newsub->passwordrequired != MySubscription->passwordrequired ||
 		strcmp(newsub->origin, MySubscription->origin) != 0 ||
 		newsub->owner != MySubscription->owner ||
-		!equal(newsub->publications, MySubscription->publications))
+		!equal(newsub->publications, MySubscription->publications) ||
+		newsub->message != MySubscription->message)
 	{
 		if (am_parallel_apply_worker())
 			ereport(LOG,
@@ -5614,6 +5641,7 @@ set_stream_options(WalRcvStreamOptions *options,
 
 	options->proto.logical.twophase = false;
 	options->proto.logical.origin = pstrdup(MySubscription->origin);
+	options->proto.logical.messages = MySubscription->message;
 }
 
 /*

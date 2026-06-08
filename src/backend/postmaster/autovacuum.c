@@ -3141,7 +3141,7 @@ relation_needs_vacanalyze(Oid relid,
 		? Min(avopts->multixact_freeze_max_age, effective_multixact_freeze_max_age)
 		: effective_multixact_freeze_max_age;
 
-	av_enabled = (avopts ? avopts->enabled : true);
+	av_enabled = (avopts ? avopts->enabled != PG_TERNARY_FALSE : true);
 	av_enabled &= AutoVacuumingActive();
 
 	relfrozenxid = classForm->relfrozenxid;

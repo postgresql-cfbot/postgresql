@@ -1921,6 +1921,35 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
                           &nelems);
 
         /*
+         * Create an array to hold the base matched clauses for each index.
+         * We match all query restrictions (except the SAOP itself) against
+         * our candidate indexes just once.
+         */
+        IndexClauseSet *base_clausesets =
+            (IndexClauseSet *) palloc0(list_length(indexes) * sizeof(IndexClauseSet));
+
+        {
+            int idx_pos = -1;
+            while ((idx_pos = bms_next_member(suitable_indexes, idx_pos)) >= 0)
+            {
+                IndexOptInfo *index = list_nth(indexes, idx_pos);
+                ListCell *clc;
+                
+                foreach(clc, clauses)
+                {
+                    RestrictInfo *other_rinfo = lfirst_node(RestrictInfo, clc);
+                    /* Skip the original SAOP clause we are actively decomposing */
+                    if (other_rinfo != rinfo) {
+                        match_clause_to_index(root,
+                                              other_rinfo,
+                                              index,
+                                              &base_clausesets[idx_pos]);
+                    }
+                }
+            }
+        }
+
+        /*
          * For each IN element, build ALL possible index paths,
          * not just the first one (avoid greedy choice).
          */
@@ -1976,24 +2005,12 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
                                           false))
                     continue;
 
-                MemSet(&clauseset, 0, sizeof(clauseset));
+                memcpy(&clauseset, &base_clausesets[index_pos], sizeof(IndexClauseSet));
 
                 match_clause_to_index(root,
                                       new_rinfo,
                                       index,
                                       &clauseset);
-
-                /*
-                 * Structural mismatch → prune permanently.
-                 */
-                if (!clauseset.nonempty)
-                {
-                    to_remove =
-                        bms_add_member(to_remove,
-                                       index_pos);
-                    continue;
-                }
-
                 indexpaths =
                     build_index_paths(root,
                                       rel,
@@ -2056,6 +2073,7 @@ generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
             }
         }
 
+        pfree(base_clausesets);
         bms_free(suitable_indexes);
 
         if (per_saop_paths != NIL)

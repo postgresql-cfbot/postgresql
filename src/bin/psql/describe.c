@@ -1950,11 +1950,11 @@ describeOneTableDetails(const char *schemaname,
 						  "\n                    when " CppAsString2(PGEKIND_EDGE) " then 'edge' end AS \"%s\","
 						  "\n     s.pgealias as \"%s\","
 						  "\n     d.pgealias as \"%s\""
-						  "\n FROM pg_propgraph_element e"
-						  "\n      INNER JOIN pg_class c ON c.oid = e.pgerelid"
-						  "\n      INNER JOIN pg_namespace n ON c.relnamespace = n.oid"
-						  "\n      LEFT JOIN pg_propgraph_element s ON e.pgesrcvertexid = s.oid"
-						  "\n      LEFT JOIN pg_propgraph_element d ON e.pgedestvertexid = d.oid"
+						  "\n FROM pg_catalog.pg_propgraph_element e"
+						  "\n      INNER JOIN pg_catalog.pg_class c ON c.oid = e.pgerelid"
+						  "\n      INNER JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid"
+						  "\n      LEFT JOIN pg_catalog.pg_propgraph_element s ON e.pgesrcvertexid = s.oid"
+						  "\n      LEFT JOIN pg_catalog.pg_propgraph_element d ON e.pgedestvertexid = d.oid"
 						  "\n WHERE e.pgepgid = '%s'"
 						  "\n ORDER BY e.pgealias",
 						  gettext_noop("Element Alias"),
@@ -7165,7 +7165,7 @@ describeSubscriptions(const char *pattern, bool verbose)
 		if (pset.sversion >= 190000)
 		{
 			appendPQExpBuffer(&buf,
-							  ", (select srvname from pg_foreign_server where oid=subserver) AS \"%s\"\n",
+							  ", (select srvname from pg_catalog.pg_foreign_server where oid=subserver) AS \"%s\"\n",
 							  gettext_noop("Server"));
 
 			appendPQExpBuffer(&buf,

@@ -290,6 +290,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
 #include "utils/guc.h"
+#include "utils/injection_point.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -514,6 +515,8 @@ static List *on_commit_wakeup_workers_subids = NIL;
 
 bool		in_remote_transaction = false;
 static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
+static TransactionId remote_xid = InvalidTransactionId;
+static TransactionId last_parallelized_remote_xid = InvalidTransactionId;
 
 /* fields valid only when processing streamed transaction */
 static bool in_streamed_transaction = false;
@@ -723,6 +726,7 @@ static void on_exit_clear_xact_state(int code, Datum arg);
 
 static void send_internal_dependencies(ParallelApplyWorkerInfo *winfo,
 									   List *depends_on_xids);
+static void build_dependency_with_last_committed_txn(ParallelApplyWorkerInfo *winfo);
 
 /*
  * Compute the hash value for entries in the replica_identity_table.
@@ -764,6 +768,9 @@ hash_replica_identity_compare(ReplicaIdentityKey *a, ReplicaIdentityKey *b)
 	{
 		if (a->data->colstatus[i] != b->data->colstatus[i])
 			return false;
+
+		if (a->data->colstatus[i] == LOGICALREP_COLUMN_NULL)
+			continue;
 
 		if (a->data->colvalues[i].len != b->data->colvalues[i].len)
 			return false;
@@ -842,7 +849,7 @@ cleanup_committed_replica_identity_entries(void)
 			XLogRecPtrIsValid(pos->local_end))
 			continue;
 
-		pos->local_end = pa_get_last_commit_end(pos->pa_remote_xid,
+		pos->local_end = pa_get_last_commit_end(pos->pa_remote_xid, false,
 												&skipped_write);
 
 		elog(DEBUG1,
@@ -1011,8 +1018,6 @@ check_and_record_ri_dependency(Oid relid, LogicalRepTupleData *original_data,
 
 	for (int i_original = 0, i_ri = 0; i_original < original_data->ncols; i_original++)
 	{
-		StringInfo	original_colvalue = &original_data->colvalues[i_original];
-
 		if (!bms_is_member(i_original, relentry->remoterel.attkeys))
 			continue;
 
@@ -1029,8 +1034,10 @@ check_and_record_ri_dependency(Oid relid, LogicalRepTupleData *original_data,
 		Assert(original_data->colstatus[i_original] != LOGICALREP_COLUMN_UNCHANGED ||
 			   original_data->colvalues[i_original].len > 0);
 
-		if (ridata->colstatus[i_ri] != LOGICALREP_COLUMN_NULL)
+		if (original_data->colstatus[i_original] != LOGICALREP_COLUMN_NULL)
 		{
+			StringInfo	original_colvalue = &original_data->colvalues[i_original];
+
 			initStringInfoExt(&ridata->colvalues[i_ri], original_colvalue->len + 1);
 			appendStringInfoString(&ridata->colvalues[i_ri], original_colvalue->data);
 		}
@@ -1498,14 +1505,14 @@ handle_streamed_transaction(LogicalRepMsgType action, StringInfo s)
 	TransApplyAction apply_action;
 	StringInfoData original_msg;
 
+	if (!in_streamed_transaction)
+		return false;
+
 	apply_action = get_transaction_apply_action(stream_xid, &winfo);
 
 	/* not in streaming mode */
 	if (apply_action == TRANS_LEADER_APPLY)
-	{
-		handle_dependency_on_change(action, s, InvalidTransactionId, winfo);
 		return false;
-	}
 
 	Assert(TransactionIdIsValid(stream_xid));
 
@@ -1573,6 +1580,73 @@ handle_streamed_transaction(LogicalRepMsgType action, StringInfo s)
 			/* Define a savepoint for a subxact if needed. */
 			pa_start_subtrans(current_xid, stream_xid);
 			return false;
+
+		default:
+			elog(ERROR, "unexpected apply action: %d", (int) apply_action);
+			return false;		/* silence compiler warning */
+	}
+}
+
+/*
+ * Handle non-streaming transactions when parallel apply is in use.
+ *
+ * This function runs only in the leader apply worker while processing a remote
+ * transaction. It checks whether the current change has dependencies on
+ * preceding parallelized transactions and decides whether to send the change to
+ * a parallel apply worker.
+ *
+ * Returns true if the change has been dispatched to a parallel worker,
+ * indicating the leader does not need to apply it directly. Returns false
+ * otherwise.
+ *
+ * Exception: If the message being processed is LOGICAL_REP_MSG_RELATION or
+ * LOGICAL_REP_MSG_TYPE, return false even if the message needs to be sent to a
+ * parallel apply worker.
+ */
+static bool
+handle_parallelized_transaction(LogicalRepMsgType action, StringInfo s)
+{
+	ParallelApplyWorkerInfo *winfo;
+	TransApplyAction apply_action;
+
+	/*
+	 * Dependency checking for non-streaming transactions is only required in
+	 * the leader apply worker during a remote transaction.
+	 */
+	if (!in_remote_transaction || !am_leader_apply_worker())
+		return false;
+
+	apply_action = get_transaction_apply_action(remote_xid, &winfo);
+
+	/* not assigned to parallel apply worker, apply in leader */
+	if (apply_action == TRANS_LEADER_APPLY)
+	{
+		handle_dependency_on_change(action, s, InvalidTransactionId, winfo);
+		return false;
+	}
+
+	Assert(TransactionIdIsValid(remote_xid));
+
+	handle_dependency_on_change(action, s, remote_xid, winfo);
+
+	switch (apply_action)
+	{
+		case TRANS_LEADER_SEND_TO_PARALLEL:
+			Assert(winfo);
+
+			/* Always update relation and type cache in leader apply worker */
+			if (pa_send_data(winfo, s->len, s->data))
+				return (action != LOGICAL_REP_MSG_RELATION &&
+						action != LOGICAL_REP_MSG_TYPE);
+
+			/*
+			 * TODO: Support switching to PARTIAL_SERIALIZE mode when the send
+			 * buffer becomes full.
+			 */
+			ereport(ERROR,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("could not send data to the logical replication parallel apply worker"));
+			return false;	/* silence compiler warning */
 
 		default:
 			elog(ERROR, "unexpected apply action: %d", (int) apply_action);
@@ -1941,16 +2015,60 @@ static void
 apply_handle_begin(StringInfo s)
 {
 	LogicalRepBeginData begin_data;
+	ParallelApplyWorkerInfo *winfo;
+	TransApplyAction apply_action;
 
 	/* There must not be an active streaming transaction. */
 	Assert(!TransactionIdIsValid(stream_xid));
 
 	logicalrep_read_begin(s, &begin_data);
-	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
+
+	remote_xid = begin_data.xid;
+
+	set_apply_error_context_xact(remote_xid, begin_data.final_lsn);
 
 	remote_final_lsn = begin_data.final_lsn;
 
 	maybe_start_skipping_changes(begin_data.final_lsn);
+
+	pa_allocate_worker(remote_xid, false);
+
+	apply_action = get_transaction_apply_action(remote_xid, &winfo);
+
+	elog(DEBUG1, "new remote_xid %u", remote_xid);
+	switch (apply_action)
+	{
+		case TRANS_LEADER_APPLY:
+			break;
+
+		case TRANS_LEADER_SEND_TO_PARALLEL:
+			Assert(winfo);
+
+			if (pa_send_data(winfo, s->len, s->data))
+			{
+				pa_set_stream_apply_worker(winfo);
+				break;
+			}
+
+			/*
+			 * TODO: Support switching to PARTIAL_SERIALIZE mode when the send
+			 * buffer becomes full.
+			 */
+			ereport(ERROR,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("could not send data to the logical replication parallel apply worker"));
+			break;
+
+		case TRANS_PARALLEL_APPLY:
+			/* Hold the lock until the end of the transaction. */
+			pa_lock_transaction(MyParallelShared->xid, AccessExclusiveLock);
+			pa_set_xact_state(MyParallelShared, PARALLEL_TRANS_STARTED);
+			break;
+
+		default:
+			elog(ERROR, "unexpected apply action: %d", (int) apply_action);
+			break;
+	}
 
 	in_remote_transaction = true;
 
@@ -1974,10 +2092,31 @@ send_internal_dependencies(ParallelApplyWorkerInfo *winfo, List *depends_on_xids
 	foreach_xid(xid, depends_on_xids)
 		pq_sendint32(&dependencies, xid);
 
-	if (pa_send_data(winfo, dependencies.len, dependencies.data))
+	/*
+	 * TODO: Support switching to PARTIAL_SERIALIZE mode when the send
+	 * buffer becomes full.
+	 */
+	if (!pa_send_data(winfo, dependencies.len, dependencies.data))
 		ereport(ERROR,
 				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				errmsg("could not send data to the logical replication parallel apply worker"));
+}
+
+/*
+ * Make a dependency between this and the lastly committed transaction.
+ *
+ * Sends an INTERNAL_DEPENDENCY message to the parallel apply worker,
+ * instructing it to wait for the last committed transaction to finish before
+ * committing its own, thereby preserving commit order.
+ */
+static void
+build_dependency_with_last_committed_txn(ParallelApplyWorkerInfo *winfo)
+{
+	/* Skip if transactions have not been applied yet */
+	if (!TransactionIdIsValid(last_parallelized_remote_xid))
+		return;
+
+	send_internal_dependencies(winfo, list_make1_xid(last_parallelized_remote_xid));
 }
 
 /*
@@ -1989,6 +2128,8 @@ static void
 apply_handle_commit(StringInfo s)
 {
 	LogicalRepCommitData commit_data;
+	ParallelApplyWorkerInfo *winfo;
+	TransApplyAction apply_action;
 
 	logicalrep_read_commit(s, &commit_data);
 
@@ -1999,7 +2140,92 @@ apply_handle_commit(StringInfo s)
 								 LSN_FORMAT_ARGS(commit_data.commit_lsn),
 								 LSN_FORMAT_ARGS(remote_final_lsn))));
 
-	apply_handle_commit_internal(&commit_data);
+	apply_action = get_transaction_apply_action(remote_xid, &winfo);
+
+	switch (apply_action)
+	{
+		case TRANS_LEADER_APPLY:
+
+			/*
+			 * Apart from parallelized transactions, we do not have to
+			 * register this transaction to parallelized_txns. The commit
+			 * ordering is always preserved.
+			 */
+
+			/* Wait until the last transaction finishes */
+			if (TransactionIdIsValid(last_parallelized_remote_xid))
+			{
+				pa_wait_for_depended_transaction(last_parallelized_remote_xid);
+				last_parallelized_remote_xid = InvalidTransactionId;
+			}
+
+			apply_handle_commit_internal(&commit_data);
+
+			break;
+
+		case TRANS_LEADER_SEND_TO_PARALLEL:
+			Assert(winfo);
+
+			/*
+			 * Mark this transaction as parallelized. This ensures that
+			 * upcoming transactions wait until this transaction is committed.
+			 */
+			pa_add_parallelized_transaction(remote_xid);
+
+			/*
+			 * Build a dependency between this transaction and the lastly
+			 * committed transaction to preserve the commit order.
+			 */
+			build_dependency_with_last_committed_txn(winfo);
+
+			if (pa_send_data(winfo, s->len, s->data))
+			{
+				/* Cache the remote_xid */
+				last_parallelized_remote_xid = remote_xid;
+
+				/* Finish processing the transaction. */
+				pa_xact_finish(winfo, commit_data.end_lsn);
+				break;
+			}
+
+			/*
+			 * TODO: Support switching to PARTIAL_SERIALIZE mode when the send
+			 * buffer becomes full.
+			 */
+			ereport(ERROR,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("could not send data to the logical replication parallel apply worker"));
+			break;
+
+		case TRANS_PARALLEL_APPLY:
+
+			/*
+			 * If the parallel apply worker is applying spooled messages then
+			 * close the file before committing.
+			 */
+			if (stream_fd)
+				stream_close_file();
+
+			INJECTION_POINT("parallel-worker-before-commit", NULL);
+
+			apply_handle_commit_internal(&commit_data);
+
+			MyParallelShared->last_commit_end = XactLastCommitEnd;
+
+			pa_commit_transaction();
+
+			pa_unlock_transaction(remote_xid, AccessExclusiveLock);
+			break;
+
+		default:
+			elog(ERROR, "unexpected apply action: %d", (int) apply_action);
+			break;
+	}
+
+	remote_xid = InvalidTransactionId;
+	in_remote_transaction = false;
+
+	elog(DEBUG1, "reset remote_xid %u", remote_xid);
 
 	/*
 	 * Process any tables that are being synchronized in parallel, as well as
@@ -2122,7 +2348,8 @@ apply_handle_prepare(StringInfo s)
 	 * XactLastCommitEnd, and adding it for this purpose doesn't seems worth
 	 * it.
 	 */
-	store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr);
+	store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr,
+						 InvalidTransactionId);
 
 	in_remote_transaction = false;
 
@@ -2182,7 +2409,8 @@ apply_handle_commit_prepared(StringInfo s)
 	CommitTransactionCommand();
 	pgstat_report_stat(false);
 
-	store_flush_position(prepare_data.end_lsn, XactLastCommitEnd);
+	store_flush_position(prepare_data.end_lsn, XactLastCommitEnd,
+						 InvalidTransactionId);
 	in_remote_transaction = false;
 
 	/*
@@ -2251,7 +2479,8 @@ apply_handle_rollback_prepared(StringInfo s)
 	 * transaction because we always flush the WAL record for it. See
 	 * apply_handle_prepare.
 	 */
-	store_flush_position(rollback_data.rollback_end_lsn, InvalidXLogRecPtr);
+	store_flush_position(rollback_data.rollback_end_lsn, InvalidXLogRecPtr,
+						 InvalidTransactionId);
 	in_remote_transaction = false;
 
 	/*
@@ -2313,7 +2542,8 @@ apply_handle_stream_prepare(StringInfo s)
 			 * It is okay not to set the local_end LSN for the prepare because
 			 * we always flush the prepare record. See apply_handle_prepare.
 			 */
-			store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr);
+			store_flush_position(prepare_data.end_lsn, InvalidXLogRecPtr,
+								 InvalidTransactionId);
 
 			in_remote_transaction = false;
 
@@ -2505,8 +2735,17 @@ apply_handle_stream_start(StringInfo s)
 
 	set_apply_error_context_xact(stream_xid, InvalidXLogRecPtr);
 
-	/* Try to allocate a worker for the streaming transaction. */
-	if (first_segment)
+	/*
+	 * Try to allocate a worker for the streaming transaction.
+	 *
+	 * TODO: Support assigning streaming transactions to parallel apply workers
+	 * even when non-streaming transactions are running and better dependency
+	 * handling between streaming and non-streaming transactions.
+	 */
+	if (first_segment &&
+		am_leader_apply_worker() &&
+		(!TransactionIdIsValid(last_parallelized_remote_xid) ||
+		 pa_transaction_committed(last_parallelized_remote_xid)))
 		pa_allocate_worker(stream_xid, true);
 
 	apply_action = get_transaction_apply_action(stream_xid, &winfo);
@@ -3021,8 +3260,7 @@ apply_spooled_messages(FileSet *stream_fileset, TransactionId xid,
 	int			fileno;
 	pgoff_t		offset;
 
-	if (!am_parallel_apply_worker())
-		maybe_start_skipping_changes(lsn);
+	maybe_start_skipping_changes(lsn);
 
 	/* Make sure we have an open transaction */
 	begin_replication_step();
@@ -3292,7 +3530,8 @@ apply_handle_commit_internal(LogicalRepCommitData *commit_data)
 
 		pgstat_report_stat(false);
 
-		store_flush_position(commit_data->end_lsn, XactLastCommitEnd);
+		store_flush_position(commit_data->end_lsn, XactLastCommitEnd,
+							 InvalidTransactionId);
 	}
 	else
 	{
@@ -3317,7 +3556,8 @@ apply_handle_relation(StringInfo s)
 {
 	LogicalRepRelation *rel;
 
-	if (handle_streamed_transaction(LOGICAL_REP_MSG_RELATION, s))
+	if (handle_parallelized_transaction(LOGICAL_REP_MSG_RELATION, s) ||
+		handle_streamed_transaction(LOGICAL_REP_MSG_RELATION, s))
 		return;
 
 	rel = logicalrep_read_rel(s);
@@ -3325,6 +3565,8 @@ apply_handle_relation(StringInfo s)
 
 	/* Also reset all entries in the partition map that refer to remoterel. */
 	logicalrep_partmap_reset_relmap(rel);
+
+	pa_distribute_schema_changes_to_workers(rel);
 }
 
 /*
@@ -3340,7 +3582,8 @@ apply_handle_type(StringInfo s)
 {
 	LogicalRepTyp typ;
 
-	if (handle_streamed_transaction(LOGICAL_REP_MSG_TYPE, s))
+	if (handle_parallelized_transaction(LOGICAL_REP_MSG_TYPE, s) ||
+		handle_streamed_transaction(LOGICAL_REP_MSG_TYPE, s))
 		return;
 
 	logicalrep_read_typ(s, &typ);
@@ -3400,6 +3643,7 @@ apply_handle_insert(StringInfo s)
 	 * streamed transactions.
 	 */
 	if (is_skipping_changes() ||
+		handle_parallelized_transaction(LOGICAL_REP_MSG_INSERT, s) ||
 		handle_streamed_transaction(LOGICAL_REP_MSG_INSERT, s))
 		return;
 
@@ -3560,6 +3804,7 @@ apply_handle_update(StringInfo s)
 	 * streamed transactions.
 	 */
 	if (is_skipping_changes() ||
+		handle_parallelized_transaction(LOGICAL_REP_MSG_UPDATE, s) ||
 		handle_streamed_transaction(LOGICAL_REP_MSG_UPDATE, s))
 		return;
 
@@ -3784,6 +4029,7 @@ apply_handle_delete(StringInfo s)
 	 * streamed transactions.
 	 */
 	if (is_skipping_changes() ||
+		handle_parallelized_transaction(LOGICAL_REP_MSG_DELETE, s) ||
 		handle_streamed_transaction(LOGICAL_REP_MSG_DELETE, s))
 		return;
 
@@ -4420,6 +4666,7 @@ apply_handle_truncate(StringInfo s)
 	 * streamed transactions.
 	 */
 	if (is_skipping_changes() ||
+		handle_parallelized_transaction(LOGICAL_REP_MSG_TRUNCATE, s) ||
 		handle_streamed_transaction(LOGICAL_REP_MSG_TRUNCATE, s))
 		return;
 
@@ -4650,6 +4897,10 @@ apply_dispatch(StringInfo s)
  * check which entries on it are already locally flushed. Those we can report
  * as having been flushed.
  *
+ * For non-streaming transactions managed by a parallel apply worker, we will
+ * get the local commit end from the shared parallel apply worker info once the
+ * transaction has been committed by the worker.
+ *
  * The have_pending_txes is true if there are outstanding transactions that
  * need to be flushed.
  */
@@ -4659,6 +4910,7 @@ get_flush_position(XLogRecPtr *write, XLogRecPtr *flush,
 {
 	dlist_mutable_iter iter;
 	XLogRecPtr	local_flush = GetFlushRecPtr(NULL);
+	List	   *committed_pa_xid = NIL;
 
 	*write = InvalidXLogRecPtr;
 	*flush = InvalidXLogRecPtr;
@@ -4668,6 +4920,40 @@ get_flush_position(XLogRecPtr *write, XLogRecPtr *flush,
 		FlushPosition *pos =
 			dlist_container(FlushPosition, node, iter.cur);
 
+		/*
+		 * If the transaction was assigned to a parallel apply worker, attempt
+		 * to retrieve its commit end LSN from that worker.
+		 */
+		if (TransactionIdIsValid(pos->pa_remote_xid) &&
+			!XLogRecPtrIsValid(pos->local_end))
+		{
+			bool		skipped_write;
+
+			pos->local_end = pa_get_last_commit_end(pos->pa_remote_xid, true,
+													&skipped_write);
+
+			elog(DEBUG1,
+				 "got commit end from parallel apply worker, "
+				 "txn: %u, remote_end %X/%X, local_end %X/%X",
+				 pos->pa_remote_xid, LSN_FORMAT_ARGS(pos->remote_end),
+				 LSN_FORMAT_ARGS(pos->local_end));
+
+			/*
+			 * Break the loop if the worker has not finished applying the
+			 * transaction. There's no need to check subsequent transactions,
+			 * as they must commit after the current transaction being
+			 * examined and thus won't have their commit end available yet.
+			 */
+			if (!skipped_write && XLogRecPtrIsInvalid(pos->local_end))
+				break;
+
+			committed_pa_xid = lappend_xid(committed_pa_xid, pos->pa_remote_xid);
+		}
+
+		/*
+		 * Worker has finished applying or the transaction was applied in the
+		 * leader apply worker.
+		 */
 		*write = pos->remote_end;
 
 		if (pos->local_end <= local_flush)
@@ -4676,29 +4962,22 @@ get_flush_position(XLogRecPtr *write, XLogRecPtr *flush,
 			dlist_delete(iter.cur);
 			pfree(pos);
 		}
-		else
-		{
-			/*
-			 * Don't want to uselessly iterate over the rest of the list which
-			 * could potentially be long. Instead get the last element and
-			 * grab the write position from there.
-			 */
-			pos = dlist_tail_element(FlushPosition, node,
-									 &lsn_mapping);
-			*write = pos->remote_end;
-			*have_pending_txes = true;
-			return;
-		}
 	}
 
 	*have_pending_txes = !dlist_is_empty(&lsn_mapping);
+
+	delete_replica_identity_entries_for_txns(committed_pa_xid);
 }
 
 /*
  * Store current remote/local lsn pair in the tracking list.
+ *
+ * pa_remote_xid should be a valid transaction ID only when the transaction was
+ * assigned to a parallel apply worker; otherwise, pass InvalidTransactionId.
  */
 void
-store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn)
+store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn,
+					 TransactionId pa_remote_xid)
 {
 	FlushPosition *flushpos;
 
@@ -4716,7 +4995,7 @@ store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn)
 	flushpos = palloc_object(FlushPosition);
 	flushpos->local_end = local_lsn;
 	flushpos->remote_end = remote_lsn;
-	flushpos->pa_remote_xid = InvalidTransactionId;
+	flushpos->pa_remote_xid = pa_remote_xid;
 
 	dlist_push_tail(&lsn_mapping, &flushpos->node);
 	MemoryContextSwitchTo(ApplyMessageContext);
@@ -6849,6 +7128,22 @@ static void
 maybe_start_skipping_changes(XLogRecPtr finish_lsn)
 {
 	Assert(!is_skipping_changes());
+
+	/*
+	 * For streaming transactions applied in a parallel apply worker, the remote
+	 * end LSN is unknown, so skipping is not possible. For non-streaming
+	 * transactions, the leader determines whether to skip the transaction. If
+	 * skipping is needed, the leader simply does not send the transaction to a
+	 * parallel apply worker.
+	 */
+	if (am_parallel_apply_worker())
+		return;
+
+	/*
+	 * These assertions apply only to leader apply and table sync workers.
+	 * Parallel workers may apply spooled BEGIN or STREAM_START messages, which
+	 * can set these flags to true.
+	 */
 	Assert(!in_remote_transaction);
 	Assert(!in_streamed_transaction);
 

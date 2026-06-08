@@ -345,7 +345,8 @@ extern void SetupApplyOrSyncWorker(int worker_slot);
 
 extern void DisableSubscriptionAndExit(void);
 
-extern void store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn);
+extern void store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn,
+								 TransactionId pa_remote_xid);
 
 /* Function for apply error callback */
 extern void apply_error_callback(void *arg);
@@ -354,13 +355,15 @@ extern void set_apply_error_context_origin(char *originname);
 /* Parallel apply worker setup and interactions */
 extern void pa_allocate_worker(TransactionId xid, bool stream_txn);
 extern ParallelApplyWorkerInfo *pa_find_worker(TransactionId xid);
-extern XLogRecPtr pa_get_last_commit_end(TransactionId xid, bool *skipped_write);
+extern XLogRecPtr pa_get_last_commit_end(TransactionId xid, bool delete_entry,
+										 bool *skipped_write);
 extern void pa_detach_all_error_mq(void);
 
 extern void apply_handle_internal_message(StringInfo s);
 
 extern bool pa_send_data(ParallelApplyWorkerInfo *winfo, Size nbytes,
 						 const void *data);
+extern void pa_distribute_schema_changes_to_workers(LogicalRepRelation *rel);
 extern void pa_switch_to_partial_serialize(ParallelApplyWorkerInfo *winfo,
 										   bool stream_locked);
 
@@ -386,8 +389,9 @@ extern void pa_decr_and_wait_stream_block(void);
 extern void pa_xact_finish(ParallelApplyWorkerInfo *winfo,
 						   XLogRecPtr remote_lsn);
 extern bool pa_transaction_committed(TransactionId xid);
-
+extern void pa_commit_transaction(void);
 extern void pa_wait_for_depended_transaction(TransactionId xid);
+extern void pa_add_parallelized_transaction(TransactionId xid);
 
 #define isParallelApplyWorker(worker) ((worker)->in_use && \
 									   (worker)->type == WORKERTYPE_PARALLEL_APPLY)

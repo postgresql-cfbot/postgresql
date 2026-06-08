@@ -1756,6 +1756,57 @@ preprocess_phv_expression(PlannerInfo *root, Expr *expr)
 	return (Expr *) preprocess_expression(root, (Node *) expr, EXPRKIND_PHV);
 }
 
+/*
+ * distinct_redundant_by_groupby
+ *
+ * Returns true if SELECT DISTINCT is redundant because GROUP BY already
+ * guarantees uniqueness of every output row.
+ *
+ * This is the case when:
+ *  - there is a non-empty GROUP BY (no GROUPING SETS, which can introduce
+ *    NULLs that create duplicates across grouping sets),
+ *  - it is plain DISTINCT, not DISTINCT ON (different semantics), and
+ *  - every GROUP BY key appears in the DISTINCT clause, ensuring that no
+ *    two distinct groups can produce the same DISTINCT output values.
+ */
+static bool
+distinct_redundant_by_groupby(Query *parse)
+{
+	ListCell   *lc;
+	Bitmapset  *distinct_refs = NULL;
+
+	Assert(parse->distinctClause != NIL);
+
+	/* Need a non-empty plain GROUP BY, no GROUPING SETS */
+	if (parse->groupClause == NIL ||
+		parse->groupingSets != NIL ||
+		parse->hasDistinctOn)
+		return false;
+
+	/*
+	 * Every GROUP BY key must appear in the DISTINCT clause.  If a GROUP BY
+	 * key is absent from the DISTINCT list, two groups could yield the same
+	 * DISTINCT output (e.g. SELECT DISTINCT 1 FROM t GROUP BY a).
+	 */
+
+	foreach(lc, parse->distinctClause)
+	{
+		SortGroupClause *sgc = lfirst_node(SortGroupClause, lc);
+
+		distinct_refs = bms_add_member(distinct_refs, sgc->tleSortGroupRef);
+	}
+
+	foreach(lc, parse->groupClause)
+	{
+		SortGroupClause *sgc = lfirst_node(SortGroupClause, lc);
+
+		if (!bms_is_member(sgc->tleSortGroupRef, distinct_refs))
+			return false;
+	}
+
+	return true;
+}
+
 /*--------------------
  * grouping_planner
  *	  Perform planning steps related to grouping, aggregation, etc.
@@ -2184,8 +2235,11 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 		/*
 		 * If there is a DISTINCT clause, consider ways to implement that. We
 		 * build a new upperrel representing the output of this phase.
+		 *
+		 * Skip this step if DISTINCT is redundant because GROUP BY already
+		 * guarantees uniqueness of the output rows.
 		 */
-		if (parse->distinctClause)
+		if (parse->distinctClause && !distinct_redundant_by_groupby(parse))
 		{
 			current_rel = create_distinct_paths(root,
 												current_rel,

@@ -958,7 +958,7 @@ CopyFromTextLikeOneRow(CopyFromState cstate, ExprContext *econtext,
 	FmgrInfo   *in_functions = cstate->in_functions;
 	Oid		   *typioparams = cstate->typioparams;
 	ExprState **defexprs = cstate->defexprs;
-	char	  **field_strings;
+	char	  **field_strings = NULL;
 	ListCell   *cur;
 	int			fldct;
 	int			fieldno;

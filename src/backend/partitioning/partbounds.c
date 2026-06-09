@@ -5375,7 +5375,7 @@ check_partition_bounds_for_split_range(Relation parent,
 	if (first || last)
 	{
 		PartitionBoundSpec *split_spec = get_partition_bound_spec(splitPartOid);
-		PartitionRangeDatum *datum;
+		PartitionRangeDatum *datum = NULL;
 
 		if (first)
 		{

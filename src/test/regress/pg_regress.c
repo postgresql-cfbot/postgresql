@@ -1425,7 +1425,7 @@ results_differ(const char *testname, const char *resultsfile, const char *defaul
 	int			best_line_count;
 	int			i;
 	int			l;
-	long		startpos;
+	long		startpos = 0;
 	const char *platform_expectfile;
 
 	/*

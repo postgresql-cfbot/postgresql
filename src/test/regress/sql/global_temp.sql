@@ -11,7 +11,7 @@ SET ROLE regress_global_temp_user;
 
 -- Test table creation
 CREATE GLOBAL TEMP TABLE pg_temp.tmp1 (a int); -- fail
-CREATE GLOBAL TEMP TABLE tmp1 (a int PRIMARY KEY, b text);
+CREATE GLOBAL TEMP TABLE tmp1 (a int PRIMARY KEY, b text, c serial);
 CREATE SCHEMA global_temp_xxx CREATE GLOBAL TEMP TABLE tmp2 (a int);
 CREATE SCHEMA global_temp_yyy;
 CREATE GLOBAL TEMP TABLE global_temp_yyy.tmp3 (a int);
@@ -189,3 +189,11 @@ SELECT * FROM v;
 DROP VIEW v;
 
 CREATE GLOBAL TEMP VIEW v AS SELECT * FROM tmp1; -- fail
+
+-- Test global temp sequence
+CREATE GLOBAL TEMP SEQUENCE s MINVALUE 100 MAXVALUE 130 INCREMENT 10 START WITH 110 CYCLE;
+\d s
+SELECT nextval('s') FROM generate_series(1, 5);
+\c
+SET search_path = global_temp_tests;
+SELECT nextval('s') FROM generate_series(1, 5);

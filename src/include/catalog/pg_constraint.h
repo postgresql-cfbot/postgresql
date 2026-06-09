@@ -100,6 +100,7 @@ CATALOG(pg_constraint,2606,ConstraintRelationId)
 	char		confupdtype;	/* foreign key's ON UPDATE action */
 	char		confdeltype;	/* foreign key's ON DELETE action */
 	char		confmatchtype;	/* foreign key's match type */
+	bool		conflockkeyindex; /* foreign key's index-vs-tuple lock option */
 
 	/* Has a local definition (hence, do not drop when coninhcount is 0) */
 	bool		conislocal;
@@ -244,6 +245,7 @@ extern Oid	CreateConstraintEntry(const char *constraintName,
 								  int foreignNKeys,
 								  char foreignUpdateType,
 								  char foreignDeleteType,
+								  bool foreignLockKeyIndex,
 								  const int16 *fkDeleteSetCols,
 								  int numFkDeleteSetCols,
 								  char foreignMatchType,

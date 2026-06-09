@@ -609,6 +609,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <list>	ColQualList
 %type <node>	ColConstraint ColConstraintElem ConstraintAttr
 %type <ival>	key_match
+%type <boolean> fklockclause opt_fklockclause
 %type <keyaction> key_delete key_update key_action
 %type <keyactions> key_actions
 %type <ival>	ConstraintAttributeSpec ConstraintAttributeElem
@@ -4231,7 +4232,7 @@ ColConstraintElem:
 
 					$$ = (Node *) n;
 				}
-			| REFERENCES qualified_name opt_column_list key_match key_actions
+			| REFERENCES qualified_name opt_column_list opt_fklockclause key_match key_actions
 				{
 					Constraint *n = makeNode(Constraint);
 
@@ -4240,10 +4241,11 @@ ColConstraintElem:
 					n->pktable = $2;
 					n->fk_attrs = NIL;
 					n->pk_attrs = $3;
-					n->fk_matchtype = $4;
-					n->fk_upd_action = ($5)->updateAction->action;
-					n->fk_del_action = ($5)->deleteAction->action;
-					n->fk_del_set_cols = ($5)->deleteAction->cols;
+					n->fk_lockkeyindex = $4;
+					n->fk_matchtype = $5;
+					n->fk_upd_action = ($6)->updateAction->action;
+					n->fk_del_action = ($6)->deleteAction->action;
+					n->fk_del_set_cols = ($6)->deleteAction->cols;
 					n->is_enforced = true;
 					n->skip_validation = false;
 					n->initially_valid = true;
@@ -4501,7 +4503,7 @@ ConstraintElem:
 					$$ = (Node *) n;
 				}
 			| FOREIGN KEY '(' columnList optionalPeriodName ')' REFERENCES qualified_name
-				opt_column_and_period_list key_match key_actions ConstraintAttributeSpec
+				opt_column_and_period_list opt_fklockclause key_match key_actions ConstraintAttributeSpec
 				{
 					Constraint *n = makeNode(Constraint);
 
@@ -4520,11 +4522,12 @@ ConstraintElem:
 						n->pk_attrs = lappend(n->pk_attrs, lsecond($9));
 						n->pk_with_period = true;
 					}
-					n->fk_matchtype = $10;
-					n->fk_upd_action = ($11)->updateAction->action;
-					n->fk_del_action = ($11)->deleteAction->action;
-					n->fk_del_set_cols = ($11)->deleteAction->cols;
-					processCASbits($12, @12, "FOREIGN KEY",
+					n->fk_lockkeyindex = $10;
+					n->fk_matchtype = $11;
+					n->fk_upd_action = ($12)->updateAction->action;
+					n->fk_del_action = ($12)->deleteAction->action;
+					n->fk_del_set_cols = ($12)->deleteAction->cols;
+					processCASbits($13, @13, "FOREIGN KEY",
 								   &n->deferrable, &n->initdeferred,
 								   &n->is_enforced, &n->skip_validation, NULL,
 								   yyscanner);
@@ -4626,6 +4629,14 @@ columnElem: ColId
 opt_c_include:	INCLUDE '(' columnList ')'			{ $$ = $3; }
 			 |		/* EMPTY */						{ $$ = NIL; }
 		;
+
+fklockclause:	LOCK_P KEY INDEX					{ $$ = true; }
+			 |	LOCK_P ROWS							{ $$ = false; }
+			 ;
+
+opt_fklockclause:	fklockclause					{ $$ = $1; }
+			 |		/* EMPTY */						{ $$ = false; }
+			 ;
 
 key_match:  MATCH FULL
 			{

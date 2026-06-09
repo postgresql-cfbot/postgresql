@@ -70,6 +70,7 @@ CreateConstraintEntry(const char *constraintName,
 					  int foreignNKeys,
 					  char foreignUpdateType,
 					  char foreignDeleteType,
+					  bool foreignLockKeyIndex,
 					  const int16 *fkDeleteSetCols,
 					  int numFkDeleteSetCols,
 					  char foreignMatchType,
@@ -200,6 +201,7 @@ CreateConstraintEntry(const char *constraintName,
 	values[Anum_pg_constraint_confupdtype - 1] = CharGetDatum(foreignUpdateType);
 	values[Anum_pg_constraint_confdeltype - 1] = CharGetDatum(foreignDeleteType);
 	values[Anum_pg_constraint_confmatchtype - 1] = CharGetDatum(foreignMatchType);
+	values[Anum_pg_constraint_conflockkeyindex - 1] = BoolGetDatum(foreignLockKeyIndex);
 	values[Anum_pg_constraint_conislocal - 1] = BoolGetDatum(conIsLocal);
 	values[Anum_pg_constraint_coninhcount - 1] = Int16GetDatum(conInhCount);
 	values[Anum_pg_constraint_connoinherit - 1] = BoolGetDatum(conNoInherit);

@@ -21,7 +21,9 @@
 #include "access/genam.h"
 #include "access/table.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_subscription_rel.h"
+#include "commands/trigger.h"
 #include "executor/executor.h"
 #include "nodes/makefuncs.h"
 #include "replication/logicalrelation.h"
@@ -160,6 +162,10 @@ logicalrep_relmap_free_entry(LogicalRepRelMapEntry *entry)
  *
  * Called when new relation mapping is sent by the publisher to update
  * our expected view of incoming data from said publisher.
+ *
+ * Note that we do not check the user-defined constraints here. PostgreSQL has
+ * already assumed that CHECK constraints' conditions are immutable and here
+ * follows the rule.
  */
 void
 logicalrep_relmap_update(LogicalRepRelation *remoterel)
@@ -209,6 +215,8 @@ logicalrep_relmap_update(LogicalRepRelation *remoterel)
 		(remoterel->relkind == 0) ? RELKIND_RELATION : remoterel->relkind;
 
 	entry->remoterel.attkeys = bms_copy(remoterel->attkeys);
+
+	entry->parallel_safe = LOGICALREP_PARALLEL_UNKNOWN;
 	MemoryContextSwitchTo(oldctx);
 }
 
@@ -353,27 +361,79 @@ logicalrep_rel_mark_updatable(LogicalRepRelMapEntry *entry)
 }
 
 /*
- * Open the local relation associated with the remote one.
+ * Check all local triggers for the relation to see the parallelizability.
  *
- * Rebuilds the Relcache mapping if it was invalidated by local DDL.
+ * We regard relations as applicable in parallel if all triggers are immutable.
+ * Result is directly set to LogicalRepRelMapEntry::parallel_safe.
  */
-LogicalRepRelMapEntry *
-logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
+static void
+check_defined_triggers(LogicalRepRelMapEntry *entry)
 {
-	LogicalRepRelMapEntry *entry;
-	bool		found;
+	TriggerDesc *trigdesc = entry->localrel->trigdesc;
+
+	/* Quick exit if triffer is not defined */
+	if (trigdesc == NULL)
+	{
+		entry->parallel_safe = LOGICALREP_PARALLEL_SAFE;
+		return;
+	}
+
+	/* Seek triggers one by one to see the volatility */
+	for (int i = 0; i < trigdesc->numtriggers; i++)
+	{
+		Trigger    *trigger = &trigdesc->triggers[i];
+
+		Assert(OidIsValid(trigger->tgfoid));
+
+		/* Skip if the trigger is not enabled for logical replication */
+		if (trigger->tgenabled == TRIGGER_DISABLED ||
+			trigger->tgenabled == TRIGGER_FIRES_ON_ORIGIN)
+			continue;
+
+		/* Check the volatility of the trigger. Exit if it is not immutable */
+		if (func_volatile(trigger->tgfoid) != PROVOLATILE_IMMUTABLE)
+		{
+			entry->parallel_safe = LOGICALREP_PARALLEL_RESTRICTED;
+			return;
+		}
+	}
+
+	/* All triggers are immutable, set as parallel safe */
+	entry->parallel_safe = LOGICALREP_PARALLEL_SAFE;
+}
+
+/*
+ * Actual workhorse for logicalrep_rel_open().
+ *
+ * Caller must specify *either* entry or key. If the entry is specified, its
+ * attributes are filled and returned. The logical relation is kept opening.
+ * If the key is given, the corresponding entry is first searched in the hash
+ * table and processed as in the above case. At the end, logical replication is
+ * closed.
+  */
+void
+logicalrep_rel_load(LogicalRepRelMapEntry *entry, LogicalRepRelId remoteid,
+					LOCKMODE lockmode)
+{
 	LogicalRepRelation *remoterel;
 
-	if (LogicalRepRelMap == NULL)
-		logicalrep_relmap_init();
+	Assert((entry && !remoteid) || (!entry && remoteid));
 
-	/* Search for existing entry. */
-	entry = hash_search(LogicalRepRelMap, &remoteid,
-						HASH_FIND, &found);
+	if (!entry)
+	{
+		bool		found;
 
-	if (!found)
-		elog(ERROR, "no relation map entry for remote relation ID %u",
-			 remoteid);
+		if (LogicalRepRelMap == NULL)
+			logicalrep_relmap_init();
+
+		/* Search for existing entry. */
+		entry = hash_search(LogicalRepRelMap, &remoteid,
+							HASH_FIND, &found);
+
+		if (!found)
+			elog(ERROR, "no relation map entry for remote relation ID %u",
+				 remoteid);
+	}
 
 	remoterel = &entry->remoterel;
 
@@ -499,6 +559,13 @@ logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
 		entry->localindexoid = FindLogicalRepLocalIndex(entry->localrel, remoterel,
 														entry->attrmap);
 
+		/*
+		 * Leader must also collect all local unique indexes for dependency
+		 * tracking.
+		 */
+		if (am_leader_apply_worker())
+			check_defined_triggers(entry);
+
 		entry->localrelvalid = true;
 	}
 
@@ -506,6 +573,34 @@ logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
 		entry->state = GetSubscriptionRelState(MySubscription->oid,
 											   entry->localreloid,
 											   &entry->statelsn);
+
+	if (remoteid)
+		logicalrep_rel_close(entry, lockmode);
+}
+
+/*
+ * Open the local relation associated with the remote one.
+ *
+ * Rebuilds the Relcache mapping if it was invalidated by local DDL.
+ */
+LogicalRepRelMapEntry *
+logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
+{
+	LogicalRepRelMapEntry *entry;
+	bool		found;
+
+	if (LogicalRepRelMap == NULL)
+		logicalrep_relmap_init();
+
+	/* Search for existing entry. */
+	entry = hash_search(LogicalRepRelMap, &remoteid,
+						HASH_FIND, &found);
+
+	if (!found)
+		elog(ERROR, "no relation map entry for remote relation ID %u",
+			 remoteid);
+
+	logicalrep_rel_load(entry, 0, lockmode);
 
 	return entry;
 }

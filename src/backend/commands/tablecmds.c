@@ -10954,6 +10954,7 @@ addFkConstraint(addFkConstraintSides fkside,
 									  numfks,
 									  fkconstraint->fk_upd_action,
 									  fkconstraint->fk_del_action,
+									  fkconstraint->fk_lockkeyindex,
 									  fkdelsetcols,
 									  numfkdelsetcols,
 									  fkconstraint->fk_matchtype,
@@ -11506,6 +11507,7 @@ CloneFkReferenced(Relation parentRel, Relation partitionRel)
 		fkconstraint->fk_matchtype = constrForm->confmatchtype;
 		fkconstraint->fk_upd_action = constrForm->confupdtype;
 		fkconstraint->fk_del_action = constrForm->confdeltype;
+		fkconstraint->fk_lockkeyindex = constrForm->conflockkeyindex;
 		fkconstraint->fk_del_set_cols = NIL;
 		fkconstraint->old_conpfeqop = NIL;
 		fkconstraint->old_pktable_oid = InvalidOid;
@@ -11769,6 +11771,7 @@ CloneFkReferencing(List **wqueue, Relation parentRel, Relation partRel)
 		fkconstraint->fk_matchtype = constrForm->confmatchtype;
 		fkconstraint->fk_upd_action = constrForm->confupdtype;
 		fkconstraint->fk_del_action = constrForm->confdeltype;
+		fkconstraint->fk_lockkeyindex = constrForm->conflockkeyindex;
 		fkconstraint->fk_del_set_cols = NIL;
 		fkconstraint->old_conpfeqop = NIL;
 		fkconstraint->old_pktable_oid = InvalidOid;
@@ -11909,7 +11912,8 @@ tryAttachPartitionForeignKey(List **wqueue,
 		partConstr->condeferred != parentConstr->condeferred ||
 		partConstr->confupdtype != parentConstr->confupdtype ||
 		partConstr->confdeltype != parentConstr->confdeltype ||
-		partConstr->confmatchtype != parentConstr->confmatchtype)
+		partConstr->confmatchtype != parentConstr->confmatchtype ||
+		partConstr->conflockkeyindex != parentConstr->conflockkeyindex)
 	{
 		ReleaseSysCache(parentConstrTup);
 		ReleaseSysCache(partcontup);
@@ -12637,6 +12641,7 @@ ATExecAlterFKConstrEnforceability(List **wqueue, ATAlterConstraint *cmdcon,
 		fkconstraint->fk_matchtype = currcon->confmatchtype;
 		fkconstraint->fk_upd_action = currcon->confupdtype;
 		fkconstraint->fk_del_action = currcon->confdeltype;
+		fkconstraint->fk_lockkeyindex = currcon->conflockkeyindex;
 		fkconstraint->deferrable = currcon->condeferrable;
 		fkconstraint->initdeferred = currcon->condeferred;
 
@@ -22019,6 +22024,7 @@ DetachPartitionFinalize(Relation rel, Relation partRel, bool concurrent,
 			fkconstraint->fk_matchtype = conform->confmatchtype;
 			fkconstraint->fk_upd_action = conform->confupdtype;
 			fkconstraint->fk_del_action = conform->confdeltype;
+			fkconstraint->fk_lockkeyindex = conform->conflockkeyindex;
 			fkconstraint->fk_del_set_cols = NIL;
 			fkconstraint->old_conpfeqop = NIL;
 			fkconstraint->old_pktable_oid = InvalidOid;

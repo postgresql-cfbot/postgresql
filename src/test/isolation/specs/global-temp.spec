@@ -1,9 +1,9 @@
 # Test global temporary relations
 
 setup {
-  CREATE GLOBAL TEMP TABLE tmp (key int, val text);
+  CREATE GLOBAL TEMP TABLE tmp (key int PRIMARY KEY, val text);
 
-  CREATE GLOBAL TEMP TABLE tmp_parted (key int, val text) PARTITION BY LIST (key);
+  CREATE GLOBAL TEMP TABLE tmp_parted (key int PRIMARY KEY, val text) PARTITION BY LIST (key);
   CREATE GLOBAL TEMP TABLE tmp_p1 PARTITION OF tmp_parted FOR VALUES IN (1);
   CREATE GLOBAL TEMP TABLE tmp_p2 PARTITION OF tmp_parted FOR VALUES IN ((2), (3));
 }
@@ -25,6 +25,14 @@ step alter1a { ALTER TABLE tmp2 ALTER COLUMN key SET DATA TYPE numeric; }
 step alter1b { ALTER TABLE tmp2 ALTER COLUMN val SET NOT NULL; }
 step seltype1 { SELECT key, pg_typeof(key), val FROM tmp2; }
 step drop1 { DROP TABLE tmp2; }
+step idx1 { CREATE INDEX tmp_val_idx ON tmp(val); }
+step sel1_idx {
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's1';
+  SELECT * FROM tmp WHERE val = 's1';
+}
 
 session s2
 step b2 { BEGIN; }
@@ -40,6 +48,14 @@ step sp2 { SAVEPOINT sp; }
 step rsp2 { ROLLBACK TO SAVEPOINT sp; }
 step ins2_2 { INSERT INTO tmp2 VALUES (1, 's2'); }
 step seltype2 { SELECT key, pg_typeof(key), val FROM tmp2; }
+step sel2_idx {
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's2';
+  SELECT * FROM tmp WHERE val = 's2';
+}
+step reidx2 { REINDEX INDEX tmp_val_idx; }
 
 # Basic effects
 permutation ins1 ins2 sel1 sel2
@@ -58,3 +74,8 @@ permutation create1 ins1_2 ins2_2 alter1a alter1b seltype1 seltype2 drop1
 
 # Test DROP with ON COMMIT DELETE ROWS
 permutation create1dr ins1_2 ins2_2 drop1 create1dr ins1_2 ins2_2 drop1
+
+# Test val index
+permutation ins1 idx1 sel1_idx ins2 sel2_idx
+permutation ins1 ins2 idx1 sel1_idx sel2_idx
+permutation ins1 ins2 idx1 sel1_idx sel2_idx reidx2 sel2_idx

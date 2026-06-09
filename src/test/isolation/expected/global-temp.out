@@ -250,3 +250,147 @@ step create1dr: CREATE GLOBAL TEMP TABLE tmp2 (key int, val text) ON COMMIT DELE
 step ins1_2: INSERT INTO tmp2 VALUES (1, 's1');
 step ins2_2: INSERT INTO tmp2 VALUES (1, 's2');
 step drop1: DROP TABLE tmp2;
+
+starting permutation: ins1 idx1 sel1_idx ins2 sel2_idx
+step ins1: INSERT INTO tmp VALUES (1, 's1');
+step idx1: CREATE INDEX tmp_val_idx ON tmp(val);
+step sel1_idx: 
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's1';
+  SELECT * FROM tmp WHERE val = 's1';
+
+QUERY PLAN                         
+-----------------------------------
+Index Scan using tmp_val_idx on tmp
+  Index Cond: (val = 's1'::text)   
+(2 rows)
+
+key|val
+---+---
+  1|s1 
+(1 row)
+
+step ins2: INSERT INTO tmp VALUES (1, 's2');
+step sel2_idx: 
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's2';
+  SELECT * FROM tmp WHERE val = 's2';
+
+QUERY PLAN                         
+-----------------------------------
+Index Scan using tmp_val_idx on tmp
+  Index Cond: (val = 's2'::text)   
+(2 rows)
+
+key|val
+---+---
+  1|s2 
+(1 row)
+
+
+starting permutation: ins1 ins2 idx1 sel1_idx sel2_idx
+step ins1: INSERT INTO tmp VALUES (1, 's1');
+step ins2: INSERT INTO tmp VALUES (1, 's2');
+step idx1: CREATE INDEX tmp_val_idx ON tmp(val);
+step sel1_idx: 
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's1';
+  SELECT * FROM tmp WHERE val = 's1';
+
+QUERY PLAN                         
+-----------------------------------
+Index Scan using tmp_val_idx on tmp
+  Index Cond: (val = 's1'::text)   
+(2 rows)
+
+key|val
+---+---
+  1|s1 
+(1 row)
+
+step sel2_idx: 
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's2';
+  SELECT * FROM tmp WHERE val = 's2';
+
+QUERY PLAN                  
+----------------------------
+Seq Scan on tmp             
+  Disabled: true            
+  Filter: (val = 's2'::text)
+(3 rows)
+
+key|val
+---+---
+  1|s2 
+(1 row)
+
+
+starting permutation: ins1 ins2 idx1 sel1_idx sel2_idx reidx2 sel2_idx
+step ins1: INSERT INTO tmp VALUES (1, 's1');
+step ins2: INSERT INTO tmp VALUES (1, 's2');
+step idx1: CREATE INDEX tmp_val_idx ON tmp(val);
+step sel1_idx: 
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's1';
+  SELECT * FROM tmp WHERE val = 's1';
+
+QUERY PLAN                         
+-----------------------------------
+Index Scan using tmp_val_idx on tmp
+  Index Cond: (val = 's1'::text)   
+(2 rows)
+
+key|val
+---+---
+  1|s1 
+(1 row)
+
+step sel2_idx: 
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's2';
+  SELECT * FROM tmp WHERE val = 's2';
+
+QUERY PLAN                  
+----------------------------
+Seq Scan on tmp             
+  Disabled: true            
+  Filter: (val = 's2'::text)
+(3 rows)
+
+key|val
+---+---
+  1|s2 
+(1 row)
+
+step reidx2: REINDEX INDEX tmp_val_idx;
+step sel2_idx: 
+  SET enable_seqscan = off;
+  SET enable_bitmapscan = off;
+  EXPLAIN (COSTS OFF)
+  SELECT * FROM tmp WHERE val = 's2';
+  SELECT * FROM tmp WHERE val = 's2';
+
+QUERY PLAN                         
+-----------------------------------
+Index Scan using tmp_val_idx on tmp
+  Index Cond: (val = 's2'::text)   
+(2 rows)
+
+key|val
+---+---
+  1|s2 
+(1 row)
+

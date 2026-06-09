@@ -53,8 +53,10 @@
  */
 #include "postgres.h"
 
+#include "access/amapi.h"
 #include "access/genam.h"
 #include "access/parallel.h"
+#include "access/table.h"
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "access/xlogutils.h"
@@ -849,6 +851,28 @@ InitGlobalTempRelation(Relation relation)
 
 		if (relation->rd_rel->reloncommit == RELONCOMMIT_DELETE_ROWS)
 			register_on_commit_action(relation->rd_id, ONCOMMIT_DELETE_ROWS);
+
+		/*
+		 * If it's an index, build an empty index in the main fork.
+		 *
+		 * If the table is not empty (can happen if another session added the
+		 * index after we populated the table), then mark it as invalid.  The
+		 * user will need to do a REINDEX to build it.
+		 */
+		if (relation->rd_rel->relkind == RELKIND_INDEX)
+		{
+			Relation	heapRelation;
+			BlockNumber nblocks;
+
+			relation->rd_indam->ambuildempty(relation, MAIN_FORKNUM);
+
+			heapRelation = table_open(relation->rd_index->indrelid, AccessShareLock);
+			nblocks = RelationGetNumberOfBlocks(heapRelation);
+			table_close(heapRelation, AccessShareLock);
+
+			if (nblocks > 0)
+				relation->rd_index->indisvalid = false;
+		}
 	}
 
 	/* The remaining initialization works as if we had created it locally */

@@ -15,6 +15,7 @@
 
 #include "postgres_fe.h"
 
+#include <dlfcn.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <ctype.h>
@@ -140,6 +141,31 @@ static int	ldapServiceLookup(const char *purl, PQconninfoOption *options,
 #define DefaultGSSMode "prefer"
 #else
 #define DefaultGSSMode "disable"
+#endif
+
+#ifdef USE_LIBCURL
+static int	httpServiceLookup(const char *purl, PQconninfoOption *options,
+							  PQExpBuffer errorMessage);
+enum fcurl_type_e {
+  CFTYPE_NONE = 0,
+  CFTYPE_FILE = 1,
+  CFTYPE_CURL = 2
+};
+struct fcurl_data
+{
+  enum fcurl_type_e type;     /* type of handle */
+  union {
+    void *curl;
+    FILE *file;
+  } handle;                   /* handle */
+
+  char *buffer;               /* buffer to store cached data*/
+  size_t buffer_len;          /* currently allocated buffers length */
+  size_t buffer_pos;          /* end of data in buffer*/
+  int still_running;          /* Is background url fetch still in progress */
+};
+
+typedef struct fcurl_data URL_FILE;
 #endif
 
 /* ----------
@@ -5978,6 +6004,229 @@ ldapServiceLookup(const char *purl, PQconninfoOption *options,
 
 #endif							/* USE_LDAP */
 
+#ifdef USE_LIBCURL
+#define HTTP_URL	"http://"
+
+
+/*
+ *		httpServiceLookup
+ *
+ * Search the HTTP URL passed as first argument, treat the result as a
+ * string of connection options that are parsed and added to the array of
+ * options passed as second argument.
+ *
+ * Returns
+ *	0 if the lookup was successful,
+ *	1 if the connection to the LDAP server could be established but
+ *	  the search was unsuccessful,
+ *	2 if a connection could not be established, and
+ *	3 if a fatal error occurred.
+ *	4 if libpq-oauth module does not exist
+ *
+ * An error message is appended to *errorMessage for return codes 1 and 3.
+ */
+static int
+httpServiceLookup(
+const char *purl, PQconninfoOption *options,
+							  PQExpBuffer errorMessage
+		)
+{
+	int			result = 0,
+				linenr = 0,
+				i;
+	URL_FILE *f;
+
+	char	   *line,
+			   *url;
+	char		buf[1024];
+
+	void 	   *libcurl_module;
+	URL_FILE * (*url_fopen) (const char *url, const char *operation);
+	char * (*url_fgets) (char *ptr, size_t size, URL_FILE *file);
+	int			(*url_fclose) (URL_FILE *file);
+
+	const char *const module_name =
+#if defined(__darwin__)
+		LIBDIR "/libpq-oauth" DLSUFFIX;
+#else
+		"libpq-oauth" DLSUFFIX;
+#endif
+
+	if ((url = strdup(purl)) == NULL)
+	{
+		libpq_append_error(errorMessage, "out of memory");
+		return 3;
+	}
+
+	if (pg_strncasecmp(url, HTTP_URL, strlen(HTTP_URL)) != 0)
+	{
+		libpq_append_error(errorMessage,
+						   "invalid HTTP URL \"%s\": scheme must be http://", purl);
+		free(url);
+		return 3;
+	}
+
+	libcurl_module = dlopen(module_name, RTLD_NOW | RTLD_LOCAL);
+	if (!libcurl_module)
+	{
+		/*
+		 * For end users, this probably isn't an error condition, it just
+		 * means the flow isn't installed. Developers and package maintainers
+		 * may want to debug this via the PGOAUTHDEBUG envvar, though.
+		 *
+		 * Note that POSIX dlerror() isn't guaranteed to be threadsafe.
+		 */
+		free(url);
+		if (oauth_unsafe_debugging_enabled())
+			fprintf(stderr, "failed dlopen for libpq-oauth: %s\n", dlerror());
+		return 4;
+	}
+
+	if ((url_fopen = dlsym(libcurl_module, "url_fopen")) == NULL
+		 || (url_fgets = dlsym(libcurl_module, "url_fgets")) == NULL
+		 || (url_fclose = dlsym(libcurl_module, "url_fclose")) == NULL)
+	{
+		if (oauth_unsafe_debugging_enabled())
+			fprintf(stderr, "failed dlsym for libpq-oauth: %s\n", dlerror());
+
+		dlclose(libcurl_module);
+		libcurl_module = NULL;
+
+		libpq_append_error(errorMessage,
+						   "could not find entry point for libpq-oauth");
+		return 3;
+	}
+
+	f = url_fopen(url, "r");
+	if (f == NULL)
+	{
+		free(url);
+		return 3;
+	}
+
+	free(url);
+
+	/* assume connection could not be established until we read */
+	result = 2;
+
+	while ((line = url_fgets(buf, sizeof(buf), f)) != NULL)
+	{
+		int			len;
+		char	   *key,
+				   *val;
+		bool		found_keyword;
+
+		linenr++;
+
+		if (strlen(line) >= sizeof(buf) - 1)
+		{
+			 libpq_append_error(errorMessage,
+							   "line %d too long in service file \"%s\"",
+							   linenr,
+							   purl);
+			result = 3;
+			goto exit;
+		}
+
+		/* ignore whitespace at end of line, especially the newline */
+		len = strlen(line);
+		while (len > 0 && isspace((unsigned char) line[len - 1]))
+			line[--len] = '\0';
+
+		/* ignore leading whitespace too */
+		while (*line && isspace((unsigned char) line[0]))
+			line++;
+
+		/* ignore comments and empty lines */
+		if (line[0] == '\0' || line[0] == '#')
+			continue;
+
+		/*
+		 * we do not support ldap lookups within http lookups but we do raise erorr
+		 * even in non ldap builds
+		 */
+		if (strncmp(line, "ldap", 4) == 0)
+		{
+			 libpq_append_error(errorMessage,
+							   "ldap:// lines are not allowed in http service lookups"
+							   );
+			result = 3;
+			goto exit;
+		}
+
+		/* we do not support recursive http lookups */
+		if (strncmp(line, "http", 4) == 0)
+		{
+			 libpq_append_error(errorMessage,
+							   "http:// lines are not allowed in http service lookups"
+							   );
+			result = 3;
+			goto exit;
+		}
+
+		key = line;
+		val = strchr(line, '=');
+		if (val == NULL)
+		{
+			libpq_append_error(errorMessage,
+							   "syntax error in service file \"%s\", line %d",
+							   purl,
+							   linenr);
+			result = 3;
+			goto exit;
+		}
+		*val++ = '\0';
+
+		if (strcmp(key, "service") == 0)
+		{
+			libpq_append_error(errorMessage,
+						   "nested service specifications not supported in service file \"%s\", line %d",
+						   purl,
+							   linenr);
+			result = 3;
+			goto exit;
+		}
+
+		/*
+		 * Set the parameter --- but don't override any previous
+		 * explicit setting.
+		 */
+		found_keyword = false;
+		for (i = 0; options[i].keyword; i++)
+		{
+			if (strcmp(options[i].keyword, key) == 0)
+			{
+				if (options[i].val == NULL)
+					options[i].val = strdup(val);
+				if (!options[i].val)
+				{
+					libpq_append_error(errorMessage, "out of memory");
+					result = 3;
+					goto exit;
+				}
+				found_keyword = true;
+				break;
+			}
+		}
+
+		if (!found_keyword)
+		{
+			libpq_append_error(errorMessage,
+						   "syntax error in service file \"%s\", line %d",
+						   purl,
+						   linenr);
+			result = 3;
+			goto exit;
+		}
+	}
+
+exit:
+	url_fclose(f);
+
+	return result;
+}
+#endif							/* USE_LIBCURL */
+
 /*
  * parseServiceInfo: if a service name has been given, look it up and absorb
  * connection options from it into *options.
@@ -6170,6 +6419,26 @@ parseServiceFile(const char *serviceFile,
 				}
 #endif
 
+#ifdef USE_LIBCURL
+				if (strncmp(line, "http", 4) == 0)
+				{
+					int			rc = httpServiceLookup(line, options, errorMessage);
+
+					/* if rc = 2 or 4, go on reading for fallback */
+					switch (rc)
+					{
+						case 0:
+							goto exit;
+						case 1:
+						case 3:
+							result = 3;
+							goto exit;
+						case 2:
+						case 4:
+							continue;
+					}
+				}
+#endif
 				key = line;
 				val = strchr(line, '=');
 				if (val == NULL)

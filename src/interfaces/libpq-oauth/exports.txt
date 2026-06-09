@@ -1,3 +1,6 @@
 # src/interfaces/libpq-oauth/exports.txt
-libpq_oauth_init          1
-pg_start_oauthbearer      2
+libpq_oauth_init             1
+pg_start_oauthbearer         2
+url_fopen                    3
+url_fgets                    4
+url_fclose                   5

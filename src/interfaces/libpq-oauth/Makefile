@@ -42,6 +42,7 @@ OBJS_STATIC = oauth-curl.o
 OBJS_SHLIB = \
 	oauth-curl_shlib.o \
 	oauth-utils.o \
+	http-service.o \
 
 oauth-utils.o: override CPPFLAGS += $(CPPFLAGS_SHLIB)
 

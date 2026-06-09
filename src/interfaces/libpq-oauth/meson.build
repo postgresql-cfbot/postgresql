@@ -11,6 +11,7 @@ libpq_oauth_sources = files(
 # The shared library needs additional glue symbols.
 libpq_oauth_so_sources = files(
   'oauth-utils.c',
+  'http-service.c',
 )
 libpq_oauth_so_c_args = [
   '-DUSE_DYNAMIC_OAUTH',

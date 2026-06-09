@@ -1104,7 +1104,24 @@ logical_read_xlog_page(XLogReaderState *state, XLogRecPtr targetPagePtr, int req
 	am_cascading_walsender = RecoveryInProgress();
 
 	if (am_cascading_walsender)
-		GetXLogReplayRecPtr(&currTLI);
+	{
+		TimeLineID	insertTLI;
+
+		/*
+		 * If the insertion timeline has already been set, use it.
+		 * InsertTimeLineID is set before old timeline WAL segments are
+		 * removed and before SharedRecoveryState flips to
+		 * RECOVERY_STATE_DONE. So there is a window where
+		 * RecoveryInProgress() still returns true but the old timeline's WAL
+		 * segments have already been removed or recycled. Using the insertion
+		 * timeline avoids attempting to read from those removed segments.
+		 */
+		insertTLI = GetWALInsertionTimeLineIfSet();
+		if (insertTLI != 0)
+			currTLI = insertTLI;
+		else
+			GetXLogReplayRecPtr(&currTLI);
+	}
 	else
 		currTLI = GetWALInsertionTimeLine();
 

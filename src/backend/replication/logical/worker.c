@@ -1194,6 +1194,54 @@ check_and_record_rel_dependency(LogicalRepRelId relid,
 }
 
 /*
+ * Check the parallel safety of applying the give action for the relation. If
+ * not safe, wait for preceding transactions to finish before proceeding with
+ * the current change.
+ *
+ * See logicalrep_rel_check_parallel_safety for details on how the safety is
+ * determined.
+ */
+static void
+check_relation_parallel_apply_safety(LogicalRepRelMapEntry *relentry,
+									 LogicalRepParallelAction action)
+{
+	/* Do not check parallel apply safety for streamed transactions */
+	if (in_streamed_transaction)
+		return;
+
+	/* Parallel apply only involves the leader and parallel apply workers */
+	if (!am_leader_apply_worker() && !am_parallel_apply_worker())
+		return;
+
+	/*
+	 * For partitioned tables, we only need to care if the target partition is
+	 * parallel apply safe or not.
+	 */
+	if (relentry->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		return;
+
+	logicalrep_rel_check_parallel_safety(relentry);
+
+	/* Return if the action is safe for parallel apply */
+	if (!relentry->parallel_global_unsafe[action])
+		return;
+
+	elog(DEBUG1, "found parallel unsafe change on table %u for action %d",
+		 relentry->remoterel.remoteid, action);
+
+	/*
+	 * Wait for preceding transactions to finish before proceeding and reset the
+	 * preceding_xid to InvalidTransactionId to avoid waiting for the same
+	 * transaction again in the next change.
+	 */
+	if (TransactionIdIsValid(last_parallelized_remote_xid))
+	{
+		pa_wait_for_depended_transaction(last_parallelized_remote_xid);
+		last_parallelized_remote_xid = InvalidTransactionId;
+	}
+}
+
+/*
  * Check dependencies related to the current change by determining if the
  * modification impacts the same row or table as another ongoing transaction.
  *
@@ -2048,7 +2096,7 @@ apply_handle_begin(StringInfo s)
 
 	maybe_start_skipping_changes(begin_data.final_lsn);
 
-	pa_allocate_worker(remote_xid, false);
+	pa_allocate_worker(remote_xid, last_parallelized_remote_xid, false);
 
 	apply_action = get_transaction_apply_action(remote_xid, &winfo);
 
@@ -2080,6 +2128,8 @@ apply_handle_begin(StringInfo s)
 			/* Hold the lock until the end of the transaction. */
 			pa_lock_transaction(MyParallelShared->xid, AccessExclusiveLock);
 			pa_set_xact_state(MyParallelShared, PARALLEL_TRANS_STARTED);
+
+			last_parallelized_remote_xid = MyParallelShared->preceding_xid;
 			break;
 
 		default:
@@ -2232,6 +2282,8 @@ apply_handle_commit(StringInfo s)
 			pa_commit_transaction();
 
 			pa_unlock_transaction(remote_xid, AccessExclusiveLock);
+
+			last_parallelized_remote_xid = InvalidTransactionId;
 			break;
 
 		default:
@@ -2283,7 +2335,7 @@ apply_handle_begin_prepare(StringInfo s)
 
 	maybe_start_skipping_changes(begin_data.prepare_lsn);
 
-	pa_allocate_worker(remote_xid, false);
+	pa_allocate_worker(remote_xid, last_parallelized_remote_xid, false);
 
 	apply_action = get_transaction_apply_action(remote_xid, &winfo);
 
@@ -2500,6 +2552,8 @@ apply_handle_prepare(StringInfo s)
 			pa_unlock_transaction(MyParallelShared->xid, AccessExclusiveLock);
 
 			pa_reset_subtrans();
+
+			last_parallelized_remote_xid = InvalidTransactionId;
 			break;
 
 		default:
@@ -2926,7 +2980,7 @@ apply_handle_stream_start(StringInfo s)
 
 	/* Try to allocate a worker for the streaming transaction. */
 	if (first_segment)
-		pa_allocate_worker(stream_xid, true);
+		pa_allocate_worker(stream_xid, last_parallelized_remote_xid, true);
 
 	apply_action = get_transaction_apply_action(stream_xid, &winfo);
 
@@ -3873,6 +3927,9 @@ apply_handle_insert(StringInfo s)
 	/* Set relation for error callback */
 	apply_error_callback_arg.rel = rel;
 
+	/* Check if the relation is safe for parallel apply */
+	check_relation_parallel_apply_safety(rel, LRPA_INSERT);
+
 	/* Initialize the executor state. */
 	edata = create_edata_for_relation(rel);
 	estate = edata->estate;
@@ -4029,6 +4086,9 @@ apply_handle_update(StringInfo s)
 
 	/* Check if we can do the update. */
 	check_relation_updatable(rel);
+
+	/* Check if the relation is safe for parallel apply */
+	check_relation_parallel_apply_safety(rel, LRPA_UPDATE);
 
 	/*
 	 * Make sure that any user-supplied code runs as the table owner, unless
@@ -4253,6 +4313,9 @@ apply_handle_delete(StringInfo s)
 
 	/* Check if we can do the delete. */
 	check_relation_updatable(rel);
+
+	/* Check if the relation is safe for parallel apply */
+	check_relation_parallel_apply_safety(rel, LRPA_DELETE);
 
 	/*
 	 * Make sure that any user-supplied code runs as the table owner, unless
@@ -4623,22 +4686,25 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 	}
 	MemoryContextSwitchTo(oldctx);
 
+	part_entry = logicalrep_partition_open(relmapentry, partrel,
+										   attrmap);
+
 	/* Check if we can do the update or delete on the leaf partition. */
 	if (operation == CMD_UPDATE || operation == CMD_DELETE)
-	{
-		part_entry = logicalrep_partition_open(relmapentry, partrel,
-											   attrmap);
 		check_relation_updatable(part_entry);
-	}
 
 	switch (operation)
 	{
 		case CMD_INSERT:
+			check_relation_parallel_apply_safety(part_entry,
+												 LRPA_INSERT);
 			apply_handle_insert_internal(edata, partrelinfo,
 										 remoteslot_part);
 			break;
 
 		case CMD_DELETE:
+			check_relation_parallel_apply_safety(part_entry,
+												 LRPA_DELETE);
 			apply_handle_delete_internal(edata, partrelinfo,
 										 remoteslot_part,
 										 part_entry->localindexoid);
@@ -4659,6 +4725,9 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 				bool		found;
 				EPQState	epqstate;
 				ConflictTupleInfo conflicttuple = {0};
+
+				check_relation_parallel_apply_safety(part_entry,
+													 LRPA_UPDATE);
 
 				/* Get the matching local tuple from the partition. */
 				found = FindReplTupleInLocalRel(edata, partrel,
@@ -4889,6 +4958,8 @@ apply_handle_truncate(StringInfo s)
 			logicalrep_rel_close(rel, lockmode);
 			continue;
 		}
+
+		check_relation_parallel_apply_safety(rel, LRPA_TRUNCATE);
 
 		remote_rels = lappend(remote_rels, rel);
 		TargetPrivilegesCheck(rel->localrel, ACL_TRUNCATE);

@@ -205,6 +205,9 @@ typedef struct ParallelApplyWorkerShared
 	 */
 	dsa_handle	parallel_apply_dsa_handle;
 	dshash_table_handle parallelized_txns_handle;
+
+	/* The remote transaction ID received before the current transaction */
+	TransactionId preceding_xid;
 } ParallelApplyWorkerShared;
 
 /*
@@ -353,7 +356,8 @@ extern void apply_error_callback(void *arg);
 extern void set_apply_error_context_origin(char *originname);
 
 /* Parallel apply worker setup and interactions */
-extern void pa_allocate_worker(TransactionId xid, bool stream_txn);
+extern void pa_allocate_worker(TransactionId xid, TransactionId preceding_xid,
+							   bool stream_txn);
 extern ParallelApplyWorkerInfo *pa_find_worker(TransactionId xid);
 extern XLogRecPtr pa_get_last_commit_end(TransactionId xid, bool delete_entry,
 										 bool *skipped_write);

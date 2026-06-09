@@ -306,6 +306,9 @@ typedef struct ForeignKeyCacheInfo
  * RelationGetFillFactor() and RelationGetTargetPageFreeSpace() can only
  * be applied to relations that use this format or a superset for
  * private options data.
+ *
+ * NB: When adding a new member, be sure to update merge_autovac_opts() and/or
+ * table_recheck_autovac() as necessary!
  */
  /* autovacuum-related reloptions. */
 typedef struct AutoVacOpts

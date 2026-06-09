@@ -187,6 +187,9 @@ ExecVacuum(ParseState *pstate, VacuumStmt *vacstmt, bool isTopLevel)
 
 	/* Will be set later if we recurse to a TOAST table. */
 	params.toast_parent = InvalidOid;
+	params.main_index_cleanup = VACOPTVALUE_UNSPECIFIED;
+	params.main_truncate = VACOPTVALUE_UNSPECIFIED;
+	params.main_max_eager_freeze_failure_rate = -1.0;
 
 	/*
 	 * Set this to an invalid value so it is clear whether or not a
@@ -2184,7 +2187,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 
 	/*
 	 * Set index_cleanup option based on index_cleanup reloption if it wasn't
-	 * specified in VACUUM command, or when running in an autovacuum worker
+	 * specified in VACUUM command, or when running in an autovacuum worker. A
+	 * TOAST table with no setting of its own inherits the main table's value.
 	 */
 	if (params.index_cleanup == VACOPTVALUE_UNSPECIFIED)
 	{
@@ -2200,15 +2204,21 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 		{
 			case STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON:
 				params.index_cleanup = VACOPTVALUE_ENABLED;
+				toast_vacuum_params.main_index_cleanup = VACOPTVALUE_ENABLED;
 				break;
 			case STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF:
 				params.index_cleanup = VACOPTVALUE_DISABLED;
+				toast_vacuum_params.main_index_cleanup = VACOPTVALUE_DISABLED;
 				break;
 			case STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO:
 				params.index_cleanup = VACOPTVALUE_AUTO;
+				toast_vacuum_params.main_index_cleanup = VACOPTVALUE_AUTO;
 				break;
 			case STDRD_OPTION_VACUUM_INDEX_CLEANUP_NOT_SET:
-				params.index_cleanup = VACOPTVALUE_AUTO;
+				if (params.main_index_cleanup != VACOPTVALUE_UNSPECIFIED)
+					params.index_cleanup = params.main_index_cleanup;
+				else
+					params.index_cleanup = VACOPTVALUE_AUTO;
 				break;
 		}
 	}
@@ -2224,16 +2234,26 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 
 	/*
 	 * Check if the vacuum_max_eager_freeze_failure_rate table storage
-	 * parameter was specified. This overrides the GUC value.
+	 * parameter was specified. This overrides the GUC value.  A TOAST table
+	 * with no setting of its own inherits the main table's value.
 	 */
 	if (rel->rd_options != NULL &&
 		((StdRdOptions *) rel->rd_options)->vacuum_max_eager_freeze_failure_rate >= 0)
+	{
 		params.max_eager_freeze_failure_rate =
 			((StdRdOptions *) rel->rd_options)->vacuum_max_eager_freeze_failure_rate;
+		toast_vacuum_params.main_max_eager_freeze_failure_rate =
+			((StdRdOptions *) rel->rd_options)->vacuum_max_eager_freeze_failure_rate;
+	}
+	else if (params.main_max_eager_freeze_failure_rate >= 0.0)
+		params.max_eager_freeze_failure_rate =
+			params.main_max_eager_freeze_failure_rate;
 
 	/*
 	 * Set truncate option based on truncate reloption or GUC if it wasn't
-	 * specified in VACUUM command, or when running in an autovacuum worker
+	 * specified in VACUUM command, or when running in an autovacuum worker. A
+	 * TOAST table with no setting of its own inherits the main table's value
+	 * before falling back to the GUC.
 	 */
 	if (params.truncate == VACOPTVALUE_UNSPECIFIED)
 	{
@@ -2242,10 +2262,18 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 		if (opts && opts->vacuum_truncate != PG_TERNARY_UNSET)
 		{
 			if (opts->vacuum_truncate == PG_TERNARY_TRUE)
+			{
 				params.truncate = VACOPTVALUE_ENABLED;
+				toast_vacuum_params.main_truncate = VACOPTVALUE_ENABLED;
+			}
 			else
+			{
 				params.truncate = VACOPTVALUE_DISABLED;
+				toast_vacuum_params.main_truncate = VACOPTVALUE_DISABLED;
+			}
 		}
+		else if (params.main_truncate != VACOPTVALUE_UNSPECIFIED)
+			params.truncate = params.main_truncate;
 		else if (vacuum_truncate)
 			params.truncate = VACOPTVALUE_ENABLED;
 		else

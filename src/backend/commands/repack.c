@@ -43,6 +43,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
+#include "catalog/global_temp.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
@@ -1666,6 +1667,15 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		rel2->rd_newRelfilelocatorSubid = rel1->rd_newRelfilelocatorSubid;
 		rel2->rd_firstRelfilelocatorSubid = rel1->rd_firstRelfilelocatorSubid;
 		RelationAssumeNewRelfilelocator(rel1);
+
+		/*
+		 * If they're global temp relations, reassign rel2's storage to rel1.
+		 * NB: We intentionally do not reassign rel1's storage to rel2, since
+		 * that would leave it in an invalid state on rollback.
+		 */
+		if (RELATION_IS_GLOBAL_TEMP(rel1))
+			ReassignGlobalTempRelationStorage(rel2->rd_locator, rel1->rd_id);
+
 		relation_close(rel1, NoLock);
 		relation_close(rel2, NoLock);
 	}

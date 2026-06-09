@@ -32,6 +32,7 @@
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "access/xlogwait.h"
+#include "catalog/global_temp.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_enum.h"
@@ -2353,6 +2354,13 @@ CommitTransaction(void)
 	PreCommit_on_commit_actions();
 
 	/*
+	 * Process dropped global temporary relations, deleting their local
+	 * storage.  It makes sense to do this before smgrDoPendingSyncs() so that
+	 * we don't bother synchronizing these relations.
+	 */
+	PreCommit_GlobalTempRelation();
+
+	/*
 	 * Synchronize files that are created and not WAL-logged during this
 	 * transaction. This must happen before AtEOXact_RelationMap(), so that we
 	 * don't see committed-but-broken files after a crash.
@@ -2461,6 +2469,9 @@ CommitTransaction(void)
 
 	/* Clean up the relation cache */
 	AtEOXact_RelationCache(true);
+
+	/* Clean up storage and usage records for global temporary relations */
+	AtEOXact_GlobalTempRelation(true);
 
 	/* Clean up the type cache */
 	AtEOXact_TypeCache();
@@ -2614,6 +2625,13 @@ PrepareTransaction(void)
 	 * cursors, to avoid dangling-reference problems)
 	 */
 	PreCommit_on_commit_actions();
+
+	/*
+	 * Process dropped global temporary relations, deleting their local
+	 * storage.  It makes sense to do this before smgrDoPendingSyncs() so that
+	 * we don't bother synchronizing these relations.
+	 */
+	PreCommit_GlobalTempRelation();
 
 	/*
 	 * Synchronize files that are created and not WAL-logged during this
@@ -2770,6 +2788,9 @@ PrepareTransaction(void)
 
 	/* Clean up the relation cache */
 	AtEOXact_RelationCache(true);
+
+	/* Clean up storage and usage records for global temporary relations */
+	AtEOXact_GlobalTempRelation(true);
 
 	/* Clean up the type cache */
 	AtEOXact_TypeCache();
@@ -3021,6 +3042,7 @@ AbortTransaction(void)
 		AtEOXact_Aio(false);
 		AtEOXact_Buffers(false);
 		AtEOXact_RelationCache(false);
+		AtEOXact_GlobalTempRelation(false);
 		AtEOXact_TypeCache();
 		AtEOXact_Inval(false);
 		AtEOXact_MultiXact();
@@ -5214,6 +5236,8 @@ CommitSubTransaction(void)
 						 true, false);
 	AtEOSubXact_RelationCache(true, s->subTransactionId,
 							  s->parent->subTransactionId);
+	AtEOSubXact_GlobalTempRelation(true, s->subTransactionId,
+								   s->parent->subTransactionId);
 	AtEOSubXact_TypeCache();
 	AtEOSubXact_Inval(true);
 	AtSubCommit_smgr();
@@ -5399,6 +5423,8 @@ AbortSubTransaction(void)
 		AtEOXact_Aio(false);
 		AtEOSubXact_RelationCache(false, s->subTransactionId,
 								  s->parent->subTransactionId);
+		AtEOSubXact_GlobalTempRelation(false, s->subTransactionId,
+									   s->parent->subTransactionId);
 		AtEOSubXact_TypeCache();
 		AtEOSubXact_Inval(false);
 		ResourceOwnerRelease(s->curTransactionOwner,

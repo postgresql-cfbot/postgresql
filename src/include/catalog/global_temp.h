@@ -1,0 +1,45 @@
+/*-------------------------------------------------------------------------
+ *
+ * global_temp.h
+ *	  Global temporary relation management.
+ *
+ *
+ * Copyright (c) 2026, PostgreSQL Global Development Group
+ *
+ * src/include/catalog/global_temp.h
+ *
+ *-------------------------------------------------------------------------
+ */
+#ifndef GLOBAL_TEMP_H
+#define GLOBAL_TEMP_H
+
+#include "storage/relfilelocator.h"
+#include "utils/rel.h"
+
+extern void TrackGlobalTempRelationStorage(Oid relid, RelFileLocator rlocator,
+										   ProcNumber backend, bool create);
+
+extern void ReassignGlobalTempRelationStorage(RelFileLocator rlocator,
+											  Oid newRelid);
+
+extern void InitGlobalTempRelation(Relation relation);
+
+extern void InvalidateGlobalTempRelation(Oid relid);
+
+extern void GlobalTempRelationCreated(Relation relation);
+
+extern void GlobalTempRelationDropped(Oid relid);
+
+extern void PreCommit_GlobalTempRelation(void);
+
+extern void AtEOXact_GlobalTempRelation(bool isCommit);
+
+extern void AtEOSubXact_GlobalTempRelation(bool isCommit,
+										   SubTransactionId mySubid,
+										   SubTransactionId parentSubid);
+
+extern bool IsOtherUsingGlobalTempRelation(Oid relid);
+
+extern List *AllGlobalTempRelationsInUse(Oid dbId);
+
+#endif							/* GLOBAL_TEMP_H */

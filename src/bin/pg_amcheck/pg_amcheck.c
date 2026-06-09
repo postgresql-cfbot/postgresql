@@ -859,7 +859,8 @@ prepare_heap_command(PQExpBuffer sql, RelationInfo *rel, PGconn *conn)
 
 	appendPQExpBuffer(sql,
 					  "\n) v WHERE c.oid = %u "
-					  "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP),
+					  "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP) " "
+					  "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP),
 					  rel->reloid);
 }
 
@@ -893,6 +894,7 @@ prepare_btree_command(PQExpBuffer sql, RelationInfo *rel, PGconn *conn)
 						  "WHERE c.oid = %u "
 						  "AND c.oid = i.indexrelid "
 						  "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP) " "
+						  "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP) " "
 						  "AND i.indisready AND i.indisvalid AND i.indislive",
 						  rel->datinfo->amcheck_schema,
 						  (opts.heapallindexed ? "true" : "false"),
@@ -908,6 +910,7 @@ prepare_btree_command(PQExpBuffer sql, RelationInfo *rel, PGconn *conn)
 						  "WHERE c.oid = %u "
 						  "AND c.oid = i.indexrelid "
 						  "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP) " "
+						  "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP) " "
 						  "AND i.indisready AND i.indisvalid AND i.indislive",
 						  rel->datinfo->amcheck_schema,
 						  (opts.heapallindexed ? "true" : "false"),
@@ -1954,8 +1957,9 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 	 * until firing off the amcheck command, as the state of an index may
 	 * change by then.
 	 */
-	appendPQExpBufferStr(&sql, "\nWHERE c.relpersistence != "
-						 CppAsString2(RELPERSISTENCE_TEMP));
+	appendPQExpBufferStr(&sql,
+						 "\nWHERE c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP)
+						 "\nAND c.relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP));
 	if (opts.excludetbl || opts.excludeidx || opts.excludensp)
 		appendPQExpBufferStr(&sql, "\nAND ep.pattern_id IS NULL");
 
@@ -2024,7 +2028,8 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 								 "\nAND (t.relname ~ ep.rel_regex OR ep.rel_regex IS NULL)"
 								 "\nAND ep.heap_only"
 								 "\nWHERE ep.pattern_id IS NULL"
-								 "\nAND t.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP));
+								 "\nAND t.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP)
+								 "\nAND t.relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP));
 		appendPQExpBufferStr(&sql,
 							 "\n)");
 	}
@@ -2043,7 +2048,8 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 							 "ON r.oid = i.indrelid "
 							 "INNER JOIN pg_catalog.pg_class c "
 							 "ON i.indexrelid = c.oid "
-							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP));
+							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP) " "
+							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP));
 		if (opts.excludeidx || opts.excludensp)
 			appendPQExpBufferStr(&sql,
 								 "\nINNER JOIN pg_catalog.pg_namespace n "
@@ -2082,7 +2088,8 @@ compile_relation_list_one_db(PGconn *conn, SimplePtrList *relations,
 							 "ON t.oid = i.indrelid"
 							 "\nINNER JOIN pg_catalog.pg_class c "
 							 "ON i.indexrelid = c.oid "
-							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP));
+							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_TEMP) " "
+							 "AND c.relpersistence != " CppAsString2(RELPERSISTENCE_GLOBAL_TEMP));
 		if (opts.excludeidx)
 			appendPQExpBufferStr(&sql,
 								 "\nLEFT OUTER JOIN exclude_pat ep "

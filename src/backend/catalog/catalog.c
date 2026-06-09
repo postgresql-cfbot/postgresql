@@ -571,6 +571,7 @@ GetNewRelFileNumber(Oid reltablespace, Relation pg_class, char relpersistence)
 	switch (relpersistence)
 	{
 		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_GLOBAL_TEMP:
 			procNumber = ProcNumberForTempRelations();
 			break;
 		case RELPERSISTENCE_UNLOGGED:

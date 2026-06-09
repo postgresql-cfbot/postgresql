@@ -1068,11 +1068,13 @@ is($cascading_stdout, $expected,
 # timeline in this window.
 ##################################################
 
-# Create a logical slot on the cascading standby for this test.
+# Create logical slots on the cascading standby for this test.
 $node_cascading_standby->create_logical_slot_on_standby($node_standby,
 	'race_slot', 'testdb');
+$node_cascading_standby->create_logical_slot_on_standby($node_standby,
+	'race_slot_sql', 'testdb');
 
-# Insert data so the slot has WAL to decode.
+# Insert data so the slots have WAL to decode.
 $node_standby->safe_psql('testdb',
 	qq[INSERT INTO decoding_test(x,y) SELECT s, s::text FROM generate_series(10,13) s;]
 );
@@ -1088,6 +1090,9 @@ COMMIT};
 # Create the injection_points extension on the cascading standby.
 $node_standby->safe_psql('testdb', 'CREATE EXTENSION injection_points;');
 $node_standby->wait_for_replay_catchup($node_cascading_standby);
+
+# Open a background psql session BEFORE promotion for the SQL decoding test.
+my $decode_session = $node_cascading_standby->background_psql('testdb');
 
 # Attach injection point to pause startup after WAL segment cleanup
 # but before RecoveryInProgress() flips to false.
@@ -1129,6 +1134,14 @@ chomp($stdout2);
 is($stdout2, $expected,
 	'got expected output from pg_recvlogical during promotion timeline switch'
 );
+
+# Verify SQL decoding (read_local_xlog_page_guts path) on the pre-connected
+# session.
+my $sql_out = $decode_session->query_safe(
+	"SELECT data FROM pg_logical_slot_peek_changes('race_slot_sql', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1')"
+);
+is($sql_out, $expected,
+	'pg_logical_slot_peek_changes works during promotion timeline switch');
 
 # Resume promotion.
 $node_cascading_standby->safe_psql('testdb',

@@ -3024,6 +3024,10 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 	if (tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
 		return;
 
+	/* Don't dump data in global temporary tables */
+	if (tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		return;
+
 	/* Don't dump data in unlogged tables, if so requested */
 	if (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED &&
 		dopt->no_unlogged_table_data)
@@ -7177,6 +7181,7 @@ getTables(Archive *fout, int *numTables)
 	int			i_relhasoids;
 	int			i_relhastriggers;
 	int			i_relpersistence;
+	int			i_reloncommit;
 	int			i_relispopulated;
 	int			i_relreplident;
 	int			i_relrowsec;
@@ -7226,6 +7231,12 @@ getTables(Archive *fout, int *numTables)
 		appendPQExpBufferStr(query, "c.relallfrozen, ");
 	else
 		appendPQExpBufferStr(query, "0 AS relallfrozen, ");
+
+	if (fout->remoteVersion >= 200000)
+		appendPQExpBufferStr(query, "c.reloncommit, ");
+	else
+		appendPQExpBufferStr(query,
+							 CppAsString2(RELONCOMMIT_NONE) " AS reloncommit, ");
 
 	appendPQExpBufferStr(query,
 						 "c.relhastriggers, c.relpersistence, "
@@ -7377,6 +7388,7 @@ getTables(Archive *fout, int *numTables)
 	i_relhasoids = PQfnumber(res, "relhasoids");
 	i_relhastriggers = PQfnumber(res, "relhastriggers");
 	i_relpersistence = PQfnumber(res, "relpersistence");
+	i_reloncommit = PQfnumber(res, "reloncommit");
 	i_relispopulated = PQfnumber(res, "relispopulated");
 	i_relreplident = PQfnumber(res, "relreplident");
 	i_relrowsec = PQfnumber(res, "relrowsecurity");
@@ -7455,6 +7467,7 @@ getTables(Archive *fout, int *numTables)
 		tblinfo[i].hasoids = (strcmp(PQgetvalue(res, i, i_relhasoids), "t") == 0);
 		tblinfo[i].hastriggers = (strcmp(PQgetvalue(res, i, i_relhastriggers), "t") == 0);
 		tblinfo[i].relpersistence = *(PQgetvalue(res, i, i_relpersistence));
+		tblinfo[i].reloncommit = *(PQgetvalue(res, i, i_reloncommit));
 		tblinfo[i].relispopulated = (strcmp(PQgetvalue(res, i, i_relispopulated), "t") == 0);
 		tblinfo[i].relreplident = *(PQgetvalue(res, i, i_relreplident));
 		tblinfo[i].rowsec = (strcmp(PQgetvalue(res, i, i_relrowsec), "t") == 0);
@@ -17236,7 +17249,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		appendPQExpBuffer(q, "CREATE %s%s %s",
 						  (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED &&
 						   tbinfo->relkind != RELKIND_PARTITIONED_TABLE) ?
-						  "UNLOGGED " : "",
+						  "UNLOGGED " :
+						  tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP ?
+						  "GLOBAL TEMP " : "",
 						  reltypename,
 						  qualrelname);
 
@@ -17486,6 +17501,12 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 			}
 			appendPQExpBufferChar(q, ')');
 		}
+
+		/* Dump ON COMMIT action (global temporary tables only) */
+		if (tbinfo->reloncommit == RELONCOMMIT_PRESERVE_ROWS)
+			appendPQExpBufferStr(q, "\nON COMMIT PRESERVE ROWS");
+		else if (tbinfo->reloncommit == RELONCOMMIT_DELETE_ROWS)
+			appendPQExpBufferStr(q, "\nON COMMIT DELETE ROWS");
 
 		/* Dump generic options if any */
 		if (ftoptions && ftoptions[0])

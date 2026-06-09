@@ -1293,7 +1293,7 @@ SELECT c.oid::pg_catalog.regclass, pg_catalog.pg_get_expr(c.relpartbound, c.oid)
 ALTER TABLE t SPLIT PARTITION tp_0_2 INTO
   (PARTITION tp_0_1 FOR VALUES FROM (0) TO (1),
    PARTITION tp_1_2 FOR VALUES FROM (1) TO (2));
-ERROR:  cannot create a permanent relation as partition of temporary relation "t"
+ERROR:  cannot create a permanent relation as partition of local temporary relation "t"
 ALTER TABLE t SPLIT PARTITION tp_0_2 INTO
   (PARTITION pg_temp.tp_0_1 FOR VALUES FROM (0) TO (1),
    PARTITION pg_temp.tp_1_2 FOR VALUES FROM (1) TO (2));

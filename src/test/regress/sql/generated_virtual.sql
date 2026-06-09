@@ -347,6 +347,17 @@ CREATE TABLE gtest20c (a int, b int GENERATED ALWAYS AS (a * 2) VIRTUAL);
 ALTER TABLE gtest20c ADD CONSTRAINT whole_row_check CHECK (gtest20c IS NOT NULL);
 INSERT INTO gtest20c VALUES (1);  -- ok
 INSERT INTO gtest20c VALUES (NULL);  -- fails
+ALTER TABLE gtest20c ALTER COLUMN b SET EXPRESSION AS (nullif(a, 1)); -- fails
+CREATE INDEX gtest20c_expr_idx ON gtest20c ((gtest20c IS NOT NULL));
+CREATE INDEX gtest20c_pred_idx ON gtest20c (a) WHERE gtest20c = ROW(1, 2);
+CREATE INDEX gtest20c_a_idx ON gtest20c (a);
+SELECT pg_relation_filenode('gtest20c_expr_idx') AS gtest20c_expr_idx_filenode \gset
+SELECT pg_relation_filenode('gtest20c_pred_idx') AS gtest20c_pred_idx_filenode \gset
+SELECT pg_relation_filenode('gtest20c_a_idx') AS gtest20c_a_idx_filenode \gset
+ALTER TABLE gtest20c ALTER COLUMN b SET EXPRESSION AS (a * 3); -- ok, rebuilds index
+SELECT pg_relation_filenode('gtest20c_expr_idx') <> :gtest20c_expr_idx_filenode AS whole_row_index_rebuilt;
+SELECT pg_relation_filenode('gtest20c_pred_idx') <> :gtest20c_pred_idx_filenode AS whole_row_predicate_index_rebuilt;
+SELECT pg_relation_filenode('gtest20c_a_idx') = :gtest20c_a_idx_filenode AS ordinary_index_not_rebuilt;
 
 -- not-null constraints
 CREATE TABLE gtest21a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (nullif(a, 0)) VIRTUAL NOT NULL);

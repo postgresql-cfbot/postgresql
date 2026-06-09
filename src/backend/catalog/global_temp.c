@@ -62,6 +62,7 @@
 #include "access/xlogutils.h"
 #include "catalog/global_temp.h"
 #include "catalog/storage.h"
+#include "commands/sequence.h"
 #include "commands/tablecmds.h"
 #include "lib/dshash.h"
 #include "miscadmin.h"
@@ -891,6 +892,10 @@ InitGlobalTempRelation(Relation relation)
 			if (nblocks > 0)
 				relation->rd_index->indisvalid = false;
 		}
+
+		/* If it's a sequence, initialize it */
+		if (relation->rd_rel->relkind == RELKIND_SEQUENCE)
+			InitGlobalTempSequence(relation);
 	}
 
 	/* The remaining initialization works as if we had created it locally */

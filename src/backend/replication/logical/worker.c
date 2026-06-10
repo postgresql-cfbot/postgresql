@@ -578,10 +578,20 @@ typedef struct ApplySubXactData
 
 static ApplySubXactData subxact_data = {0, 0, InvalidTransactionId, NULL};
 
+/*
+ * Type of key used for dependency tracking.
+ */
+typedef enum LogicalRepKeyKind
+{
+	LOGICALREP_KEY_REPLICA_IDENTITY,
+	LOGICALREP_KEY_LOCAL_UNIQUE
+} LogicalRepKeyKind;
+
 /* Hash table key for replica_identity_table */
 typedef struct ReplicaIdentityKey
 {
 	Oid			relid;
+	LogicalRepKeyKind kind;
 	LogicalRepTupleData *data;
 } ReplicaIdentityKey;
 
@@ -761,13 +771,17 @@ static bool
 hash_replica_identity_compare(ReplicaIdentityKey *a, ReplicaIdentityKey *b)
 {
 	if (a->relid != b->relid ||
-		a->data->ncols != b->data->ncols)
+		a->data->ncols != b->data->ncols ||
+		a->kind != b->kind)
 		return false;
 
 	for (int i = 0; i < a->data->ncols; i++)
 	{
 		if (a->data->colstatus[i] != b->data->colstatus[i])
 			return false;
+
+		if (a->data->colstatus[i] == LOGICALREP_COLUMN_NULL)
+			continue;
 
 		if (a->data->colvalues[i].len != b->data->colvalues[i].len)
 			return false;
@@ -789,8 +803,12 @@ free_replica_identity_key(ReplicaIdentityKey *key)
 {
 	Assert(key);
 
-	pfree(key->data->colvalues);
-	pfree(key->data->colstatus);
+	if (key->data->colvalues)
+		pfree(key->data->colvalues);
+
+	if (key->data->colstatus)
+		pfree(key->data->colstatus);
+
 	pfree(key->data);
 	pfree(key);
 }
@@ -933,13 +951,261 @@ append_xid_dependency(TransactionId xid, List **depends_on_xids)
 }
 
 /*
- * Check for dependencies on preceding transactions that modify the same key as
- * the given tuple. Returns the dependent transactions in 'depends_on_xids'.
+ * Common function for checking dependency by using the key. Used by both
+ * check_and_record_ri_dependency and check_and_record_local_key_dependency.
  *
- * Additionally, if new_depended_xid is valid, record the current change and the
- * transaction as a new dependency for the replica identity key modification,
- * allowing subsequent transactions that modify the same key to be dependent on
- * it.
+ * Check whether the given key has an active dependency. If new_depended_xid is
+ * valid, also records a new dependency for that transaction.
+ *
+ * Return the existing transaction ID if an active dependency exists for the
+ * key; otherwise returns InvalidTransactionId.
+ */
+static TransactionId
+check_and_record_key_dependency(ReplicaIdentityKey *key,
+								TransactionId new_depended_xid)
+{
+	TransactionId existing_xid = InvalidTransactionId;
+	ReplicaIdentityEntry *rientry;
+	bool		found = false;
+
+	/*
+	 * The new xid could be invalid if the transaction will be applied by the
+	 * leader itself which means all the changes will be committed before
+	 * processing next transaction. In this case, we only need to check for
+	 * dependencies on preceding transactions, there is no need to record a new
+	 * dependency for subsequent transactions to wait on.
+	 */
+	if (!TransactionIdIsValid(new_depended_xid))
+	{
+		rientry = replica_identity_lookup(replica_identity_table, key);
+
+		if (rientry && has_active_key_dependency(rientry, true))
+		{
+			elog(DEBUG1,
+				 key->kind == LOGICALREP_KEY_REPLICA_IDENTITY ?
+				 "found conflicting replica identity change on table %u from %u" :
+				 "found conflicting local unique key change on table %u from %u",
+				 key->relid, rientry->remote_xid);
+
+			existing_xid = rientry->remote_xid;
+		}
+
+		free_replica_identity_key(key);
+
+		return existing_xid;
+	}
+
+	/* Record a new dependency for subsequent transactions to wait on */
+	rientry = replica_identity_insert(replica_identity_table, key,
+									  &found);
+
+	/*
+	 * Release the key built to search the entry, if the entry already exists.
+	 */
+	if (found)
+	{
+		if (has_active_key_dependency(rientry, false))
+		{
+			elog(DEBUG1,
+				 key->kind == LOGICALREP_KEY_REPLICA_IDENTITY ?
+				 "found conflicting replica identity change on table %u from %u" :
+				 "found conflicting local unique key change on table %u from %u",
+				 key->relid, rientry->remote_xid);
+
+			existing_xid = rientry->remote_xid;
+		}
+
+		free_replica_identity_key(key);
+	}
+
+	rientry->remote_xid = new_depended_xid;
+
+	return existing_xid;
+}
+
+/*
+ * Check if any of the key columns have NULL values.
+ */
+static bool
+has_null_key_values(LogicalRepTupleData *data, Bitmapset *indexkeys)
+{
+	for (int i = 0; i < data->ncols; i++)
+	{
+		if (bms_is_member(i, indexkeys) &&
+			data->colstatus[i] == LOGICALREP_COLUMN_NULL)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Build a hash key for replica_identity_table using the given relation and
+ * tuple data, restricted to the specified key columns.
+ */
+static ReplicaIdentityKey *
+build_replica_identity_key(Oid relid, LogicalRepTupleData *original_data,
+						   Bitmapset *keycols)
+{
+	LogicalRepTupleData *keydata;
+	ReplicaIdentityKey *key;
+	MemoryContext oldctx;
+	int		nkeycols = bms_num_members(keycols);
+
+	oldctx = MemoryContextSwitchTo(ApplyContext);
+
+	/* Allocate space for replica identity values */
+	keydata = palloc0_object(LogicalRepTupleData);
+
+	if (nkeycols)
+	{
+		keydata->colvalues = palloc0_array(StringInfoData, nkeycols);
+		keydata->colstatus = palloc0_array(char, nkeycols);
+	}
+
+	keydata->ncols = nkeycols;
+
+	for (int i = 0, i_key = 0; i < original_data->ncols; i++)
+	{
+		if (!bms_is_member(i, keycols))
+			continue;
+
+		/*
+		 * LOGICALREP_COLUMN_UNCHANGED only indicates that a TOAST column in the
+		 * replica identity key hasn't changed. However, other columns may have
+		 * changed, so we still need to check the dependency for this column.
+		 *
+		 * Before calling this function, unchanged TOAST column values should
+		 * have been copied from the old tuple to the new tuple. So, we should
+		 * see the complete replica identity key value in original_data and
+		 * correctly check the dependency.
+		 */
+		Assert(original_data->colstatus[i] != LOGICALREP_COLUMN_UNCHANGED ||
+			   original_data->colvalues[i].len > 0);
+
+		if (original_data->colstatus[i] != LOGICALREP_COLUMN_NULL)
+		{
+			StringInfo	original_colvalue = &original_data->colvalues[i];
+
+			initStringInfoExt(&keydata->colvalues[i_key], original_colvalue->len + 1);
+			appendStringInfoString(&keydata->colvalues[i_key], original_colvalue->data);
+		}
+
+		keydata->colstatus[i_key] = original_data->colstatus[i];
+		i_key++;
+	}
+
+	key = palloc0_object(ReplicaIdentityKey);
+	key->relid = relid;
+	key->data = keydata;
+
+	MemoryContextSwitchTo(oldctx);
+
+	return key;
+}
+
+/*
+ * Mostly same as check_and_record_ri_dependency() but for local unique indexes.
+ *
+ * See the comments in applyparallelworker.c for details on why tracking these
+ * dependencies is necessary.
+ */
+static void
+check_and_record_local_key_dependency(Oid relid,
+									  LogicalRepTupleData *original_data,
+									  bool old_tuple,
+									  TransactionId new_depended_xid,
+									  List **depends_on_xids)
+{
+	LogicalRepRelMapEntry *relentry;
+	ReplicaIdentityKey *rikey;
+
+	Assert(depends_on_xids);
+
+	/* Search for existing entry */
+	relentry = logicalrep_get_relentry(relid);
+
+	Assert(relentry);
+
+	/*
+	 * Gather information for local indexes if not yet. We require to be in a
+	 * transaction state because system catalogs are read.
+	 */
+	if (!relentry->local_unique_indexes_collected)
+	{
+		bool		needs_start = !IsTransactionOrTransactionBlock();
+
+		if (needs_start)
+			StartTransactionCommand();
+
+		logicalrep_rel_load(NULL, relid, AccessShareLock);
+
+		if (needs_start)
+			CommitTransactionCommand();
+
+		Assert(relentry->local_unique_indexes_collected);
+	}
+
+	foreach_ptr(LogicalRepSubscriberIdx, idxinfo, relentry->local_unique_indexes)
+	{
+		/*
+		 * NULL values in the new tuple represent true NULLs in a unique index.
+		 * If NULLs are treated as distinct (nulls_distinct = true), they never
+		 * cause conflicts. Therefore, we can skip dependency checking if any
+		 * key column is NULL in this case.
+		 *
+		 * However, for old tuples in UPDATE or DELETE operations, a NULL key
+		 * simply indicate the column lies outside the replica identity key
+		 * rather than a true NULL. In such cases, the remote old tuple could
+		 * still conflict with a local tuple, so we must not skip the check.
+		 */
+		if (!old_tuple && idxinfo->nulls_distinct &&
+			has_null_key_values(original_data, idxinfo->indexkeys))
+			continue;
+
+		/*
+		 * Old tuples of unique keys do not conflict with any preceding
+		 * transaction (see the comments in applyparallelworker.c for details on
+		 * conflicting cases). When we don't need to record a new dependency, we
+		 * can skip processing this index entirely.
+		 */
+		if (old_tuple && !TransactionIdIsValid(new_depended_xid))
+			continue;
+
+		rikey = build_replica_identity_key(relid, original_data, idxinfo->indexkeys);
+		rikey->kind = LOGICALREP_KEY_LOCAL_UNIQUE;
+
+		/*
+		 * For old tuples, record a dependency for subsequent transactions to
+		 * wait on; no preceding transactions are added to the list.
+		 *
+		 * For new tuples in INSERT or UPDATE, check for existing key
+		 * dependencies and add any dependent transactions to the list.
+		 */
+		if (old_tuple)
+		{
+			(void) check_and_record_key_dependency(rikey, new_depended_xid);
+		}
+		else
+		{
+			TransactionId	xid;
+
+			xid = check_and_record_key_dependency(rikey, InvalidTransactionId);
+
+			if (TransactionIdIsValid(xid) &&
+				!TransactionIdEquals(xid, new_depended_xid))
+				append_xid_dependency(xid, depends_on_xids);
+		}
+	}
+}
+
+/*
+ * Check for dependencies on preceding transactions that modify the same key.
+ * Returns the dependent transactions in 'depends_on_xids'.
+ *
+ * Additionally, if new_depended_xid is valid, record it as a dependency for the
+ * replica identity key modification, allowing subsequent transactions that
+ * modify the same key to be dependent on it.
  */
 static void
 check_and_record_ri_dependency(Oid relid, LogicalRepTupleData *original_data,
@@ -947,12 +1213,8 @@ check_and_record_ri_dependency(Oid relid, LogicalRepTupleData *original_data,
 							   List **depends_on_xids)
 {
 	LogicalRepRelMapEntry *relentry;
-	LogicalRepTupleData *ridata;
 	ReplicaIdentityKey *rikey;
-	ReplicaIdentityEntry *rientry;
-	MemoryContext oldctx;
-	int			n_ri;
-	bool		found = false;
+	TransactionId xid;
 
 	Assert(depends_on_xids);
 
@@ -968,128 +1230,36 @@ check_and_record_ri_dependency(Oid relid, LogicalRepTupleData *original_data,
 	 */
 	if (has_active_rel_dependency(relentry) &&
 		!TransactionIdEquals(relentry->last_depended_xid, new_depended_xid))
-	{
-		elog(DEBUG1, "found table-wide change affecting %u from %u",
-			 relid, relentry->last_depended_xid);
-
 		append_xid_dependency(relentry->last_depended_xid, depends_on_xids);
-	}
-
-	n_ri = bms_num_members(relentry->remoterel.attkeys);
 
 	/*
 	 * Return if there are no replica identity columns, indicating that the
 	 * remote relation has neither a replica identity key nor is marked as
 	 * replica identity full.
 	 */
-	if (!n_ri)
+	if (!bms_num_members(relentry->remoterel.attkeys))
 		return;
 
-	/* Check if the RI key value of the tuple is invalid */
-	for (int i = 0; i < original_data->ncols; i++)
-	{
-		if (!bms_is_member(i, relentry->remoterel.attkeys))
-			continue;
-
-		/*
-		 * NULL in the new tuple means the replica identity key hasn't changed,
-		 * so no new dependency needs to be recorded. The dependency should have
-		 * been recorded when processing the old tuple.
-		 */
-		if (original_data->colstatus[i] == LOGICALREP_COLUMN_NULL)
-			return;
-
-		/*
-		 * LOGICALREP_COLUMN_UNCHANGED only indicates that a TOAST column in the
-		 * replica identity key hasn't changed. However, other columns may have
-		 * changed, so we still need to check the dependency for this column.
-		 *
-		 * Before calling this function, unchanged TOAST column values should
-		 * have been copied from the old tuple to the new tuple. So, we should
-		 * see the complete replica identity key value in original_data and
-		 * correctly check the dependency.
-		 */
-		Assert(original_data->colstatus[i] != LOGICALREP_COLUMN_UNCHANGED ||
-			   original_data->colvalues[i].len > 0);
-	}
-
-	oldctx = MemoryContextSwitchTo(ApplyContext);
-
-	/* Allocate space for replica identity values */
-	ridata = palloc0_object(LogicalRepTupleData);
-	ridata->colvalues = palloc0_array(StringInfoData, n_ri);
-	ridata->colstatus = palloc0_array(char, n_ri);
-	ridata->ncols = n_ri;
-
-	for (int i_original = 0, i_ri = 0; i_original < original_data->ncols; i_original++)
-	{
-		StringInfo	original_colvalue = &original_data->colvalues[i_original];
-
-		if (!bms_is_member(i_original, relentry->remoterel.attkeys))
-			continue;
-
-		initStringInfoExt(&ridata->colvalues[i_ri], original_colvalue->len + 1);
-		appendStringInfoString(&ridata->colvalues[i_ri], original_colvalue->data);
-		ridata->colstatus[i_ri] = original_data->colstatus[i_original];
-		i_ri++;
-	}
-
-	rikey = palloc0_object(ReplicaIdentityKey);
-	rikey->relid = relid;
-	rikey->data = ridata;
-
-	MemoryContextSwitchTo(oldctx);
-
 	/*
-	 * The new xid could be invalid if the transaction will be applied by the
-	 * leader itself which means all the changes will be committed before
-	 * processing next transaction. In this case, we only need to check for
-	 * dependencies on preceding transactions, there is no need to record a new
-	 * dependency for subsequent transactions to wait on.
+	 * NULL in the new tuple means the replica identity key hasn't changed, so
+	 * no new dependency needs to be recorded. The dependency should have been
+	 * recorded when processing the old tuple.
 	 */
-	if (!TransactionIdIsValid(new_depended_xid))
-	{
-		rientry = replica_identity_lookup(replica_identity_table, rikey);
-		free_replica_identity_key(rikey);
-
-		if (rientry && has_active_key_dependency(rientry, true))
-		{
-			elog(DEBUG1, "found conflicting replica identity change on table %u from %u",
-				 relid, rientry->remote_xid);
-
-			append_xid_dependency(rientry->remote_xid, depends_on_xids);
-		}
-
+	if (has_null_key_values(original_data, relentry->remoterel.attkeys))
 		return;
-	}
 
-	/* Record a new dependency for subsequent transactions to wait on */
-	rientry = replica_identity_insert(replica_identity_table, rikey,
-									  &found);
+	rikey = build_replica_identity_key(relid, original_data, relentry->remoterel.attkeys);
+	rikey->kind = LOGICALREP_KEY_REPLICA_IDENTITY;
+
+	xid = check_and_record_key_dependency(rikey, new_depended_xid);
 
 	/*
-	 * Release the key built to search the entry, if the entry already exists.
+	 * Append the dependency to the list if the current transaction was not the
+	 * lastest one to modify the key.
 	 */
-	if (found)
-	{
-		free_replica_identity_key(rikey);
-
-		/*
-		 * Append the dependency to the list if the current transaction was not
-		 * the lastest one to modify the key.
-		 */
-		if (has_active_key_dependency(rientry, false) &&
-			!TransactionIdEquals(rientry->remote_xid, new_depended_xid))
-		{
-			elog(DEBUG1, "found conflicting replica identity change on table %u from %u",
-				 relid, rientry->remote_xid);
-
-			append_xid_dependency(rientry->remote_xid, depends_on_xids);
-		}
-	}
-
-	/* Update the new depended xid into the entry */
-	rientry->remote_xid = new_depended_xid;
+	if (TransactionIdIsValid(xid) &&
+		!TransactionIdEquals(xid, new_depended_xid))
+		append_xid_dependency(xid, depends_on_xids);
 }
 
 /*
@@ -1291,6 +1461,9 @@ handle_dependency_on_change(LogicalRepMsgType action, StringInfo s,
 			relid = logicalrep_read_insert(&change, &newtup);
 			check_and_record_ri_dependency(relid, &newtup, new_depended_xid,
 										   &depends_on_xids);
+			check_and_record_local_key_dependency(relid, &newtup, false,
+												  new_depended_xid,
+												  &depends_on_xids);
 			check_dependency_for_parallel_safety(relid, new_depended_xid,
 												 &depends_on_xids);
 			break;
@@ -1303,6 +1476,10 @@ handle_dependency_on_change(LogicalRepMsgType action, StringInfo s,
 			{
 				check_and_record_ri_dependency(relid, &oldtup, new_depended_xid,
 											   &depends_on_xids);
+
+				check_and_record_local_key_dependency(relid, &oldtup, true,
+													  new_depended_xid,
+													  &depends_on_xids);
 
 				check_dependency_for_parallel_safety(relid, new_depended_xid,
 													 &depends_on_xids);
@@ -1325,6 +1502,9 @@ handle_dependency_on_change(LogicalRepMsgType action, StringInfo s,
 
 			check_and_record_ri_dependency(relid, &newtup, new_depended_xid,
 										   &depends_on_xids);
+			check_and_record_local_key_dependency(relid, &newtup, false,
+												  new_depended_xid,
+												  &depends_on_xids);
 			check_dependency_for_parallel_safety(relid, new_depended_xid,
 												 &depends_on_xids);
 			break;
@@ -1333,6 +1513,9 @@ handle_dependency_on_change(LogicalRepMsgType action, StringInfo s,
 			relid = logicalrep_read_delete(&change, &oldtup);
 			check_and_record_ri_dependency(relid, &oldtup, new_depended_xid,
 										   &depends_on_xids);
+			check_and_record_local_key_dependency(relid, &oldtup, true,
+												  new_depended_xid,
+												  &depends_on_xids);
 			check_dependency_for_parallel_safety(relid, new_depended_xid,
 												 &depends_on_xids);
 			break;

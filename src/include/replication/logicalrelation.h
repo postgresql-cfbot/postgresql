@@ -46,6 +46,10 @@ typedef struct LogicalRepRelMapEntry
 	 */
 	TransactionId last_depended_xid;
 
+	/* Local unique indexes. Used for dependency tracking */
+	List	   *local_unique_indexes;
+	bool		local_unique_indexes_collected;
+
 	/*
 	 * Whether the relation can be applied in parallel or not. It is
 	 * distinglish whether defined triggers are the immutable or not.
@@ -60,6 +64,14 @@ typedef struct LogicalRepRelMapEntry
 	 */
 	char		parallel_safe;
 } LogicalRepRelMapEntry;
+
+
+typedef struct LogicalRepSubscriberIdx
+{
+	Oid			indexoid;	/* OID of the local key */
+	Bitmapset  *indexkeys;	/* Bitmap of key columns *on remote* */
+	bool		nulls_distinct;	/* Whether NULLs are considered distinct */
+} LogicalRepSubscriberIdx;
 
 extern void logicalrep_relmap_update(LogicalRepRelation *remoterel);
 extern void logicalrep_partmap_reset_relmap(LogicalRepRelation *remoterel);

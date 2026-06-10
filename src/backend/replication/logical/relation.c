@@ -84,6 +84,7 @@ logicalrep_relmap_invalidate_cb(Datum arg, Oid reloid)
 			if (entry->localreloid == reloid)
 			{
 				entry->localrelvalid = false;
+				entry->local_unique_indexes_collected = false;
 				hash_seq_term(&status);
 				break;
 			}
@@ -97,7 +98,10 @@ logicalrep_relmap_invalidate_cb(Datum arg, Oid reloid)
 		hash_seq_init(&status, LogicalRepRelMap);
 
 		while ((entry = (LogicalRepRelMapEntry *) hash_seq_search(&status)) != NULL)
+		{
 			entry->localrelvalid = false;
+			entry->local_unique_indexes_collected = false;
+		}
 	}
 }
 
@@ -129,6 +133,21 @@ logicalrep_relmap_init(void)
 }
 
 /*
+ * Release local index list
+ */
+static void
+free_local_unique_indexes(LogicalRepRelMapEntry *entry)
+{
+	Assert(am_leader_apply_worker());
+
+	foreach_ptr(LogicalRepSubscriberIdx, idxinfo, entry->local_unique_indexes)
+		bms_free(idxinfo->indexkeys);
+
+	list_free_deep(entry->local_unique_indexes);
+	entry->local_unique_indexes = NIL;
+}
+
+/*
  * Free the entry of a relation map cache.
  */
 static void
@@ -155,6 +174,9 @@ logicalrep_relmap_free_entry(LogicalRepRelMapEntry *entry)
 
 	if (entry->attrmap)
 		free_attrmap(entry->attrmap);
+
+	if (entry->local_unique_indexes != NIL)
+		free_local_unique_indexes(entry);
 }
 
 /*
@@ -217,6 +239,7 @@ logicalrep_relmap_update(LogicalRepRelation *remoterel)
 	entry->remoterel.attkeys = bms_copy(remoterel->attkeys);
 
 	entry->parallel_safe = LOGICALREP_PARALLEL_UNKNOWN;
+	entry->local_unique_indexes_collected = false;
 	MemoryContextSwitchTo(oldctx);
 }
 
@@ -361,6 +384,154 @@ logicalrep_rel_mark_updatable(LogicalRepRelMapEntry *entry)
 }
 
 /*
+ * Collect all local unique indexes that can be used for dependency tracking
+ *
+ * This function collects all types of unique indexes, including those with
+ * index expressions and partial indexes. However, to avoid the overhead and
+ * complexity of executing expressions, we do not evaluate them during
+ * dependency tracking.
+ *
+ * For indexes with expressions, only the non-expression columns are recorded in
+ * the bitmap. The dependency tracking function will use only these columns,
+ * which may lead to false dependency detection. For example, consider a unique
+ * index defined as UNIQUE (a, func(b)), where b is an expression column. Rows
+ * (1, 2) and (1, 3) will be treated as dependent even though they are not. This
+ * is acceptable, as it is still better than disabling parallelism for all
+ * relations that have expression indexes.
+ *
+ * Similarly, partial indexes may also cause false dependencies due to predicate
+ * expressions. For the same reason, we consider this acceptable as well.
+ *
+ * To avoid redundant dependency tracking, indexes whose key columns are the
+ * same as, or a superset of, the replica identity key columns are skipped,
+ * since tracking the replica identity keys already covers their scope.
+ *
+ * Columns not in the replica identity key are excluded from the unique column
+ * set. Since the old tuple of an UPDATE or DELETE contains only replica
+ * identity key columns, any other columns would be missing and thus unavailable
+ * for dependency tracking.
+ */
+static void
+collect_indexes_for_dependency_tracking(LogicalRepRelMapEntry *entry)
+{
+	List	   *idxlist;
+
+	free_local_unique_indexes(entry);
+
+	/*
+	 * XXX For partitioned tables, we must collect unique indexes from leaf
+	 * partitions, which are the actual replication targets. This is because
+	 * leaf partitions can have unique indexes that are not present on the
+	 * partitioned table, and those indexes can be used for dependency tracking.
+	 * However, collecting unique indexes from leaf partitions requires building
+	 * the tuple, and executing partition pruning expressions, which could be
+	 * expensive for each change on a partitioned table. For now, we skip
+	 * collecting local unique indexes for partitioned tables and create a dummy
+	 * entry, ensuring that changes on partitioned tables are not applied in
+	 * parallel.
+	 */
+	if (entry->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		MemoryContext oldctx;
+		LogicalRepSubscriberIdx *indexinfo;
+
+		oldctx = MemoryContextSwitchTo(LogicalRepRelMapContext);
+		indexinfo = palloc(sizeof(LogicalRepSubscriberIdx));
+		indexinfo->indexoid = InvalidOid;
+		indexinfo->indexkeys = NULL;
+		indexinfo->nulls_distinct = false;
+		entry->local_unique_indexes = lappend(entry->local_unique_indexes,
+											  indexinfo);
+		MemoryContextSwitchTo(oldctx);
+
+		entry->local_unique_indexes_collected = true;
+
+		return;
+	}
+
+	idxlist = RelationGetIndexList(entry->localrel);
+
+	/* Iterate indexes to list all usable indexes */
+	foreach_oid(idxoid, idxlist)
+	{
+		Relation	idxrel;
+		int			indnkeys;
+		AttrMap    *attrmap;
+		MemoryContext oldctx;
+		LogicalRepSubscriberIdx *indexinfo;
+		Bitmapset  *indexkeys = NULL;
+		bool		nulls_distinct;
+
+		idxrel = index_open(idxoid, AccessShareLock);
+
+		/* Only unique indexes are considered */
+		if (!idxrel->rd_index->indisunique)
+		{
+			index_close(idxrel, AccessShareLock);
+			continue;
+		}
+
+		indnkeys = idxrel->rd_index->indnkeyatts;
+		nulls_distinct = !idxrel->rd_index->indnullsnotdistinct;
+		attrmap = entry->attrmap;
+
+		Assert(indnkeys);
+
+		/* Seek each attributes and add to a Bitmap */
+		for (int i = 0; i < indnkeys; i++)
+		{
+			AttrNumber	localcol = idxrel->rd_index->indkey.values[i];
+			AttrNumber	remotecol;
+
+			/* Skip expression */
+			if (!AttributeNumberIsValid(localcol))
+				continue;
+
+			remotecol = attrmap->attnums[AttrNumberGetAttrOffset(localcol)];
+
+			/* Skip if the column does not exist on publisher node */
+			if (remotecol < 0)
+				continue;
+
+			/* Skip columns that are not part of the replica identity key */
+			if (!bms_is_member(remotecol, entry->remoterel.attkeys))
+				continue;
+
+			/* Checks are passed, remember the attribute */
+			indexkeys = bms_add_member(indexkeys, remotecol);
+		}
+
+		index_close(idxrel, AccessShareLock);
+
+		/*
+		 * Skip indexes whose key columns are a superset of the replica identity
+		 * key.
+		 */
+		if (bms_equal(entry->remoterel.attkeys, indexkeys) ||
+			bms_is_subset(entry->remoterel.attkeys, indexkeys))
+		{
+			bms_free(indexkeys);
+			continue;
+		}
+
+		oldctx = MemoryContextSwitchTo(LogicalRepRelMapContext);
+		indexinfo = palloc(sizeof(LogicalRepSubscriberIdx));
+		indexinfo->indexoid = idxoid;
+		indexinfo->indexkeys = bms_copy(indexkeys);
+		indexinfo->nulls_distinct = nulls_distinct;
+		entry->local_unique_indexes = lappend(entry->local_unique_indexes,
+											  indexinfo);
+		MemoryContextSwitchTo(oldctx);
+
+		bms_free(indexkeys);
+	}
+
+	list_free(idxlist);
+
+	entry->local_unique_indexes_collected = true;
+}
+
+/*
  * Check all local triggers for the relation to see the parallelizability.
  *
  * We regard relations as applicable in parallel if all triggers are immutable.
@@ -369,7 +540,16 @@ logicalrep_rel_mark_updatable(LogicalRepRelMapEntry *entry)
 static void
 check_defined_triggers(LogicalRepRelMapEntry *entry)
 {
-	TriggerDesc *trigdesc = entry->localrel->trigdesc;
+	TriggerDesc *trigdesc;
+
+	/*
+	 * Skip if the parallelizability has already been checked. Possilble if
+	 * the relation has expression indexes.
+	 */
+	if (entry->parallel_safe != LOGICALREP_PARALLEL_UNKNOWN)
+		return;
+
+	trigdesc = entry->localrel->trigdesc;
 
 	/* Quick exit if triffer is not defined */
 	if (trigdesc == NULL)
@@ -410,7 +590,7 @@ check_defined_triggers(LogicalRepRelMapEntry *entry)
  * If the key is given, the corresponding entry is first searched in the hash
  * table and processed as in the above case. At the end, logical replication is
  * closed.
-  */
+ */
 void
 logicalrep_rel_load(LogicalRepRelMapEntry *entry, LogicalRepRelId remoteid,
 					LOCKMODE lockmode)
@@ -454,6 +634,7 @@ logicalrep_rel_load(LogicalRepRelMapEntry *entry, LogicalRepRelId remoteid,
 		{
 			/* Table was renamed or dropped. */
 			entry->localrelvalid = false;
+			entry->local_unique_indexes_collected = false;
 		}
 		else if (!entry->localrelvalid)
 		{
@@ -564,7 +745,11 @@ logicalrep_rel_load(LogicalRepRelMapEntry *entry, LogicalRepRelId remoteid,
 		 * tracking.
 		 */
 		if (am_leader_apply_worker())
+		{
+			entry->parallel_safe = LOGICALREP_PARALLEL_UNKNOWN;
+			collect_indexes_for_dependency_tracking(entry);
 			check_defined_triggers(entry);
+		}
 
 		entry->localrelvalid = true;
 	}
@@ -865,6 +1050,13 @@ logicalrep_partition_open(LogicalRepRelMapEntry *root,
 	 */
 	entry->localindexoid = FindLogicalRepLocalIndex(partrel, remoterel,
 													entry->attrmap);
+
+	/*
+	 * TODO: Parallel apply cannot collect indexes from leaf partition for now.
+	 * Just mark local indexes are collected. (See
+	 * collect_indexes_for_dependency_tracking() for details.)
+	 */
+	entry->local_unique_indexes_collected = true;
 
 	entry->localrelvalid = true;
 

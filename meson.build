@@ -2062,21 +2062,6 @@ foreach builtin : builtins
 endforeach
 
 
-# Check if the C compiler understands __builtin_types_compatible_p,
-# and define HAVE__BUILTIN_TYPES_COMPATIBLE_P if so.
-#
-# We check usage with __typeof__, though it's unlikely any compiler would
-# have the former and not the latter.
-if cc.compiles('''
-    static int x;
-    static int y[__builtin_types_compatible_p(__typeof__(x), int)];
-    ''',
-    name: '__builtin_types_compatible_p',
-    args: test_c_args)
-  cdata.set('HAVE__BUILTIN_TYPES_COMPATIBLE_P', 1)
-endif
-
-
 # Check if the C compiler understands __builtin_$op_overflow(),
 # and define HAVE__BUILTIN_OP_OVERFLOW if so.
 #

@@ -267,25 +267,6 @@ fi])# PGAC_CXX_TYPEOF_UNQUAL
 
 
 
-# PGAC_C_TYPES_COMPATIBLE
-# -----------------------
-# Check if the C compiler understands __builtin_types_compatible_p,
-# and define HAVE__BUILTIN_TYPES_COMPATIBLE_P if so.
-#
-# We check usage with __typeof__, though it's unlikely any compiler would
-# have the former and not the latter.
-AC_DEFUN([PGAC_C_TYPES_COMPATIBLE],
-[AC_CACHE_CHECK(for __builtin_types_compatible_p, pgac_cv__types_compatible,
-[AC_COMPILE_IFELSE([AC_LANG_PROGRAM([],
-[[ int x; static int y[__builtin_types_compatible_p(__typeof__(x), int)]; ]])],
-[pgac_cv__types_compatible=yes],
-[pgac_cv__types_compatible=no])])
-if test x"$pgac_cv__types_compatible" = xyes ; then
-AC_DEFINE(HAVE__BUILTIN_TYPES_COMPATIBLE_P, 1,
-          [Define to 1 if your compiler understands __builtin_types_compatible_p.])
-fi])# PGAC_C_TYPES_COMPATIBLE
-
-
 # PGAC_C_BUILTIN_CONSTANT_P
 # -------------------------
 # Check if the C compiler understands __builtin_constant_p(),

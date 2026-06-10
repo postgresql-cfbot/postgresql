@@ -544,9 +544,6 @@
 /* Define to 1 if your compiler understands __builtin_$op_overflow. */
 #undef HAVE__BUILTIN_OP_OVERFLOW
 
-/* Define to 1 if your compiler understands __builtin_types_compatible_p. */
-#undef HAVE__BUILTIN_TYPES_COMPATIBLE_P
-
 /* Define to 1 if your compiler understands __builtin_unreachable. */
 #undef HAVE__BUILTIN_UNREACHABLE
 

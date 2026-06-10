@@ -1049,29 +1049,24 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
 /*
  * Compile-time checks that a variable (or expression) has the specified type.
  *
+ * The type must not have top-level qualifiers (const, volatile) and must not
+ * be an array (use pointer instead).  (This wouldn't work because _Generic
+ * does lvalue conversion on the controlling expression, which drops
+ * qualifiers and converts arrays to pointers.)  Qualifiers inside pointers
+ * are allowed.
+ *
  * StaticAssertVariableIsOfType() can be used as a declaration.
  * StaticAssertVariableIsOfTypeMacro() is intended for use in macros, eg
  *		#define foo(x) (StaticAssertVariableIsOfTypeMacro(x, int), bar(x))
  *
- * If we don't have __builtin_types_compatible_p, we can still assert that
- * the types have the same size.  This is far from ideal (especially on 32-bit
- * platforms) but it provides at least some coverage.
+ * Note that these do not work in C++.
  */
-#ifdef HAVE__BUILTIN_TYPES_COMPATIBLE_P
 #define StaticAssertVariableIsOfType(varname, typename) \
-	StaticAssertDecl(__builtin_types_compatible_p(typeof(varname), typename), \
+	StaticAssertDecl(_Generic((varname), typename: 1, default: 0), \
 	CppAsString(varname) " does not have type " CppAsString(typename))
 #define StaticAssertVariableIsOfTypeMacro(varname, typename) \
-	(StaticAssertExpr(__builtin_types_compatible_p(typeof(varname), typename), \
+	(StaticAssertExpr(_Generic((varname), typename: 1, default: 0), \
 	 CppAsString(varname) " does not have type " CppAsString(typename)))
-#else							/* !HAVE__BUILTIN_TYPES_COMPATIBLE_P */
-#define StaticAssertVariableIsOfType(varname, typename) \
-	StaticAssertDecl(sizeof(varname) == sizeof(typename), \
-	CppAsString(varname) " does not have type " CppAsString(typename))
-#define StaticAssertVariableIsOfTypeMacro(varname, typename) \
-	(StaticAssertExpr(sizeof(varname) == sizeof(typename), \
-	 CppAsString(varname) " does not have type " CppAsString(typename)))
-#endif							/* HAVE__BUILTIN_TYPES_COMPATIBLE_P */
 
 
 /* ----------------------------------------------------------------
@@ -1308,8 +1303,13 @@ typedef struct PGAlignedXLogBlock PGAlignedXLogBlock;
 
 /*
  * Macro that allows to cast constness and volatile away from an expression, but doesn't
- * allow changing the underlying type.  Enforcement of the latter
- * currently only works for gcc like compilers.
+ * allow changing the underlying type.
+ *
+ * This is only meant to work for qualifiers behind at least one level of
+ * pointer.  (In the C implementation, the StaticAssertVariableIsOfTypeMacro
+ * will drop top-level qualifiers, so with a non-pointer, the static assertion
+ * will fail.  In the C++ implementation, const_cast will error for
+ * non-pointers.)
  *
  * Please note IT IS NOT SAFE to cast constness away if the result will ever
  * be modified (it would be undefined behaviour). Doing so anyway can cause

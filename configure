@@ -1551,7 +1551,8 @@ Optional Features:
   --enable-profiling      build with profiling enabled
   --enable-coverage       build with coverage testing instrumentation
   --enable-dtrace         build with DTrace support
-  --enable-tap-tests      enable TAP tests (requires Perl and IPC::Run)
+  --enable-tap-tests      enable TAP tests (requires Perl, IPC::Run and
+                          FFI::Platypus)
   --enable-injection-points
                           enable injection points (for testing)
   --enable-depend         turn on automatic dependency tracking

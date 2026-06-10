@@ -103,11 +103,12 @@ Avoid using any bleeding-edge Perl features.  We have buildfarm animals
 running Perl versions as old as 5.14, so your tests will be expected
 to pass on that.
 
-Also, do not use any non-core Perl modules except IPC::Run.  Or, if you
-must do so for a particular test, arrange to skip the test when the needed
-module isn't present.  If unsure, you can consult Module::CoreList to find
-out whether a given module is part of the Perl core, and which module
-versions shipped with which Perl releases.
+Also, do not use any non-core Perl modules except IPC::Run and
+FFI::Platypus.  Or, if you must do so for a particular test, arrange to
+skip the test when the needed module isn't present.  If unsure, you can
+consult Module::CoreList to find out whether a given module is part of
+the Perl core, and which module versions shipped with which Perl
+releases.
 
 One way to test for compatibility with old Perl versions is to use
 perlbrew; see http://perlbrew.pl .  After installing that, do
@@ -118,6 +119,7 @@ perlbrew; see http://perlbrew.pl .  After installing that, do
     perlbrew install-cpanm
     cpanm install Test::Simple@0.98
     cpanm install IPC::Run@0.79
+    cpanm install FFI::Platypus@1.00
     cpanm install ExtUtils::MakeMaker@6.50  # downgrade
 
 TIP: if Test::Simple's utf8 regression test hangs up, try setting a
@@ -131,4 +133,4 @@ running tests.  To verify that the right Perl was found:
 Due to limitations of cpanm, this recipe doesn't exactly duplicate the
 module list of older buildfarm animals.  The discrepancies should seldom
 matter, but if you want to be sure, bypass cpanm and instead manually
-install the desired versions of Test::Simple and IPC::Run.
+install the desired versions of Test::Simple, IPC::Run and FFI::Platypus.

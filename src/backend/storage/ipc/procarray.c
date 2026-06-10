@@ -58,11 +58,13 @@
 #include "pgstat.h"
 #include "postmaster/bgworker.h"
 #include "port/pg_lfind.h"
+#include "replication/slot.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
 #include "storage/subsystems.h"
 #include "utils/acl.h"
+#include "utils/backend_status.h"
 #include "utils/builtins.h"
 #include "utils/injection_point.h"
 #include "utils/lsyscache.h"
@@ -281,6 +283,25 @@ typedef enum KAXCompressReason
 	KAX_TRANSACTION_END,		/* we just committed/removed some XIDs */
 	KAX_STARTUP_PROCESS_IDLE,	/* startup process is about to sleep */
 } KAXCompressReason;
+
+/*
+ * A candidate blocker collected during the ProcArray/replication-slot scan.
+ *
+ * Kept deliberately small (the result array is sized for the worst case); the
+ * comparatively large blocker name is not stored per candidate but resolved
+ * later, only for the blockers actually reported.  See GetXidHorizonBlockers
+ * (sizing) and FillXidHorizonBlocker (name resolution).
+ */
+typedef struct XidHorizonBlockerCandidate
+{
+	XidHorizonBlockerType type;
+	TransactionId xid;			/* the blocking xid/xmin */
+	int			pid;			/* backend pid (0 for prepared xacts and slots) */
+	ProcNumber	proc_number;	/* walsender proc number for hot standby
+								 * feedback; INVALID_PROC_NUMBER otherwise */
+	int			slot_index;		/* replication_slots[] index for slot blockers;
+								 * -1 otherwise */
+} XidHorizonBlockerCandidate;
 
 static PGPROC *allProcs;
 
@@ -1997,6 +2018,375 @@ GetReplicationHorizons(TransactionId *xmin, TransactionId *catalog_xmin)
 	 */
 	*xmin = horizons.shared_oldest_nonremovable_raw;
 	*catalog_xmin = horizons.slot_catalog_xmin;
+}
+
+/*
+ * Find the blockers that are holding back the given xid horizon.
+ *
+ * This function searches for what is preventing the given horizon from being
+ * advanced to allow removal of dead tuples. It checks:
+ * 1. Active transactions (running statements)
+ * 2. Idle-in-transaction sessions
+ * 3. Prepared transactions
+ * 4. Hot standby feedback
+ * 5. Replication slots (physical or logical)
+ *
+ * The horizon kind (see GlobalVisHorizonKindForRel) determines which backends
+ * and slot reservations are relevant: the same database and catalog_xmin
+ * filtering ComputeXidHorizons() applied when computing the horizon is mirrored
+ * here, at the point of each scan (see the per-case comments below).
+ *
+ * Hot standby feedback deserves a note, because where the standby's xmin is
+ * stored depends on whether the connection uses a replication slot (see
+ * ProcessStandbyHSFeedbackMessage):
+ *
+ * - Without a slot, the xmin is held in the walsender's PGPROC and is found by
+ *   the ProcArray scan below as XHB_HOT_STANDBY_FEEDBACK.
+ * - With a physical slot, the xmin is held in the slot (the walsender's PGPROC
+ *   xmin is reset to invalid), so the ProcArray scan does not see it.  The slot
+ *   scan finds it instead: if a standby is currently connected (the slot is
+ *   active) it is still reported as XHB_HOT_STANDBY_FEEDBACK, otherwise the
+ *   persisted reservation is reported as XHB_PHYSICAL_REPLICATION_SLOT.
+ *
+ * Logical slots reserve catalog_xmin and are reported as
+ * XHB_LOGICAL_REPLICATION_SLOT.
+ *
+ * Because the horizon was computed earlier, the original blocker may have
+ * already committed by the time this function runs.  The result is therefore
+ * best-effort: it may return a different blocker, or no blocker at all.
+ *
+ * Returns a palloc'd array of candidate blockers and stores the number of
+ * entries in *nblockers.  The blocker names are not resolved here; the caller
+ * does that for the blocker it reports (see FillXidHorizonBlocker).  The array
+ * may be empty if no blocker is found.
+ */
+static XidHorizonBlockerCandidate *
+GetXidHorizonBlockers(TransactionId horizon, GlobalVisHorizonKind kind,
+					  int *nblockers)
+{
+	ProcArrayStruct *arrayP = procArray;
+	TransactionId *other_xids = ProcGlobal->xids;
+	XidHorizonBlockerCandidate *result;
+	int			count = 0;
+	int			max_blockers;
+	int			max_slots = max_replication_slots + max_repack_replication_slots;
+	bool		in_recovery = RecoveryInProgress();
+
+	Assert(TransactionIdIsValid(horizon));
+	Assert(nblockers != NULL);
+
+	/*
+	 * Size the result array for the worst case (one entry per PGPROC plus one
+	 * per replication slot, including repack slots) and allocate it before
+	 * acquiring ProcArrayLock, so the scan below never has to allocate while
+	 * holding the lock.  The other ProcArray scanners such as
+	 * GetCurrentVirtualXIDs() size their result space the same way.  Only 0-2
+	 * entries are returned in practice, and each entry is small because the
+	 * blocker name is resolved later, not here.
+	 */
+	max_blockers = arrayP->maxProcs + max_slots;
+	result = palloc_array(XidHorizonBlockerCandidate, max_blockers);
+
+	LWLockAcquire(ProcArrayLock, LW_SHARED);
+
+	for (int index = 0; index < arrayP->numProcs; index++)
+	{
+		int			pgprocno = arrayP->pgprocnos[index];
+		PGPROC	   *proc = &allProcs[pgprocno];
+		int8		statusFlags = ProcGlobal->statusFlags[index];
+		TransactionId proc_xid;
+		TransactionId proc_xmin;
+		XidHorizonBlockerCandidate *dst = NULL;
+
+		/*
+		 * Skip over backends either vacuuming (which is ok with rows being
+		 * removed, as long as pg_subtrans is not truncated), doing logical
+		 * decoding (which manages xmin separately, check below), or myself.
+		 * This mirrors the exclusions in ComputeXidHorizons().
+		 */
+		if (statusFlags & (PROC_IN_VACUUM | PROC_IN_LOGICAL_DECODING) ||
+			proc == MyProc)
+			continue;
+
+		/*
+		 * For the data and catalog horizons only backends in our own database
+		 * hold the horizon back (plus those affecting all horizons, such as
+		 * hot standby feedback).  The shared horizon considers backends in all
+		 * databases.  This mirrors the per-database filter in
+		 * ComputeXidHorizons().
+		 */
+		if (kind != VISHORIZON_SHARED &&
+			proc->databaseId != MyDatabaseId &&
+			MyDatabaseId != InvalidOid &&
+			!(statusFlags & PROC_AFFECTS_ALL_HORIZONS) &&
+			!in_recovery)
+			continue;
+
+		/* Fetch xid just once - see GetNewTransactionId */
+		proc_xid = UINT32_ACCESS_ONCE(other_xids[index]);
+		proc_xmin = UINT32_ACCESS_ONCE(proc->xmin);
+
+		/*
+		 * Candidates are collected in ProcArray order; callers can reorder if
+		 * needed.  Only the blocker type differs between the cases below; the
+		 * common fields are filled in once afterwards.  Backends are
+		 * provisionally recorded as "active"; the active vs. idle-in-transaction
+		 * distinction is resolved from the reported backend state once all
+		 * locks are released (see below), because the PGPROC alone cannot tell
+		 * an idle-in-transaction session from one blocked on client I/O.
+		 */
+		if (TransactionIdEquals(proc_xid, horizon))
+		{
+			/* This proc's xid matches the horizon (the root cause) */
+			dst = &result[count++];
+			if (proc->pid == 0)
+				dst->type = XHB_PREPARED_TRANSACTION;
+			else
+				dst->type = XHB_ACTIVE_TRANSACTION;
+		}
+		else if (TransactionIdEquals(proc_xmin, horizon))
+		{
+			/* This proc's xmin matches the horizon (held back by the above) */
+			dst = &result[count++];
+			if (statusFlags & PROC_AFFECTS_ALL_HORIZONS)
+				dst->type = XHB_HOT_STANDBY_FEEDBACK;
+			else
+				dst->type = XHB_XMIN_ACTIVE_TRANSACTION;
+		}
+
+		if (dst)
+		{
+			dst->pid = proc->pid;
+			dst->xid = horizon;
+			dst->proc_number = pgprocno;
+			dst->slot_index = -1;
+		}
+	}
+
+	LWLockRelease(ProcArrayLock);
+
+	/*
+	 * Also check replication slots.
+	 *
+	 * A physical slot reserves xmin on behalf of a standby using hot standby
+	 * feedback.  If a standby is currently connected we attribute the
+	 * reservation to that feedback (and record the walsender pid so its
+	 * application_name can be looked up below); otherwise it is a persisted
+	 * physical-slot reservation with no connected standby.  A logical slot
+	 * reserves catalog_xmin for logical decoding.  We compare against the
+	 * effective xmin values, the same ones ReplicationSlotsComputeRequiredXmin()
+	 * aggregates into the horizon (data.xmin/catalog_xmin can lag those, e.g.
+	 * while a logical slot is being created).
+	 */
+	if (max_slots > 0)
+	{
+		LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+
+		for (int i = 0; i < max_slots; i++)
+		{
+			ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+			TransactionId slot_xmin;
+			TransactionId slot_catalog_xmin;
+			ProcNumber	active_proc;
+			bool		invalidated;
+			XidHorizonBlockerCandidate *dst;
+
+			if (!s->in_use)
+				continue;
+
+			SpinLockAcquire(&s->mutex);
+			slot_xmin = s->effective_xmin;
+			slot_catalog_xmin = s->effective_catalog_xmin;
+			active_proc = s->active_proc;
+			invalidated = s->data.invalidated != RS_INVAL_NONE;
+			SpinLockRelease(&s->mutex);
+
+			/* Invalidated slots no longer hold back the horizon. */
+			if (invalidated)
+				continue;
+
+			/*
+			 * A slot's xmin holds back every (non-temp) horizon, but its
+			 * catalog_xmin only holds back the shared and catalog horizons,
+			 * mirroring ComputeXidHorizons().
+			 */
+			if (!TransactionIdEquals(slot_xmin, horizon) &&
+				!(TransactionIdEquals(slot_catalog_xmin, horizon) &&
+				  (kind == VISHORIZON_SHARED || kind == VISHORIZON_CATALOG)))
+				continue;
+
+			dst = &result[count++];
+			dst->xid = horizon;
+			dst->slot_index = i;
+
+			if (SlotIsPhysical(s) && active_proc != INVALID_PROC_NUMBER)
+			{
+				/* Connected standby: report as hot standby feedback. */
+				dst->type = XHB_HOT_STANDBY_FEEDBACK;
+				dst->pid = GetPGProcByNumber(active_proc)->pid;
+				dst->proc_number = active_proc;
+			}
+			else
+			{
+				/*
+				 * A physical slot with no connected standby, or a logical
+				 * slot.  The slot name is resolved later from slot_index.
+				 */
+				dst->type = SlotIsPhysical(s) ?
+					XHB_PHYSICAL_REPLICATION_SLOT :
+					XHB_LOGICAL_REPLICATION_SLOT;
+				dst->pid = 0;
+				dst->proc_number = INVALID_PROC_NUMBER;
+			}
+		}
+
+		LWLockRelease(ReplicationSlotControlLock);
+	}
+
+	/*
+	 * Resolve the active vs. idle-in-transaction distinction for backend
+	 * candidates now that all locks are released.  A backend's PGPROC cannot
+	 * tell an idle-in-transaction session apart from one actively blocked on
+	 * client I/O (both wait on WAIT_EVENT_CLIENT_READ), so consult the
+	 * cumulative backend status, the same source as pg_stat_activity.state.
+	 * This is a bsearch over a process-local snapshot; matching on proc_number
+	 * plus st_procpid guards against the PGPROC being reused since the scan.
+	 */
+	for (int i = 0; i < count; i++)
+	{
+		XidHorizonBlockerCandidate *cand = &result[i];
+		PgBackendStatus *beentry;
+
+		if (cand->type != XHB_ACTIVE_TRANSACTION &&
+			cand->type != XHB_XMIN_ACTIVE_TRANSACTION)
+			continue;
+
+		beentry = pgstat_get_beentry_by_proc_number(cand->proc_number);
+		if (beentry != NULL && beentry->st_procpid == cand->pid &&
+			(beentry->st_state == STATE_IDLEINTRANSACTION ||
+			 beentry->st_state == STATE_IDLEINTRANSACTION_ABORTED))
+			cand->type = (cand->type == XHB_ACTIVE_TRANSACTION) ?
+				XHB_IDLE_IN_TRANSACTION : XHB_XMIN_IDLE_IN_TRANSACTION;
+	}
+
+	*nblockers = count;
+	return result;
+}
+
+/*
+ * Resolve a scanned candidate into a fully-populated blocker.
+ *
+ * The scan deliberately leaves the (comparatively large) blocker name out of
+ * every candidate; it is filled in here for a blocker that is actually
+ * reported, after all scan locks have been released:
+ *
+ * - prepared transaction: look up the GID from the xid;
+ * - hot standby feedback: look up the standby's application_name from the
+ *   walsender's backend status entry.  Matching on proc_number rather than pid
+ *   avoids being fooled by pid reuse, and the lookup is a bsearch over a
+ *   process-local snapshot; the st_procpid check guards against the proc being
+ *   reused since the scan;
+ * - replication slot: copy the slot name (best-effort: empty if the slot has
+ *   since been dropped).
+ */
+static void
+FillXidHorizonBlocker(const XidHorizonBlockerCandidate *cand,
+					  XidHorizonBlocker *blocker)
+{
+	blocker->type = cand->type;
+	blocker->xid = cand->xid;
+	blocker->pid = cand->pid;
+	blocker->proc_number = cand->proc_number;
+	blocker->name[0] = '\0';
+
+	switch (cand->type)
+	{
+		case XHB_PREPARED_TRANSACTION:
+			GetPreparedTransactionGid(cand->xid, blocker->name);
+			break;
+
+		case XHB_HOT_STANDBY_FEEDBACK:
+			{
+				PgBackendStatus *beentry;
+
+				beentry = pgstat_get_beentry_by_proc_number(cand->proc_number);
+				if (beentry != NULL && beentry->st_procpid == cand->pid &&
+					beentry->st_appname != NULL && beentry->st_appname[0] != '\0')
+					strlcpy(blocker->name, beentry->st_appname,
+							sizeof(blocker->name));
+				break;
+			}
+
+		case XHB_PHYSICAL_REPLICATION_SLOT:
+		case XHB_LOGICAL_REPLICATION_SLOT:
+			{
+				NameData	slotname;
+
+				if (ReplicationSlotName(cand->slot_index, &slotname))
+					strlcpy(blocker->name, NameStr(slotname),
+							sizeof(blocker->name));
+				break;
+			}
+
+		default:
+			break;
+	}
+}
+
+/*
+ * Get the highest-priority blocker holding back the xid horizon of 'rel'.
+ *
+ * 'horizon' must be the relation's removal cutoff as computed by
+ * GetOldestNonRemovableTransactionId(rel); 'rel' identifies which kind of
+ * horizon that is, so the scan can apply the same database and catalog_xmin
+ * filtering ComputeXidHorizons() used to compute it.
+ *
+ * Returns true and stores the blocker in *blocker if any are found.
+ */
+bool
+GetXidHorizonBlocker(Relation rel, TransactionId horizon,
+					 XidHorizonBlocker *blocker)
+{
+	XidHorizonBlockerCandidate *blockers;
+	XidHorizonBlockerCandidate *best = NULL;
+	GlobalVisHorizonKind kind;
+	int			nblockers;
+
+	Assert(TransactionIdIsValid(horizon));
+	Assert(blocker != NULL);
+
+	kind = GlobalVisHorizonKindForRel(rel);
+
+	/*
+	 * The temp-table horizon is held back only by our own backend, which the
+	 * scan skips, so there is never an external blocker to report.
+	 */
+	if (kind == VISHORIZON_TEMP)
+		return false;
+
+	blockers = GetXidHorizonBlockers(horizon, kind, &nblockers);
+	for (int i = 0; i < nblockers; i++)
+	{
+		if (best == NULL || blockers[i].type < best->type)
+		{
+			best = &blockers[i];
+
+			/*
+			 * xid-match types are the highest priority (the root cause holding
+			 * the horizon), so nothing can outrank them; stop once we find one.
+			 */
+			if (best->type <= XHB_PREPARED_TRANSACTION)
+				break;
+		}
+	}
+
+	/* Resolve the name only for the blocker we actually report. */
+	if (best != NULL)
+		FillXidHorizonBlocker(best, blocker);
+
+	pfree(blockers);
+
+	return (best != NULL);
 }
 
 /*

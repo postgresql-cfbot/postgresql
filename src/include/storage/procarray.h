@@ -14,9 +14,50 @@
 #ifndef PROCARRAY_H
 #define PROCARRAY_H
 
+#include "access/xact.h"
+#include "storage/procnumber.h"
 #include "storage/standby.h"
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
+
+/*
+ * Type of blocker that is holding back the xid horizon.
+ * Listed in priority order from highest to lowest.  Blockers whose xid
+ * matches the horizon (the root cause) are listed before blockers whose
+ * xmin matches (held back by the root cause).  Within each group, active
+ * transactions are listed first because they are the most actionable for
+ * the DBA (the running query can be identified and cancelled).
+ */
+typedef enum XidHorizonBlockerType
+{
+	/* xid-match types (horizon == proc's xid) */
+	XHB_ACTIVE_TRANSACTION,		/* backend running a statement */
+	XHB_IDLE_IN_TRANSACTION,	/* backend idle in transaction */
+	XHB_PREPARED_TRANSACTION,	/* prepared (two-phase) transaction */
+	/* xmin-match types (horizon == proc's xmin or slot's xmin) */
+	XHB_XMIN_ACTIVE_TRANSACTION,	/* backend running a statement */
+	XHB_XMIN_IDLE_IN_TRANSACTION,	/* backend idle in transaction */
+	XHB_HOT_STANDBY_FEEDBACK,	/* connected standby with hot_standby_feedback */
+	XHB_PHYSICAL_REPLICATION_SLOT,	/* physical slot reserving xmin (no
+									 * connected standby) */
+	XHB_LOGICAL_REPLICATION_SLOT,	/* logical replication slot */
+} XidHorizonBlockerType;
+
+/*
+ * Information about a blocker that is holding back the xid horizon.
+ */
+typedef struct XidHorizonBlocker
+{
+	XidHorizonBlockerType type;
+	TransactionId xid;			/* the blocking xid/xmin */
+	int			pid;			/* backend pid (0 for prepared xacts and
+								 * slots) */
+	ProcNumber	proc_number;	/* backend's proc number, used to look up its
+								 * application_name; INVALID_PROC_NUMBER when
+								 * there is no associated backend */
+	/* large enough for prepared-txn GID or replication slot name */
+	char		name[Max(GIDSIZE, NAMEDATALEN)];
+} XidHorizonBlocker;
 
 
 extern void ProcArrayAdd(PGPROC *proc);
@@ -97,5 +138,8 @@ extern void ProcArraySetReplicationSlotXmin(TransactionId xmin,
 
 extern void ProcArrayGetReplicationSlotXmin(TransactionId *xmin,
 											TransactionId *catalog_xmin);
+
+extern bool GetXidHorizonBlocker(Relation rel, TransactionId horizon,
+								 XidHorizonBlocker *blocker);
 
 #endif							/* PROCARRAY_H */

@@ -874,7 +874,7 @@ AC_MSG_RESULT([$with_icu])
 AC_SUBST(with_icu)
 
 if test "$with_icu" = yes; then
-  PKG_CHECK_MODULES(ICU, icu-uc icu-i18n)
+  PKG_CHECK_MODULES(ICU, icu-uc >= 55 icu-i18n)
 fi
 
 #

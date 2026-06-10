@@ -36,6 +36,7 @@
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_enum.h"
+#include "catalog/pg_temp_class.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
 #include "commands/tablecmds.h"
@@ -1147,6 +1148,9 @@ CommandCounterIncrement(void)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 					 errmsg("cannot start commands during a parallel operation")));
+
+		/* Flush out any pending inserts to pg_temp_class */
+		PreCCI_PgTempClass();
 
 		currentCommandId += 1;
 		if (currentCommandId == InvalidCommandId)
@@ -2360,6 +2364,9 @@ CommitTransaction(void)
 	 */
 	PreCommit_GlobalTempRelation();
 
+	/* Flush out any pending inserts to pg_temp_class */
+	PreCommit_PgTempClass();
+
 	/*
 	 * Synchronize files that are created and not WAL-logged during this
 	 * transaction. This must happen before AtEOXact_RelationMap(), so that we
@@ -2632,6 +2639,9 @@ PrepareTransaction(void)
 	 * we don't bother synchronizing these relations.
 	 */
 	PreCommit_GlobalTempRelation();
+
+	/* Flush out any pending inserts to pg_temp_class */
+	PreCommit_PgTempClass();
 
 	/*
 	 * Synchronize files that are created and not WAL-logged during this
@@ -5191,6 +5201,9 @@ CommitSubTransaction(void)
 
 	CallSubXactCallbacks(SUBXACT_EVENT_PRE_COMMIT_SUB, s->subTransactionId,
 						 s->parent->subTransactionId);
+
+	/* Flush out any pending inserts to pg_temp_class */
+	PreSubCommit_PgTempClass();
 
 	/*
 	 * If this subxact has started any unfinished parallel operation, clean up

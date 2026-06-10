@@ -61,6 +61,7 @@
 #include "access/xact.h"
 #include "access/xlogutils.h"
 #include "catalog/global_temp.h"
+#include "catalog/pg_temp_class.h"
 #include "catalog/storage.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
@@ -955,8 +956,17 @@ InvalidateGlobalTempRelation(Oid relid)
 void
 GlobalTempRelationCreated(Relation relation)
 {
-	/* Record our use of the relation */
-	gtr_record_usage(relation->rd_id);
+	/*
+	 * If this is the first time we've used this relation in this session,
+	 * insert a pg_temp_class tuple for it, and update the usage hash tables.
+	 */
+	if (gtr_local_usage == NULL ||
+		hash_search(gtr_local_usage,
+					&relation->rd_id, HASH_FIND, NULL) == NULL)
+	{
+		InsertPgTempClassTuple(relation);
+		gtr_record_usage(relation->rd_id);
+	}
 }
 
 /*
@@ -985,6 +995,9 @@ GlobalTempRelationDropped(Oid relid)
 
 		/* Flag the usage entry for eoxact cleanup */
 		EOXactUsageListAdd(relid);
+
+		/* Delete it's pg_temp_class tuple */
+		DeletePgTempClassTuple(relid);
 	}
 
 	/* Forget any ON COMMIT action for the relation */
@@ -1114,6 +1127,9 @@ AtEOXact_GlobalTempRelation(bool isCommit)
 		}
 	}
 
+	/* Perform any pg_temp_class processing */
+	AtEOXact_PgTempClass(isCommit);
+
 	/* Now we're out of the transaction and can clear the lists */
 	eoxact_storage_list_len = 0;
 	eoxact_storage_list_overflowed = false;
@@ -1182,6 +1198,9 @@ AtEOSubXact_GlobalTempRelation(bool isCommit, SubTransactionId mySubid,
 										 parentSubid);
 		}
 	}
+
+	/* Perform any pg_temp_class processing */
+	AtEOSubXact_PgTempClass(isCommit, mySubid, parentSubid);
 
 	/* Don't reset the lists; we still need more cleanup later */
 }

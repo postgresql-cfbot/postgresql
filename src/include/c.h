@@ -1081,24 +1081,10 @@ pg_noreturn extern void ExceptionalCondition(const char *conditionName,
  * rationale for the precise behavior of this implementation.  See
  * <https://stackoverflow.com/questions/31311748> about the C++
  * implementation.
- *
- * For compilers that don't support this, we fall back on a kluge that assumes
- * the compiler will complain about a negative width for a struct bit-field.
- * This will not include a helpful error message, but it beats not getting an
- * error at all.
  */
 #ifndef __cplusplus
-#if !defined(_MSC_VER) || _MSC_VER >= 1933
 #define StaticAssertExpr(condition, errmessage) \
 	((void) sizeof(struct {static_assert(condition, errmessage); char a;}))
-#else							/* _MSC_VER < 1933 */
-/*
- * This compiler is buggy and fails to compile the previous variant; use a
- * fallback implementation.
- */
-#define StaticAssertExpr(condition, errmessage) \
-	((void) sizeof(struct { int static_assert_failure : (condition) ? 1 : -1; }))
-#endif							/* _MSC_VER < 1933 */
 #else							/* __cplusplus */
 #define StaticAssertExpr(condition, errmessage) \
 	([]{static_assert(condition, errmessage);})

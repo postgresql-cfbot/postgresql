@@ -128,6 +128,15 @@ extern StatisticExtInfo *choose_best_statistics(List *stats, char requiredkind,
 												int nclauses);
 extern HeapTuple statext_expressions_load(Oid stxoid, bool inh, int idx);
 extern void statext_decode_stxexprs(HeapTuple htup, Relation rel,
-									Bitmapset **keys, List **exprs);
+									Bitmapset **keys, List **exprs,
+									List **keyvars);
+
+/* Join MCV statistics functions */
+extern Selectivity join_mcv_clause_selectivity(PlannerInfo *root,
+											   RestrictInfo *rinfo);
+extern Selectivity statext_join_mcv_clauselist_selectivity(PlannerInfo *root,
+														   List *clauses,
+														   int varRelid,
+														   Bitmapset **estimatedclauses);
 
 #endif							/* STATISTICS_H */

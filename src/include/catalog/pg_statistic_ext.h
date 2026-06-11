@@ -54,6 +54,12 @@ CATALOG(pg_statistic_ext,3381,StatisticExtRelationId)
 												 * for all stats attributes,
 												 * including simple column
 												 * references as Var nodes */
+
+	/* Fields for join statistics (all NULL for single-table stats) */
+
+	/* participating rels anchor-first (stxjoinrels[0] == stxrelid) */
+	oidvector	stxjoinrels BKI_DEFAULT(_null_) BKI_FORCE_NULL;
+	pg_node_tree stxjoinconds BKI_DEFAULT(_null_) BKI_FORCE_NULL;
 #endif
 
 } FormData_pg_statistic_ext;

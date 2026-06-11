@@ -443,7 +443,7 @@ extended_statistics_update(FunctionCallInfo fcinfo)
 
 	/* Decode stxexprs into keys and exprs (const-folded) */
 	rel = table_open(relid, NoLock);
-	statext_decode_stxexprs(tup, rel, &keys, &exprs);
+	statext_decode_stxexprs(tup, rel, &keys, &exprs, NULL);
 	table_close(rel, NoLock);
 
 	numattnums = bms_num_members(keys);

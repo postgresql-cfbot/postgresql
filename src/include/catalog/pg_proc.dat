@@ -6070,7 +6070,7 @@
   prosrc => 'pg_stat_get_lock' },
 
 { oid => '8987', descr => 'statistics: deprecated feature usage',
-  proname => 'pg_stat_get_deprecated_features', prorows => '3',
+  proname => 'pg_stat_get_deprecated_features', prorows => '4',
   proretset => 't', provolatile => 'v', proparallel => 'r',
   prorettype => 'record', proargtypes => '',
   proallargtypes => '{text,int8,timestamptz,timestamptz}',

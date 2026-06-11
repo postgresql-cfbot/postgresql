@@ -28,6 +28,7 @@
  */
 static const char *const pgstat_deprecated_feature_names[] = {
 	[PGSTAT_DEPRECATED_FEATURE_GLOBAL_TEMPORARY_TABLE] = "global_temporary_table",
+	[PGSTAT_DEPRECATED_FEATURE_LOCAL_TEMPORARY_TABLE] = "local_temporary_table",
 	[PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_AUTH] = "md5_password_auth",
 	[PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_SET] = "md5_password_set",
 };

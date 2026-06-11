@@ -3923,8 +3923,16 @@ CreateStmt:	CREATE OptTemp TABLE qualified_name '(' OptTableElementList ')'
  */
 OptTemp:	TEMPORARY					{ $$ = RELPERSISTENCE_TEMP; }
 			| TEMP						{ $$ = RELPERSISTENCE_TEMP; }
-			| LOCAL TEMPORARY			{ $$ = RELPERSISTENCE_TEMP; }
-			| LOCAL TEMP				{ $$ = RELPERSISTENCE_TEMP; }
+			| LOCAL TEMPORARY
+				{
+					pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_LOCAL_TEMPORARY_TABLE);
+					$$ = RELPERSISTENCE_TEMP;
+				}
+			| LOCAL TEMP
+				{
+					pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_LOCAL_TEMPORARY_TABLE);
+					$$ = RELPERSISTENCE_TEMP;
+				}
 			| GLOBAL TEMPORARY
 				{
 					pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_GLOBAL_TEMPORARY_TABLE);
@@ -13965,11 +13973,13 @@ OptTempTableName:
 				}
 			| LOCAL TEMPORARY opt_table qualified_name
 				{
+					pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_LOCAL_TEMPORARY_TABLE);
 					$$ = $4;
 					$$->relpersistence = RELPERSISTENCE_TEMP;
 				}
 			| LOCAL TEMP opt_table qualified_name
 				{
+					pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_LOCAL_TEMPORARY_TABLE);
 					$$ = $4;
 					$$->relpersistence = RELPERSISTENCE_TEMP;
 				}

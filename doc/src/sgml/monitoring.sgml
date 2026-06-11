@@ -3512,6 +3512,16 @@ description | Waiting for a newly initialized WAL file to reach durable storage
     </varlistentry>
 
     <varlistentry>
+     <term><literal>local_temporary_table</literal></term>
+     <listitem>
+      <para>
+       Use of the deprecated <literal>LOCAL</literal> keyword in temporary
+       table creation.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><literal>md5_password_auth</literal></term>
      <listitem>
       <para>

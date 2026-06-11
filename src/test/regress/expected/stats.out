@@ -1101,6 +1101,26 @@ SELECT usage_count = :deprecated_global_temp_count + 1 AS incremented,
  t           | t
 (1 row)
 
+-- Creating a temporary table with the deprecated LOCAL keyword must be
+-- counted, even though it is accepted silently.
+SELECT usage_count AS deprecated_local_temp_count
+  FROM pg_stat_deprecated_features WHERE name = 'local_temporary_table' \gset
+CREATE LOCAL TEMPORARY TABLE stats_local_temp (a int);
+DROP TABLE stats_local_temp;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT usage_count = :deprecated_local_temp_count + 1 AS incremented,
+       last_used IS NOT NULL AS has_last_used
+  FROM pg_stat_deprecated_features WHERE name = 'local_temporary_table';
+ incremented | has_last_used 
+-------------+---------------
+ t           | t
+(1 row)
+
 -- Setting an MD5-encrypted password must be counted even when
 -- md5_password_warnings is disabled.
 SET md5_password_warnings = off;
@@ -1170,9 +1190,10 @@ SELECT name FROM pg_stat_deprecated_features ORDER BY name COLLATE "C";
           name          
 ------------------------
  global_temporary_table
+ local_temporary_table
  md5_password_auth
  md5_password_set
-(3 rows)
+(4 rows)
 
 -- Test that reset_shared with deprecated_features specified as the stats type works
 SELECT max(stats_reset) AS deprecated_features_reset_ts FROM pg_stat_deprecated_features \gset

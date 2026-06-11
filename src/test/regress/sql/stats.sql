@@ -500,6 +500,17 @@ SELECT stats_reset > :'slru_notify_reset_ts'::timestamptz FROM pg_stat_slru WHER
 
 -- Test deprecated feature usage statistics
 
+-- Creating a temporary table with the deprecated GLOBAL keyword must be
+-- counted, in addition to emitting a warning.
+SELECT usage_count AS deprecated_global_temp_count
+  FROM pg_stat_deprecated_features WHERE name = 'global_temporary_table' \gset
+CREATE GLOBAL TEMPORARY TABLE stats_global_temp (a int);
+DROP TABLE stats_global_temp;
+SELECT pg_stat_force_next_flush();
+SELECT usage_count = :deprecated_global_temp_count + 1 AS incremented,
+       last_used IS NOT NULL AS has_last_used
+  FROM pg_stat_deprecated_features WHERE name = 'global_temporary_table';
+
 -- Setting an MD5-encrypted password must be counted even when
 -- md5_password_warnings is disabled.
 SET md5_password_warnings = off;

@@ -276,6 +276,7 @@ typedef struct PgStat_CheckpointerStats
 /* Deprecated features counted by pg_stat_deprecated_features */
 typedef enum PgStat_DeprecatedFeature
 {
+	PGSTAT_DEPRECATED_FEATURE_GLOBAL_TEMPORARY_TABLE,
 	PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_AUTH,
 	PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_SET,
 } PgStat_DeprecatedFeature;

@@ -1077,6 +1077,29 @@ SELECT stats_reset > :'slru_notify_reset_ts'::timestamptz FROM pg_stat_slru WHER
  t
 (1 row)
 
+-- Test deprecated feature usage statistics
+-- Setting an MD5-encrypted password must be counted even when
+-- md5_password_warnings is disabled.
+SET md5_password_warnings = off;
+SELECT usage_count AS deprecated_md5_set_count
+  FROM pg_stat_deprecated_features WHERE name = 'md5_password_set' \gset
+CREATE ROLE regress_stats_md5 PASSWORD 'md5912f4d9b58e4731e3e9f6dd9eebbbca5';
+DROP ROLE regress_stats_md5;
+RESET md5_password_warnings;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT usage_count = :deprecated_md5_set_count + 1 AS incremented,
+       last_used IS NOT NULL AS has_last_used
+  FROM pg_stat_deprecated_features WHERE name = 'md5_password_set';
+ incremented | has_last_used 
+-------------+---------------
+ t           | t
+(1 row)
+
 -- Test that reset_shared with archiver specified as the stats type works
 SELECT stats_reset AS archiver_reset_ts FROM pg_stat_archiver \gset
 SELECT pg_stat_reset_shared('archiver');
@@ -1121,9 +1144,10 @@ SELECT stats_reset > :'checkpointer_reset_ts'::timestamptz FROM pg_stat_checkpoi
 
 -- The deprecated features view should list the expected features
 SELECT name FROM pg_stat_deprecated_features ORDER BY name COLLATE "C";
- name 
-------
-(0 rows)
+       name       
+------------------
+ md5_password_set
+(1 row)
 
 -- Test that reset_shared with deprecated_features specified as the stats type works
 SELECT max(stats_reset) AS deprecated_features_reset_ts FROM pg_stat_deprecated_features \gset

@@ -21,6 +21,7 @@
 #include "libpq/crypt.h"
 #include "libpq/scram.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "utils/builtins.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
@@ -241,13 +242,17 @@ encrypt_password(PasswordType target_type, const char *role,
 						   MAX_ENCRYPTED_PASSWORD_LEN)));
 	}
 
-	if (md5_password_warnings &&
-		get_password_type(encrypted_password) == PASSWORD_TYPE_MD5)
-		ereport(WARNING,
-				(errcode(ERRCODE_WARNING_DEPRECATED_FEATURE),
-				 errmsg("setting an MD5-encrypted password"),
-				 errdetail("MD5 password support is deprecated and will be removed in a future release of PostgreSQL."),
-				 errhint("Refer to the PostgreSQL documentation for details about migrating to another password type.")));
+	if (get_password_type(encrypted_password) == PASSWORD_TYPE_MD5)
+	{
+		pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_SET);
+
+		if (md5_password_warnings)
+			ereport(WARNING,
+					(errcode(ERRCODE_WARNING_DEPRECATED_FEATURE),
+					 errmsg("setting an MD5-encrypted password"),
+					 errdetail("MD5 password support is deprecated and will be removed in a future release of PostgreSQL."),
+					 errhint("Refer to the PostgreSQL documentation for details about migrating to another password type.")));
+	}
 
 	return encrypted_password;
 }

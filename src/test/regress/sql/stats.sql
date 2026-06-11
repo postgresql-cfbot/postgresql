@@ -498,6 +498,21 @@ SELECT pg_stat_reset_slru();
 SELECT stats_reset > :'slru_commit_ts_reset_ts'::timestamptz FROM pg_stat_slru WHERE name = 'commit_timestamp';
 SELECT stats_reset > :'slru_notify_reset_ts'::timestamptz FROM pg_stat_slru WHERE name = 'notify';
 
+-- Test deprecated feature usage statistics
+
+-- Setting an MD5-encrypted password must be counted even when
+-- md5_password_warnings is disabled.
+SET md5_password_warnings = off;
+SELECT usage_count AS deprecated_md5_set_count
+  FROM pg_stat_deprecated_features WHERE name = 'md5_password_set' \gset
+CREATE ROLE regress_stats_md5 PASSWORD 'md5912f4d9b58e4731e3e9f6dd9eebbbca5';
+DROP ROLE regress_stats_md5;
+RESET md5_password_warnings;
+SELECT pg_stat_force_next_flush();
+SELECT usage_count = :deprecated_md5_set_count + 1 AS incremented,
+       last_used IS NOT NULL AS has_last_used
+  FROM pg_stat_deprecated_features WHERE name = 'md5_password_set';
+
 -- Test that reset_shared with archiver specified as the stats type works
 SELECT stats_reset AS archiver_reset_ts FROM pg_stat_archiver \gset
 SELECT pg_stat_reset_shared('archiver');

@@ -27,7 +27,7 @@
  * be kept in the same order, sorted by name.
  */
 static const char *const pgstat_deprecated_feature_names[] = {
-	/* entries are added by later commits */
+	[PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_SET] = "md5_password_set",
 };
 
 StaticAssertDecl(lengthof(pgstat_deprecated_feature_names) == PGSTAT_NUM_DEPRECATED_FEATURES,

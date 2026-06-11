@@ -3501,6 +3501,15 @@ description | Waiting for a newly initialized WAL file to reach durable storage
    The tracked deprecated features are:
 
    <variablelist>
+    <varlistentry>
+     <term><literal>md5_password_set</literal></term>
+     <listitem>
+      <para>
+       Setting an MD5-encrypted password, e.g., with <command>CREATE
+       ROLE</command> or <command>ALTER ROLE</command>.
+      </para>
+     </listitem>
+    </varlistentry>
    </variablelist>
   </para>
  </sect2>

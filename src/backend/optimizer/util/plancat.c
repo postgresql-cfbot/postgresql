@@ -1654,7 +1654,9 @@ get_relation_constraints(PlannerInfo *root,
 static void
 get_relation_statistics_worker(List **stainfos, RelOptInfo *rel,
 							   Oid statOid, bool inh,
-							   Bitmapset *keys, List *exprs)
+							   Bitmapset *keys, List *exprs,
+							   List *joinrels, List *keyvars,
+							   List *joinconds)
 {
 	Form_pg_statistic_ext_data dataForm;
 	HeapTuple	dtup;
@@ -1706,6 +1708,15 @@ get_relation_statistics_worker(List **stainfos, RelOptInfo *rel,
 		info->keys = bms_copy(keys);
 		info->exprs = exprs;
 
+		/*
+		 * Only MCV carries the join fields: CREATE STATISTICS allows no other
+		 * kind yet for join stats, so the nodes above are never join stats.
+		 * For single-table stats these locals are NIL.
+		 */
+		info->joinrels = joinrels;
+		info->keyvars = keyvars;
+		info->joinconds = joinconds;
+
 		*stainfos = lappend(*stainfos, info);
 	}
 
@@ -1751,6 +1762,12 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 		HeapTuple	htup;
 		Bitmapset  *keys = NULL;
 		List	   *exprs = NIL;
+		List	   *keyvars = NIL;
+
+		/* Join statistics fields */
+		List	   *joinrels = NIL;
+		List	   *target_keyvars = NIL;
+		List	   *joinconds = NIL;
 
 		htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statOid));
 		if (!HeapTupleIsValid(htup))
@@ -1767,7 +1784,7 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 		 * keys and expressions here.
 		 */
 		{
-			statext_decode_stxexprs(htup, relation, &keys, &exprs);
+			statext_decode_stxexprs(htup, relation, &keys, &exprs, &keyvars);
 
 			/*
 			 * Modify the copies we obtain from the relcache to have the
@@ -1798,11 +1815,52 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 			}
 		}
 
+		/*
+		 * Get join statistics fields if present.  Join stats have a non-null
+		 * stxjoinrels array listing the other participating relations.
+		 */
+		{
+			bool		isnull;
+			Datum		datum;
+
+			datum = SysCacheGetAttr(STATEXTOID, htup,
+									Anum_pg_statistic_ext_stxjoinrels, &isnull);
+			if (!isnull)
+			{
+				oidvector  *jrels = (oidvector *) DatumGetPointer(datum);
+				char	   *condstr;
+
+				for (int j = 0; j < jrels->dim1; j++)
+					joinrels = lappend_oid(joinrels,
+										   jrels->values[j]);
+
+				/*
+				 * The target columns are the Var nodes collected by
+				 * statext_decode_stxexprs (in stxexprs order); each carries
+				 * both its attnum and its 1-based relation ref in varno.
+				 */
+				target_keyvars = keyvars;
+
+				/* stxjoinconds */
+				datum = SysCacheGetAttrNotNull(STATEXTOID, htup,
+											   Anum_pg_statistic_ext_stxjoinconds);
+				condstr = TextDatumGetCString(datum);
+				joinconds = (List *) stringToNode(condstr);
+				pfree(condstr);
+			}
+		}
+
 		/* extract statistics for possible values of stxdinherit flag */
 
-		get_relation_statistics_worker(&stainfos, rel, statOid, true, keys, exprs);
+		get_relation_statistics_worker(&stainfos, rel, statOid, true,
+									   keys, exprs,
+									   joinrels, target_keyvars,
+									   joinconds);
 
-		get_relation_statistics_worker(&stainfos, rel, statOid, false, keys, exprs);
+		get_relation_statistics_worker(&stainfos, rel, statOid, false,
+									   keys, exprs,
+									   joinrels, target_keyvars,
+									   joinconds);
 
 		ReleaseSysCache(htup);
 		bms_free(keys);

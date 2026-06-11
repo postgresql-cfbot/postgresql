@@ -1119,6 +1119,26 @@ SELECT stats_reset > :'checkpointer_reset_ts'::timestamptz FROM pg_stat_checkpoi
  t
 (1 row)
 
+-- The deprecated features view should list the expected features
+SELECT name FROM pg_stat_deprecated_features ORDER BY name COLLATE "C";
+ name 
+------
+(0 rows)
+
+-- Test that reset_shared with deprecated_features specified as the stats type works
+SELECT max(stats_reset) AS deprecated_features_reset_ts FROM pg_stat_deprecated_features \gset
+SELECT pg_stat_reset_shared('deprecated_features');
+ pg_stat_reset_shared 
+----------------------
+ 
+(1 row)
+
+SELECT max(stats_reset) > :'deprecated_features_reset_ts'::timestamptz FROM pg_stat_deprecated_features;
+ ?column? 
+----------
+ t
+(1 row)
+
 -- Test that reset_shared with recovery_prefetch specified as the stats type works
 SELECT stats_reset AS recovery_prefetch_reset_ts FROM pg_stat_recovery_prefetch \gset
 SELECT pg_stat_reset_shared('recovery_prefetch');
@@ -1164,7 +1184,7 @@ SELECT stats_reset > :'wal_reset_ts'::timestamptz FROM pg_stat_wal;
 -- Test error case for reset_shared with unknown stats type
 SELECT pg_stat_reset_shared('unknown');
 ERROR:  unrecognized reset target: "unknown"
-HINT:  Target must be "archiver", "bgwriter", "checkpointer", "io", "lock", "recovery_prefetch", "slru", or "wal".
+HINT:  Target must be "archiver", "bgwriter", "checkpointer", "deprecated_features", "io", "lock", "recovery_prefetch", "slru", or "wal".
 -- Test that reset works for pg_stat_database and pg_stat_database_conflicts
 -- Since pg_stat_database stats_reset starts out as NULL, reset it once first so that we
 -- have a baseline for comparison. The same for pg_stat_database_conflicts as it shares

@@ -1939,6 +1939,11 @@ pg_stat_database_conflicts| SELECT oid AS datid,
     pg_stat_get_db_conflict_logicalslot(oid) AS confl_active_logicalslot,
     pg_stat_get_db_stat_reset_time(oid) AS stats_reset
    FROM pg_database d;
+pg_stat_deprecated_features| SELECT name,
+    usage_count,
+    last_used,
+    stats_reset
+   FROM pg_stat_get_deprecated_features() d(name, usage_count, last_used, stats_reset);
 pg_stat_gssapi| SELECT pid,
     gss_auth AS gss_authenticated,
     gss_princ AS principal,

@@ -9,6 +9,7 @@ backend_sources += files(
   'pgstat_bgwriter.c',
   'pgstat_checkpointer.c',
   'pgstat_database.c',
+  'pgstat_deprecated_features.c',
   'pgstat_function.c',
   'pgstat_io.c',
   'pgstat_lock.c',

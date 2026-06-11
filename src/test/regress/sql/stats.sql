@@ -513,6 +513,14 @@ SELECT stats_reset AS checkpointer_reset_ts FROM pg_stat_checkpointer \gset
 SELECT pg_stat_reset_shared('checkpointer');
 SELECT stats_reset > :'checkpointer_reset_ts'::timestamptz FROM pg_stat_checkpointer;
 
+-- The deprecated features view should list the expected features
+SELECT name FROM pg_stat_deprecated_features ORDER BY name COLLATE "C";
+
+-- Test that reset_shared with deprecated_features specified as the stats type works
+SELECT max(stats_reset) AS deprecated_features_reset_ts FROM pg_stat_deprecated_features \gset
+SELECT pg_stat_reset_shared('deprecated_features');
+SELECT max(stats_reset) > :'deprecated_features_reset_ts'::timestamptz FROM pg_stat_deprecated_features;
+
 -- Test that reset_shared with recovery_prefetch specified as the stats type works
 SELECT stats_reset AS recovery_prefetch_reset_ts FROM pg_stat_recovery_prefetch \gset
 SELECT pg_stat_reset_shared('recovery_prefetch');

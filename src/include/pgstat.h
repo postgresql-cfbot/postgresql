@@ -218,7 +218,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBC
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBD
 
 typedef struct PgStat_ArchiverStats
 {
@@ -271,6 +271,22 @@ typedef struct PgStat_CheckpointerStats
 	PgStat_Counter slru_written;
 	TimestampTz stat_reset_timestamp;
 } PgStat_CheckpointerStats;
+
+
+/* Deprecated features counted by pg_stat_deprecated_features */
+typedef enum PgStat_DeprecatedFeature
+{
+	/* entries are added by later commits */
+} PgStat_DeprecatedFeature;
+
+#define PGSTAT_NUM_DEPRECATED_FEATURES 0
+
+typedef struct PgStat_DeprecatedFeatureStats
+{
+	PgStat_Counter usage_count;
+	TimestampTz last_used;
+	TimestampTz stat_reset_timestamp;
+} PgStat_DeprecatedFeatureStats;
 
 
 /*
@@ -606,6 +622,15 @@ extern PgStat_BgWriterStats *pgstat_fetch_stat_bgwriter(void);
 
 extern void pgstat_report_checkpointer(void);
 extern PgStat_CheckpointerStats *pgstat_fetch_stat_checkpointer(void);
+
+
+/*
+ * Functions in pgstat_deprecated_features.c
+ */
+
+extern void pgstat_count_deprecated_feature(PgStat_DeprecatedFeature feature);
+extern const char *pgstat_get_deprecated_feature_name(int idx);
+extern PgStat_DeprecatedFeatureStats *pgstat_fetch_deprecated_features(void);
 
 
 /*

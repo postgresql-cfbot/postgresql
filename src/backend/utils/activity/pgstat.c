@@ -1186,52 +1186,55 @@ pgstat_build_snapshot(void)
 	/*
 	 * Snapshot all variable stats.
 	 */
-	dshash_seq_init(&hstat, pgStatLocal.shared_hash, false);
-	while ((p = dshash_seq_next(&hstat)) != NULL)
+	for (int h = 0; h < pgStatLocal.num_hashes; h++)
 	{
-		PgStat_Kind kind = p->key.kind;
-		const PgStat_KindInfo *kind_info = pgstat_get_kind_info(kind);
-		bool		found;
-		PgStat_SnapshotEntry *entry;
-		PgStatShared_Common *stats_data;
+		dshash_seq_init(&hstat, pgStatLocal.all_hashes[h], false);
+		while ((p = dshash_seq_next(&hstat)) != NULL)
+		{
+			PgStat_Kind kind = p->key.kind;
+			const PgStat_KindInfo *kind_info = pgstat_get_kind_info(kind);
+			bool		found;
+			PgStat_SnapshotEntry *entry;
+			PgStatShared_Common *stats_data;
 
-		/*
-		 * Check if the stats object should be included in the snapshot.
-		 * Unless the stats kind can be accessed from all databases (e.g.,
-		 * database stats themselves), we only include stats for the current
-		 * database or objects not associated with a database (e.g. shared
-		 * relations).
-		 */
-		if (p->key.dboid != MyDatabaseId &&
-			p->key.dboid != InvalidOid &&
-			!kind_info->accessed_across_databases)
-			continue;
+			/*
+			 * Check if the stats object should be included in the snapshot.
+			 * Unless the stats kind can be accessed from all databases (e.g.,
+			 * database stats themselves), we only include stats for the
+			 * current database or objects not associated with a database
+			 * (e.g. shared relations).
+			 */
+			if (p->key.dboid != MyDatabaseId &&
+				p->key.dboid != InvalidOid &&
+				!kind_info->accessed_across_databases)
+				continue;
 
-		if (p->dropped)
-			continue;
+			if (p->dropped)
+				continue;
 
-		Assert(pg_atomic_read_u32(&p->refcount) > 0);
+			Assert(pg_atomic_read_u32(&p->refcount) > 0);
 
-		stats_data = dsa_get_address(pgStatLocal.dsa, p->body);
-		Assert(stats_data);
+			stats_data = dsa_get_address(pgStatLocal.dsa, p->body);
+			Assert(stats_data);
 
-		entry = pgstat_snapshot_insert(pgStatLocal.snapshot.stats, p->key, &found);
-		Assert(!found);
+			entry = pgstat_snapshot_insert(pgStatLocal.snapshot.stats, p->key, &found);
+			Assert(!found);
 
-		entry->data = MemoryContextAlloc(pgStatLocal.snapshot.context,
-										 pgstat_get_entry_len(kind));
+			entry->data = MemoryContextAlloc(pgStatLocal.snapshot.context,
+											 pgstat_get_entry_len(kind));
 
-		/*
-		 * Acquire the LWLock directly instead of using
-		 * pg_stat_lock_entry_shared() which requires a reference.
-		 */
-		LWLockAcquire(&stats_data->lock, LW_SHARED);
-		memcpy(entry->data,
-			   pgstat_get_entry_data(kind, stats_data),
-			   pgstat_get_entry_len(kind));
-		LWLockRelease(&stats_data->lock);
+			/*
+			 * Acquire the LWLock directly instead of using
+			 * pg_stat_lock_entry_shared() which requires a reference.
+			 */
+			LWLockAcquire(&stats_data->lock, LW_SHARED);
+			memcpy(entry->data,
+				   pgstat_get_entry_data(kind, stats_data),
+				   pgstat_get_entry_len(kind));
+			LWLockRelease(&stats_data->lock);
+		}
+		dshash_seq_term(&hstat);
 	}
-	dshash_seq_term(&hstat);
 
 	/*
 	 * Build snapshot of all fixed-numbered stats.
@@ -1540,6 +1543,10 @@ pgstat_register_kind(PgStat_Kind kind, const PgStat_KindInfo *kind_info)
 			ereport(ERROR,
 					(errmsg("custom cumulative statistics property is invalid"),
 					 errhint("Custom cumulative statistics cannot use entry count tracking for fixed-numbered objects.")));
+		if (kind_info->own_hash)
+			ereport(ERROR,
+					(errmsg("custom cumulative statistics property is invalid"),
+					 errhint("Custom cumulative statistics cannot use a dedicated hash table for fixed-numbered objects.")));
 	}
 
 	/*
@@ -1683,78 +1690,81 @@ pgstat_write_statsfile(void)
 	/*
 	 * Walk through the stats entries
 	 */
-	dshash_seq_init(&hstat, pgStatLocal.shared_hash, false);
-	while ((ps = dshash_seq_next(&hstat)) != NULL)
+	for (int h = 0; h < pgStatLocal.num_hashes; h++)
 	{
-		PgStatShared_Common *shstats;
-		const PgStat_KindInfo *kind_info = NULL;
-
-		CHECK_FOR_INTERRUPTS();
-
-		/*
-		 * We should not see any "dropped" entries when writing the stats
-		 * file, as all backends and auxiliary processes should have cleaned
-		 * up their references before they terminated.
-		 *
-		 * However, since we are already shutting down, it is not worth
-		 * crashing the server over any potential cleanup issues, so we simply
-		 * skip such entries if encountered.
-		 */
-		Assert(!ps->dropped);
-		if (ps->dropped)
-			continue;
-
-		/*
-		 * This discards data related to custom stats kinds that are unknown
-		 * to this process.
-		 */
-		if (!pgstat_is_kind_valid(ps->key.kind))
+		dshash_seq_init(&hstat, pgStatLocal.all_hashes[h], false);
+		while ((ps = dshash_seq_next(&hstat)) != NULL)
 		{
-			elog(WARNING, "found unknown stats entry %u/%u/%" PRIu64,
-				 ps->key.kind, ps->key.dboid,
-				 ps->key.objid);
-			continue;
+			PgStatShared_Common *shstats;
+			const PgStat_KindInfo *kind_info = NULL;
+
+			CHECK_FOR_INTERRUPTS();
+
+			/*
+			 * We should not see any "dropped" entries when writing the stats
+			 * file, as all backends and auxiliary processes should have
+			 * cleaned up their references before they terminated.
+			 *
+			 * However, since we are already shutting down, it is not worth
+			 * crashing the server over any potential cleanup issues, so we
+			 * simply skip such entries if encountered.
+			 */
+			Assert(!ps->dropped);
+			if (ps->dropped)
+				continue;
+
+			/*
+			 * This discards data related to custom stats kinds that are
+			 * unknown to this process.
+			 */
+			if (!pgstat_is_kind_valid(ps->key.kind))
+			{
+				elog(WARNING, "found unknown stats entry %u/%u/%" PRIu64,
+					 ps->key.kind, ps->key.dboid,
+					 ps->key.objid);
+				continue;
+			}
+
+			shstats = (PgStatShared_Common *) dsa_get_address(pgStatLocal.dsa, ps->body);
+
+			kind_info = pgstat_get_kind_info(ps->key.kind);
+
+			/* if not dropped the valid-entry refcount should exist */
+			Assert(pg_atomic_read_u32(&ps->refcount) > 0);
+
+			/* skip if no need to write to file */
+			if (!kind_info->write_to_file)
+				continue;
+
+			if (!kind_info->to_serialized_name)
+			{
+				/* normal stats entry, identified by PgStat_HashKey */
+				fputc(PGSTAT_FILE_ENTRY_HASH, fpout);
+				pgstat_write_chunk_s(fpout, &ps->key);
+			}
+			else
+			{
+				/* stats entry identified by name on disk (e.g. slots) */
+				NameData	name;
+
+				kind_info->to_serialized_name(&ps->key, shstats, &name);
+
+				fputc(PGSTAT_FILE_ENTRY_NAME, fpout);
+				pgstat_write_chunk_s(fpout, &ps->key.kind);
+				pgstat_write_chunk_s(fpout, &name);
+			}
+
+			/* Write except the header part of the entry */
+			pgstat_write_chunk(fpout,
+							   pgstat_get_entry_data(ps->key.kind, shstats),
+							   pgstat_get_entry_len(ps->key.kind));
+
+			/* Write more data for the entry, if required */
+			if (kind_info->to_serialized_data)
+				kind_info->to_serialized_data(&ps->key, shstats, fpout);
 		}
-
-		shstats = (PgStatShared_Common *) dsa_get_address(pgStatLocal.dsa, ps->body);
-
-		kind_info = pgstat_get_kind_info(ps->key.kind);
-
-		/* if not dropped the valid-entry refcount should exist */
-		Assert(pg_atomic_read_u32(&ps->refcount) > 0);
-
-		/* skip if no need to write to file */
-		if (!kind_info->write_to_file)
-			continue;
-
-		if (!kind_info->to_serialized_name)
-		{
-			/* normal stats entry, identified by PgStat_HashKey */
-			fputc(PGSTAT_FILE_ENTRY_HASH, fpout);
-			pgstat_write_chunk_s(fpout, &ps->key);
-		}
-		else
-		{
-			/* stats entry identified by name on disk (e.g. slots) */
-			NameData	name;
-
-			kind_info->to_serialized_name(&ps->key, shstats, &name);
-
-			fputc(PGSTAT_FILE_ENTRY_NAME, fpout);
-			pgstat_write_chunk_s(fpout, &ps->key.kind);
-			pgstat_write_chunk_s(fpout, &name);
-		}
-
-		/* Write except the header part of the entry */
-		pgstat_write_chunk(fpout,
-						   pgstat_get_entry_data(ps->key.kind, shstats),
-						   pgstat_get_entry_len(ps->key.kind));
-
-		/* Write more data for the entry, if required */
-		if (kind_info->to_serialized_data)
-			kind_info->to_serialized_data(&ps->key, shstats, fpout);
+		dshash_seq_term(&hstat);
 	}
-	dshash_seq_term(&hstat);
 
 	/*
 	 * No more output to be done. Close the temp file and replace the old
@@ -2021,12 +2031,12 @@ pgstat_read_statsfile(void)
 					 * putting all stats into checkpointer's
 					 * pgStatEntryRefHash would be wasted effort and memory.
 					 */
-					p = dshash_find_or_insert(pgStatLocal.shared_hash, &key, &found);
+					p = dshash_find_or_insert(pgstat_get_hash_for_kind(key.kind), &key, &found);
 
 					/* don't allow duplicate entries */
 					if (found)
 					{
-						dshash_release_lock(pgStatLocal.shared_hash, p);
+						dshash_release_lock(pgstat_get_hash_for_kind(key.kind), p);
 						elog(WARNING, "found duplicate stats entry %u/%u/%" PRIu64 " of type %c",
 							 key.kind, key.dboid,
 							 key.objid, t);
@@ -2034,7 +2044,7 @@ pgstat_read_statsfile(void)
 					}
 
 					header = pgstat_init_entry(key.kind, p);
-					dshash_release_lock(pgStatLocal.shared_hash, p);
+					dshash_release_lock(pgstat_get_hash_for_kind(key.kind), p);
 					if (header == NULL)
 					{
 						/*

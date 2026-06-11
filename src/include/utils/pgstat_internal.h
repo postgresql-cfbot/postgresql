@@ -252,6 +252,12 @@ typedef struct PgStat_KindInfo
 	bool		track_entry_count:1;
 
 	/*
+	 * Should entries of this kind be stored in a dedicated dshash table
+	 * rather than the shared hash table? For variable-numbered stats only.
+	 */
+	bool		own_hash:1;
+
+	/*
 	 * The size of an entry in the shared stats hash table (pointed to by
 	 * PgStatShared_HashEntry->body).  For fixed-numbered statistics, this is
 	 * the size of an entry in PgStat_ShmemControl->custom_data.
@@ -548,6 +554,10 @@ typedef struct PgStat_ShmemControl
 	 */
 	dshash_table_handle hash_handle;	/* shared dbstat hash */
 
+	/* Per-kind hash handles for kinds with own_hash set */
+	dshash_table_handle kind_hash_handles[PGSTAT_KIND_MAX + 1];
+	bool		kind_hash_valid[PGSTAT_KIND_MAX + 1];
+
 	/* Has the stats system already been shut down? Just a debugging check. */
 	bool		is_shutdown;
 
@@ -638,6 +648,11 @@ typedef struct PgStat_LocalState
 	PgStat_ShmemControl *shmem;
 	dsa_area   *dsa;
 	dshash_table *shared_hash;
+	dshash_table *kind_hash[PGSTAT_KIND_MAX + 1];
+
+	/* All hash tables to iterate (shared + per-kind), built at attach time */
+	dshash_table *all_hashes[PGSTAT_KIND_MAX + 1];
+	int			num_hashes;
 
 	/* the current statistics snapshot */
 	PgStat_Snapshot snapshot;
@@ -1055,6 +1070,20 @@ pgstat_get_custom_snapshot_data(PgStat_Kind kind)
 	Assert(pgstat_get_kind_info(kind)->fixed_amount);
 
 	return pgStatLocal.snapshot.custom_data[idx];
+}
+
+/*
+ * Returns the dshash table for a given kind.  Kinds with own_hash set have
+ * a dedicated hash table; others use the shared hash.
+ */
+static inline dshash_table *
+pgstat_get_hash_for_kind(PgStat_Kind kind)
+{
+	if (pgStatLocal.kind_hash[kind] != NULL)
+		return pgStatLocal.kind_hash[kind];
+
+	Assert(!pgstat_get_kind_info(kind)->own_hash);
+	return pgStatLocal.shared_hash;
 }
 
 #endif							/* PGSTAT_INTERNAL_H */

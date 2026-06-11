@@ -211,6 +211,25 @@ StatsShmemInit(void *arg)
 	dsa_set_size_limit(dsa, -1);
 
 	/*
+	 * Create dedicated hash tables for kinds that have variable-numbered
+	 * stats and set own_hash to true.
+	 */
+	memset(ctl->kind_hash_valid, 0, sizeof(ctl->kind_hash_valid));
+	for (PgStat_Kind kind = PGSTAT_KIND_MIN; kind <= PGSTAT_KIND_MAX; kind++)
+	{
+		const PgStat_KindInfo *kind_info = pgstat_get_kind_info(kind);
+		dshash_table *kind_dsh;
+
+		if (!kind_info || kind_info->fixed_amount || !kind_info->own_hash)
+			continue;
+
+		kind_dsh = dshash_create(dsa, &dsh_params, NULL);
+		ctl->kind_hash_handles[kind] = dshash_get_hash_table_handle(kind_dsh);
+		ctl->kind_hash_valid[kind] = true;
+		dshash_detach(kind_dsh);
+	}
+
+	/*
 	 * Postmaster will never access these again, thus free the local
 	 * dsa/dshash references.
 	 */
@@ -257,6 +276,8 @@ pgstat_attach_shmem(void)
 {
 	MemoryContext oldcontext;
 
+	pgStatLocal.num_hashes = 0;
+
 	Assert(pgStatLocal.dsa == NULL);
 
 	/* stats shared memory persists for the backend lifetime */
@@ -269,6 +290,26 @@ pgstat_attach_shmem(void)
 	pgStatLocal.shared_hash = dshash_attach(pgStatLocal.dsa, &dsh_params,
 											pgStatLocal.shmem->hash_handle,
 											NULL);
+
+	/* Attach dedicated hash tables */
+	for (PgStat_Kind kind = PGSTAT_KIND_MIN; kind <= PGSTAT_KIND_MAX; kind++)
+	{
+		if (pgStatLocal.shmem->kind_hash_valid[kind])
+			pgStatLocal.kind_hash[kind] =
+				dshash_attach(pgStatLocal.dsa, &dsh_params,
+							  pgStatLocal.shmem->kind_hash_handles[kind],
+							  NULL);
+		else
+			pgStatLocal.kind_hash[kind] = NULL;
+	}
+
+	/* Populate array of all hash tables */
+	pgStatLocal.all_hashes[pgStatLocal.num_hashes++] = pgStatLocal.shared_hash;
+	for (PgStat_Kind kind = PGSTAT_KIND_MIN; kind <= PGSTAT_KIND_MAX; kind++)
+	{
+		if (pgStatLocal.kind_hash[kind] != NULL)
+			pgStatLocal.all_hashes[pgStatLocal.num_hashes++] = pgStatLocal.kind_hash[kind];
+	}
 
 	MemoryContextSwitchTo(oldcontext);
 }
@@ -283,6 +324,16 @@ pgstat_detach_shmem(void)
 
 	dshash_detach(pgStatLocal.shared_hash);
 	pgStatLocal.shared_hash = NULL;
+
+	/* Detach dedicated hash tables */
+	for (PgStat_Kind kind = PGSTAT_KIND_MIN; kind <= PGSTAT_KIND_MAX; kind++)
+	{
+		if (pgStatLocal.kind_hash[kind] != NULL)
+		{
+			dshash_detach(pgStatLocal.kind_hash[kind]);
+			pgStatLocal.kind_hash[kind] = NULL;
+		}
+	}
 
 	dsa_detach(pgStatLocal.dsa);
 
@@ -404,7 +455,7 @@ pgstat_acquire_entry_ref(PgStat_EntryRef *entry_ref,
 
 	pg_atomic_fetch_add_u32(&shhashent->refcount, 1);
 
-	dshash_release_lock(pgStatLocal.shared_hash, shhashent);
+	dshash_release_lock(pgstat_get_hash_for_kind(shhashent->key.kind), shhashent);
 
 	entry_ref->shared_stats = shheader;
 	entry_ref->shared_entry = shhashent;
@@ -478,6 +529,7 @@ pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, uint64 objid, bool create,
 	PgStatShared_HashEntry *shhashent;
 	PgStatShared_Common *shheader = NULL;
 	PgStat_EntryRef *entry_ref;
+	dshash_table *hash;
 
 	key.kind = kind;
 	key.dboid = dboid;
@@ -521,7 +573,9 @@ pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, uint64 objid, bool create,
 	 * Do a lookup in the hash table first - it's quite likely that the entry
 	 * already exists, and that way we only need a shared lock.
 	 */
-	shhashent = dshash_find(pgStatLocal.shared_hash, &key, false);
+	hash = pgstat_get_hash_for_kind(kind);
+
+	shhashent = dshash_find(hash, &key, false);
 
 	if (create && !shhashent)
 	{
@@ -532,7 +586,7 @@ pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, uint64 objid, bool create,
 		 * lookup. If so, fall through to the same path as if we'd have if it
 		 * already had been created before the dshash_find() calls.
 		 */
-		shhashent = dshash_find_or_insert(pgStatLocal.shared_hash, &key, &shfound);
+		shhashent = dshash_find_or_insert(hash, &key, &shfound);
 		if (!shfound)
 		{
 			shheader = pgstat_init_entry(kind, shhashent);
@@ -542,7 +596,7 @@ pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, uint64 objid, bool create,
 				 * Failed the allocation of a new entry, so clean up the
 				 * shared hashtable before giving up.
 				 */
-				dshash_delete_entry(pgStatLocal.shared_hash, shhashent);
+				dshash_delete_entry(hash, shhashent);
 
 				ereport(ERROR,
 						(errcode(ERRCODE_OUT_OF_MEMORY),
@@ -598,7 +652,7 @@ pgstat_get_entry_ref(PgStat_Kind kind, Oid dboid, uint64 objid, bool create,
 		}
 		else if (shhashent->dropped)
 		{
-			dshash_release_lock(pgStatLocal.shared_hash, shhashent);
+			dshash_release_lock(hash, shhashent);
 			pgstat_release_entry_ref(key, entry_ref, false);
 
 			return NULL;
@@ -647,7 +701,7 @@ pgstat_release_entry_ref(PgStat_HashKey key, PgStat_EntryRef *entry_ref,
 			/* only dropped entries can reach a 0 refcount */
 			Assert(entry_ref->shared_entry->dropped);
 
-			shent = dshash_find(pgStatLocal.shared_hash,
+			shent = dshash_find(pgstat_get_hash_for_kind(key.kind),
 								&entry_ref->shared_entry->key,
 								true);
 			if (!shent)
@@ -672,7 +726,7 @@ pgstat_release_entry_ref(PgStat_HashKey key, PgStat_EntryRef *entry_ref,
 				 * Shared stats entry has been reinitialized, so do not drop
 				 * its shared entry, only release its lock.
 				 */
-				dshash_release_lock(pgStatLocal.shared_hash, shent);
+				dshash_release_lock(pgstat_get_hash_for_kind(key.kind), shent);
 			}
 		}
 	}
@@ -886,7 +940,7 @@ pgstat_free_entry(PgStatShared_HashEntry *shent, dshash_seq_status *hstat)
 	pdsa = shent->body;
 
 	if (!hstat)
-		dshash_delete_entry(pgStatLocal.shared_hash, shent);
+		dshash_delete_entry(pgstat_get_hash_for_kind(kind), shent);
 	else
 		dshash_delete_current(hstat);
 
@@ -929,7 +983,7 @@ pgstat_drop_entry_internal(PgStatShared_HashEntry *shent,
 	else
 	{
 		if (!hstat)
-			dshash_release_lock(pgStatLocal.shared_hash, shent);
+			dshash_release_lock(pgstat_get_hash_for_kind(shent->key.kind), shent);
 		return false;
 	}
 }
@@ -959,25 +1013,29 @@ pgstat_drop_database_and_contents(Oid dboid)
 	pgstat_release_db_entry_refs(dboid);
 
 	/* some of the dshash entries are to be removed, take exclusive lock. */
-	dshash_seq_init(&hstat, pgStatLocal.shared_hash, true);
-	while ((p = dshash_seq_next(&hstat)) != NULL)
+	for (int h = 0; h < pgStatLocal.num_hashes; h++)
 	{
-		if (p->dropped)
-			continue;
-
-		if (p->key.dboid != dboid)
-			continue;
-
-		if (!pgstat_drop_entry_internal(p, &hstat))
+		dshash_seq_init(&hstat, pgStatLocal.all_hashes[h], true);
+		while ((p = dshash_seq_next(&hstat)) != NULL)
 		{
-			/*
-			 * Even statistics for a dropped database might currently be
-			 * accessed (consider e.g. database stats for pg_stat_database).
-			 */
-			not_freed_count++;
+			if (p->dropped)
+				continue;
+
+			if (p->key.dboid != dboid)
+				continue;
+
+			if (!pgstat_drop_entry_internal(p, &hstat))
+			{
+				/*
+				 * Even statistics for a dropped database might currently be
+				 * accessed (consider e.g. database stats for
+				 * pg_stat_database).
+				 */
+				not_freed_count++;
+			}
 		}
+		dshash_seq_term(&hstat);
 	}
-	dshash_seq_term(&hstat);
 
 	/*
 	 * If some of the stats data could not be freed, signal the reference
@@ -1023,8 +1081,8 @@ pgstat_drop_entry(PgStat_Kind kind, Oid dboid, uint64 objid,
 									 true);
 	}
 
-	/* mark entry in shared hashtable as deleted, drop if possible */
-	shent = dshash_find(pgStatLocal.shared_hash, &key, true);
+	/* mark entry in the kind's hashtable as deleted, drop if possible */
+	shent = dshash_find(pgstat_get_hash_for_kind(kind), &key, true);
 	if (shent)
 	{
 		if (shent->dropped)
@@ -1037,7 +1095,7 @@ pgstat_drop_entry(PgStat_Kind kind, Oid dboid, uint64 objid,
 					 shent->key.objid,
 					 pg_atomic_read_u32(&shent->refcount),
 					 pg_atomic_read_u32(&shent->generation));
-			dshash_release_lock(pgStatLocal.shared_hash, shent);
+			dshash_release_lock(pgstat_get_hash_for_kind(kind), shent);
 			return true;
 		}
 
@@ -1057,8 +1115,8 @@ pgstat_drop_entry(PgStat_Kind kind, Oid dboid, uint64 objid,
 }
 
 /*
- * Scan through the shared hashtable of stats, dropping statistics if
- * approved by the optional do_drop() function.
+ * Scan through all stats hash tables, dropping statistics if approved by the
+ * optional do_drop() function.
  */
 void
 pgstat_drop_matching_entries(bool (*do_drop) (PgStatShared_HashEntry *, Datum),
@@ -1069,37 +1127,40 @@ pgstat_drop_matching_entries(bool (*do_drop) (PgStatShared_HashEntry *, Datum),
 	uint64		not_freed_count = 0;
 
 	/* entries are removed, take an exclusive lock */
-	dshash_seq_init(&hstat, pgStatLocal.shared_hash, true);
-	while ((ps = dshash_seq_next(&hstat)) != NULL)
+	for (int h = 0; h < pgStatLocal.num_hashes; h++)
 	{
-		if (ps->dropped)
-			continue;
-
-		if (do_drop != NULL && !do_drop(ps, match_data))
-			continue;
-
-		/* delete local reference */
-		if (pgStatEntryRefHash)
+		dshash_seq_init(&hstat, pgStatLocal.all_hashes[h], true);
+		while ((ps = dshash_seq_next(&hstat)) != NULL)
 		{
-			PgStat_EntryRefHashEntry *lohashent =
-				pgstat_entry_ref_hash_lookup(pgStatEntryRefHash, ps->key);
+			if (ps->dropped)
+				continue;
 
-			if (lohashent)
-				pgstat_release_entry_ref(lohashent->key, lohashent->entry_ref,
-										 true);
+			if (do_drop != NULL && !do_drop(ps, match_data))
+				continue;
+
+			/* delete local reference */
+			if (pgStatEntryRefHash)
+			{
+				PgStat_EntryRefHashEntry *lohashent =
+					pgstat_entry_ref_hash_lookup(pgStatEntryRefHash, ps->key);
+
+				if (lohashent)
+					pgstat_release_entry_ref(lohashent->key, lohashent->entry_ref,
+											 true);
+			}
+
+			if (!pgstat_drop_entry_internal(ps, &hstat))
+				not_freed_count++;
 		}
-
-		if (!pgstat_drop_entry_internal(ps, &hstat))
-			not_freed_count++;
+		dshash_seq_term(&hstat);
 	}
-	dshash_seq_term(&hstat);
 
 	if (not_freed_count > 0)
 		pgstat_request_entry_refs_gc();
 }
 
 /*
- * Scan through the shared hashtable of stats and drop all entries.
+ * Scan through all stats hash tables and drop all entries.
  */
 void
 pgstat_drop_all_entries(void)
@@ -1140,8 +1201,8 @@ pgstat_reset_entry(PgStat_Kind kind, Oid dboid, uint64 objid, TimestampTz ts)
 }
 
 /*
- * Scan through the shared hashtable of stats, resetting statistics if
- * approved by the provided do_reset() function.
+ * Scan through all stats hash tables, resetting statistics if approved by the
+ * provided do_reset() function.
  */
 void
 pgstat_reset_matching_entries(bool (*do_reset) (PgStatShared_HashEntry *, Datum),
@@ -1151,26 +1212,29 @@ pgstat_reset_matching_entries(bool (*do_reset) (PgStatShared_HashEntry *, Datum)
 	PgStatShared_HashEntry *p;
 
 	/* dshash entry is not modified, take shared lock */
-	dshash_seq_init(&hstat, pgStatLocal.shared_hash, false);
-	while ((p = dshash_seq_next(&hstat)) != NULL)
+	for (int h = 0; h < pgStatLocal.num_hashes; h++)
 	{
-		PgStatShared_Common *header;
+		dshash_seq_init(&hstat, pgStatLocal.all_hashes[h], false);
+		while ((p = dshash_seq_next(&hstat)) != NULL)
+		{
+			PgStatShared_Common *header;
 
-		if (p->dropped)
-			continue;
+			if (p->dropped)
+				continue;
 
-		if (!do_reset(p, match_data))
-			continue;
+			if (!do_reset(p, match_data))
+				continue;
 
-		header = dsa_get_address(pgStatLocal.dsa, p->body);
+			header = dsa_get_address(pgStatLocal.dsa, p->body);
 
-		LWLockAcquire(&header->lock, LW_EXCLUSIVE);
+			LWLockAcquire(&header->lock, LW_EXCLUSIVE);
 
-		shared_stat_reset_contents(p->key.kind, header, ts);
+			shared_stat_reset_contents(p->key.kind, header, ts);
 
-		LWLockRelease(&header->lock);
+			LWLockRelease(&header->lock);
+		}
+		dshash_seq_term(&hstat);
 	}
-	dshash_seq_term(&hstat);
 }
 
 static bool

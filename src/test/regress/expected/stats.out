@@ -1144,10 +1144,11 @@ SELECT stats_reset > :'checkpointer_reset_ts'::timestamptz FROM pg_stat_checkpoi
 
 -- The deprecated features view should list the expected features
 SELECT name FROM pg_stat_deprecated_features ORDER BY name COLLATE "C";
-       name       
-------------------
+       name        
+-------------------
+ md5_password_auth
  md5_password_set
-(1 row)
+(2 rows)
 
 -- Test that reset_shared with deprecated_features specified as the stats type works
 SELECT max(stats_reset) AS deprecated_features_reset_ts FROM pg_stat_deprecated_features \gset

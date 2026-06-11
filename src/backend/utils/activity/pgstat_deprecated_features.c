@@ -27,6 +27,7 @@
  * be kept in the same order, sorted by name.
  */
 static const char *const pgstat_deprecated_feature_names[] = {
+	[PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_AUTH] = "md5_password_auth",
 	[PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_SET] = "md5_password_set",
 };
 

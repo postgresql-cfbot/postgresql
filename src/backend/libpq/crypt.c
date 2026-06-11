@@ -309,6 +309,8 @@ md5_crypt_verify(const char *role, const char *shadow_pass,
 
 		retval = STATUS_OK;
 
+		pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_AUTH);
+
 		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
 
 		warning = pstrdup(_("authenticated with an MD5-encrypted password"));
@@ -385,7 +387,10 @@ plain_crypt_verify(const char *role, const char *shadow_pass,
 			}
 			if (strlen(crypt_client_pass) == strlen(shadow_pass) &&
 				timingsafe_bcmp(crypt_client_pass, shadow_pass, strlen(shadow_pass)) == 0)
+			{
+				pgstat_count_deprecated_feature(PGSTAT_DEPRECATED_FEATURE_MD5_PASSWORD_AUTH);
 				return STATUS_OK;
+			}
 			else
 			{
 				*logdetail = psprintf(_("Password does not match for user \"%s\"."),

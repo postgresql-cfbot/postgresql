@@ -3502,6 +3502,17 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
    <variablelist>
     <varlistentry>
+     <term><literal>md5_password_auth</literal></term>
+     <listitem>
+      <para>
+       Successful authentication against an MD5-encrypted password, via
+       either <literal>md5</literal> or <literal>password</literal>
+       authentication.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><literal>md5_password_set</literal></term>
      <listitem>
       <para>

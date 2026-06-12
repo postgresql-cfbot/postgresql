@@ -130,6 +130,14 @@ do_command(
 	qr/55\r?$/m,
 	"execute command with footer that needs pagination");
 
+# With the 80-column pty, the payload wraps to two lines per row.
+# Expanded output also prints one record header per row, plus a trailing
+# blank line, so this produces 11 * 3 + 1 = 34 lines.
+do_command(
+	"\\pset expanded on\n\\pset format wrapped\nSELECT repeat('x',80) AS payload FROM generate_series(1,11);\n",
+	qr/34\r?$/m,
+	"execute SELECT query that needs pagination in expanded wrapped mode");
+
 # send psql an explicit \q to shut it down, else pty won't close properly
 $h->quit or die "psql returned $?";
 

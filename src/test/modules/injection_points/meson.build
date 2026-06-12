@@ -45,6 +45,7 @@ tests += {
     'specs': [
       'basic',
       'inplace',
+      'predicate-lock-page-split',
       'repack',
       'repack_temporal',
       'repack_temporal_multirange',

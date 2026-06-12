@@ -227,10 +227,22 @@ analyze_rel(Oid relid, RangeVar *relation,
 
 		fdwroutine = GetFdwRoutineForRelation(onerel, false);
 
-		if (fdwroutine->ImportForeignStatistics != NULL &&
-			fdwroutine->ImportForeignStatistics(onerel, va_cols, elevel))
-			stats_imported = true;
-		else
+		if (fdwroutine->ImportForeignStatistics != NULL)
+		{
+			double		imported_totalrows = 0;
+			TimestampTz import_starttime = GetCurrentTimestamp();
+
+			if (fdwroutine->ImportForeignStatistics(onerel, va_cols, elevel,
+													&imported_totalrows))
+			{
+				pgstat_report_analyze(onerel, imported_totalrows, 0,
+									  (va_cols == NIL), import_starttime);
+
+				stats_imported = true;
+			}
+		}
+
+		if (!stats_imported)
 		{
 			bool		ok = false;
 

@@ -4604,7 +4604,12 @@ ANALYZE simport_ftable;                   -- should fail
 ALTER TABLE simport_table ALTER COLUMN c2 SET STATISTICS DEFAULT;
 ANALYZE simport_table;
 
+SELECT pg_stat_reset_single_table_counters('simport_ftable'::regclass);
 ANALYZE VERBOSE simport_ftable;           -- should work
+SELECT pg_stat_force_next_flush();
+SELECT pg_stat_get_live_tuples('simport_ftable'::regclass),
+       pg_stat_get_analyze_count('simport_ftable'::regclass),
+       pg_stat_get_last_analyze_time('simport_ftable'::regclass) IS NOT NULL;
 
 ANALYZE VERBOSE simport_ftable (c1);      -- should work
 

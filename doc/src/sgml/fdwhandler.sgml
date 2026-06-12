@@ -1414,7 +1414,8 @@ AcquireSampleRowsFunc(Relation relation,
 bool
 ImportForeignStatistics(Relation relation,
                         List *va_cols,
-                        int elevel);
+                        int elevel,
+                        double *totalrows);
 </programlisting>
 
      This function is called before the <function>AnalyzeForeignTable</function>
@@ -1426,10 +1427,11 @@ ImportForeignStatistics(Relation relation,
      describing the target foreign table.  <literal>va_cols</literal>, if not
      NIL, contains the columns specified in the <command>ANALYZE</command>
      command.  <literal>elevel</literal> contains a flag indicating a logging
-     level to use.
-     If the function imports the statistics successfully, it should return
-     <literal>true</literal>.  Otherwise, return <literal>false</literal>, in
-     which case <function>AnalyzeForeignTable</function> callback function is
+     level to use.  If the function imports the statistics successfully, it
+     should store the estimated number of live rows for the foreign table into
+     <literal>totalrows</literal> and return <literal>true</literal>.
+     Otherwise, return <literal>false</literal>, in which case
+     <function>AnalyzeForeignTable</function> callback function is
      called on the foreign table to collect statistics locally, if supported.
     </para>
 

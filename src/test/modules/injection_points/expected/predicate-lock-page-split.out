@@ -1,0 +1,108 @@
+Parsed test spec with 5 sessions
+
+starting permutation: s1_begin bump_xmin s2_begin s3_begin s1_insert s2_insert_wait_at_page_split s1_commit_wait_in_SetNewSxactGlobalXmin wakeup_s2_then_s1 s3_insert s3_commit s2_commit verify
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step s1_begin: 
+    BEGIN ISOLATION LEVEL SERIALIZABLE;
+    SELECT max(id) > 0 AS locked FROM test_table;
+
+locked
+------
+t     
+(1 row)
+
+step bump_xmin: 
+    DO $$
+    BEGIN
+        PERFORM pg_current_xact_id();
+    END;
+    $$;
+
+step s2_begin: 
+    BEGIN ISOLATION LEVEL SERIALIZABLE;
+    SELECT max(id) > 0 AS locked FROM test_table;
+
+locked
+------
+t     
+(1 row)
+
+step s3_begin: 
+    BEGIN ISOLATION LEVEL SERIALIZABLE;
+    SELECT max(id) > 0 AS locked FROM test_table;
+
+locked
+------
+t     
+(1 row)
+
+step s1_insert: 
+    INSERT INTO test_table
+    SELECT max(id) + 1
+    FROM test_table;
+
+step s2_insert_wait_at_page_split: 
+    DO $$
+    DECLARE
+        next_id int := 0;
+        base_size bigint := pg_relation_size('test_table_id_idx');
+    BEGIN
+        LOOP
+            INSERT INTO test_table VALUES (next_id);
+            EXIT WHEN pg_relation_size('test_table_id_idx') > base_size;
+            next_id := next_id - 1;
+        END LOOP;
+    END;
+    $$;
+ <waiting ...>
+step s1_commit_wait_in_SetNewSxactGlobalXmin: 
+    COMMIT;
+ <waiting ...>
+step wakeup_s2_then_s1: 
+    SELECT injection_points_wakeup('predicate-lock-page-split');
+    SELECT injection_points_wakeup('predicate-set-sxact-global-xmin-invalid');
+ <waiting ...>
+step s2_insert_wait_at_page_split: <... completed>
+step s1_commit_wait_in_SetNewSxactGlobalXmin: <... completed>
+step s3_insert: 
+    INSERT INTO test_table
+    SELECT max(id) + 1
+    FROM test_table;
+
+ERROR:  could not serialize access due to read/write dependencies among transactions
+step wakeup_s2_then_s1: <... completed>
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step s3_commit: 
+    COMMIT;
+
+step s2_commit: 
+    COMMIT;
+
+ERROR:  could not serialize access due to read/write dependencies among transactions
+step verify: 
+    SELECT id, count(*) FROM test_table GROUP BY id ORDER BY id;
+
+id|count
+--+-----
+ 1|    1
+ 2|    1
+(2 rows)
+

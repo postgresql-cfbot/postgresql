@@ -2220,7 +2220,7 @@ do_autovacuum(void)
 		 * somebody else is using (or dropping) the table, so it's not our
 		 * concern anymore.  Having the lock prevents race conditions below.
 		 */
-		if (!ConditionalLockRelationOid(relid, AccessExclusiveLock))
+		if (!ConditionalLockRelationOid(relid, AccessExclusiveLock, false))
 			continue;
 
 		/*

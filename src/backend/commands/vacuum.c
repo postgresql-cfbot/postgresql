@@ -789,7 +789,7 @@ vacuum_open_relation(Oid relid, RangeVar *relation, uint32 options,
 	 */
 	if (!(options & VACOPT_SKIP_LOCKED))
 		rel = try_relation_open(relid, lmode);
-	else if (ConditionalLockRelationOid(relid, lmode))
+	else if (ConditionalLockRelationOid(relid, lmode, false))
 		rel = try_relation_open(relid, NoLock);
 	else
 	{

@@ -99,9 +99,6 @@ typedef struct
 	HANDLE		UsedShmemSegID;
 #endif
 	void	   *UsedShmemSegAddr;
-#ifdef USE_INJECTION_POINTS
-	struct InjectionPointsCtl *ActiveInjectionPoints;
-#endif
 	PROC_HDR   *ProcGlobal;
 	PGPROC	   *AuxiliaryProcs;
 	PGPROC	   *PreparedXactProcs;
@@ -730,10 +727,6 @@ save_backend_variables(BackendParameters *param,
 	param->UsedShmemSegID = UsedShmemSegID;
 	param->UsedShmemSegAddr = UsedShmemSegAddr;
 
-#ifdef USE_INJECTION_POINTS
-	param->ActiveInjectionPoints = ActiveInjectionPoints;
-#endif
-
 	param->ProcGlobal = ProcGlobal;
 	param->AuxiliaryProcs = AuxiliaryProcs;
 	param->PreparedXactProcs = PreparedXactProcs;
@@ -985,10 +978,6 @@ restore_backend_variables(BackendParameters *param)
 #endif
 	UsedShmemSegID = param->UsedShmemSegID;
 	UsedShmemSegAddr = param->UsedShmemSegAddr;
-
-#ifdef USE_INJECTION_POINTS
-	ActiveInjectionPoints = param->ActiveInjectionPoints;
-#endif
 
 	ProcGlobal = param->ProcGlobal;
 	AuxiliaryProcs = param->AuxiliaryProcs;

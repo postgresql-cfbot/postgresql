@@ -21,11 +21,17 @@
 
 #ifdef USE_INJECTION_POINTS
 
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
+#ifndef WIN32
+#include <sys/mman.h>
+#endif
 
 #include "fmgr.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
+#include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
 #include "storage/subsystems.h"
@@ -72,6 +78,17 @@ typedef struct InjectionPointEntry
 	char		private_data[INJ_PRIVATE_MAXLEN];
 } InjectionPointEntry;
 
+/*
+ * The active points array is mapped from a file (see below) that out-of-process
+ * tools can read and write.  Those tools cannot use the pg_atomic_* API, so
+ * they mirror this layout with plain integers; make sure the atomic types stay
+ * layout-compatible with their underlying width.
+ */
+StaticAssertDecl(sizeof(pg_atomic_uint32) == sizeof(uint32),
+				 "pg_atomic_uint32 must be layout-compatible with uint32");
+StaticAssertDecl(sizeof(pg_atomic_uint64) == sizeof(uint64),
+				 "pg_atomic_uint64 must be layout-compatible with uint64");
+
 #define MAX_INJECTION_POINTS	128
 
 /*
@@ -87,7 +104,38 @@ typedef struct InjectionPointsCtl
 	InjectionPointEntry entries[MAX_INJECTION_POINTS];
 } InjectionPointsCtl;
 
+/*
+ * The 8-byte-aligned generation counter pushes the entries array to offset 8,
+ * past max_inuse and its padding.  Out-of-process tools mirror this, so pin it
+ * here too: this offset is part of the on-file contract.
+ */
+StaticAssertDecl(offsetof(InjectionPointsCtl, entries) == 8,
+				 "InjectionPointsCtl.entries must start at offset 8");
+
 NON_EXEC_STATIC InjectionPointsCtl *ActiveInjectionPoints;
+
+/*
+ * Name of the file backing the active injection points array.
+ *
+ * Unlike the rest of shared memory, this array lives in an ordinary file so
+ * that out-of-process tools (with no backend connection, no SQL, and possibly
+ * running before or instead of the postmaster) can map the same bytes, attach
+ * injection points and coordinate with the processes that hit them.  The path
+ * defaults to this name relative to the data directory, but can be overridden
+ * with the PG_INJECTION_POINTS_FILE environment variable so that points can be
+ * attached even before initdb has created a data directory (e.g. for
+ * single-user mode bootstrap).
+ */
+#define INJ_POINTS_FILE			"injection_points.shm"
+#define INJ_POINTS_FILE_ENV		"PG_INJECTION_POINTS_FILE"
+
+/* How injection_map_points() should open the backing file. */
+typedef enum InjectionMapMode
+{
+	INJ_MAP_ATTACH,				/* map an already-existing file */
+	INJ_MAP_ATTACH_OR_CREATE,	/* attach if present, else create */
+	INJ_MAP_ATTACH_IF_EXISTS,	/* attach if present, else leave unmapped */
+} InjectionMapMode;
 
 /*
  * Backend local cache of injection callbacks already loaded, stored in
@@ -110,8 +158,9 @@ typedef struct InjectionPointCacheEntry
 
 static HTAB *InjectionPointCache = NULL;
 
-static void InjectionPointShmemRequest(void *arg);
-static void InjectionPointShmemInit(void *arg);
+static void injection_shmem_init(void *arg);
+static void injection_shmem_attach(void *arg);
+static void injection_map_points(InjectionMapMode mode, int elevel);
 
 /*
  * injection_point_cache_add
@@ -229,29 +278,281 @@ injection_point_cache_get(const char *name)
 	return NULL;
 }
 
+/*
+ * The active injection points array is backed by a file rather than the main
+ * shared memory segment, so we do not reserve any space there.  init_fn maps
+ * (and, if needed, creates) the file once in the postmaster; children inherit
+ * the mapping through fork(), while attach_fn re-maps it in children that do
+ * not (EXEC_BACKEND/Windows).
+ */
 const ShmemCallbacks InjectionPointShmemCallbacks = {
-	.request_fn = InjectionPointShmemRequest,
-	.init_fn = InjectionPointShmemInit,
+	.init_fn = injection_shmem_init,
+	.attach_fn = injection_shmem_attach,
 };
 
 /*
- * Reserve space for the dynamic shared hash table
+ * Resolve the path of the backing file.  The result is cached in a static
+ * buffer so that the cleanup callback can unlink the same path that was
+ * mapped, regardless of later CWD or environment changes.
+ */
+static const char *
+injection_points_file_path(void)
+{
+	static char path[MAXPGPATH];
+	const char *env;
+
+	if (path[0] != '\0')
+		return path;
+
+	env = getenv(INJ_POINTS_FILE_ENV);
+	if (env != NULL && env[0] != '\0')
+		strlcpy(path, env, sizeof(path));
+	else if (DataDir != NULL && DataDir[0] != '\0')
+	{
+		/*
+		 * Anchor the file at the data directory rather than relying on the
+		 * current working directory.  EXEC_BACKEND children re-map the file
+		 * from attach_fn before they chdir into the data directory, so a
+		 * relative path would resolve against the wrong directory there and
+		 * the attach would fail.  This also matches the absolute path that
+		 * out-of-process tools build from the data directory they are given.
+		 */
+		snprintf(path, sizeof(path), "%s/%s", DataDir, INJ_POINTS_FILE);
+	}
+	else
+		strlcpy(path, INJ_POINTS_FILE, sizeof(path));
+
+	return path;
+}
+
+/*
+ * Initialize a freshly-created array.
  */
 static void
-InjectionPointShmemRequest(void *arg)
+injection_points_init_ctl(InjectionPointsCtl *ctl)
 {
-	ShmemRequestStruct(.name = "InjectionPoint hash",
-					   .size = sizeof(InjectionPointsCtl),
-					   .ptr = (void **) &ActiveInjectionPoints,
-		);
+	pg_atomic_init_u32(&ctl->max_inuse, 0);
+	for (int i = 0; i < MAX_INJECTION_POINTS; i++)
+		pg_atomic_init_u64(&ctl->entries[i].generation, 0);
+}
+
+/*
+ * proc_exit callback that drops the mapping and, in the process that owns the
+ * cluster lifecycle (the postmaster, or a standalone backend), unlinks the
+ * backing file so it does not survive the cluster.  Forked children inherit
+ * this callback but must not remove the file.
+ */
+static void
+injection_points_file_cleanup(int code, Datum arg)
+{
+	if (ActiveInjectionPoints != NULL)
+	{
+#ifndef WIN32
+		munmap(ActiveInjectionPoints, sizeof(InjectionPointsCtl));
+#else
+		UnmapViewOfFile(ActiveInjectionPoints);
+#endif
+		ActiveInjectionPoints = NULL;
+	}
+
+	if (!IsUnderPostmaster)
+		(void) unlink(injection_points_file_path());
+}
+
+#ifndef WIN32
+/*
+ * Wait for a file created by a concurrent process to reach its final size.
+ *
+ * The winner of the O_EXCL create race makes the file at length zero and only
+ * then ftruncate()s it to "size".  A process that lost the race and is
+ * attaching could otherwise mmap() past end-of-file and take a SIGBUS on first
+ * access.  The gap is just the few instructions between create and ftruncate,
+ * so in practice this returns on the first check.
+ */
+static void
+injection_wait_for_size(int fd, Size size, const char *path, int elevel)
+{
+	/* Generous bound; the writer needs only microseconds. */
+	for (int i = 0; i < 10000; i++)
+	{
+		struct stat st;
+
+		if (fstat(fd, &st) != 0)
+		{
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not stat injection point file \"%s\": %m",
+							path)));
+			return;
+		}
+		if (st.st_size >= (off_t) size)
+			return;
+		pg_usleep(1000L);		/* 1ms */
+	}
+
+	ereport(elevel,
+			(errmsg("injection point file \"%s\" was never sized by its creator",
+					path)));
+}
+#endif
+
+/*
+ * Map the backing file into this process, creating and/or initializing it as
+ * dictated by "mode", and set ActiveInjectionPoints.
+ *
+ * Accessors must always use the mapping, never plain file reads, because file
+ * I/O is not guaranteed to be coherent with a mapped view on Windows.
+ */
+static void
+injection_map_points(InjectionMapMode mode, int elevel)
+{
+	const char *path = injection_points_file_path();
+	Size		size = sizeof(InjectionPointsCtl);
+	bool		created = false;
+
+	if (ActiveInjectionPoints != NULL)
+		return;
+
+#ifndef WIN32
+	{
+		int			fd;
+		int			oflags = O_RDWR;
+
+		if (mode == INJ_MAP_ATTACH_OR_CREATE)
+			oflags |= O_CREAT | O_EXCL;
+
+		fd = OpenTransientFile(path, oflags);
+		if (fd < 0 && mode == INJ_MAP_ATTACH_OR_CREATE && errno == EEXIST)
+		{
+			/* Lost the race to create it; just attach. */
+			oflags = O_RDWR;
+			fd = OpenTransientFile(path, oflags);
+
+			/*
+			 * The winner may not have ftruncate()d the file to full size yet;
+			 * wait for it so the mmap() below cannot fault past end-of-file.
+			 */
+			if (fd >= 0)
+				injection_wait_for_size(fd, size, path, elevel);
+		}
+		else if (fd >= 0 && (oflags & O_CREAT))
+			created = true;
+
+		if (fd < 0)
+		{
+			/* A missing file simply means nothing has been armed yet. */
+			if (mode == INJ_MAP_ATTACH_IF_EXISTS && errno == ENOENT)
+				return;
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not open injection point file \"%s\": %m",
+							path)));
+		}
+
+		if (created && ftruncate(fd, size) != 0)
+		{
+			CloseTransientFile(fd);
+			(void) unlink(path);
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not size injection point file \"%s\": %m",
+							path)));
+		}
+
+		ActiveInjectionPoints = mmap(NULL, size, PROT_READ | PROT_WRITE,
+									 MAP_SHARED, fd, 0);
+		CloseTransientFile(fd);
+
+		if (ActiveInjectionPoints == MAP_FAILED)
+		{
+			ActiveInjectionPoints = NULL;
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not map injection point file \"%s\": %m",
+							path)));
+		}
+	}
+#else
+	{
+		HANDLE		hfile;
+		HANDLE		hmap;
+		DWORD		share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+		DWORD		disp = (mode == INJ_MAP_ATTACH_OR_CREATE) ? CREATE_NEW : OPEN_EXISTING;
+
+		hfile = CreateFile(path,
+						   GENERIC_READ | GENERIC_WRITE,
+						   share, NULL, disp, FILE_ATTRIBUTE_NORMAL, NULL);
+
+		/*
+		 * If creation failed because a file from an earlier cluster lifetime
+		 * is in the way, attach to it instead of failing to start.  Do not
+		 * insist on a specific error code: besides ERROR_FILE_EXISTS, a file
+		 * whose deletion is still pending reports ERROR_ACCESS_DENIED, and we
+		 * want to recover from that too.  FILE_SHARE_DELETE (above) lets such a
+		 * file be reopened and lets the cleanup unlink it while still mapped.
+		 */
+		if (hfile == INVALID_HANDLE_VALUE && mode == INJ_MAP_ATTACH_OR_CREATE)
+		{
+			disp = OPEN_EXISTING;
+			hfile = CreateFile(path,
+							   GENERIC_READ | GENERIC_WRITE,
+							   share, NULL, disp, FILE_ATTRIBUTE_NORMAL, NULL);
+		}
+		else if (hfile != INVALID_HANDLE_VALUE && disp == CREATE_NEW)
+			created = true;
+
+		if (hfile == INVALID_HANDLE_VALUE)
+		{
+			DWORD		err = GetLastError();
+
+			/* A missing file simply means nothing has been armed yet. */
+			if (mode == INJ_MAP_ATTACH_IF_EXISTS &&
+				(err == ERROR_FILE_NOT_FOUND || err == ERROR_PATH_NOT_FOUND))
+				return;
+			ereport(elevel,
+					(errmsg("could not open injection point file \"%s\": error code %lu",
+							path, err)));
+		}
+
+		/* CreateFileMapping extends the backing file to the mapping size. */
+		hmap = CreateFileMapping(hfile, NULL, PAGE_READWRITE, 0,
+								 (DWORD) size, NULL);
+		if (hmap == NULL)
+		{
+			CloseHandle(hfile);
+			ereport(elevel,
+					(errmsg("could not create mapping for injection point file \"%s\": error code %lu",
+							path, GetLastError())));
+		}
+
+		ActiveInjectionPoints = MapViewOfFile(hmap, FILE_MAP_ALL_ACCESS, 0, 0, size);
+		CloseHandle(hmap);
+		CloseHandle(hfile);
+
+		if (ActiveInjectionPoints == NULL)
+			ereport(elevel,
+					(errmsg("could not map injection point file \"%s\": error code %lu",
+							path, GetLastError())));
+	}
+#endif
+
+	if (created)
+	{
+		injection_points_init_ctl(ActiveInjectionPoints);
+		on_proc_exit(injection_points_file_cleanup, 0);
+	}
 }
 
 static void
-InjectionPointShmemInit(void *arg)
+injection_shmem_init(void *arg)
 {
-	pg_atomic_init_u32(&ActiveInjectionPoints->max_inuse, 0);
-	for (int i = 0; i < MAX_INJECTION_POINTS; i++)
-		pg_atomic_init_u64(&ActiveInjectionPoints->entries[i].generation, 0);
+	injection_map_points(INJ_MAP_ATTACH_OR_CREATE, FATAL);
+}
+
+static void
+injection_shmem_attach(void *arg)
+{
+	injection_map_points(INJ_MAP_ATTACH, FATAL);
 }
 #endif							/* USE_INJECTION_POINTS */
 
@@ -411,6 +712,26 @@ InjectionPointCacheRefresh(const char *name)
 	int			namelen;
 	InjectionPointEntry local_copy;
 	InjectionPointCacheEntry *cached;
+
+	/*
+	 * The registry may not be mapped yet in this process: an EXEC_BACKEND
+	 * child reaches early points (e.g. "backend-initialize") before its shmem
+	 * attach callback runs, and the postmaster itself runs points before it
+	 * creates the file.  Map it lazily so a point armed out of band, or before
+	 * this process attached, is never missed.  If no file exists nothing has
+	 * been armed; a genuine mapping failure is reported rather than hidden.
+	 */
+	if (ActiveInjectionPoints == NULL)
+		injection_map_points(INJ_MAP_ATTACH_IF_EXISTS, ERROR);
+	if (ActiveInjectionPoints == NULL)
+	{
+		if (InjectionPointCache)
+		{
+			hash_destroy(InjectionPointCache);
+			InjectionPointCache = NULL;
+		}
+		return NULL;
+	}
 
 	/*
 	 * First read the number of in-use slots.  More entries can be added or

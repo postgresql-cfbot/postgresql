@@ -2175,7 +2175,7 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 			 * disregard it.  Be sure to release this if we ultimately decide
 			 * not to process the table!
 			 */
-			if (!ConditionalLockRelationOid(index->indrelid, AccessShareLock))
+			if (!ConditionalLockRelationOid(index->indrelid, AccessShareLock, false))
 				continue;
 
 			/* Verify that the table still exists; skip if not */
@@ -2234,7 +2234,7 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 			 * disregard the table.  Be sure to release this if we ultimately
 			 * decide not to process the table!
 			 */
-			if (!ConditionalLockRelationOid(class->oid, AccessShareLock))
+			if (!ConditionalLockRelationOid(class->oid, AccessShareLock, false))
 				continue;
 
 			/* Verify that the table still exists */

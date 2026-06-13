@@ -3046,6 +3046,7 @@ StreamStopReason
 String
 StringInfo
 StringInfoData
+StringList
 StripnullState
 SubLink
 SubLinkType

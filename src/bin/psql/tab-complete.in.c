@@ -210,6 +210,18 @@ typedef struct SchemaQuery
 	const char *refnamespace;
 } SchemaQuery;
 
+/*
+ * A dynamically grown list of strings, used to build completion candidate
+ * lists whose size is not known in advance.  The list owns its strings:
+ * string_list_free() releases them along with the array.
+ */
+typedef struct StringList
+{
+	char	  **items;
+	int			nitems;			/* number of valid entries */
+	int			alloc;			/* allocated length of items[] */
+} StringList;
+
 
 /*
  * Store maximum number of records we want from database queries
@@ -1487,13 +1499,17 @@ static void set_completion_reference(const char *word);
 static void set_completion_reference_verbatim(const char *word);
 static char *complete_from_list(const char *text, int state);
 static char *complete_from_const(const char *text, int state);
-static void append_variable_names(char ***varnames, int *nvars,
-								  int *maxvars, const char *varname,
-								  const char *prefix, const char *suffix);
+static void string_list_free(StringList *list);
+static void string_list_add(StringList *list, char *s);
+static bool string_list_contains(const StringList *list, const char *s);
+static char **complete_from_string_list(const char *text, StringList *list);
 static char **complete_from_variables(const char *text,
 									  const char *prefix, const char *suffix, bool need_value);
 static char *complete_from_files(const char *text, int state);
 static char *_complete_from_files(const char *text, int state);
+static char **complete_for_key_join(const char *text, int start,
+									char **previous_words,
+									int previous_words_count);
 
 static char *pg_strdup_keyword_case(const char *s, const char *ref);
 static char *escape_string(const char *text);
@@ -5593,14 +5609,31 @@ match_previous_words(int pattern_id,
 /* ... JOIN ... */
 	else if (TailMatches("JOIN"))
 		COMPLETE_WITH_SCHEMA_QUERY_PLUS(Query_for_list_of_selectables, "LATERAL");
+
+	/*
+	 * Complete a JOIN condition with FOR KEY join clauses inferred from
+	 * foreign keys between the joined relation and earlier FROM-clause
+	 * references: whole clauses, or one phrase at a time while several
+	 * foreign keys match.  This rule must precede the generic JOIN-condition
+	 * rules below, which take over whenever the inference does not apply.
+	 * The HeadMatches(MatchAny) test is always true here (this code is
+	 * reached only with at least one previous word); it exists because
+	 * gen_tabcomplete.pl requires each rule to start with a *Matches call.
+	 */
+	else if (HeadMatches(MatchAny) &&
+			 (matches = complete_for_key_join(text, start, previous_words,
+											  previous_words_count)))
+	{
+		/* complete_for_key_join() built the matches list */
+	}
 	else if (TailMatches("JOIN", MatchAny) && !TailMatches("CROSS|NATURAL", "JOIN", MatchAny))
-		COMPLETE_WITH("ON", "USING (");
+		COMPLETE_WITH("FOR KEY (", "ON", "USING (");
 	else if (TailMatches("JOIN", MatchAny, MatchAny) &&
-			 !TailMatches("CROSS|NATURAL", "JOIN", MatchAny, MatchAny) && !TailMatches("ON|USING"))
-		COMPLETE_WITH("ON", "USING (");
+			 !TailMatches("CROSS|NATURAL", "JOIN", MatchAny, MatchAny) && !TailMatches("FOR|ON|USING"))
+		COMPLETE_WITH("FOR KEY (", "ON", "USING (");
 	else if (TailMatches("JOIN", "LATERAL", MatchAny, MatchAny) &&
-			 !TailMatches("CROSS|NATURAL", "JOIN", "LATERAL", MatchAny, MatchAny) && !TailMatches("ON|USING"))
-		COMPLETE_WITH("ON", "USING (");
+			 !TailMatches("CROSS|NATURAL", "JOIN", "LATERAL", MatchAny, MatchAny) && !TailMatches("FOR|ON|USING"))
+		COMPLETE_WITH("FOR KEY (", "ON", "USING (");
 	else if (TailMatches("JOIN", MatchAny, "USING") ||
 			 TailMatches("JOIN", MatchAny, MatchAny, "USING") ||
 			 TailMatches("JOIN", "LATERAL", MatchAny, MatchAny, "USING"))
@@ -6485,60 +6518,93 @@ complete_from_const(const char *text, int state)
 
 
 /*
- * This function appends the variable name with prefix and suffix to
- * the variable names array.
+ * Release a StringList's strings and its array storage, resetting it to the
+ * empty state.
  */
 static void
-append_variable_names(char ***varnames, int *nvars,
-					  int *maxvars, const char *varname,
-					  const char *prefix, const char *suffix)
+string_list_free(StringList *list)
 {
-	if (*nvars >= *maxvars)
-	{
-		*maxvars *= 2;
-		*varnames = pg_realloc_array(*varnames, char *, (*maxvars) + 1);
-	}
+	for (int i = 0; i < list->nitems; i++)
+		free(list->items[i]);
+	free(list->items);
+	list->items = NULL;
+	list->nitems = list->alloc = 0;
+}
 
-	(*varnames)[(*nvars)++] = psprintf("%s%s%s", prefix, varname, suffix);
+/*
+ * Append a malloc'd string (or NULL) to the list, which takes ownership.
+ */
+static void
+string_list_add(StringList *list, char *s)
+{
+	if (list->nitems >= list->alloc)
+	{
+		/* grow from a small initial allocation, doubling as needed */
+		list->alloc = (list->alloc == 0) ? 8 : list->alloc * 2;
+		list->items = pg_realloc_array(list->items, char *, list->alloc);
+	}
+	list->items[list->nitems++] = s;
+}
+
+/*
+ * Does the list already contain a string equal to s?  Must not be used
+ * after the list has been NULL-terminated.
+ */
+static bool
+string_list_contains(const StringList *list, const char *s)
+{
+	for (int i = 0; i < list->nitems; i++)
+	{
+		if (strcmp(list->items[i], s) == 0)
+			return true;
+	}
+	return false;
+}
+
+/*
+ * Produce completion matches from a dynamically built string list, matching
+ * with COMPLETE_WITH_LIST_CS semantics, then release the list.  An empty
+ * list yields no matches.
+ */
+static char **
+complete_from_string_list(const char *text, StringList *list)
+{
+	char	  **matches;
+
+	string_list_add(list, NULL);	/* NULL-terminate the array */
+	completion_case_sensitive = true;
+	completion_charpp = (const char *const *) list->items;
+	matches = rl_completion_matches(text, complete_from_list);
+	completion_charpp = NULL;
+	string_list_free(list);		/* frees the NULL terminator harmlessly */
+	return matches;
 }
 
 
 /*
  * This function supports completion with the name of a psql variable.
- * The variable names can be prefixed and suffixed with additional text
- * to support quoting usages. If need_value is true, only variables
- * that are currently set are included; otherwise, special variables
- * (those that have hooks) are included even if currently unset.
+ * Each variable name is appended with prefix and suffix applied, to
+ * support quoting usages. If need_value is true, only variables that are
+ * currently set are included; otherwise, special variables (those that
+ * have hooks) are included even if currently unset.
  */
 static char **
 complete_from_variables(const char *text, const char *prefix, const char *suffix,
 						bool need_value)
 {
-	char	  **matches;
-	char	  **varnames;
-	int			nvars = 0;
-	int			maxvars = 100;
-	int			i;
+	StringList	varnames = {0};
 	struct _variable *ptr;
-
-	varnames = pg_malloc_array(char *, maxvars + 1);
 
 	for (ptr = pset.vars->next; ptr; ptr = ptr->next)
 	{
 		if (need_value && !(ptr->value))
 			continue;
-		append_variable_names(&varnames, &nvars, &maxvars, ptr->name,
-							  prefix, suffix);
+
+		string_list_add(&varnames,
+						psprintf("%s%s%s", prefix, ptr->name, suffix));
 	}
 
-	varnames[nvars] = NULL;
-	COMPLETE_WITH_LIST_CS((const char *const *) varnames);
-
-	for (i = 0; i < nvars; i++)
-		pg_free(varnames[i]);
-	pg_free(varnames);
-
-	return matches;
+	return complete_from_string_list(text, &varnames);
 }
 
 
@@ -6698,6 +6764,425 @@ _complete_from_files(const char *text, int state)
 
 	return ret;
 #endif							/* USE_FILENAME_QUOTING_FUNCTIONS */
+}
+
+
+/*
+ * FOR KEY join completion
+ *
+ * Complete the join condition of a JOIN with FOR KEY join clauses inferred
+ * from foreign key constraints connecting the relation being joined with
+ * the relations visible earlier in the FROM clause.
+ *
+ * Each usable (foreign key, left reference) pair is rendered by the server as
+ * a canonical clause, for example "FOR KEY ( a ) -> leftref ( b )".
+ */
+
+/* Maximum number of earlier FROM-clause references we consider */
+#define KEYJOIN_MAX_REFS	32
+
+/*
+ * Aggregate the quoted column names of one side's key, in key order.  The
+ * referencing key columns belong to the referencing relation and the
+ * referenced ones to the referenced relation, so whichever direction is
+ * being rendered, the right side's columns are found in rr.reloid and the
+ * left side's in lr.reloid; only the choice of key array depends on the
+ * direction.  key1 is the key array to use when dir.fwd says the right
+ * relation is the referencing one and key2 the one to use when it is the
+ * referenced one, so KEYJOIN_COLS("conkey", "confkey", "rr") yields the
+ * right side's columns and KEYJOIN_COLS("confkey", "conkey", "lr") the
+ * left side's.
+ */
+#define KEYJOIN_COLS(key1, key2, side) \
+	"(SELECT pg_catalog.string_agg(pg_catalog.quote_ident(a.attname), ', '" \
+	" ORDER BY k.ord)" \
+	" FROM pg_catalog.unnest(CASE WHEN dir.fwd" \
+	" THEN c." key1 " ELSE c." key2 " END)" \
+	" WITH ORDINALITY AS k(attnum, ord)" \
+	" JOIN pg_catalog.pg_attribute a ON a.attrelid = " side ".reloid" \
+	" AND a.attnum = k.attnum)"
+
+/*
+ * Could this word be a relation name or alias in a FROM clause?  Per the
+ * grammar's ColId production, any word that starts like an identifier
+ * qualifies unless it is a fully reserved or type/function name keyword:
+ * those categories are what make JOIN, LEFT, ON and the like end a table
+ * reference, while unreserved keywords such as KEY remain valid aliases.
+ * A bogus relation name that gets through is harmless, because the catalog
+ * query resolves names with to_regclass(), which just returns NULL.
+ */
+static bool
+is_name_word(const char *word)
+{
+	int			kwnum;
+
+	if (!isalpha((unsigned char) word[0]) &&
+		word[0] != '_' &&
+		word[0] != '"' &&
+		!IS_HIGHBIT_SET(word[0]))
+		return false;
+
+	/*
+	 * ScanKeywordLookup() compares case-insensitively; quoted or qualified
+	 * names cannot match any keyword.
+	 */
+	kwnum = ScanKeywordLookup(word, &ScanKeywords);
+	return (kwnum < 0 ||
+			ScanKeywordCategories[kwnum] == UNRESERVED_KEYWORD ||
+			ScanKeywordCategories[kwnum] == COL_NAME_KEYWORD);
+}
+
+/*
+ * Parse one table reference, "[LATERAL] relname [[AS] alias]", expected to
+ * begin at previous_words[idx].  previous_words is in right-to-left order,
+ * so parsing the reference left-to-right means decrementing the index.
+ *
+ * Returns true if a plausible relation name was found, setting *relp to it
+ * and *aliasp to the alias, or to NULL when there is none.  *nextp receives
+ * the index of the first word past the reference (-1 when the reference
+ * consumed all remaining words).  Returns false if previous_words[idx]
+ * cannot start a table reference; in particular, while the user is still
+ * typing the relation name there is no complete word to read yet.
+ */
+static bool
+parse_table_ref(char **previous_words, int idx,
+				const char **relp, const char **aliasp, int *nextp)
+{
+	if (idx >= 0 && pg_strcasecmp(previous_words[idx], "LATERAL") == 0)
+		idx--;
+	if (idx < 0 || !is_name_word(previous_words[idx]))
+		return false;
+
+	*relp = previous_words[idx--];
+	*aliasp = NULL;
+	if (idx >= 0 && pg_strcasecmp(previous_words[idx], "AS") == 0)
+		idx--;
+	if (idx >= 0 && is_name_word(previous_words[idx]))
+		*aliasp = previous_words[idx--];
+	*nextp = idx;
+	return true;
+}
+
+/*
+ * Return the offset just past the phrase of a canonical FOR KEY clause that
+ * extends beyond position pos: the smallest offset one past an unquoted
+ * parenthesis that exceeds pos, or strlen(clause) when there is none.  The
+ * parentheses divide a clause into the phrases "FOR KEY (", the key columns
+ * with their closing paren, the arrow with the left reference and its
+ * opening paren, and the left key columns with the final paren.  A
+ * parenthesis inside a double-quoted identifier does not end a phrase; a
+ * doubled quote toggles the in-quote state twice, which is harmless because
+ * no other character sits between the two quotes.
+ */
+static size_t
+keyjoin_phrase_end(const char *clause, size_t pos)
+{
+	bool		in_quotes = false;
+	size_t		i;
+
+	for (i = 0; clause[i] != '\0'; i++)
+	{
+		if (clause[i] == '"')
+			in_quotes = !in_quotes;
+		else if (!in_quotes &&
+				 (clause[i] == '(' || clause[i] == ')') &&
+				 i >= pos)		/* i + 1 > pos: strictly past pos */
+			return i + 1;
+	}
+	return i;
+}
+
+/*
+ * Complete within a FOR KEY join clause, including offering whole inferred
+ * clauses from a FOR KEY prefix at the join-condition position.  When
+ * several inferred clauses match the typed prefix, completion advances one
+ * parenthesis-delimited phrase at a time instead, so the menu of
+ * alternatives shows short, clearly separated entries.
+ * Returns the completion matches when the inference applies here, or NULL
+ * to let the regular completion rules take over.
+ */
+static char **
+complete_for_key_join(const char *text, int start,
+					  char **previous_words, int previous_words_count)
+{
+	static const char for_key[] = "FOR KEY (";
+	const char *rel;
+	const char *alias;
+	const char *lrels[KEYJOIN_MAX_REFS];
+	const char *laliases[KEYJOIN_MAX_REFS];
+	int			nrefs = 0;
+	int			join;
+	int			tailstart;
+	int			nmatch = 0;
+	char	   *prefix;
+	char	   *kw;
+	char	  **matches;
+	PQExpBufferData prefixbuf;
+	size_t		prefixlen;
+	size_t		for_key_len = strlen(for_key);
+	size_t		replace_offset;
+	const char *caseref = "";
+	StringList	clauses = {0};
+	StringList	candidates = {0};
+
+	/*
+	 * XXX - bump to 200000 when master becomes 20devel.
+	 */
+	if (pset.sversion < 190000)
+		return NULL;
+
+	/*
+	 * Find the JOIN that introduced the relation being joined.  Stop at a
+	 * semicolon, so completion never looks through an earlier statement.
+	 */
+	for (join = 0; join < previous_words_count; join++)
+	{
+		if (pg_strcasecmp(previous_words[join], "JOIN") == 0)
+			break;
+		if (strchr(previous_words[join], ';') != NULL)
+			return NULL;
+	}
+	if (join >= previous_words_count)
+		return NULL;
+
+	/* CROSS and NATURAL joins do not take a join condition. */
+	if (join + 1 < previous_words_count &&
+		(pg_strcasecmp(previous_words[join + 1], "CROSS") == 0 ||
+		 pg_strcasecmp(previous_words[join + 1], "NATURAL") == 0))
+		return NULL;
+
+	/*
+	 * Read the joined relation; the words past its alias, if any, are the
+	 * join condition typed so far.
+	 */
+	if (!parse_table_ref(previous_words, join - 1, &rel, &alias, &tailstart))
+		return NULL;			/* still typing the relation name */
+
+	/*
+	 * Collect references visible to the left of the join, walking outward
+	 * until the FROM that starts the clause.  We only look at words following
+	 * FROM and JOIN keywords, so conditions of earlier joins are skipped.
+	 * Relations listed comma-style in FROM are not recognized.
+	 */
+	for (int k = join + 1; k < previous_words_count; k++)
+	{
+		const char *lrel;
+		const char *lalias;
+		bool		is_from;
+		int			next;
+
+		if (strchr(previous_words[k], ';') != NULL)
+			break;
+		is_from = (pg_strcasecmp(previous_words[k], "FROM") == 0);
+		if (!is_from && pg_strcasecmp(previous_words[k], "JOIN") != 0)
+			continue;
+
+		if (parse_table_ref(previous_words, k - 1, &lrel, &lalias, &next) &&
+			nrefs < KEYJOIN_MAX_REFS)
+		{
+			lrels[nrefs] = lrel;
+			laliases[nrefs] = lalias;
+			nrefs++;
+		}
+		if (is_from)
+			break;
+	}
+
+	/*
+	 * Reconstruct the JOIN condition typed so far in the same canonical
+	 * spelling used by the catalog query below, then append the current
+	 * Readline word.  Words are joined with single spaces, except that the
+	 * arrows must be re-glued: '<' and '>' are word-break characters but '-'
+	 * is not, so a typed "<-" arrives as "<" then "-", and "->" as "-" then
+	 * ">".  The replacement starts at replace_offset, so each candidate is
+	 * the remaining suffix of a full canonical clause, or only its next
+	 * phrase when several clauses match.
+	 */
+	initPQExpBuffer(&prefixbuf);
+	for (int i = tailstart; i >= 0; i--)
+	{
+		if (prefixbuf.len > 0)
+		{
+			char		last = prefixbuf.data[prefixbuf.len - 1];
+
+			if (!((last == '<' && strcmp(previous_words[i], "-") == 0) ||
+				  (last == '-' && strcmp(previous_words[i], ">") == 0)))
+				appendPQExpBufferChar(&prefixbuf, ' ');
+		}
+		appendPQExpBufferStr(&prefixbuf, previous_words[i]);
+	}
+	if (prefixbuf.len > 0 && start > 0 &&
+		isspace((unsigned char) rl_line_buffer[start - 1]))
+		appendPQExpBufferChar(&prefixbuf, ' ');
+
+	replace_offset = prefixbuf.len;
+	appendPQExpBufferStr(&prefixbuf, text);
+	prefix = pg_strdup(prefixbuf.data);
+	termPQExpBuffer(&prefixbuf);
+
+	/*
+	 * Take over completions only while the typed prefix can still become "FOR
+	 * KEY (".  Otherwise, leave the regular JOIN completion rules alone.
+	 */
+	prefixlen = strlen(prefix);
+	if (prefixlen == 0 ||
+		pg_strncasecmp(prefix, for_key, Min(prefixlen, for_key_len)) != 0)
+	{
+		free(prefix);
+		return NULL;
+	}
+
+	/*
+	 * Look up foreign keys connecting the joined relation with each visible
+	 * left-side reference, in either direction.  The query renders each
+	 * usable constraint as a complete canonical FOR KEY clause, spelling the
+	 * left reference as its alias when it has one.  The two-row dir relation
+	 * makes each constraint produce one clause per usable direction: for an
+	 * ordinary foreign key only one direction connects the two relations, but
+	 * a self-referential foreign key in a self-join can be used in both
+	 * directions, and only the user knows which one is meant.  This requires
+	 * a live connection, if only because escape_string() uses pset.db.
+	 */
+	if (nrefs > 0 && pset.db != NULL && PQstatus(pset.db) == CONNECTION_OK)
+	{
+		PQExpBufferData query;
+		PGresult   *result;
+		char	   *e;
+
+		initPQExpBuffer(&query);
+		appendPQExpBufferStr(&query,
+							 "SELECT DISTINCT 'FOR KEY ( ' || "
+							 KEYJOIN_COLS("conkey", "confkey", "rr")
+							 " || CASE WHEN dir.fwd"
+							 " THEN ' ) -> ' ELSE ' ) <- ' END"
+							 " || COALESCE(lr.alias, pg_catalog.quote_ident(cl.relname))"
+							 " || ' ( ' || "
+							 KEYJOIN_COLS("confkey", "conkey", "lr")
+							 " || ' )' AS clause "
+							 "FROM (SELECT pg_catalog.to_regclass('");
+		e = escape_string(rel);
+		appendPQExpBufferStr(&query, e);
+		free(e);
+		appendPQExpBufferStr(&query,
+							 "') AS reloid) AS rr"
+							 " CROSS JOIN (VALUES ");
+		for (int i = 0; i < nrefs; i++)
+		{
+			appendPQExpBuffer(&query, "%s(pg_catalog.to_regclass('",
+							  (i > 0) ? ", " : "");
+			e = escape_string(lrels[i]);
+			appendPQExpBufferStr(&query, e);
+			free(e);
+			appendPQExpBufferStr(&query, "'), ");
+			if (laliases[i] != NULL)
+			{
+				e = escape_string(laliases[i]);
+				appendPQExpBuffer(&query, "'%s')", e);
+				free(e);
+			}
+			else
+				appendPQExpBufferStr(&query, "NULL::pg_catalog.text)");
+		}
+		appendPQExpBufferStr(&query,
+							 ") AS lr(reloid, alias)"
+							 " JOIN pg_catalog.pg_class cl"
+							 " ON cl.oid = lr.reloid"
+							 " CROSS JOIN (VALUES (true), (false)) AS dir(fwd)"
+							 " JOIN pg_catalog.pg_constraint c"
+							 " ON ((dir.fwd AND c.conrelid = rr.reloid"
+							 " AND c.confrelid = lr.reloid)"
+							 " OR (NOT dir.fwd AND c.confrelid = rr.reloid"
+							 " AND c.conrelid = lr.reloid)) "
+							 "WHERE c.contype = 'f'"
+							 " AND c.conenforced AND c.convalidated"
+							 " AND NOT c.condeferrable AND c.conparentid = 0 "
+							 "ORDER BY clause");
+		result = exec_query(query.data);
+		termPQExpBuffer(&query);
+		if (result != NULL)
+		{
+			for (int row = 0; row < PQntuples(result); row++)
+			{
+				if (!PQgetisnull(result, row, 0))
+					string_list_add(&clauses,
+									pg_strdup(PQgetvalue(result, row, 0)));
+			}
+			PQclear(result);
+		}
+	}
+
+	/*
+	 * Match the reconstructed prefix against each full clause.  Only the "FOR
+	 * KEY" keywords are recased; identifiers and aliases must keep the
+	 * spelling returned by the catalog query.  The word being completed, if
+	 * any, determines the keyword case (prefix + replace_offset points at its
+	 * copy appended above); otherwise the last fully-typed word does.
+	 */
+	if (prefix[replace_offset] != '\0')
+		caseref = prefix + replace_offset;
+	else if (tailstart >= 0)
+		caseref = previous_words[tailstart];
+	kw = pg_strdup_keyword_case("FOR KEY", caseref);
+
+	for (int i = 0; i < clauses.nitems; i++)
+	{
+		char	   *clause = clauses.items[i];
+
+		/*
+		 * pg_strdup_keyword_case() changes only letter case, never the
+		 * length, and every clause starts with "FOR KEY ", so the recased
+		 * keywords can simply be copied over the clause in place.
+		 */
+		memcpy(clause, kw, strlen(kw));
+
+		if (prefixlen <= strlen(clause) &&
+			pg_strncasecmp(prefix, clause, prefixlen) == 0)
+			nmatch++;
+	}
+	free(kw);
+
+	/*
+	 * Build one candidate per matching clause.  A single match completes the
+	 * whole remaining suffix.  With several matches, whole suffixes would
+	 * produce a menu of long multi-word entries with no visible separation,
+	 * so offer only the part up to the end of the current phrase; identical
+	 * truncated candidates are merged, so a phrase shared by all matching
+	 * clauses still completes in one step, and each TAB advances one phrase
+	 * until the clauses diverge.
+	 */
+	for (int i = 0; i < clauses.nitems; i++)
+	{
+		const char *clause = clauses.items[i];
+		char	   *cand;
+
+		/* replace_offset <= prefixlen, so this also bounds the suffix */
+		if (prefixlen > strlen(clause) ||
+			pg_strncasecmp(prefix, clause, prefixlen) != 0)
+			continue;
+
+		if (nmatch == 1)
+			cand = pg_strdup(clause + replace_offset);
+		else
+		{
+			size_t		end = keyjoin_phrase_end(clause, prefixlen);
+
+			cand = pnstrdup(clause + replace_offset, end - replace_offset);
+		}
+		if (string_list_contains(&candidates, cand))
+			free(cand);
+		else
+			string_list_add(&candidates, cand);
+	}
+
+	/*
+	 * The prefix filter above matched case-insensitively against whole
+	 * clauses; the readline match in complete_from_string_list() is
+	 * case-sensitive, preserving the canonical spelling of what remains.
+	 */
+	matches = complete_from_string_list(text, &candidates);
+	string_list_free(&clauses);
+	free(prefix);
+	return matches;
 }
 
 

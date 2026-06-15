@@ -25,8 +25,8 @@ OBJS = \
 
 all: pg_walsummary
 
-pg_walsummary: $(OBJS) | submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pg_walsummary: $(OBJS) $(libpgfeutils) | submake-libpgport
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 
 install: all installdirs

@@ -537,6 +537,30 @@ ALTER DOMAIN things VALIDATE CONSTRAINT meow;
 UPDATE thethings SET stuff = 10;
 ALTER DOMAIN things VALIDATE CONSTRAINT meow;
 
+ALTER DOMAIN things ADD CONSTRAINT nn1 NOT NULL;
+ALTER DOMAIN things ADD CONSTRAINT domain_nn NOT NULL NOT VALID; -- no-op
+ALTER DOMAIN things DROP NOT NULL;
+
+INSERT INTO thethings VALUES(NULL);
+ALTER DOMAIN things ADD CONSTRAINT domain_nn NOT NULL NOT VALID; -- ok
+
+INSERT INTO thethings VALUES(NULL); -- error
+ALTER DOMAIN things ADD CONSTRAINT nn1 NOT NULL; -- error
+ALTER DOMAIN things ADD NOT NULL; -- error
+ALTER DOMAIN things SET NOT NULL; -- error
+ALTER DOMAIN things VALIDATE CONSTRAINT domain_nn; -- error
+ALTER DOMAIN things ADD CONSTRAINT domain_nn1 NOT NULL NOT VALID; -- no-op
+
+\dD things
+SELECT conname, pg_get_constraintdef(oid)
+FROM   pg_constraint
+WHERE  contypid = 'things'::regtype AND contype = 'n';
+
+UPDATE thethings SET stuff = 10 WHERE stuff IS NULL;
+ALTER DOMAIN things SET NOT NULL; -- ok
+ALTER DOMAIN things VALIDATE CONSTRAINT domain_nn; -- ok
+ALTER DOMAIN things DROP NOT NULL;
+
 -- Confirm ALTER DOMAIN with RULES.
 create table domtab (col1 integer);
 create domain dom as integer;

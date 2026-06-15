@@ -651,7 +651,7 @@ findNotNullConstraint(Oid relid, const char *colname)
 }
 
 /*
- * Find and return the pg_constraint tuple that implements a validated
+ * Find and return the pg_constraint tuple that implements a (possibly not valid)
  * not-null constraint for the given domain.
  */
 HeapTuple
@@ -675,12 +675,7 @@ findDomainNotNullConstraint(Oid typid)
 	{
 		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(conTup);
 
-		/*
-		 * We're looking for a NOTNULL constraint that's marked validated.
-		 */
 		if (con->contype != CONSTRAINT_NOTNULL)
-			continue;
-		if (!con->convalidated)
 			continue;
 
 		/* Found it */

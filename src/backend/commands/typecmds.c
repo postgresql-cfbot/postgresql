@@ -129,7 +129,7 @@ static Oid	findRangeSubOpclass(List *opcname, Oid subtype);
 static Oid	findRangeCanonicalFunction(List *procname, Oid typeOid);
 static Oid	findRangeSubtypeDiffFunction(List *procname, Oid subtype);
 static void validateDomainCheckConstraint(Oid domainoid, const char *ccbin, LOCKMODE lockmode);
-static void validateDomainNotNullConstraint(Oid domainoid);
+static void validateDomainNotNullConstraint(Oid domainoid, LOCKMODE lockmode);
 static List *get_rels_with_domain(Oid domainOid, LOCKMODE lockmode);
 static void checkEnumOwner(HeapTuple tup);
 static char *domainAddCheckConstraint(Oid domainOid, Oid domainNamespace,
@@ -2797,9 +2797,70 @@ AlterDomainNotNull(List *names, bool notNull)
 	checkDomainOwner(tup);
 
 	/* Is the domain already set to the desired constraint? */
-	if (typTup->typnotnull == notNull)
+	if (!typTup->typnotnull && !notNull)
 	{
 		table_close(typrel, RowExclusiveLock);
+		return address;
+	}
+
+	if (typTup->typnotnull && notNull)
+	{
+		ScanKeyData key[1];
+		SysScanDesc scan;
+		HeapTuple	conTup;
+
+		Relation	pg_constraint = table_open(ConstraintRelationId,
+											   AccessShareLock);
+
+		ScanKeyInit(&key[0],
+					Anum_pg_constraint_contypid,
+					BTEqualStrategyNumber, F_OIDEQ,
+					ObjectIdGetDatum(domainoid));
+
+		scan = systable_beginscan(pg_constraint, ConstraintTypidIndexId, true,
+								  NULL, 1, key);
+
+		while (HeapTupleIsValid(conTup = systable_getnext(scan)))
+		{
+			Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(conTup);
+
+			if (con->contype != CONSTRAINT_NOTNULL)
+				continue;
+
+			/*
+			 * ALTER DOMAIN SET NOT NULL require validate the existing NOT
+			 * VALID not-null domain constraint, while at it, set
+			 * pg_constraint.convalidated to true.
+			 */
+			if (!con->convalidated)
+			{
+				HeapTuple	copyTuple;
+				Form_pg_constraint copy_con;
+
+				validateDomainNotNullConstraint(domainoid, ShareUpdateExclusiveLock);
+
+				copyTuple = heap_copytuple(conTup);
+				copy_con = (Form_pg_constraint) GETSTRUCT(copyTuple);
+
+				copy_con->convalidated = true;
+				CatalogTupleUpdate(pg_constraint, &copyTuple->t_self, copyTuple);
+
+				InvokeObjectPostAlterHook(ConstraintRelationId, con->oid, 0);
+
+				heap_freetuple(copyTuple);
+			}
+
+			break;
+		}
+		systable_endscan(scan);
+
+		table_close(pg_constraint, AccessShareLock);
+		table_close(typrel, RowExclusiveLock);
+
+		/*
+		 * Now the existing not-null domain constraint is valid, no need to
+		 * add a new one. Exit now.
+		 */
 		return address;
 	}
 
@@ -2816,7 +2877,7 @@ AlterDomainNotNull(List *names, bool notNull)
 								   typTup->typbasetype, typTup->typtypmod,
 								   constr, NameStr(typTup->typname), NULL);
 
-		validateDomainNotNullConstraint(domainoid);
+		validateDomainNotNullConstraint(domainoid, ShareLock);
 	}
 	else
 	{
@@ -3030,10 +3091,51 @@ AlterDomainAddConstraint(List *names, Node *newConstraint,
 	}
 	else if (constr->contype == CONSTR_NOTNULL)
 	{
-		/* Is the domain already set NOT NULL? */
+		/* Is the domain already have a NOT NULL constraint? */
 		if (typTup->typnotnull)
 		{
+			HeapTuple	conTup;
+			ScanKeyData key[1];
+			SysScanDesc scan;
+
+			Relation	pg_constraint = table_open(ConstraintRelationId,
+												   AccessShareLock);
+
+			ScanKeyInit(&key[0],
+						Anum_pg_constraint_contypid,
+						BTEqualStrategyNumber, F_OIDEQ,
+						ObjectIdGetDatum(domainoid));
+
+			scan = systable_beginscan(pg_constraint,
+									  ConstraintTypidIndexId,
+									  true, NULL, 1, key);
+			while (HeapTupleIsValid(conTup = systable_getnext(scan)))
+			{
+				Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(conTup);
+
+				if (con->contype != CONSTRAINT_NOTNULL)
+					continue;
+
+				/*
+				 * Cannot adding a new VALID NOT NULL constraint if the domain
+				 * already has a NOT VALID one. However, adding a NOT VALID
+				 * NOT NULL constraint when a VALID one exists is allowed.
+				 */
+				if (!con->convalidated && constr->initially_valid)
+					ereport(ERROR,
+							errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+							errmsg("incompatible NOT VALID constraint \"%s\" on domain \"%s\"",
+								   NameStr(con->conname),
+								   NameStr(typTup->typname)),
+							errhint("You might need to validate it using %s.",
+									"ALTER DOMAIN ... VALIDATE CONSTRAINT"));
+				break;
+			}
+			systable_endscan(scan);
+
+			table_close(pg_constraint, AccessShareLock);
 			table_close(typrel, RowExclusiveLock);
+
 			return address;
 		}
 		domainAddNotNullConstraint(domainoid, typTup->typnamespace,
@@ -3041,7 +3143,7 @@ AlterDomainAddConstraint(List *names, Node *newConstraint,
 								   constr, NameStr(typTup->typname), constrAddr);
 
 		if (!constr->skip_validation)
-			validateDomainNotNullConstraint(domainoid);
+			validateDomainNotNullConstraint(domainoid, ShareLock);
 
 		typTup->typnotnull = true;
 		CatalogTupleUpdate(typrel, &tup->t_self, tup);
@@ -3124,23 +3226,28 @@ AlterDomainValidateConstraint(List *names, const char *constrName)
 						constrName, TypeNameToString(typename))));
 
 	con = (Form_pg_constraint) GETSTRUCT(tuple);
-	if (con->contype != CONSTRAINT_CHECK)
+	if (con->contype != CONSTRAINT_CHECK && con->contype != CONSTRAINT_NOTNULL)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("constraint \"%s\" of domain \"%s\" is not a check constraint",
+				 errmsg("constraint \"%s\" of domain \"%s\" is not a check or not-null constraint",
 						constrName, TypeNameToString(typename))));
 
 	if (!con->convalidated)
 	{
-		val = SysCacheGetAttrNotNull(CONSTROID, tuple, Anum_pg_constraint_conbin);
-		conbin = TextDatumGetCString(val);
+		if (con->contype == CONSTRAINT_CHECK)
+		{
+			val = SysCacheGetAttrNotNull(CONSTROID, tuple, Anum_pg_constraint_conbin);
+			conbin = TextDatumGetCString(val);
 
-		/*
-		 * Locking related relations with ShareUpdateExclusiveLock is ok
-		 * because not-yet-valid constraints are still enforced against
-		 * concurrent inserts or updates.
-		 */
-		validateDomainCheckConstraint(domainoid, conbin, ShareUpdateExclusiveLock);
+			/*
+			 * Locking related relations with ShareUpdateExclusiveLock is ok
+			 * because not-yet-valid constraints are still enforced against
+			 * concurrent inserts or updates.
+			 */
+			validateDomainCheckConstraint(domainoid, conbin, ShareUpdateExclusiveLock);
+		}
+		else
+			validateDomainNotNullConstraint(domainoid, ShareUpdateExclusiveLock);
 
 		/*
 		 * Now update the catalog, while we have the door open.
@@ -3169,9 +3276,16 @@ AlterDomainValidateConstraint(List *names, const char *constrName)
 
 /*
  * Verify that all columns currently using the domain are not null.
+ *
+ * This support validating the existing not-null constraint and adding a new
+ * not-null constraint on a domain.
+ *
+ * The lockmode is used for relations using the domain.  It should be ShareLock
+ * when adding a new not-null to domain.  It can be ShareUpdateExclusiveLock
+ * when validating the existing not-null constraint.
  */
 static void
-validateDomainNotNullConstraint(Oid domainoid)
+validateDomainNotNullConstraint(Oid domainoid, LOCKMODE lockmode)
 {
 	List	   *rels;
 	ListCell   *rt;
@@ -3179,7 +3293,7 @@ validateDomainNotNullConstraint(Oid domainoid)
 	/* Fetch relation list with attributes based on this domain */
 	/* ShareLock is sufficient to prevent concurrent data changes */
 
-	rels = get_rels_with_domain(domainoid, ShareLock);
+	rels = get_rels_with_domain(domainoid, lockmode);
 
 	foreach(rt, rels)
 	{

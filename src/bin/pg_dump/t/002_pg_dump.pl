@@ -1024,6 +1024,22 @@ my %tests = (
 		},
 	},
 
+	'DOMAIN CONSTRAINT NOT NULL / NOT VALID' => {
+		create_sql => 'CREATE DOMAIN dump_test.test_domain_nn AS INT;
+					   ALTER DOMAIN dump_test.test_domain_nn ADD CONSTRAINT nn NOT NULL NOT VALID;',
+		regexp => qr/^
+			\QALTER DOMAIN dump_test.test_domain_nn\E \n^\s+
+			\QADD CONSTRAINT nn NOT NULL NOT VALID;\E
+			/xm,
+		like => {
+			%full_runs, %dump_test_schema_runs, section_post_data => 1,
+		},
+		unlike => {
+			exclude_dump_test_schema => 1,
+			only_dump_measurement => 1,
+		},
+	},
+
 	'CONSTRAINT NOT NULL / NOT VALID (child1)' => {
 		regexp => qr/^
 		\QCREATE TABLE dump_test.test_table_nn_chld1 (\E\n

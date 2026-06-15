@@ -3252,6 +3252,11 @@ flatten_simple_union_all(PlannerInfo *root)
  * removed to prevent bogus selectivity calculations, but we leave it to
  * distribute_qual_to_rels to get rid of such clauses.
  *
+ * A whole-row Var works too.  "WHERE b IS NULL" in row-format semantics is
+ * true when b's whole-row value is NULL or when every column of b is NULL;
+ * for a matching row only the latter is possible, so proving any one column
+ * of b non-null in matching rows justifies the same reduction.
+ *
  * The same recognition reduces a FULL join to an anti-semijoin when a
  * forced-null Var on either side is proven non-null: only the other side's
  * unmatched rows can survive.  If that surviving side is the right-hand
@@ -3803,6 +3808,9 @@ report_reduced_full_join(reduce_outer_joins_pass2_state *state2,
  *		indicated by "state" that are known to be non-nullable due to table
  *		constraints.
  *
+ * A whole-row Var, in any matching row, requires every column of its relation
+ * to be NULL, so any NOT NULL column of the relation refutes it.
+ *
  * Note that we must also consider the situation where a NOT NULL Var can be
  * nulled by lower-level outer joins.
  *
@@ -3819,6 +3827,7 @@ forced_null_var_is_attnotnull(PlannerInfo *root, List *forced_null_vars,
 		RangeTblEntry *rte;
 		Bitmapset  *notnullattnums;
 		Bitmapset  *forcednullattnums = NULL;
+		bool		wholerow = false;
 		int			attno;
 
 		varno++;
@@ -3853,6 +3862,13 @@ forced_null_var_is_attnotnull(PlannerInfo *root, List *forced_null_vars,
 			if (real_attno < 0)
 				return true;
 
+			/* whole-row Vars are handled below, not by attnum matching */
+			if (real_attno == 0)
+			{
+				wholerow = true;
+				continue;
+			}
+
 			forcednullattnums = bms_add_member(forcednullattnums, real_attno);
 		}
 
@@ -3880,6 +3896,17 @@ forced_null_var_is_attnotnull(PlannerInfo *root, List *forced_null_vars,
 		notnullattnums = find_relation_notnullatts(root, rte->relid);
 
 		/*
+		 * A forced-null whole-row Var, in any matching row, requires every
+		 * column of the relation to be NULL, so any NOT NULL column refutes
+		 * it.
+		 */
+		if (wholerow && !bms_is_empty(notnullattnums))
+		{
+			bms_free(forcednullattnums);
+			return true;
+		}
+
+		/*
 		 * Check if any forced-null attributes are defined as NOT NULL by
 		 * table constraints.
 		 */
@@ -3905,6 +3932,10 @@ forced_null_var_is_attnotnull(PlannerInfo *root, List *forced_null_vars,
  * the Var, or a NOT NULL table constraint (excluding Vars nullable due to
  * lower-level outer joins).
  *
+ * A whole-row Var in "forced_null_vars" requires, in any matching row, every
+ * column of its relation to be NULL, so it is refuted by proving any one of
+ * those columns non-null.
+ *
  * Helper for reduce_outer_joins_pass2.
  */
 static bool
@@ -3914,19 +3945,59 @@ forced_null_var_is_nonnullable(PlannerInfo *root, List *forced_null_vars,
 {
 	List	   *all_quals;
 	List	   *nonnullable_vars;
-	Bitmapset  *overlap;
+	int			wholerow_attno = 0 - FirstLowInvalidHeapAttributeNumber;
+	int			varno = -1;
 
 	all_quals = list_concat_copy(state->safe_quals, extra_quals);
 	nonnullable_vars = find_nonnullable_vars((Node *) all_quals);
 
 	/*
-	 * It's not sufficient to check whether nonnullable_vars and
-	 * forced_null_vars overlap: we need to know if the overlap includes any
-	 * variables of this subtree.
+	 * It's not sufficient to consider all matches between nonnullable_vars
+	 * and forced_null_vars: a match counts only for a Var belonging to this
+	 * subtree, and the whole-row attribute needs special treatment.
 	 */
-	overlap = mbms_overlap_sets(nonnullable_vars, forced_null_vars);
-	if (bms_overlap(overlap, state->relids))
-		return true;
+	foreach_node(Bitmapset, attrs, forced_null_vars)
+	{
+		Bitmapset  *nonnull_attrs;
+
+		varno++;
+
+		/* Skip empty bitmaps */
+		if (bms_is_empty(attrs))
+			continue;
+
+		/* Skip Vars that do not belong to the target relations */
+		if (!bms_is_member(varno, state->relids))
+			continue;
+
+		/* Get what the quals prove non-null for this relation, if anything */
+		if (varno >= list_length(nonnullable_vars))
+			continue;
+		nonnull_attrs = list_nth_node(Bitmapset, nonnullable_vars, varno);
+
+		/*
+		 * A proof for the whole-row attribute refutes nothing: it shows only
+		 * that the composite datum is non-null, and such a datum can still
+		 * have all columns NULL.  Discard it up front.
+		 */
+		nonnull_attrs = bms_del_member(nonnull_attrs, wholerow_attno);
+
+		/* A forced-null attribute that is proven non-null settles it. */
+		if (bms_overlap(attrs, nonnull_attrs))
+			return true;
+
+		/*
+		 * So does any real column proven non-null, if the whole-row Var is
+		 * forced null: in a matching row (whose whole-row datum is non-null)
+		 * the row-format IS NULL test is true only when every column is NULL.
+		 * System attributes don't count, since they are not part of the row
+		 * value; conveniently they sort below the whole-row attribute in the
+		 * bitmap.
+		 */
+		if (bms_is_member(wholerow_attno, attrs) &&
+			bms_next_member(nonnull_attrs, wholerow_attno) >= 0)
+			return true;
+	}
 
 	/*
 	 * Otherwise, check if any forced-null var is defined NOT NULL by table

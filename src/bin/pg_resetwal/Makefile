@@ -23,8 +23,8 @@ OBJS = \
 
 all: pg_resetwal
 
-pg_resetwal: $(OBJS) | submake-libpgport
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pg_resetwal: $(OBJS) $(libpgfeutils) | submake-libpgport
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs
 	$(INSTALL_PROGRAM) pg_resetwal$(X) '$(DESTDIR)$(bindir)/pg_resetwal$(X)'

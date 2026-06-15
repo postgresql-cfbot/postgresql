@@ -44,8 +44,8 @@ export TEST_EXT_LIB
 
 all: pg_upgrade
 
-pg_upgrade: $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pg_upgrade: $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs
 	$(INSTALL_PROGRAM) pg_upgrade$(X) '$(DESTDIR)$(bindir)/pg_upgrade$(X)'

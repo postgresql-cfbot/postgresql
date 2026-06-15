@@ -23,5 +23,5 @@ include $(top_builddir)/src/Makefile.global
 include $(top_srcdir)/contrib/contrib-global.mk
 endif
 
-test_escape$(X): | submake-libpgfeutils
+test_escape$(X): $(libpgfeutils)
 check: test_escape$(X)

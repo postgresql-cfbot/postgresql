@@ -303,11 +303,35 @@
 
 #define NAPTIME_PER_CYCLE 1000	/* max sleep time between cycles (1s) */
 
+/*
+ * Struct for tracking the progress of flushing the transaction received from
+ * the publisher.
+ *
+ * A list of these structs (lsn_mapping) is maintained in the apply worker, each
+ * representing a transaction that is being flushed. The entries are removed
+ * from the list when the transaction is fully flushed (see get_flush_position).
+ */
 typedef struct FlushPosition
 {
 	dlist_node	node;
+
+	/*
+	 * The end of commit record applied by the worker, and the corresponding end
+	 * of commit record on the publisher.
+	 *
+	 * For transactions assigned to a parallel apply worker, the local_end is
+	 * not immediately available. The leader will update the local_end when it
+	 * confirms that the parallel apply worker has finished applying the
+	 * transaction (see the usage of pa_get_last_commit_end).
+	 */
 	XLogRecPtr	local_end;
 	XLogRecPtr	remote_end;
+
+	/*
+	 * The remote transaction ID. This should be set to a valid ID only when the
+	 * transaction is assigned to a parallel apply worker.
+	 */
+	TransactionId pa_remote_xid;
 } FlushPosition;
 
 static dlist_head lsn_mapping = DLIST_STATIC_INIT(lsn_mapping);
@@ -476,6 +500,8 @@ ErrorContextCallback *apply_error_context_stack = NULL;
 MemoryContext ApplyMessageContext = NULL;
 MemoryContext ApplyContext = NULL;
 
+static MemoryContext ParallelApplyContext = NULL;
+
 /* per stream context for streaming transactions */
 static MemoryContext LogicalStreamingContext = NULL;
 
@@ -548,6 +574,65 @@ typedef struct ApplySubXactData
 } ApplySubXactData;
 
 static ApplySubXactData subxact_data = {0, 0, InvalidTransactionId, NULL};
+
+/* Hash table key for replica_identity_table */
+typedef struct ReplicaIdentityKey
+{
+	Oid			relid;
+	LogicalRepTupleData *data;
+} ReplicaIdentityKey;
+
+/* Hash table entry in replica_identity_table */
+typedef struct ReplicaIdentityEntry
+{
+	ReplicaIdentityKey *keydata;
+	TransactionId remote_xid;
+
+	/* needed for simplehash */
+	uint32		hash;
+	char		status;
+} ReplicaIdentityEntry;
+
+#include "common/hashfn.h"
+
+static uint32 hash_replica_identity(ReplicaIdentityKey *key);
+static bool hash_replica_identity_compare(ReplicaIdentityKey *a,
+										  ReplicaIdentityKey *b);
+
+/* Define parameters for replica identity hash table code generation. */
+#define SH_PREFIX		replica_identity
+#define SH_ELEMENT_TYPE	ReplicaIdentityEntry
+#define SH_KEY_TYPE		ReplicaIdentityKey *
+#define	SH_KEY			keydata
+#define SH_HASH_KEY(tb, key)	hash_replica_identity(key)
+#define SH_EQUAL(tb, a, b)		hash_replica_identity_compare(a, b)
+#define SH_STORE_HASH
+#define SH_GET_HASH(tb, a) (a)->hash
+#define	SH_SCOPE		static inline
+#define SH_DECLARE
+#define SH_DEFINE
+#include "lib/simplehash.h"
+
+#define REPLICA_IDENTITY_INITIAL_SIZE 128
+#define REPLICA_IDENTITY_CLEANUP_THRESHOLD 1024
+
+/*
+ * Hash table storing replica identity values for changes being applied in
+ * parallel, along with the latest transaction that modified each row.
+ *
+ * Entries are removed in the following cases:
+ *
+ * 1) When handling a subsequent change that modifies the same row, and the
+ *    stored transaction has already committed.
+ * 2) When collecting flush progress of remote transactions, and the stored
+ *    transaction is found to have committed.
+ * 3) When the number of entries exceeds REPLICA_IDENTITY_CLEANUP_THRESHOLD
+ *    and the stored transaction has already committed.
+ *
+ * We use simplehash for its efficiency (see comments atop of simplehash.h), as
+ * this hash table is accessed for every change in a transaction.
+ */
+static replica_identity_hash *replica_identity_table = NULL;
 
 static inline void subxact_filename(char *path, Oid subid, TransactionId xid);
 static inline void changes_filename(char *path, Oid subid, TransactionId xid);
@@ -635,6 +720,631 @@ static TransApplyAction get_transaction_apply_action(TransactionId xid,
 static void set_wal_receiver_timeout(void);
 
 static void on_exit_clear_xact_state(int code, Datum arg);
+
+static void send_internal_dependencies(ParallelApplyWorkerInfo *winfo,
+									   List *depends_on_xids);
+
+/*
+ * Compute the hash value for entries in the replica_identity_table.
+ */
+static uint32
+hash_replica_identity(ReplicaIdentityKey *key)
+{
+	int			i;
+	uint32		hashkey = 0;
+
+	hashkey = hash_combine(hashkey, hash_uint32(key->relid));
+
+	for (i = 0; i < key->data->ncols; i++)
+	{
+		uint32		hkey;
+
+		if (key->data->colstatus[i] == LOGICALREP_COLUMN_NULL)
+			continue;
+
+		hkey = hash_any((const unsigned char *) key->data->colvalues[i].data,
+						key->data->colvalues[i].len);
+		hashkey = hash_combine(hashkey, hkey);
+	}
+
+	return hashkey;
+}
+
+/*
+ * Compare two entries in the replica_identity_table.
+ */
+static bool
+hash_replica_identity_compare(ReplicaIdentityKey *a, ReplicaIdentityKey *b)
+{
+	if (a->relid != b->relid ||
+		a->data->ncols != b->data->ncols)
+		return false;
+
+	for (int i = 0; i < a->data->ncols; i++)
+	{
+		if (a->data->colstatus[i] != b->data->colstatus[i])
+			return false;
+
+		if (a->data->colvalues[i].len != b->data->colvalues[i].len)
+			return false;
+
+		if (strcmp(a->data->colvalues[i].data, b->data->colvalues[i].data))
+			return false;
+
+		elog(DEBUG1, "conflicting key %s", a->data->colvalues[i].data);
+	}
+
+	return true;
+}
+
+/*
+ * Free resources associated with a replica identity key.
+ */
+static void
+free_replica_identity_key(ReplicaIdentityKey *key)
+{
+	Assert(key);
+
+	pfree(key->data->colvalues);
+	pfree(key->data->colstatus);
+	pfree(key->data);
+	pfree(key);
+}
+
+/*
+ * Clean up hash table entries associated with the given transaction IDs.
+ */
+static void
+delete_replica_identity_entries_for_txns(List *committed_xids)
+{
+	replica_identity_iterator i;
+	ReplicaIdentityEntry *rientry;
+
+	if (!committed_xids)
+		return;
+
+	replica_identity_start_iterate(replica_identity_table, &i);
+	while ((rientry = replica_identity_iterate(replica_identity_table, &i)) != NULL)
+	{
+		if (!list_member_xid(committed_xids, rientry->remote_xid))
+			continue;
+
+		/* Clean up the hash entry for committed transaction */
+		free_replica_identity_key(rientry->keydata);
+		replica_identity_delete_item(replica_identity_table, rientry);
+	}
+}
+
+/*
+ * Check committed transactions and clean up corresponding entries in the hash
+ * table.
+ *
+ * Also update the local_end for transactions assigned to parallel apply workers
+ * if not already set.
+ */
+static void
+cleanup_committed_replica_identity_entries(void)
+{
+	dlist_mutable_iter iter;
+	List	   *committed_xids = NIL;
+
+	dlist_foreach_modify(iter, &lsn_mapping)
+	{
+		FlushPosition *pos =
+			dlist_container(FlushPosition, node, iter.cur);
+		bool		skipped_write;
+
+		/*
+		 * Skip if the transaction was not assigned to a parallel worker, or if
+		 * we have already collected its local end LSN.
+		 */
+		if (!TransactionIdIsValid(pos->pa_remote_xid) ||
+			XLogRecPtrIsValid(pos->local_end))
+			continue;
+
+		pos->local_end = pa_get_last_commit_end(pos->pa_remote_xid,
+												&skipped_write);
+
+		elog(DEBUG1,
+			 "got commit end from parallel apply worker, "
+			 "txn: %u, remote_end %X/%X, local_end %X/%X",
+			 pos->pa_remote_xid, LSN_FORMAT_ARGS(pos->remote_end),
+			 LSN_FORMAT_ARGS(pos->local_end));
+
+		/* Skip if the transaction is still being applied */
+		if (!skipped_write && !XLogRecPtrIsValid(pos->local_end))
+			continue;
+
+		committed_xids = lappend_xid(committed_xids, pos->pa_remote_xid);
+	}
+
+	/* cleanup the entries for committed transactions */
+	delete_replica_identity_entries_for_txns(committed_xids);
+}
+
+/*
+ * Check whether the given relation entry contains an uncommitted transaction
+ * that affected the whole table.
+ */
+static bool
+has_active_rel_dependency(LogicalRepRelMapEntry *relentry)
+{
+	if (!TransactionIdIsValid(relentry->last_depended_xid))
+		return false;
+
+	if (pa_transaction_committed(relentry->last_depended_xid))
+	{
+		relentry->last_depended_xid = InvalidTransactionId;
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Check whether the given key dependency entry contains an uncommitted
+ * transaction. If cleanup is true, also clean up the entry if the transaction
+ * has already committed.
+ */
+static bool
+has_active_key_dependency(ReplicaIdentityEntry *rientry, bool cleanup)
+{
+	Assert(TransactionIdIsValid(rientry->remote_xid));
+
+	if (pa_transaction_committed(rientry->remote_xid))
+	{
+		if (cleanup)
+		{
+			free_replica_identity_key(rientry->keydata);
+			replica_identity_delete_item(replica_identity_table, rientry);
+		}
+
+		return false;
+	}
+
+	return true;
+}
+
+/*
+ * Append the given transaction ID to the dependency list if it is not already
+ * present.
+ */
+static void
+append_xid_dependency(TransactionId xid, List **depends_on_xids)
+{
+	Assert(TransactionIdIsValid(xid));
+
+	if (list_member_xid(*depends_on_xids, xid))
+		return;
+
+	*depends_on_xids = lappend_xid(*depends_on_xids, xid);
+}
+
+/*
+ * Check if any of the key columns have NULL values.
+ */
+static bool
+has_null_key_values(LogicalRepTupleData *data, Bitmapset *indexkeys)
+{
+	for (int i = 0; i < data->ncols; i++)
+	{
+		if (bms_is_member(i, indexkeys) &&
+			data->colstatus[i] == LOGICALREP_COLUMN_NULL)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Check for dependencies on preceding transactions that modify the same key as
+ * the given tuple. Returns the dependent transactions in 'depends_on_xids'.
+ *
+ * Additionally, if new_depended_xid is valid, record the current change and the
+ * transaction as a new dependency for the replica identity key modification,
+ * allowing subsequent transactions that modify the same key to be dependent on
+ * it.
+ */
+static void
+check_and_record_ri_dependency(Oid relid, LogicalRepTupleData *original_data,
+							   TransactionId new_depended_xid,
+							   List **depends_on_xids)
+{
+	LogicalRepRelMapEntry *relentry;
+	LogicalRepTupleData *ridata;
+	ReplicaIdentityKey *rikey;
+	ReplicaIdentityEntry *rientry;
+	MemoryContext oldctx;
+	int			n_ri;
+	bool		found = false;
+
+	Assert(depends_on_xids);
+
+	/* Search for existing entry */
+	relentry = logicalrep_get_relentry(relid);
+
+	Assert(relentry);
+
+	/*
+	 * First check whether any previous transaction (other than the current one)
+	 * has affected the whole table e.g., truncate or schema change from
+	 * publisher.
+	 */
+	if (has_active_rel_dependency(relentry) &&
+		!TransactionIdEquals(relentry->last_depended_xid, new_depended_xid))
+	{
+		elog(DEBUG1, "found table-wide change affecting %u from %u",
+			 relid, relentry->last_depended_xid);
+
+		append_xid_dependency(relentry->last_depended_xid, depends_on_xids);
+	}
+
+	n_ri = bms_num_members(relentry->remoterel.attkeys);
+
+	/*
+	 * Return if there are no replica identity columns, indicating that the
+	 * remote relation has neither a replica identity key nor is marked as
+	 * replica identity full.
+	 */
+	if (!n_ri)
+		return;
+
+	/*
+	 * For replica identity FULL, the tuple contains all columns including
+	 * NULLs, so we always check for existing dependencies.
+	 *
+	 * For other cases, NULL in the new tuple means the replica identity key
+	 * hasn't changed, so no new dependency needs to be recorded. The dependency
+	 * should have been recorded when processing the old tuple.
+	 */
+	if (relentry->remoterel.replident != REPLICA_IDENTITY_FULL &&
+		has_null_key_values(original_data, relentry->remoterel.attkeys))
+		return;
+
+	oldctx = MemoryContextSwitchTo(ApplyContext);
+
+	/* Allocate space for replica identity values */
+	ridata = palloc0_object(LogicalRepTupleData);
+	ridata->colvalues = palloc0_array(StringInfoData, n_ri);
+	ridata->colstatus = palloc0_array(char, n_ri);
+	ridata->ncols = n_ri;
+
+	for (int i_original = 0, i_ri = 0; i_original < original_data->ncols; i_original++)
+	{
+		StringInfo	original_colvalue = &original_data->colvalues[i_original];
+
+		if (!bms_is_member(i_original, relentry->remoterel.attkeys))
+			continue;
+
+		/*
+		 * LOGICALREP_COLUMN_UNCHANGED only indicates that a TOAST column in the
+		 * replica identity key hasn't changed. However, other columns may have
+		 * changed, so we still need to check the dependency for this column.
+		 *
+		 * Before calling this function, unchanged TOAST column values should
+		 * have been copied from the old tuple to the new tuple. So, we should
+		 * see the complete replica identity key value in original_data and
+		 * correctly check the dependency.
+		 */
+		Assert(original_data->colstatus[i_original] != LOGICALREP_COLUMN_UNCHANGED ||
+			   original_data->colvalues[i_original].len > 0);
+
+		if (ridata->colstatus[i_ri] != LOGICALREP_COLUMN_NULL)
+		{
+			initStringInfoExt(&ridata->colvalues[i_ri], original_colvalue->len + 1);
+			appendStringInfoString(&ridata->colvalues[i_ri], original_colvalue->data);
+		}
+
+		ridata->colstatus[i_ri] = original_data->colstatus[i_original];
+		i_ri++;
+	}
+
+	rikey = palloc0_object(ReplicaIdentityKey);
+	rikey->relid = relid;
+	rikey->data = ridata;
+
+	MemoryContextSwitchTo(oldctx);
+
+	/*
+	 * The new xid could be invalid if the transaction will be applied by the
+	 * leader itself which means all the changes will be committed before
+	 * processing next transaction. In this case, we only need to check for
+	 * dependencies on preceding transactions, there is no need to record a new
+	 * dependency for subsequent transactions to wait on.
+	 */
+	if (!TransactionIdIsValid(new_depended_xid))
+	{
+		rientry = replica_identity_lookup(replica_identity_table, rikey);
+		free_replica_identity_key(rikey);
+
+		if (rientry && has_active_key_dependency(rientry, true))
+		{
+			elog(DEBUG1, "found conflicting replica identity change on table %u from %u",
+				 relid, rientry->remote_xid);
+
+			append_xid_dependency(rientry->remote_xid, depends_on_xids);
+		}
+
+		return;
+	}
+
+	/* Record a new dependency for subsequent transactions to wait on */
+	rientry = replica_identity_insert(replica_identity_table, rikey,
+									  &found);
+
+	/*
+	 * Release the key built to search the entry, if the entry already exists.
+	 */
+	if (found)
+	{
+		free_replica_identity_key(rikey);
+
+		/*
+		 * Append the dependency to the list if the current transaction was not
+		 * the lastest one to modify the key.
+		 */
+		if (has_active_key_dependency(rientry, false) &&
+			!TransactionIdEquals(rientry->remote_xid, new_depended_xid))
+		{
+			elog(DEBUG1, "found conflicting replica identity change on table %u from %u",
+				 relid, rientry->remote_xid);
+
+			append_xid_dependency(rientry->remote_xid, depends_on_xids);
+		}
+	}
+
+	/* Update the new depended xid into the entry */
+	rientry->remote_xid = new_depended_xid;
+}
+
+/*
+ * Check for preceding transactions (other than 'current_xid') that involve
+ * insert, delete, or update operations on the specified table, and return them
+ * in 'depends_on_xids'.
+ */
+static void
+find_all_dependencies_on_rel(LogicalRepRelId relid,
+							 TransactionId new_depended_xid,
+							 List **depends_on_xids)
+{
+	replica_identity_iterator i;
+	ReplicaIdentityEntry *rientry;
+
+	Assert(depends_on_xids);
+
+	replica_identity_start_iterate(replica_identity_table, &i);
+	while ((rientry = replica_identity_iterate(replica_identity_table, &i)) != NULL)
+	{
+		Assert(TransactionIdIsValid(rientry->remote_xid));
+
+		if (rientry->keydata->relid != relid)
+			continue;
+
+		/* Skip entries that do not have a valid and uncommitted transaction */
+		if (!has_active_key_dependency(rientry, true))
+			continue;
+
+		/* Skip self-dependency */
+		if (TransactionIdEquals(rientry->remote_xid, new_depended_xid))
+			continue;
+
+		elog(DEBUG1, "found conflicting change on table %u from %u",
+			 relid, rientry->remote_xid);
+
+		append_xid_dependency(rientry->remote_xid, depends_on_xids);
+	}
+}
+
+/*
+ * Check for any preceding transactions that affect the given table and returns
+ * them in 'depends_on_xids'.
+ *
+ * Additionally, if new_depended_xid is valid, record the current change and its
+ * transaction as a new table-level dependency, allowing subsequent transactions
+ * that modify the same table to be dependent on it.
+ */
+static void
+check_and_record_rel_dependency(LogicalRepRelId relid,
+								TransactionId new_depended_xid,
+								List **depends_on_xids)
+{
+	LogicalRepRelMapEntry *relentry;
+
+	Assert(depends_on_xids);
+
+	find_all_dependencies_on_rel(relid, new_depended_xid, depends_on_xids);
+
+	/* Search for existing entry */
+	relentry = logicalrep_get_relentry(relid);
+
+	/* First time seeing this relation, no entry exists. */
+	if (!relentry)
+		return;
+
+	/*
+	 * Check whether any previous transaction (other than the current one) has
+	 * affected the whole table e.g., truncate or schema change from publisher.
+	 */
+	if (has_active_rel_dependency(relentry) &&
+		!TransactionIdEquals(relentry->last_depended_xid, new_depended_xid))
+	{
+		elog(DEBUG1, "found table-wide change affecting %u from %u",
+			 relid, relentry->last_depended_xid);
+
+		append_xid_dependency(relentry->last_depended_xid, depends_on_xids);
+	}
+
+	if (TransactionIdIsValid(new_depended_xid))
+		relentry->last_depended_xid = new_depended_xid;
+}
+
+/*
+ * Check dependencies related to the current change by determining if the
+ * modification impacts the same row or table as another ongoing transaction.
+ *
+ * If a dependency on preceding transactions is found, this function instructs
+ * the appropriate worker (parallel apply or leader) to wait for those
+ * transactions to complete.
+ *
+ * Simultaneously, if the current change will be dispatched to a parallel apply
+ * worker (indicated by a valid new_depended_xid and a non-NULL winfo), it
+ * records a new dependency so that subsequent transactions will wait on it.
+ */
+static void
+handle_dependency_on_change(LogicalRepMsgType action, StringInfo s,
+							TransactionId new_depended_xid,
+							ParallelApplyWorkerInfo *winfo)
+{
+	LogicalRepRelId relid;
+	LogicalRepTupleData oldtup;
+	LogicalRepTupleData newtup;
+	LogicalRepRelation *rel;
+	List	   *depends_on_xids = NIL;
+	List	   *remote_relids;
+	bool		has_oldtup = false;
+	bool		cascade = false;
+	bool		restart_seqs = false;
+
+	/*
+	 * Parse the consume data using a local copy instead of directly consuming
+	 * the given remote change as the caller may also read the data from the
+	 * remote message.
+	 */
+	StringInfoData change = *s;
+
+	/* Only the leader checks dependencies and schedules the parallel apply */
+	if (!am_leader_apply_worker())
+		return;
+
+	if (!ParallelApplyContext)
+	{
+		Assert(!replica_identity_table);
+
+		/*
+		 * Create a permanent memory context for dependency information that
+		 * persists across transactions. Using a dedicated context makes memory
+		 * consumption more visible and easier to track, especially when
+		 * handling a large number of change entries for transactions being
+		 * applied in parallel.
+		 */
+		ParallelApplyContext = AllocSetContextCreate(ApplyContext,
+													 "ParallelApplyContext",
+													 ALLOCSET_DEFAULT_SIZES);
+
+		replica_identity_table = replica_identity_create(ParallelApplyContext,
+														 REPLICA_IDENTITY_INITIAL_SIZE,
+														 NULL);
+	}
+
+	if (replica_identity_table->members >= REPLICA_IDENTITY_CLEANUP_THRESHOLD)
+		cleanup_committed_replica_identity_entries();
+
+	switch (action)
+	{
+		case LOGICAL_REP_MSG_INSERT:
+			relid = logicalrep_read_insert(&change, &newtup);
+			check_and_record_ri_dependency(relid, &newtup, new_depended_xid,
+										   &depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_UPDATE:
+			relid = logicalrep_read_update(&change, &has_oldtup, &oldtup,
+										   &newtup);
+
+			if (has_oldtup)
+			{
+				check_and_record_ri_dependency(relid, &oldtup, new_depended_xid,
+											   &depends_on_xids);
+
+				/*
+				 * Copy unchanged column values from the old tuple to the new
+				 * tuple for replica identity dependency checking. See
+				 * check_and_record_ri_dependency() for details. Also adjust the
+				 * column status so that hash comparisons match correctly.
+				 */
+				for (int i = 0; i < oldtup.ncols; i++)
+				{
+					if (newtup.colstatus[i] == LOGICALREP_COLUMN_UNCHANGED)
+					{
+						newtup.colvalues[i] = oldtup.colvalues[i];
+						newtup.colstatus[i] = oldtup.colstatus[i];
+					}
+				}
+			}
+
+			check_and_record_ri_dependency(relid, &newtup, new_depended_xid,
+										   &depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_DELETE:
+			relid = logicalrep_read_delete(&change, &oldtup);
+			check_and_record_ri_dependency(relid, &oldtup, new_depended_xid,
+										   &depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_TRUNCATE:
+			remote_relids = logicalrep_read_truncate(&change, &cascade,
+													 &restart_seqs);
+
+			/*
+			 * Truncate affects all rows in a table, so the current
+			 * transaction should wait for all preceding transactions that
+			 * modified the same table.
+			 */
+			foreach_int(truncated_relid, remote_relids)
+				check_and_record_rel_dependency(truncated_relid,
+												new_depended_xid,
+												&depends_on_xids);
+
+			break;
+
+		case LOGICAL_REP_MSG_RELATION:
+			rel = logicalrep_read_rel(&change);
+
+			/*
+			 * The replica identity key could be changed, making existing
+			 * entries in the replica identity invalid. In this case, parallel
+			 * apply is not allowed on this specific table until all running
+			 * transactions that modified it have finished.
+			 */
+			check_and_record_rel_dependency(rel->remoteid, new_depended_xid,
+											&depends_on_xids);
+			break;
+
+		case LOGICAL_REP_MSG_TYPE:
+		case LOGICAL_REP_MSG_MESSAGE:
+
+			/*
+			 * Type updates accompany relation updates, so dependencies have
+			 * already been checked during relation updates. Logical messages
+			 * do not conflict with any changes, so they can be ignored.
+			 */
+			break;
+
+		default:
+			Assert(false);
+			break;
+	}
+
+	/* Return early if the current change has no dependencies. */
+	if (!depends_on_xids)
+		return;
+
+	/*
+	 * If the leader applies the transaction itself, start waiting for
+	 * transactions that the current change depends on to finish. Otherwise,
+	 * instruct the parallel apply worker to wait for them.
+	 */
+	if (winfo == NULL)
+	{
+		foreach_xid(xid, depends_on_xids)
+			pa_wait_for_depended_transaction(xid);
+	}
+	else
+	{
+		send_internal_dependencies(winfo, depends_on_xids);
+	}
+}
 
 /*
  * Form the origin name for the subscription.
@@ -792,7 +1502,10 @@ handle_streamed_transaction(LogicalRepMsgType action, StringInfo s)
 
 	/* not in streaming mode */
 	if (apply_action == TRANS_LEADER_APPLY)
+	{
+		handle_dependency_on_change(action, s, InvalidTransactionId, winfo);
 		return false;
+	}
 
 	Assert(TransactionIdIsValid(stream_xid));
 
@@ -1242,6 +1955,29 @@ apply_handle_begin(StringInfo s)
 	in_remote_transaction = true;
 
 	pgstat_report_activity(STATE_RUNNING, NULL);
+}
+
+/*
+ * Send an INTERNAL_DEPENDENCY message to a parallel apply worker.
+ */
+static void
+send_internal_dependencies(ParallelApplyWorkerInfo *winfo, List *depends_on_xids)
+{
+	StringInfoData dependencies;
+
+	initStringInfo(&dependencies);
+
+	pq_sendbyte(&dependencies, LOGICAL_REP_MSG_INTERNAL_MESSAGE);
+	pq_sendbyte(&dependencies, PA_MSG_XACT_DEPENDENCY);
+	pq_sendint32(&dependencies, list_length(depends_on_xids));
+
+	foreach_xid(xid, depends_on_xids)
+		pq_sendint32(&dependencies, xid);
+
+	if (pa_send_data(winfo, dependencies.len, dependencies.data))
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("could not send data to the logical replication parallel apply worker"));
 }
 
 /*
@@ -1771,7 +2507,7 @@ apply_handle_stream_start(StringInfo s)
 
 	/* Try to allocate a worker for the streaming transaction. */
 	if (first_segment)
-		pa_allocate_worker(stream_xid);
+		pa_allocate_worker(stream_xid, true);
 
 	apply_action = get_transaction_apply_action(stream_xid, &winfo);
 
@@ -3980,6 +4716,7 @@ store_flush_position(XLogRecPtr remote_lsn, XLogRecPtr local_lsn)
 	flushpos = palloc_object(FlushPosition);
 	flushpos->local_end = local_lsn;
 	flushpos->remote_end = remote_lsn;
+	flushpos->pa_remote_xid = InvalidTransactionId;
 
 	dlist_push_tail(&lsn_mapping, &flushpos->node);
 	MemoryContextSwitchTo(ApplyMessageContext);

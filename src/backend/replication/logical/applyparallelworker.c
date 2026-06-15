@@ -213,17 +213,41 @@
 #define PARALLEL_APPLY_LOCK_XACT	1
 
 /*
- * Hash table entry to map xid to the parallel apply worker state.
+ * Hash table entry of ParallelApplyTxnHash to map xid to the parallel apply
+ * worker state.
  */
 typedef struct ParallelApplyWorkerEntry
 {
-	TransactionId xid;			/* Hash key -- must be first */
+	TransactionId xid;			/* Remote transaction ID (hash key) ---
+								 * must be first */
+
+	/*
+	 * The parallel apply worker assigned for applying the transaction. It is
+	 * NULL if the worker has already finished the transaction and the leader
+	 * has collected its local end LSN.
+	 */
 	ParallelApplyWorkerInfo *winfo;
+
+	/*
+	 * The local end LSN of this transaction applied by the parallel apply
+	 * worker.
+	 *
+	 * The leader will initialize this value by reading the last_commit_end from
+	 * the parallel apply worker shared memory before reusing the worker for
+	 * another transaction (see pa_get_last_commit_end). An invalid value
+	 * indicates the worker has not finished applying the transaction or there
+	 * is no change applied by the worker for this transaction.
+	 */
+	XLogRecPtr	local_end;
 } ParallelApplyWorkerEntry;
 
 /*
  * A hash table used to cache the state of streaming transactions being applied
  * by the parallel apply workers. Entries are of type ParallelApplyWorkerEntry.
+ *
+ * The leader apply worker adds an entry when a transaction starts being
+ * applied, and removes it after collecting the transaction's local end LSN from
+ * the parallel worker.
  */
 static HTAB *ParallelApplyTxnHash = NULL;
 
@@ -236,6 +260,10 @@ typedef struct ParallelizedTxnEntry
 /*
  * A hash table used to track the parallelized remote transactions that could be
  * depended on by other transactions. Entries are of type ParallelizedTxnEntry.
+ *
+ * The leader apply worker adds an entry before sending the COMMIT record of a
+ * transaction to a parallel apply worker. The entry is removed by that worker
+ * immediately after committing the transaction.
  *
  * dshash is used to enable dynamic shared memory allocation based on the number
  * of transactions being applied in parallel.
@@ -510,7 +538,7 @@ pa_launch_parallel_worker(void)
  * streaming changes.
  */
 void
-pa_allocate_worker(TransactionId xid)
+pa_allocate_worker(TransactionId xid, bool stream_txn)
 {
 	bool		found;
 	ParallelApplyWorkerInfo *winfo = NULL;
@@ -551,7 +579,9 @@ pa_allocate_worker(TransactionId xid)
 
 	winfo->in_use = true;
 	winfo->serialize_changes = false;
+	winfo->stream_txn = stream_txn;
 	entry->winfo = winfo;
+	entry->local_end = InvalidXLogRecPtr;
 }
 
 /*
@@ -746,6 +776,72 @@ pa_process_spooled_messages_if_required(void)
 	}
 
 	return true;
+}
+
+/*
+ * Get the local end LSN for a transaction applied by a parallel apply worker.
+ *
+ * If the parallel apply worker did not write any changes during the transaction
+ * application due to situations like update/delete_missing or a before trigger,
+ * the *skipped_write will be set to true.
+ *
+ * Once the LSN is retrieved, the transaction entry is removed from
+ * ParallelApplyTxnHash.
+ */
+XLogRecPtr
+pa_get_last_commit_end(TransactionId xid, bool *skipped_write)
+{
+	bool		found;
+	ParallelApplyWorkerEntry *entry;
+	ParallelApplyWorkerInfo *winfo;
+
+	Assert(TransactionIdIsValid(xid));
+	Assert(ParallelApplyTxnHash);
+
+	if (skipped_write)
+		*skipped_write = false;
+
+	/* Find an entry for the requested transaction. */
+	entry = hash_search(ParallelApplyTxnHash, &xid, HASH_FIND, &found);
+
+	if (!found)
+		return InvalidXLogRecPtr;
+
+	/*
+	 * If worker info is NULL, it indicates that the worker has already
+	 * finished handling the transaction. Consequently, the local end LSN has
+	 * already been collected and saved in entry->local_end.
+	 */
+	winfo = entry->winfo;
+	if (winfo == NULL)
+	{
+		if (!hash_search(ParallelApplyTxnHash, &xid, HASH_REMOVE, NULL))
+			elog(ERROR, "hash table corrupted");
+
+		if (skipped_write)
+			*skipped_write = XLogRecPtrIsInvalid(entry->local_end);
+
+		return entry->local_end;
+	}
+
+	/* Return InvalidXLogRecPtr if the transaction is still in progress */
+	if (pa_get_xact_state(winfo->shared) != PARALLEL_TRANS_FINISHED)
+		return InvalidXLogRecPtr;
+
+	/* Collect the local end LSN from the worker's shared memory area */
+	entry->local_end = winfo->shared->last_commit_end;
+	entry->winfo = NULL;
+
+	if (skipped_write)
+		*skipped_write = XLogRecPtrIsInvalid(entry->local_end);
+
+	elog(DEBUG1, "store local commit %X/%X end to txn entry: %u",
+		 LSN_FORMAT_ARGS(entry->local_end), xid);
+
+	if (!hash_search(ParallelApplyTxnHash, &xid, HASH_REMOVE, NULL))
+		elog(ERROR, "hash table corrupted");
+
+	return entry->local_end;
 }
 
 /*
@@ -1793,6 +1889,35 @@ pa_xact_finish(ParallelApplyWorkerInfo *winfo, XLogRecPtr remote_lsn)
 		store_flush_position(remote_lsn, winfo->shared->last_commit_end);
 
 	pa_free_worker(winfo);
+}
+
+/*
+ * Check if the given transaction has been committed. This can only be used by
+ * the leader apply worker.
+ *
+ * Returns true if the transaction is committed, false if it is still being
+ * applied in parallel.
+ */
+bool
+pa_transaction_committed(TransactionId xid)
+{
+	bool		found;
+	ParallelApplyWorkerEntry *entry;
+
+	Assert(am_leader_apply_worker());
+	Assert(TransactionIdIsValid(xid));
+	Assert(ParallelApplyTxnHash);
+
+	/* Find an entry for the requested transaction */
+	entry = hash_search(ParallelApplyTxnHash, &xid, HASH_FIND, &found);
+
+	if (!found)
+		return true;
+
+	if (!entry->winfo)
+		return true;
+
+	return pa_get_xact_state(entry->winfo->shared) == PARALLEL_TRANS_FINISHED;
 }
 
 /*

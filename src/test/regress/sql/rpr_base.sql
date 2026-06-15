@@ -1309,6 +1309,195 @@ SELECT LAST(id), id, val FROM rpr_nav;
 
 DROP TABLE rpr_nav;
 
+-- Name-space: prev/next/first/last are navigation functions, not ordinary functions
+CREATE SCHEMA rpr_navns;
+SET search_path TO rpr_navns, public;
+CREATE TABLE nt (g text, id int, val int);
+INSERT INTO nt VALUES ('x', 1, 100), ('x', 2, 200), ('x', 3, 150),
+                      ('x', 4, 140), ('x', 5, 150);
+
+-- Outside DEFINE these are ordinary identifiers and resolve to nothing
+SELECT prev(val) FROM nt;
+SELECT next(val) FROM nt;
+SELECT prev(val, 2) FROM nt;
+SELECT next(val, 2) FROM nt;
+SELECT first(val) FROM nt;
+SELECT last(val) FROM nt;
+SELECT first(val, 1) FROM nt;
+-- A schema-qualified call is also a plain (failing) function lookup
+SELECT pg_catalog.prev(val) FROM nt;
+
+-- Outside DEFINE, a user-defined function of that name is callable
+CREATE FUNCTION next(numeric) RETURNS numeric AS 'SELECT -999::numeric'
+  LANGUAGE sql IMMUTABLE;
+SELECT next(10);
+
+-- Inside DEFINE, unqualified PREV is nav whether or not a user prev() exists
+SELECT id, val, count(*) OVER w AS cnt, last_value(id) OVER w AS last_id
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (START UP+)
+    DEFINE START AS TRUE, UP AS val > PREV(val))
+  ORDER BY id;
+
+-- A qualified call invokes the function, so its volatility still matters
+-- VOLATILE: unqualified is nav; qualified is rejected as a volatile function
+CREATE FUNCTION prev(integer) RETURNS integer AS 'SELECT -999'
+  LANGUAGE sql VOLATILE;
+SELECT id, val, count(*) OVER w AS cnt, last_value(id) OVER w AS last_id
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (START UP+)
+    DEFINE START AS TRUE, UP AS val > PREV(val))
+  ORDER BY id;
+SELECT id, val, count(*) OVER w AS cnt, last_value(id) OVER w AS last_id
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+)
+    DEFINE A AS rpr_navns.prev(val) = -999)
+  ORDER BY id;
+DROP FUNCTION prev(integer);
+-- IMMUTABLE: unqualified is nav; qualified is the escape hatch and succeeds
+CREATE FUNCTION prev(integer) RETURNS integer AS 'SELECT -999'
+  LANGUAGE sql IMMUTABLE;
+SELECT id, val, count(*) OVER w AS cnt, last_value(id) OVER w AS last_id
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (START UP+)
+    DEFINE START AS TRUE, UP AS val > PREV(val))
+  ORDER BY id;
+-- (val).prev is attribute notation, so it calls the ordinary function prev(val)
+-- (the IMMUTABLE user prev here), the same as the schema-qualified call below
+SELECT id, val, count(*) OVER w AS cnt, last_value(id) OVER w AS last_id
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+)
+    DEFINE A AS (val).prev = -999)
+  ORDER BY id;
+SELECT id, val, count(*) OVER w AS cnt, last_value(id) OVER w AS last_id
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+)
+    DEFINE A AS rpr_navns.prev(val) = -999)
+  ORDER BY id;
+
+-- Zero or more than two arguments is an error, with no function fallback
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV() IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(val, 1, 2) IS NULL);
+-- the error stands even when a user function of that exact arity exists
+CREATE FUNCTION prev(integer, integer, integer) RETURNS integer
+  AS 'SELECT -999' LANGUAGE sql IMMUTABLE;
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(val, 1, 2) IS NULL);
+DROP FUNCTION prev(integer, integer, integer);
+
+-- Syntactic decoration is rejected
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(*) IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(DISTINCT val) IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(val ORDER BY val) IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(val) FILTER (WHERE true) IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(val) WITHIN GROUP (ORDER BY val) IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(val) OVER () IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(VARIADIC ARRAY[val]) IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS prev(x => val) IS NULL);
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS PREV(val) IGNORE NULLS IS NULL);
+
+-- Quoting does not escape: "prev" is nav, "PREV" is an ordinary name
+SELECT id, val, count(*) OVER w AS cnt
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (START UP+)
+    DEFINE START AS TRUE, UP AS val > "prev"(val))
+  ORDER BY id;
+SELECT count(*) OVER w FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS "PREV"(val) IS NULL);
+
+-- A view round-trips: bare PREV stays a navigation function, and a qualified
+-- user prev() stays schema-qualified so it does not reparse as navigation
+CREATE VIEW navns_nav AS
+  SELECT id, count(*) OVER w AS cnt FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (START UP+) DEFINE START AS TRUE, UP AS val > PREV(val));
+CREATE VIEW navns_fn AS
+  SELECT id, count(*) OVER w AS cnt FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS rpr_navns.prev(val) = -999);
+SELECT pg_get_viewdef('navns_nav');
+SELECT pg_get_viewdef('navns_fn');
+DROP VIEW navns_nav, navns_fn;
+
+-- Attribute notation is field selection only, never a function fallback
+CREATE TYPE rpr_navns_pair AS (first int, last int);
+CREATE TABLE ct (id int, p rpr_navns_pair);
+INSERT INTO ct VALUES (1, (10, 20)), (2, (30, 40));
+SELECT (p).last FROM ct ORDER BY id;
+SELECT count(*) OVER w FROM ct
+  WINDOW w AS (ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS (p).last > 0);
+SELECT count(*) OVER w FROM ct
+  WINDOW w AS (ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS (p).prev > 0);
+
+-- Navigation offset must not contain a navigation operation
+SELECT id, val
+  FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+)
+    DEFINE A AS PREV(val, FIRST(1)) > 0)
+  ORDER BY id;
+
+DROP SCHEMA rpr_navns CASCADE;
+RESET search_path;
+
 -- ============================================================
 -- SKIP TO / INITIAL Tests
 -- ============================================================
@@ -2419,6 +2608,68 @@ WINDOW w AS (
     PATTERN (A+)
     DEFINE A AS PREV(FIRST(PREV(v))) > 0
 );
+
+-- A navigation offset must be a run-time constant, not a navigation operation
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(v, FIRST(1)) > 0);
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(v, FIRST(1) + 1) > 0);
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(v, NEXT(1, 0)) > 0);
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(FIRST(v), LAST(1)) > 0);
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(v, FIRST(v)) > 0);
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS NEXT(v, PREV(v, 1)) > 0);
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(FIRST(v, LAST(1)), 2) > 0);
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(v, FIRST(1::bigint)) > 0);
+
+-- An unknown literal argument resolves to text; it must still reference a column
+SELECT count(*) OVER w
+FROM generate_series(1,5) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV('foo') = 'bar');
+SELECT count(*) OVER w
+FROM generate_series(1,5) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV('foo'));
+SELECT count(*) OVER w
+FROM generate_series(1,5) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(NULL) IS NULL);
+PREPARE rpr_navarg AS SELECT count(*) OVER w
+FROM generate_series(1,5) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV($1) IS NULL);
+
+-- An int2 offset is coerced to int8 like any implicit cast (same as plain 0)
+SELECT count(*) OVER w
+FROM generate_series(1,5) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(v, 0::smallint) = v);
+SELECT count(*) OVER w
+FROM generate_series(1,5) s(v)
+WINDOW w AS (ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+) DEFINE A AS PREV(v, 0) = v);
 
 -- ============================================================
 -- Window Deduplication Tests

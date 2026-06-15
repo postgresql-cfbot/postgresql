@@ -282,6 +282,10 @@ IGNORE NULLS
    Row Pattern Recognition navigation functions are listed in
    <xref linkend="functions-rpr-navigation-table"/>.  These functions
    can be used to describe the DEFINE clause of Row Pattern Recognition.
+   The names <function>PREV</function>, <function>NEXT</function>,
+   <function>FIRST</function>, and <function>LAST</function> are
+   recognized as navigation functions only in an unqualified call; a
+   schema-qualified call is resolved as an ordinary function instead.
   </para>
 
    <table id="functions-rpr-navigation-table">
@@ -397,6 +401,8 @@ IGNORE NULLS
     permitted. Same-category nesting (e.g.,
     <function>PREV</function> inside <function>PREV</function>) is also
     prohibited.
+    The <parameter>offset</parameter> argument must be a run-time constant:
+    it cannot reference columns or contain a navigation operation.
    </para>
 
   <note>

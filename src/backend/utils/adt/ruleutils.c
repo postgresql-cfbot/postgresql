@@ -127,6 +127,7 @@ typedef struct
 	bool		varprefix;		/* true to print prefixes on Vars */
 	bool		colNamesVisible;	/* do we care about output column names? */
 	bool		inGroupBy;		/* deparsing GROUP BY clause? */
+	bool		inRPRDefine;	/* deparsing an RPR DEFINE clause? */
 	bool		varInOrderBy;	/* deparsing simple Var in ORDER BY? */
 	Bitmapset  *appendparents;	/* if not null, map child Vars of these relids
 								 * back to the parent rel */
@@ -545,7 +546,7 @@ static char *generate_qualified_relation_name(Oid relid);
 static char *generate_function_name(Oid funcid, int nargs,
 									List *argnames, Oid *argtypes,
 									bool has_variadic, bool *use_variadic_p,
-									bool inGroupBy);
+									bool inGroupBy, bool inRPRDefine);
 static char *generate_operator_name(Oid operid, Oid arg1, Oid arg2);
 static void add_cast_to(StringInfo buf, Oid typid);
 static char *generate_qualified_type_name(Oid typid);
@@ -1131,6 +1132,7 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 		context.indentLevel = PRETTYINDENT_STD;
 		context.colNamesVisible = true;
 		context.inGroupBy = false;
+		context.inRPRDefine = false;
 		context.varInOrderBy = false;
 		context.appendparents = NULL;
 
@@ -1142,7 +1144,7 @@ pg_get_triggerdef_worker(Oid trigid, bool pretty)
 	appendStringInfo(&buf, "EXECUTE FUNCTION %s(",
 					 generate_function_name(trigrec->tgfoid, 0,
 											NIL, NULL,
-											false, NULL, false));
+											false, NULL, false, false));
 
 	if (trigrec->tgnargs > 0)
 	{
@@ -3401,7 +3403,7 @@ pg_get_functiondef(PG_FUNCTION_ARGS)
 		appendStringInfo(&buf, " SUPPORT %s",
 						 generate_function_name(proc->prosupport, 1,
 												NIL, argtypes,
-												false, NULL, false));
+												false, NULL, false, false));
 	}
 
 	if (oldlen != buf.len)
@@ -4054,6 +4056,7 @@ deparse_expression_pretty(Node *expr, List *dpcontext,
 	context.indentLevel = startIndent;
 	context.colNamesVisible = true;
 	context.inGroupBy = false;
+	context.inRPRDefine = false;
 	context.varInOrderBy = false;
 	context.appendparents = NULL;
 
@@ -5849,6 +5852,7 @@ make_ruledef(StringInfo buf, HeapTuple ruletup, TupleDesc rulettc,
 		context.indentLevel = PRETTYINDENT_STD;
 		context.colNamesVisible = true;
 		context.inGroupBy = false;
+		context.inRPRDefine = false;
 		context.varInOrderBy = false;
 		context.appendparents = NULL;
 
@@ -6041,6 +6045,7 @@ get_query_def(Query *query, StringInfo buf, List *parentnamespace,
 	context.indentLevel = startIndent;
 	context.colNamesVisible = colNamesVisible;
 	context.inGroupBy = false;
+	context.inRPRDefine = false;
 	context.varInOrderBy = false;
 	context.appendparents = NULL;
 
@@ -7220,8 +7225,16 @@ get_rule_define(List *defineClause, deparse_context *context)
 {
 	StringInfo	buf = context->buf;
 	const char *sep;
+	bool		save_inrprdefine = context->inRPRDefine;
 
 	sep = "  ";
+
+	/*
+	 * Within the DEFINE clause an unqualified prev/next/first/last is a
+	 * navigation operation, so a user function of one of those names must be
+	 * schema-qualified to survive a reparse; see generate_function_name().
+	 */
+	context->inRPRDefine = true;
 
 	foreach_node(TargetEntry, te, defineClause)
 	{
@@ -7229,6 +7242,8 @@ get_rule_define(List *defineClause, deparse_context *context)
 		get_rule_expr((Node *) te->expr, context, false);
 		sep = ",\n  ";
 	}
+
+	context->inRPRDefine = save_inrprdefine;
 }
 
 /*
@@ -7459,6 +7474,7 @@ get_window_frame_options_for_explain(int frameOptions,
 	context.indentLevel = 0;
 	context.colNamesVisible = true;
 	context.inGroupBy = false;
+	context.inRPRDefine = false;
 	context.varInOrderBy = false;
 	context.appendparents = NULL;
 
@@ -11691,7 +11707,8 @@ get_func_expr(FuncExpr *expr, deparse_context *context,
 											argnames, argtypes,
 											expr->funcvariadic,
 											&use_variadic,
-											context->inGroupBy));
+											context->inGroupBy,
+											context->inRPRDefine));
 	nargs = 0;
 	foreach(l, expr->args)
 	{
@@ -11761,7 +11778,8 @@ get_agg_expr_helper(Aggref *aggref, deparse_context *context,
 		funcname = generate_function_name(aggref->aggfnoid, nargs, NIL,
 										  argtypes, aggref->aggvariadic,
 										  &use_variadic,
-										  context->inGroupBy);
+										  context->inGroupBy,
+										  context->inRPRDefine);
 
 	/* Print the aggregate name, schema-qualified if needed */
 	appendStringInfo(buf, "%s(%s", funcname,
@@ -11902,7 +11920,8 @@ get_windowfunc_expr_helper(WindowFunc *wfunc, deparse_context *context,
 	if (!funcname)
 		funcname = generate_function_name(wfunc->winfnoid, nargs, argnames,
 										  argtypes, false, NULL,
-										  context->inGroupBy);
+										  context->inGroupBy,
+										  context->inRPRDefine);
 
 	appendStringInfo(buf, "%s(", funcname);
 
@@ -13743,7 +13762,7 @@ get_tablesample_def(TableSampleClause *tablesample, deparse_context *context)
 	appendStringInfo(buf, " TABLESAMPLE %s (",
 					 generate_function_name(tablesample->tsmhandler, 1,
 											NIL, argtypes,
-											false, NULL, false));
+											false, NULL, false, false));
 
 	nargs = 0;
 	foreach(l, tablesample->args)
@@ -14157,12 +14176,14 @@ generate_qualified_relation_name(Oid relid)
  *
  * inGroupBy must be true if we're deparsing a GROUP BY clause.
  *
+ * inRPRDefine must be true if we're deparsing an RPR DEFINE clause.
+ *
  * The result includes all necessary quoting and schema-prefixing.
  */
 static char *
 generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 					   bool has_variadic, bool *use_variadic_p,
-					   bool inGroupBy)
+					   bool inGroupBy, bool inRPRDefine)
 {
 	char	   *result;
 	HeapTuple	proctup;
@@ -14193,6 +14214,24 @@ generate_function_name(Oid funcid, int nargs, List *argnames, Oid *argtypes,
 	if (inGroupBy)
 	{
 		if (strcmp(proname, "cube") == 0 || strcmp(proname, "rollup") == 0)
+			force_qualify = true;
+	}
+
+	/*
+	 * Inside a row pattern DEFINE clause, the parser binds an unqualified
+	 * prev/next/first/last to a navigation operation before any catalog
+	 * lookup, so an unqualified call to a user function of one of those names
+	 * would change meaning across a deparse/reparse cycle.  Force schema
+	 * qualification; the qualified form is the documented escape hatch.  Only
+	 * the exact lower-case names are at risk: a mixed-case proname deparses
+	 * quoted and cannot match the parser's downcased comparison.
+	 */
+	if (inRPRDefine)
+	{
+		if (strcmp(proname, "prev") == 0 ||
+			strcmp(proname, "next") == 0 ||
+			strcmp(proname, "first") == 0 ||
+			strcmp(proname, "last") == 0)
 			force_qualify = true;
 	}
 

@@ -444,12 +444,6 @@ WINDOW w AS (
 -- Error cases: PREV/NEXT usage restrictions
 --
 
--- PREV outside DEFINE clause
-SELECT prev(price) FROM stock;
-
--- NEXT outside DEFINE clause
-SELECT next(price) FROM stock;
-
 -- Nested PREV
 SELECT price FROM stock
 WINDOW w AS (
@@ -831,10 +825,6 @@ WINDOW w AS (
     DEFINE A AS PREV(price, 0) = price
 );
 
--- 2-arg PREV/NEXT outside DEFINE clause
-SELECT prev(price, 2) FROM stock;
-SELECT next(price, 2) FROM stock;
-
 -- 2-arg PREV/NEXT: negative offset
 SELECT company, tdate, price, first_value(price) OVER w
 FROM stock
@@ -1123,11 +1113,6 @@ SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
     PATTERN (A+)
     DEFINE A AS LAST(val, -1) IS NULL
 );
-
--- FIRST/LAST outside DEFINE clause (error cases)
-SELECT first(val) FROM rpr_nav;
-SELECT last(val) FROM rpr_nav;
-SELECT first(val, 1) FROM rpr_nav;
 
 -- Functional notation: should access column, not RPR navigation
 CREATE TEMP TABLE rpr_names (prev int, next int, first text, last text);

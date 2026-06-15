@@ -472,6 +472,7 @@ transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
  *     * PREV/NEXT wrapping FIRST/LAST flattens to a compound kind
  *     * Other nestings are rejected (FIRST(PREV()), PREV(PREV()), ...)
  *     * offset_arg / compound_offset_arg must not contain column refs
+ *       or nested navigation operations
  *
  * Volatile callees (and sequence operations) are rejected later in the
  * planner via validate_rpr_define_volatility(); see optimizer/plan/rpr.c.
@@ -482,7 +483,7 @@ transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
  * walks nav.arg in PHASE_NAV_ARG to collect nesting/column-ref state,
  * applies compound flatten or raises a nesting error, then walks the
  * (post-flatten) offset(s) in PHASE_NAV_OFFSET to enforce the
- * constant-offset rule.  No subtree is walked twice.
+ * constant-offset and no-nested-nav rules.  No subtree is walked twice.
  */
 
 /*
@@ -498,6 +499,7 @@ transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
  *				PREV(PREV()), FIRST(FIRST()), three-or-more deep)
  *		  [2] for each nav offset (PHASE_NAV_OFFSET):
  *			  - must be a run-time constant (no column references)
+ *			  - must not contain a row pattern navigation operation
  *
  * Var sightings feed the column-ref rule for the enclosing nav scope;
  * RPRNavExpr sightings inside PHASE_NAV_ARG feed the nesting decision.
@@ -538,11 +540,14 @@ define_walker(Node *node, void *context)
 		if (ctx->phase == DEFINE_PHASE_NAV_OFFSET)
 		{
 			/*
-			 * Navs inside offset_arg are unusual but not directly banned; the
-			 * constant-offset rule will catch any Var or volatile they
-			 * contain.
+			 * A navigation offset must be a run-time constant, so it cannot
+			 * contain a navigation operation.
 			 */
-			return expression_tree_walker(node, define_walker, ctx);
+			ereport(ERROR,
+					errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("row pattern navigation offset cannot contain a row pattern navigation operation"),
+					errdetail("A navigation offset must be a run-time constant."),
+					parser_errposition(ctx->pstate, nav->location));
 		}
 
 		/*

@@ -26,8 +26,8 @@ LIBS += $(PTHREAD_LIBS)
 
 all: pgbench
 
-pgbench: $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pgbench: $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 # See notes in src/backend/parser/Makefile about the following two rules
 exprparse.h: exprparse.c

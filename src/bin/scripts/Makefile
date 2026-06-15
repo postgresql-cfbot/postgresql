@@ -31,14 +31,22 @@ LDFLAGS_INTERNAL += -L$(top_builddir)/src/fe_utils -lpgfeutils $(libpq_pgport)
 
 all: $(PROGRAMS)
 
-createdb: createdb.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-createuser: createuser.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-dropdb: dropdb.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-dropuser: dropuser.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-clusterdb: clusterdb.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-vacuumdb: vacuumdb.o vacuuming.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-reindexdb: reindexdb.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-pg_isready: pg_isready.o common.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
+createdb: createdb.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) createdb.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+createuser: createuser.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) createuser.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+dropdb: dropdb.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) dropdb.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+dropuser: dropuser.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) dropuser.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+clusterdb: clusterdb.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) clusterdb.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+vacuumdb: vacuumdb.o vacuuming.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) vacuumdb.o vacuuming.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+reindexdb: reindexdb.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) reindexdb.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pg_isready: pg_isready.o common.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) pg_isready.o common.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs
 	$(INSTALL_PROGRAM) createdb$(X)   '$(DESTDIR)$(bindir)'/createdb$(X)

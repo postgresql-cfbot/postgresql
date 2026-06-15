@@ -32,6 +32,7 @@ static void check_for_pg_role_prefix(ClusterInfo *cluster);
 static void check_for_new_tablespace_dir(void);
 static void check_for_user_defined_encoding_conversions(ClusterInfo *cluster);
 static void check_for_unicode_update(ClusterInfo *cluster);
+static void check_for_invalid_init_privs(ClusterInfo *cluster);
 static void check_new_cluster_replication_slots(void);
 static void check_new_cluster_subscription_configuration(void);
 static void check_old_cluster_for_valid_slots(void);
@@ -652,6 +653,13 @@ check_and_dump_old_cluster(void)
 	}
 
 	check_for_data_types_usage(&old_cluster);
+
+	/*
+	 * Check for objects with invalid role references in initial privileges.
+	 * pg_init_privs was introduced in PG 10, so only check on version 10+.
+	 */
+	if (GET_MAJOR_VERSION(old_cluster.major_version) >= 1000)
+		check_for_invalid_init_privs(&old_cluster);
 
 	/*
 	 * Unicode updates can affect some objects that use expressions with
@@ -2185,6 +2193,80 @@ check_for_unicode_update(ClusterInfo *cluster)
 		pg_log(PG_WARNING, "Your installation contains relations that might be affected by a new version of Unicode.\n"
 			   "A list of potentially-affected relations is in the file:\n"
 			   "    %s", report.path);
+	}
+	else
+		check_ok();
+}
+
+/*
+ * Callback function for processing results of query for
+ * check_for_invalid_init_privs()'s UpgradeTask.  If the query returned any
+ * rows (i.e., the check failed), write the details to the report file.
+ */
+static void
+process_invalid_init_privs(DbInfo *dbinfo, PGresult *res, void *arg)
+{
+	UpgradeTaskReport *report = (UpgradeTaskReport *) arg;
+	int			ntups = PQntuples(res);
+	int			i_objoid = PQfnumber(res, "objoid");
+
+	if (ntups == 0)
+		return;
+
+	if (report->file == NULL &&
+		(report->file = fopen_priv(report->path, "w")) == NULL)
+		pg_fatal("could not open file \"%s\": %m", report->path);
+
+	fprintf(report->file, "In database: %s\n", dbinfo->db_name);
+
+	for (int rowno = 0; rowno < ntups; rowno++)
+		fprintf(report->file, "  Object oid=%s has invalid role reference in pg_init_privs\n",
+				PQgetvalue(res, rowno, i_objoid));
+}
+
+/*
+ * check_for_invalid_init_privs()
+ *
+ * Check for objects with invalid role references in pg_init_privs, which can
+ * occur when a role is deleted after granting privileges to an object but
+ * before the initial privileges are recorded. This check prevents pg_upgrade
+ * from attempting to restore invalid privilege records.
+ */
+static void
+check_for_invalid_init_privs(ClusterInfo *cluster)
+{
+	UpgradeTaskReport report;
+	UpgradeTask *task = upgrade_task_create();
+	const char *query =
+		"SELECT DISTINCT pip.objoid "
+		"FROM pg_init_privs pip "
+		"CROSS JOIN LATERAL aclexplode(pip.initprivs) ace "
+		"LEFT JOIN pg_authid a ON a.oid = ace.grantee "
+		"WHERE a.oid IS NULL AND ace.grantee <> 0";
+
+	prep_status("Checking for invalid role references in initial privileges");
+
+	report.file = NULL;
+	snprintf(report.path, sizeof(report.path), "%s/%s",
+			 log_opts.basedir,
+			 "invalid_init_privs.txt");
+
+	upgrade_task_add_step(task, query, process_invalid_init_privs,
+						  true, &report);
+	upgrade_task_run(task, cluster);
+	upgrade_task_free(task);
+
+	if (report.file)
+	{
+		fclose(report.file);
+		pg_log(PG_REPORT, "fatal");
+		pg_fatal("Your installation contains objects with invalid role references in initial\n"
+				 "privileges (pg_init_privs).  These privilege records cannot be restored\n"
+				 "and must be cleaned up before upgrade.  To fix this, connect to each affected\n"
+				 "database and remove the privilege records using:\n"
+				 "  DELETE FROM pg_init_privs WHERE objoid IN (<list of object oids>);\n"
+				 "A list of affected object oids is in the file:\n"
+				 "    %s", report.path);
 	}
 	else
 		check_ok();

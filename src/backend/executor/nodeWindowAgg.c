@@ -2742,12 +2742,28 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 
 	/*
 	 * Create expression contexts.  We need two, one for per-input-tuple
-	 * processing and one for per-output-tuple processing.  We cheat a little
-	 * by using ExecAssignExprContext() to build both.
+	 * processing and one for per-output-tuple processing, plus an optional
+	 * third for row pattern recognition DEFINE evaluation (built just below
+	 * when a DEFINE clause is present).  We cheat a little by using
+	 * ExecAssignExprContext() to build them all.  Each call overwrites
+	 * ps_ExprContext, so the last call must establish the output context.
 	 */
 	ExecAssignExprContext(estate, &winstate->ss.ps);
 	tmpcontext = winstate->ss.ps.ps_ExprContext;
 	winstate->tmpcontext = tmpcontext;
+
+	/*
+	 * Row pattern recognition evaluates DEFINE clauses in a third context,
+	 * reset before each DEFINE evaluation pass.  It must be distinct from
+	 * tmpcontext and ps_ExprContext so its reset frees neither input nor
+	 * output tuple memory.
+	 */
+	if (node->defineClause != NIL)
+	{
+		ExecAssignExprContext(estate, &winstate->ss.ps);
+		winstate->rprContext = winstate->ss.ps.ps_ExprContext;
+	}
+
 	ExecAssignExprContext(estate, &winstate->ss.ps);
 
 	/* Create long-lived context for storage of partition-local memory etc */
@@ -4572,11 +4588,14 @@ static bool
 nfa_evaluate_row(WindowObject winobj, int64 pos, bool *varMatched)
 {
 	WindowAggState *winstate = winobj->winstate;
-	ExprContext *econtext = winstate->ss.ps.ps_ExprContext;
+	ExprContext *econtext = winstate->rprContext;
 	int			numDefineVars = list_length(winstate->defineVariableList);
 	int			varIdx = 0;
 	TupleTableSlot *slot;
 	int64		saved_pos;
+
+	/* Release the previous row's DEFINE evaluation memory */
+	ResetExprContext(econtext);
 
 	/* Fetch current row into temp_slot_1 */
 	slot = winstate->temp_slot_1;

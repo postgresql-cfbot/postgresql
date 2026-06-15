@@ -2700,6 +2700,7 @@ typedef struct WindowAggState
 	MemoryContext aggcontext;	/* shared context for aggregate working data */
 	MemoryContext curaggcontext;	/* current aggregate's working data */
 	ExprContext *tmpcontext;	/* short-term evaluation context */
+	ExprContext *rprContext;	/* DEFINE clause evaluation context */
 
 	bool		all_first;		/* true if the scan is starting */
 	bool		partition_spooled;	/* true if all tuples in current partition

@@ -1592,9 +1592,12 @@ static void
 nfa_reevaluate_dependent_vars(WindowAggState *winstate, RPRNFAContext *ctx,
 							  int64 currentPos)
 {
-	ExprContext *econtext = winstate->ss.ps.ps_ExprContext;
+	ExprContext *econtext = winstate->rprContext;
 	int64		saved_match_start = winstate->nav_match_start;
 	int64		saved_pos = winstate->currentpos;
+
+	/* Release the previous evaluation's DEFINE expression memory */
+	ResetExprContext(econtext);
 
 	/* Temporarily set nav_match_start and currentpos for FIRST/LAST */
 	winstate->nav_match_start = ctx->matchStartRow;

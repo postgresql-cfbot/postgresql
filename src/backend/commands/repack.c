@@ -503,13 +503,11 @@ cluster_rel(RepackCommand cmd, Relation OldHeap, Oid indexOid,
 	Oid			tableOid = RelationGetRelid(OldHeap);
 	Relation	index;
 	LOCKMODE	lmode;
-	Oid			save_userid;
-	int			save_sec_context;
-	int			save_nestlevel;
 	bool		verbose = ((params->options & CLUOPT_VERBOSE) != 0);
 	bool		recheck = ((params->options & CLUOPT_RECHECK) != 0);
 	bool		concurrent = ((params->options & CLUOPT_CONCURRENT) != 0);
 	Oid			ident_idx = InvalidOid;
+	IndexBuildSecurity ibsec;
 
 	/* Determine the lock mode to use. */
 	lmode = RepackLockLevel(concurrent);
@@ -528,15 +526,9 @@ cluster_rel(RepackCommand cmd, Relation OldHeap, Oid indexOid,
 	pgstat_progress_update_param(PROGRESS_REPACK_COMMAND, cmd);
 
 	/*
-	 * Switch to the table owner's userid, so that any index functions are run
-	 * as that user.  Also lock down security-restricted operations and
-	 * arrange to make GUC variable changes local to this command.
+	 * Prevent index functions from doing what they are not supposed to.
 	 */
-	GetUserIdAndSecContext(&save_userid, &save_sec_context);
-	SetUserIdAndSecContext(OldHeap->rd_rel->relowner,
-						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
-	save_nestlevel = NewGUCNestLevel();
-	RestrictSearchPath();
+	enable_index_build_security(OldHeap->rd_rel->relowner, &ibsec);
 
 	/*
 	 * Recheck that the relation is still what it was when we started.
@@ -546,7 +538,7 @@ cluster_rel(RepackCommand cmd, Relation OldHeap, Oid indexOid,
 	 * not-previously-clustered index.
 	 */
 	if (recheck &&
-		!cluster_rel_recheck(cmd, OldHeap, indexOid, save_userid,
+		!cluster_rel_recheck(cmd, OldHeap, indexOid, GetUserId(),
 							 lmode, params->options))
 		goto out;
 
@@ -670,11 +662,8 @@ cluster_rel(RepackCommand cmd, Relation OldHeap, Oid indexOid,
 		rebuild_relation(OldHeap, index, verbose, ident_idx);
 
 out:
-	/* Roll back any GUC changes executed by index functions */
-	AtEOXact_GUC(false, save_nestlevel);
-
-	/* Restore userid and security context */
-	SetUserIdAndSecContext(save_userid, save_sec_context);
+	/* Relax the restrictions imposed above. */
+	disable_index_build_security(&ibsec);
 
 	pgstat_progress_end_command();
 }
@@ -1206,7 +1195,6 @@ rebuild_relation(Relation OldHeap, Relation index, bool verbose,
 						 relpersistence);
 	}
 }
-
 
 /*
  * Create the transient table that will be filled with new data during

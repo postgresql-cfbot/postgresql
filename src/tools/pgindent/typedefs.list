@@ -1647,6 +1647,7 @@ LoInfo
 LoadStmt
 LocalBufferLookupEnt
 LocalPgBackendStatus
+LocalSyncedSlot
 LocalTransactionId
 Location
 LocationIndex

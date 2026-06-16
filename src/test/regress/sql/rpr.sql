@@ -1813,6 +1813,81 @@ WINDOW w AS (
 );
 
 --
+-- nth_value with a NULL offset
+--
+
+CREATE TABLE rpr_dormant (id int, price int);
+INSERT INTO rpr_dormant SELECT g, g*10 FROM generate_series(1,60) g;
+
+-- reference: first_value(id) is the start row of the match beginning at the
+-- current row, count(*) is that match's length over the reduced frame
+SELECT * FROM (
+  SELECT id, first_value(id) OVER w AS match_start, count(*) OVER w AS match_len
+  FROM rpr_dormant
+  WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    AFTER MATCH SKIP PAST LAST ROW
+    PATTERN (A+) DEFINE A AS price > PREV(FIRST(price), 50))
+) s WHERE id > 50 ORDER BY id;
+
+-- nth_value with a NULL offset; FIRST navigation in DEFINE, SKIP PAST LAST ROW
+SELECT * FROM (
+  SELECT id, nv FROM (
+    SELECT id, nth_value(price, CASE WHEN id < 50 THEN NULL ELSE 1 END) OVER w AS nv
+    FROM rpr_dormant
+    WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+      AFTER MATCH SKIP PAST LAST ROW
+      PATTERN (A+) DEFINE A AS price > PREV(FIRST(price), 50))
+  ) s
+) t WHERE id > 50 ORDER BY id;
+
+-- the same window with first_value and count alongside nth_value
+SELECT * FROM (
+  SELECT id, nv, fv, cnt FROM (
+    SELECT id, nth_value(price, CASE WHEN id < 50 THEN NULL ELSE 1 END) OVER w AS nv,
+               first_value(id) OVER w AS fv, count(*) OVER w AS cnt
+    FROM rpr_dormant
+    WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+      AFTER MATCH SKIP PAST LAST ROW
+      PATTERN (A+) DEFINE A AS price > PREV(FIRST(price), 50))
+  ) s
+) t WHERE id > 50 ORDER BY id;
+
+-- the same nth_value with a non-navigation DEFINE
+SELECT * FROM (
+  SELECT id, nv FROM (
+    SELECT id, nth_value(price, CASE WHEN id < 50 THEN NULL ELSE 1 END) OVER w AS nv
+    FROM rpr_dormant
+    WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+      AFTER MATCH SKIP PAST LAST ROW
+      PATTERN (A+) DEFINE A AS price > 0)
+  ) s
+) t WHERE id > 50 ORDER BY id;
+
+-- the same nth_value with a PREV-only DEFINE (no FIRST navigation)
+SELECT * FROM (
+  SELECT id, nv FROM (
+    SELECT id, nth_value(price, CASE WHEN id < 50 THEN NULL ELSE 1 END) OVER w AS nv
+    FROM rpr_dormant
+    WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+      AFTER MATCH SKIP PAST LAST ROW
+      PATTERN (A+) DEFINE A AS price > PREV(price, 50))
+  ) s
+) t WHERE id > 50 ORDER BY id;
+
+-- nth_value with a NULL offset band in the middle of the partition
+SELECT * FROM (
+  SELECT id, nv FROM (
+    SELECT id, nth_value(price, CASE WHEN id BETWEEN 20 AND 40 THEN NULL ELSE 1 END) OVER w AS nv
+    FROM rpr_dormant
+    WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+      AFTER MATCH SKIP PAST LAST ROW
+      PATTERN (A+) DEFINE A AS price > PREV(FIRST(price), 50))
+  ) s
+) t WHERE id BETWEEN 38 AND 46 ORDER BY id;
+
+DROP TABLE rpr_dormant;
+
+--
 -- NULL handling
 --
 

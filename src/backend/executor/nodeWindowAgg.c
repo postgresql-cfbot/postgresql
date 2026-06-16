@@ -239,6 +239,10 @@ static int64 row_is_in_reduced_frame(WindowObject winobj, int64 pos);
 
 static void clear_reduced_frame(WindowAggState *winstate);
 static int	get_reduced_frame_status(WindowAggState *winstate, int64 pos);
+static void advance_nav_mark(WindowAggState *winstate, int64 currentPos);
+static void advance_reduced_frame_nfa(WindowObject winobj,
+									  RPRNFAContext *targetCtx, int64 pos,
+									  bool hasLimitedFrame, int64 frameOffset);
 static void update_reduced_frame(WindowObject winobj, int64 pos);
 
 /* Forward declarations - NFA row evaluation */
@@ -2521,6 +2525,16 @@ ExecWindowAgg(PlanState *pstate)
 			{
 				if (winstate->rpSkipTo == ST_NEXT_ROW)
 					clear_reduced_frame(winstate);
+
+				/*
+				 * Drive the row pattern match every row, so it tracks the row
+				 * scan rather than frame access: a window function that skips
+				 * the frame (e.g. nth_value() with a NULL offset) must not
+				 * leave the match state behind currentpos.
+				 */
+				Assert(winstate->nav_winobj != NULL);
+				(void) row_is_in_reduced_frame(winstate->nav_winobj,
+											   winstate->currentpos);
 			}
 
 			/*
@@ -2561,43 +2575,6 @@ ExecWindowAgg(PlanState *pstate)
 			update_frametailpos(winstate);
 		if (winstate->grouptail_ptr >= 0)
 			update_grouptailpos(winstate);
-
-		/*
-		 * Advance RPR navigation mark pointer if possible, so that
-		 * tuplestore_trim() can free rows no longer reachable by navigation.
-		 */
-		if (winstate->nav_winobj &&
-			winstate->rpPattern != NULL &&
-			winstate->navMaxOffsetKind == RPR_NAV_OFFSET_FIXED)
-		{
-			int64		navmarkpos;
-
-			/* Backward reach from PREV/LAST/compound PREV_LAST/NEXT_LAST */
-			if (winstate->currentpos > winstate->navMaxOffset)
-				navmarkpos = winstate->currentpos - winstate->navMaxOffset;
-			else
-				navmarkpos = 0;
-
-			/*
-			 * If FIRST is used, also consider match_start + navFirstOffset.
-			 * The oldest active context (nfaContext) has the smallest
-			 * matchStartRow.
-			 */
-			if (winstate->hasFirstNav &&
-				winstate->navFirstOffsetKind == RPR_NAV_OFFSET_FIXED &&
-				winstate->nfaContext != NULL)
-			{
-				int64		firstreach;
-
-				if (!pg_add_s64_overflow(winstate->nfaContext->matchStartRow,
-										 winstate->navFirstOffset,
-										 &firstreach))
-					navmarkpos = Min(navmarkpos, Max(firstreach, 0));
-			}
-
-			if (navmarkpos > winstate->nav_winobj->markpos)
-				WinSetMarkPosition(winstate->nav_winobj, navmarkpos);
-		}
 
 		/*
 		 * Truncate any no-longer-needed rows from the tuplestore.
@@ -4383,6 +4360,143 @@ get_reduced_frame_status(WindowAggState *winstate, int64 pos)
 }
 
 /*
+ * advance_nav_mark
+ *		Advance the RPR navigation mark, derived from the NFA frontier
+ *		(currentPos) but held back by the navigation's backward reach, so
+ *		tuplestore_trim() can free rows no longer reachable by navigation.
+ *
+ * The nav read pointer is independent of the aggregate and per-function read
+ * pointers, so moving its mark does not affect their fetches; it only bounds
+ * the DEFINE clause's own PREV/LAST/FIRST lookups.  Backward reach (PREV/LAST)
+ * is measured from the frontier.  FIRST reaches back from the head context's
+ * matchStartRow instead, so it is bounded separately; without FIRST the mark
+ * can follow the frontier freely.
+ */
+static void
+advance_nav_mark(WindowAggState *winstate, int64 currentPos)
+{
+	int64		navmarkpos;
+
+	/* No RPR navigation read pointer: nothing to advance */
+	if (winstate->nav_winobj == NULL)
+		return;
+
+	/* RETAIN_ALL disables trim for the backward (PREV/LAST) dimension */
+	if (winstate->navMaxOffsetKind == RPR_NAV_OFFSET_RETAIN_ALL)
+		return;
+
+	/* navMax is FIXED here: NEEDS_EVAL resolved, RETAIN_ALL returned */
+	Assert(winstate->navMaxOffsetKind == RPR_NAV_OFFSET_FIXED);
+
+	if (currentPos > winstate->navMaxOffset)
+		navmarkpos = currentPos - winstate->navMaxOffset;
+	else
+		navmarkpos = 0;
+
+	if (winstate->hasFirstNav && winstate->nfaContext != NULL)
+	{
+		int64		firstreach;
+
+		/* navFirst is always FIXED; it never takes RETAIN_ALL */
+		Assert(winstate->navFirstOffsetKind == RPR_NAV_OFFSET_FIXED);
+
+		/*
+		 * Head context has the smallest matchStartRow (contexts appended in
+		 * nondecreasing order), so bounding by it covers every FIRST reach.
+		 */
+		if (!pg_add_s64_overflow(winstate->nfaContext->matchStartRow,
+								 winstate->navFirstOffset,
+								 &firstreach))
+			navmarkpos = Min(navmarkpos, Max(firstreach, 0));
+	}
+
+	if (navmarkpos > winstate->nav_winobj->markpos)
+		WinSetMarkPosition(winstate->nav_winobj, navmarkpos);
+}
+
+/*
+ * advance_reduced_frame_nfa
+ *		Drive the NFA forward until targetCtx completes or the partition ends.
+ *
+ * This is the match driver, extracted from update_reduced_frame(), which calls
+ * it to advance the match and then records the resolved result.  Row
+ * evaluations are shared across all active contexts.
+ */
+static void
+advance_reduced_frame_nfa(WindowObject winobj, RPRNFAContext *targetCtx,
+						  int64 pos, bool hasLimitedFrame, int64 frameOffset)
+{
+	WindowAggState *winstate = winobj->winstate;
+	int64		currentPos;
+	int64		startPos;
+
+	/*
+	 * Determine where to start processing. Usually nfaLastProcessedRow+1 >=
+	 * pos since contexts are created at currentPos+1 during processing.
+	 * However, pos can exceed this when rows are skipped (e.g., unmatched
+	 * rows don't update nfaLastProcessedRow).
+	 */
+	startPos = Max(pos, winstate->nfaLastProcessedRow + 1);
+
+	/*
+	 * Process rows until target context completes or we hit boundaries. Each
+	 * row evaluation is shared across all active contexts.
+	 */
+	for (currentPos = startPos; targetCtx->states != NULL; currentPos++)
+	{
+		bool		rowExists;
+
+		/*
+		 * Evaluate variables for this row - done only once, shared by all
+		 * contexts.
+		 *
+		 * Set nav_match_start to the head context's matchStartRow for
+		 * FIRST/LAST navigation.  Match_start-dependent variables (FIRST,
+		 * LAST-with-offset) are re-evaluated per-context in ExecRPRProcessRow
+		 * when matchStartRow differs.
+		 */
+		winstate->nav_match_start = targetCtx->matchStartRow;
+		rowExists = nfa_evaluate_row(winobj, currentPos, winstate->nfaVarMatched);
+
+		/* No more rows in partition? Finalize all contexts */
+		if (!rowExists)
+		{
+			ExecRPRFinalizeAllContexts(winstate, currentPos - 1);
+			/* Clean up dead contexts from finalization */
+			ExecRPRCleanupDeadContexts(winstate, targetCtx);
+			break;
+		}
+
+		/* Update last processed row */
+		winstate->nfaLastProcessedRow = currentPos;
+
+		/*--------------------------
+		 * Process all contexts for this row:
+		 *   1. Match all (convergence)
+		 *   2. Absorb redundant
+		 *   3. Advance all (divergence)
+		 */
+		ExecRPRProcessRow(winstate, currentPos, hasLimitedFrame, frameOffset);
+
+		/*
+		 * Create a new context for the next potential start position. This
+		 * enables overlapping match detection for SKIP TO NEXT ROW.
+		 */
+		ExecRPRStartContext(winstate, currentPos + 1);
+
+		/*
+		 * Clean up dead contexts (failed with no active states and no match).
+		 * This removes contexts that failed during processing and counts them
+		 * appropriately as pruned or mismatched.
+		 */
+		ExecRPRCleanupDeadContexts(winstate, targetCtx);
+
+		/* Advance the nav mark to the frontier so trim can free old rows. */
+		advance_nav_mark(winstate, currentPos);
+	}
+}
+
+/*
  * update_reduced_frame
  *		Update reduced frame info using multi-context NFA pattern matching.
  *
@@ -4401,8 +4515,6 @@ update_reduced_frame(WindowObject winobj, int64 pos)
 {
 	WindowAggState *winstate = winobj->winstate;
 	RPRNFAContext *targetCtx;
-	int64		currentPos;
-	int64		startPos;
 	int			frameOptions = winstate->frameOptions;
 	bool		hasLimitedFrame;
 	int64		frameOffset = 0;
@@ -4468,67 +4580,9 @@ update_reduced_frame(WindowObject winobj, int64 pos)
 		goto register_result;
 	}
 
-	/*
-	 * Determine where to start processing. Usually nfaLastProcessedRow+1 >=
-	 * pos since contexts are created at currentPos+1 during processing.
-	 * However, pos can exceed this when rows are skipped (e.g., unmatched
-	 * rows don't update nfaLastProcessedRow).
-	 */
-	startPos = Max(pos, winstate->nfaLastProcessedRow + 1);
-
-	/*
-	 * Process rows until target context completes or we hit boundaries. Each
-	 * row evaluation is shared across all active contexts.
-	 */
-	for (currentPos = startPos; targetCtx->states != NULL; currentPos++)
-	{
-		bool		rowExists;
-
-		/*
-		 * Evaluate variables for this row - done only once, shared by all
-		 * contexts.
-		 *
-		 * Set nav_match_start to the head context's matchStartRow for
-		 * FIRST/LAST navigation.  Match_start-dependent variables (FIRST,
-		 * LAST-with-offset) are re-evaluated per-context in ExecRPRProcessRow
-		 * when matchStartRow differs.
-		 */
-		winstate->nav_match_start = targetCtx->matchStartRow;
-		rowExists = nfa_evaluate_row(winobj, currentPos, winstate->nfaVarMatched);
-
-		/* No more rows in partition? Finalize all contexts */
-		if (!rowExists)
-		{
-			ExecRPRFinalizeAllContexts(winstate, currentPos - 1);
-			/* Clean up dead contexts from finalization */
-			ExecRPRCleanupDeadContexts(winstate, targetCtx);
-			break;
-		}
-
-		/* Update last processed row */
-		winstate->nfaLastProcessedRow = currentPos;
-
-		/*--------------------------
-		 * Process all contexts for this row:
-		 *   1. Match all (convergence)
-		 *   2. Absorb redundant
-		 *   3. Advance all (divergence)
-		 */
-		ExecRPRProcessRow(winstate, currentPos, hasLimitedFrame, frameOffset);
-
-		/*
-		 * Create a new context for the next potential start position. This
-		 * enables overlapping match detection for SKIP TO NEXT ROW.
-		 */
-		ExecRPRStartContext(winstate, currentPos + 1);
-
-		/*
-		 * Clean up dead contexts (failed with no active states and no match).
-		 * This removes contexts that failed during processing and counts them
-		 * appropriately as pruned or mismatched.
-		 */
-		ExecRPRCleanupDeadContexts(winstate, targetCtx);
-	}
+	/* Drive the NFA forward until pos's match is resolved. */
+	advance_reduced_frame_nfa(winobj, targetCtx, pos, hasLimitedFrame,
+							  frameOffset);
 
 register_result:
 	Assert(pos == targetCtx->matchStartRow);

@@ -1666,7 +1666,13 @@ ExecRPRStartContext(WindowAggState *winstate, int64 startPos)
 		ctx->states->isAbsorbable = false;
 	}
 
-	/* Add to tail of active context list (doubly-linked, oldest-first) */
+	/*
+	 * Add to tail of active context list (doubly-linked, oldest-first).
+	 * matchStartRow is nondecreasing along the list, so the head holds the
+	 * smallest -- an ordering other code relies on.
+	 */
+	Assert(winstate->nfaContextTail == NULL ||
+		   startPos >= winstate->nfaContextTail->matchStartRow);
 	ctx->prev = winstate->nfaContextTail;
 	ctx->next = NULL;
 	if (winstate->nfaContextTail != NULL)

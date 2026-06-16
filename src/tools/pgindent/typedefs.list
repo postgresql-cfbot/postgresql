@@ -430,6 +430,7 @@ CatalogId
 CatalogIdMapEntry
 CatalogIndexState
 ChangeContext
+ChangeContextBackup
 ChangeVarNodes_callback
 ChangeVarNodes_context
 ChannelName
@@ -2605,6 +2606,7 @@ RelMapping
 RelOptInfo
 RelOptKind
 RelPathStr
+RelReopenInfo
 RelStatsInfo
 RelSyncCallbackFunction
 RelToCheck

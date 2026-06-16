@@ -380,6 +380,7 @@ extern void heap_multi_insert(Relation relation, TupleTableSlot **slots,
 							  int ntuples, CommandId cid, uint32 options,
 							  BulkInsertState bistate);
 extern TM_Result heap_delete(Relation relation, const ItemPointerData *tid,
+							 TransactionId xid,
 							 CommandId cid, uint32 options, Snapshot crosscheck,
 							 bool wait, TM_FailureData *tmfd);
 extern void heap_finish_speculative(Relation relation, const ItemPointerData *tid);
@@ -422,7 +423,8 @@ extern bool heap_tuple_should_freeze(HeapTupleHeader tuple,
 extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);
 
 extern void simple_heap_insert(Relation relation, HeapTuple tup);
-extern void simple_heap_delete(Relation relation, const ItemPointerData *tid);
+extern void simple_heap_delete(Relation relation, const ItemPointerData *tid,
+							   TransactionId xid);
 extern void simple_heap_update(Relation relation, const ItemPointerData *otid,
 							   HeapTuple tup, TU_UpdateIndexes *update_indexes);
 

@@ -3899,7 +3899,7 @@ object_aclcheck_ext(Oid classid, Oid objectid,
 	if (object_aclmask_ext(classid, objectid, roleid, mode, ACLMASK_ANY,
 						   is_missing) != 0)
 	{
-		aclcheck_track_record(classid, objectid, roleid, mode);
+		aclcheck_track_record(classid, objectid, InvalidAttrNumber, roleid, mode);
 		return ACLCHECK_OK;
 	}
 	else
@@ -3934,7 +3934,10 @@ pg_attribute_aclcheck_ext(Oid table_oid, AttrNumber attnum,
 {
 	if (pg_attribute_aclmask_ext(table_oid, attnum, roleid, mode,
 								 ACLMASK_ANY, is_missing) != 0)
+	{
+		aclcheck_track_record(RelationRelationId, table_oid, attnum, roleid, mode);
 		return ACLCHECK_OK;
+	}
 	else
 		return ACLCHECK_NO_PRIV;
 }
@@ -4104,7 +4107,7 @@ pg_class_aclcheck_ext(Oid table_oid, Oid roleid,
 	if (pg_class_aclmask_ext(table_oid, roleid, mode,
 							 ACLMASK_ANY, is_missing) != 0)
 	{
-		aclcheck_track_record(RelationRelationId, table_oid, roleid, mode);
+		aclcheck_track_record(RelationRelationId, table_oid, InvalidAttrNumber, roleid, mode);
 		return ACLCHECK_OK;
 	}
 	else

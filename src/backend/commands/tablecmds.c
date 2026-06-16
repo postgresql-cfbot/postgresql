@@ -101,6 +101,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/injection_point.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
@@ -14210,6 +14211,9 @@ checkFkeyPermissions(Relation rel, int16 *attnums, int natts)
 								  ACL_REFERENCES);
 	if (aclresult == ACLCHECK_OK)
 		return;
+
+	INJECTION_POINT("checkFkeyPermissions-after-table-acl-fail", NULL);
+
 	/* Else we must have REFERENCES on each column */
 	for (i = 0; i < natts; i++)
 	{

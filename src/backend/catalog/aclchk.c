@@ -3918,10 +3918,12 @@ object_aclcheck_ext(Oid classid, Oid objectid,
 					Oid roleid, AclMode mode,
 					bool *is_missing)
 {
-	aclcheck_track_record(classid, objectid, roleid, mode);
 	if (object_aclmask_ext(classid, objectid, roleid, mode, ACLMASK_ANY,
 						   is_missing) != 0)
+	{
+		aclcheck_track_record(classid, objectid, roleid, mode);
 		return ACLCHECK_OK;
+	}
 	else
 		return ACLCHECK_NO_PRIV;
 }
@@ -4121,10 +4123,12 @@ AclResult
 pg_class_aclcheck_ext(Oid table_oid, Oid roleid,
 					  AclMode mode, bool *is_missing)
 {
-	aclcheck_track_record(RelationRelationId, table_oid, roleid, mode);
 	if (pg_class_aclmask_ext(table_oid, roleid, mode,
 							 ACLMASK_ANY, is_missing) != 0)
+	{
+		aclcheck_track_record(RelationRelationId, table_oid, roleid, mode);
 		return ACLCHECK_OK;
+	}
 	else
 		return ACLCHECK_NO_PRIV;
 }

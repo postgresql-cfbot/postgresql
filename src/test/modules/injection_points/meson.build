@@ -60,4 +60,12 @@ tests += {
       '--temp-config', files('extra.conf'),
     ],
   },
+  'tap': {
+    'env': {
+      'enable_injection_points': get_option('injection_points') ? 'yes' : 'no',
+    },
+    'tests': [
+      't/001_wait_without_sql.pl',
+    ],
+  },
 }

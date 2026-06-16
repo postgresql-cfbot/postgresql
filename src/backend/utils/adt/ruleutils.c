@@ -7311,7 +7311,6 @@ get_rule_windowspec(WindowClause *wc, List *targetList,
 		get_rule_orderby(wc->orderClause, targetList, false, context);
 		needspace = true;
 	}
-
 	/* framing clause is never inherited, so print unless it's default */
 	if (wc->frameOptions & FRAMEOPTION_NONDEFAULT)
 	{

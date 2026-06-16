@@ -41,6 +41,7 @@ static bool rank_up(WindowObject winobj);
 static Datum leadlag_common(FunctionCallInfo fcinfo,
 							bool forward, bool withoffset, bool withdefault);
 
+
 /*
  * utility routine for *_rank functions.
  */

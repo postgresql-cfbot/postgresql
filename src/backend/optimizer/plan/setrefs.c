@@ -214,6 +214,7 @@ static List *set_windowagg_runcondition_references(PlannerInfo *root,
 static void record_elided_node(PlannerGlobal *glob, int plan_node_id,
 							   NodeTag elided_type, Bitmapset *relids);
 
+
 /*****************************************************************************
  *
  *		SUBPLAN REFERENCES

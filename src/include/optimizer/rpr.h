@@ -10,11 +10,12 @@
  *
  *-------------------------------------------------------------------------
  */
-#ifndef OPTIMIZER_RPR_H
-#define OPTIMIZER_RPR_H
+#ifndef RPR_H
+#define RPR_H
 
 #include "nodes/parsenodes.h"
 #include "nodes/plannodes.h"
+#include "nodes/primnodes.h"
 
 /* Limits and special values */
 /*
@@ -96,4 +97,4 @@ typedef struct NavTraversal
 
 extern bool nav_traversal_walker(Node *node, void *ctx);
 
-#endif							/* OPTIMIZER_RPR_H */
+#endif							/* RPR_H */

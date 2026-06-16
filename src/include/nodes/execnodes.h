@@ -38,9 +38,6 @@
 #include "nodes/plannodes.h"
 #include "partitioning/partdefs.h"
 #include "storage/buf.h"
-#include "storage/condition_variable.h"
-#include "utils/hsearch.h"
-#include "utils/queryenvironment.h"
 #include "utils/reltrigger.h"
 #include "utils/typcache.h"
 

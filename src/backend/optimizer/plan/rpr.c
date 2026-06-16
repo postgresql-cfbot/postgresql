@@ -37,8 +37,6 @@
 
 #include "postgres.h"
 
-#include <limits.h>
-
 #include "catalog/pg_proc.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"

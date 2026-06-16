@@ -15,7 +15,6 @@
 #define EXECRPR_H
 
 #include "nodes/execnodes.h"
-#include "windowapi.h"
 
 /* NFA context management */
 extern RPRNFAContext *ExecRPRStartContext(WindowAggState *winstate,

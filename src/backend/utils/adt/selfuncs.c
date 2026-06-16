@@ -5668,8 +5668,34 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 	 * RelabelType nodes here, because the prior stripping of PlaceHolderVars
 	 * may have brought separate RelabelTypes into adjacency.
 	 */
-	while (IsA(basenode, RelabelType))
-		basenode = (Node *) ((RelabelType *) basenode)->arg;
+	if (IsA(basenode, RelabelType))
+	{
+		RelabelType *relabel = castNode(RelabelType, basenode);
+		Expr	   *expr = (Expr *) relabel;
+
+		while (expr && IsA(expr, RelabelType))
+			expr = ((RelabelType *) expr)->arg;
+
+		if (exprCollation((Node *) expr) == relabel->resultcollid)
+			basenode = (Node *) expr;
+		else
+		{
+			/*
+			 * A RelabelType is required when the input expression’s
+			 * collation differs from the resulting resultcollid.
+			 */
+			RelabelType *newrelabel = makeNode(RelabelType);
+
+			newrelabel->arg = (Expr *) expr;
+			newrelabel->resulttype = relabel->resulttype;
+			newrelabel->resulttypmod = relabel->resulttypmod;
+			newrelabel->resultcollid = relabel->resultcollid;
+			newrelabel->relabelformat = relabel->relabelformat;
+			newrelabel->location = relabel->location;
+
+			basenode = (Node *) newrelabel;
+		}
+	}
 
 	/* Fast path for a simple Var */
 	if (IsA(basenode, Var) &&
@@ -5916,9 +5942,35 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 
 				Assert(expr);
 
-				/* strip RelabelType before comparing it */
-				if (expr && IsA(expr, RelabelType))
-					expr = (Node *) ((RelabelType *) expr)->arg;
+				if (IsA(expr, RelabelType))
+				{
+					RelabelType *relabel = castNode(RelabelType, expr);
+					Expr	   *rexpr = (Expr *) relabel;
+
+					while (rexpr && IsA(rexpr, RelabelType))
+						rexpr = ((RelabelType *) rexpr)->arg;
+
+					if (exprCollation((Node *) rexpr) == relabel->resultcollid)
+						expr = (Node *) rexpr;
+					else
+					{
+						/*
+						 * A RelabelType is required when the input
+						 * expression’s collation differs from the resulting
+						 * resultcollid.
+						 */
+						RelabelType *newrelabel = makeNode(RelabelType);
+
+						newrelabel->arg = (Expr *) rexpr;
+						newrelabel->resulttype = relabel->resulttype;
+						newrelabel->resulttypmod = relabel->resulttypmod;
+						newrelabel->resultcollid = relabel->resultcollid;
+						newrelabel->relabelformat = relabel->relabelformat;
+						newrelabel->location = relabel->location;
+
+						expr = (Node *) newrelabel;
+					}
+				}
 
 				/* found a match, see if we can extract pg_statistic row */
 				if (equal(node, expr))

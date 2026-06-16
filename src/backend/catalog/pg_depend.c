@@ -773,7 +773,12 @@ recheckAcl(Oid classId, Oid objectId)
 		{
 			AclResult	aclresult;
 
-			if (classId == RelationRelationId)
+			if (acltable->entries[i].attnum != InvalidAttrNumber)
+				aclresult = pg_attribute_aclcheck(objectId,
+												  acltable->entries[i].attnum,
+												  acltable->entries[i].roleId,
+												  acltable->entries[i].mode);
+			else if (classId == RelationRelationId)
 				aclresult = pg_class_aclcheck(objectId,
 											  acltable->entries[i].roleId,
 											  acltable->entries[i].mode);

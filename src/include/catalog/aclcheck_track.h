@@ -30,6 +30,7 @@ typedef struct AclCheckEntry
 {
 	Oid			classId;
 	Oid			objectId;
+	AttrNumber	attnum;
 	Oid			roleId;
 	AclMode		mode;
 	uint64		inval_count;
@@ -50,11 +51,13 @@ extern void FreeTrackAclTable(TrackAclTable *acltable);
 /*
  * Record an aclcheck for later revalidation.
  *
- * Called from object_aclcheck_ext() and pg_class_aclcheck_ext().
+ * Called from object_aclcheck_ext(), pg_class_aclcheck_ext(), and
+ * pg_attribute_aclcheck_ext().
  * Only records when inside an utility statement.
  */
 static inline void
-aclcheck_track_record(Oid classId, Oid objectId, Oid roleId, AclMode mode)
+aclcheck_track_record(Oid classId, Oid objectId, AttrNumber attnum,
+					  Oid roleId, AclMode mode)
 {
 	TrackAclTable *acltable = CurrentTrackAclTable;
 	AclCheckEntry *entry;
@@ -72,6 +75,7 @@ aclcheck_track_record(Oid classId, Oid objectId, Oid roleId, AclMode mode)
 	entry = &acltable->entries[acltable->count++];
 	entry->classId = classId;
 	entry->objectId = objectId;
+	entry->attnum = attnum;
 	entry->roleId = roleId;
 	entry->mode = mode;
 	entry->inval_count = SharedInvalidMessageCounter;

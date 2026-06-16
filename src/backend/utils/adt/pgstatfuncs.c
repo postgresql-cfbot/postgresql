@@ -2374,7 +2374,7 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_VACUUM_TABLES_STATS_COLS 5
+#define PG_STAT_GET_VACUUM_TABLES_STATS_COLS 8
 
 	Oid			relid = PG_GETARG_OID(0);
 	PgStat_VacuumRelationCounts *extvacuum;
@@ -2404,6 +2404,9 @@ pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 	values[i++] = Int64GetDatum(extvacuum->table.pages_removed);
 	values[i++] = Int64GetDatum(extvacuum->common.tuples_deleted);
 	values[i++] = Int64GetDatum(extvacuum->table.tuples_frozen);
+	values[i++] = Int64GetDatum(extvacuum->table.recently_dead_tuples);
+	values[i++] = Int64GetDatum(extvacuum->table.missed_dead_pages);
+	values[i++] = Int64GetDatum(extvacuum->table.missed_dead_tuples);
 
 	Assert(i == PG_STAT_GET_VACUUM_TABLES_STATS_COLS);
 

@@ -630,6 +630,9 @@ accumulate_heap_vacuum_statistics(LVRelState *vacrel,
 	extVacStats->table.pages_removed = vacrel->removed_pages;
 	extVacStats->common.tuples_deleted = vacrel->tuples_deleted;
 	extVacStats->table.tuples_frozen = vacrel->tuples_frozen;
+	extVacStats->table.recently_dead_tuples = vacrel->recently_dead_tuples;
+	extVacStats->table.missed_dead_pages = vacrel->missed_dead_pages;
+	extVacStats->table.missed_dead_tuples = vacrel->missed_dead_tuples;
 }
 
 /*

@@ -2440,10 +2440,13 @@ pg_stat_vacuum_tables| SELECT n.nspname AS schemaname,
     s.pages_scanned,
     s.pages_removed,
     s.tuples_deleted,
-    s.tuples_frozen
+    s.tuples_frozen,
+    s.recently_dead_tuples,
+    s.missed_dead_pages,
+    s.missed_dead_tuples
    FROM (pg_class c
      JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
-    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen)
+    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen, recently_dead_tuples, missed_dead_pages, missed_dead_tuples)
   WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
 pg_stat_wal| SELECT wal_records,
     wal_fpi,

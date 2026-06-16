@@ -53,6 +53,9 @@ pgstat_accumulate_extvac_stats_relations(PgStat_VacuumRelationCounts *dst,
 		ACCUMULATE_SUBFIELD(table, pages_scanned);
 		ACCUMULATE_SUBFIELD(table, pages_removed);
 		ACCUMULATE_SUBFIELD(table, tuples_frozen);
+		ACCUMULATE_SUBFIELD(table, recently_dead_tuples);
+		ACCUMULATE_SUBFIELD(table, missed_dead_pages);
+		ACCUMULATE_SUBFIELD(table, missed_dead_tuples);
 	}
 	else if (dst->type == PGSTAT_EXTVAC_INDEX)
 	{

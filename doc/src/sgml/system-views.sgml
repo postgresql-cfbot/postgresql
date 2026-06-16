@@ -5868,6 +5868,30 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
        Number of tuples frozen by the vacuum.
       </para></entry>
      </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>recently_dead_tuples</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of dead tuples that are still visible to some transaction and therefore could not yet be removed.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>missed_dead_pages</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of heap pages containing dead tuples that the vacuum could not remove because it failed to acquire a cleanup lock.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>missed_dead_tuples</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of dead tuples that the vacuum could not remove because it failed to acquire a cleanup lock on their page.
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

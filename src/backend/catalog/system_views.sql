@@ -1569,7 +1569,10 @@ CREATE VIEW pg_stat_vacuum_tables AS
         S.pages_scanned AS pages_scanned,
         S.pages_removed AS pages_removed,
         S.tuples_deleted AS tuples_deleted,
-        S.tuples_frozen AS tuples_frozen
+        S.tuples_frozen AS tuples_frozen,
+        S.recently_dead_tuples AS recently_dead_tuples,
+        S.missed_dead_pages AS missed_dead_pages,
+        S.missed_dead_tuples AS missed_dead_tuples
 
     FROM pg_class C JOIN
             pg_namespace N ON N.oid = C.relnamespace,

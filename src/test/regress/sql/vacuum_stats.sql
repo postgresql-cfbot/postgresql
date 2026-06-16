@@ -44,6 +44,17 @@ SELECT tuples_frozen > 0 AS tuples_frozen
   FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_freeze';
 DROP TABLE vacstat_freeze;
 
+-- dead tuples that survived this vacuum: recently_dead_tuples are still visible
+-- to some transaction, while missed_dead_pages/missed_dead_tuples could not be
+-- removed because the page was pinned by another backend (cleanup lock not
+-- acquired).  None occur here, since this VACUUM runs without concurrent
+-- activity (all = 0).  The non-zero paths are covered by the
+-- vacuum-extending-in-repetable-read isolation test.
+SELECT recently_dead_tuples = 0 AS recently_dead_tuples,
+       missed_dead_pages = 0 AS missed_dead_pages,
+       missed_dead_tuples = 0 AS missed_dead_tuples
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
 -- per-index view: the primary key index is processed by the same VACUUM.
 -- No btree leaf empties out (interleaved deletions), so pages_deleted = 0,
 -- while every index entry for a removed heap tuple is deleted.

@@ -211,10 +211,17 @@ typedef struct PgStat_VacuumRelationCounts
 		struct
 		{
 			int64		tuples_frozen;	/* tuples frozen up by vacuum */
+			int64		recently_dead_tuples;	/* deleted tuples that are
+												 * still visible to some
+												 * transaction */
 			int64		pages_scanned;	/* heap pages examined (not skipped by
 										 * VM) */
 			int64		pages_removed;	/* heap pages removed by vacuum
 										 * "truncation" */
+			int64		missed_dead_pages;	/* pages with missed dead tuples */
+			int64		missed_dead_tuples; /* tuples not pruned by vacuum due
+											 * to failure to get a cleanup
+											 * lock */
 		}			table;
 		struct
 		{

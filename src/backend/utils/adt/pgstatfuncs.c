@@ -2367,3 +2367,86 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 
 	PG_RETURN_BOOL(pgstat_have_entry(kind, dboid, objid));
 }
+
+/*
+ * Get the extended vacuum statistics for a heap table.
+ */
+Datum
+pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_VACUUM_TABLES_STATS_COLS 5
+
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_VacuumRelationCounts *extvacuum;
+	TupleDesc	tupdesc;
+	Datum		values[PG_STAT_GET_VACUUM_TABLES_STATS_COLS] = {0};
+	bool		nulls[PG_STAT_GET_VACUUM_TABLES_STATS_COLS] = {0};
+	int			i = 0;
+
+	/* Build a tuple descriptor for our result type */
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	extvacuum = pgstat_fetch_stat_vacuum_tabentry(relid, MyDatabaseId);
+	if (!extvacuum)
+	{
+		/* Retry as a shared relation before giving up. */
+		extvacuum = pgstat_fetch_stat_vacuum_tabentry(relid, InvalidOid);
+		if (!extvacuum)
+		{
+			InitMaterializedSRF(fcinfo, 0);
+			PG_RETURN_VOID();
+		}
+	}
+
+	values[i++] = ObjectIdGetDatum(relid);
+	values[i++] = Int64GetDatum(extvacuum->table.pages_scanned);
+	values[i++] = Int64GetDatum(extvacuum->table.pages_removed);
+	values[i++] = Int64GetDatum(extvacuum->common.tuples_deleted);
+	values[i++] = Int64GetDatum(extvacuum->table.tuples_frozen);
+
+	Assert(i == PG_STAT_GET_VACUUM_TABLES_STATS_COLS);
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+/*
+ * Get the extended vacuum statistics for an index.
+ */
+Datum
+pg_stat_get_vacuum_indexes(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_VACUUM_INDEX_STATS_COLS 3
+
+	Oid			relid = PG_GETARG_OID(0);
+	PgStat_VacuumRelationCounts *extvacuum;
+	TupleDesc	tupdesc;
+	Datum		values[PG_STAT_GET_VACUUM_INDEX_STATS_COLS] = {0};
+	bool		nulls[PG_STAT_GET_VACUUM_INDEX_STATS_COLS] = {0};
+	int			i = 0;
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	extvacuum = pgstat_fetch_stat_vacuum_tabentry(relid, MyDatabaseId);
+	if (!extvacuum)
+	{
+		extvacuum = pgstat_fetch_stat_vacuum_tabentry(relid, InvalidOid);
+		if (!extvacuum)
+		{
+			InitMaterializedSRF(fcinfo, 0);
+			PG_RETURN_VOID();
+		}
+	}
+
+	values[i++] = ObjectIdGetDatum(relid);
+
+	values[i++] = Int64GetDatum(extvacuum->index.pages_deleted);
+	values[i++] = Int64GetDatum(extvacuum->common.tuples_deleted);
+
+	Assert(i == PG_STAT_GET_VACUUM_INDEX_STATS_COLS);
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}

@@ -1559,3 +1559,37 @@ CREATE VIEW pg_aios AS
     SELECT * FROM pg_get_aios();
 REVOKE ALL ON pg_aios FROM PUBLIC;
 GRANT SELECT ON pg_aios TO pg_read_all_stats;
+
+CREATE VIEW pg_stat_vacuum_tables AS
+    SELECT
+        N.nspname AS schemaname,
+        C.relname AS relname,
+        S.relid AS relid,
+
+        S.pages_scanned AS pages_scanned,
+        S.pages_removed AS pages_removed,
+        S.tuples_deleted AS tuples_deleted,
+        S.tuples_frozen AS tuples_frozen
+
+    FROM pg_class C JOIN
+            pg_namespace N ON N.oid = C.relnamespace,
+            LATERAL pg_stat_get_vacuum_tables(C.oid) S
+    WHERE C.relkind IN ('r', 't', 'm');
+
+CREATE VIEW pg_stat_vacuum_indexes AS
+    SELECT
+            C.oid AS relid,
+            I.oid AS indexrelid,
+            N.nspname AS schemaname,
+            C.relname AS relname,
+            I.relname AS indexrelname,
+
+            S.pages_deleted AS pages_deleted,
+            S.tuples_deleted AS tuples_deleted
+    FROM
+            pg_class C JOIN
+            pg_index X ON C.oid = X.indrelid JOIN
+            pg_class I ON I.oid = X.indexrelid
+            LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace),
+            LATERAL pg_stat_get_vacuum_indexes(I.oid) S
+    WHERE C.relkind IN ('r', 't', 'm');

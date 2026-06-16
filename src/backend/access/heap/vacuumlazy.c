@@ -283,6 +283,7 @@ typedef struct LVRelState
 	/* Error reporting state */
 	char	   *dbname;
 	char	   *relnamespace;
+	Oid			reloid;
 	char	   *relname;
 	char	   *indname;		/* Current index name */
 	BlockNumber blkno;			/* used only for heap operations */
@@ -483,6 +484,8 @@ static void update_vacuum_error_info(LVRelState *vacrel,
 									 OffsetNumber offnum);
 static void restore_vacuum_error_info(LVRelState *vacrel,
 									  const LVSavedErrInfo *saved_vacrel);
+static void accumulate_heap_vacuum_statistics(LVRelState *vacrel,
+											  PgStat_VacuumRelationCounts *extVacStats);
 
 
 
@@ -610,6 +613,63 @@ heap_vacuum_eager_scan_setup(LVRelState *vacrel, const VacuumParams *params)
 }
 
 /*
+ * Fill the extended vacuum statistics report for a heap relation with the
+ * counters that are derived directly from the LVRelState.  Buffer, WAL and
+ * timing counters require sampling resource usage around the vacuum and are
+ * gathered separately; they are not touched here.
+ */
+static void
+accumulate_heap_vacuum_statistics(LVRelState *vacrel,
+								  PgStat_VacuumRelationCounts *extVacStats)
+{
+	if (!pgstat_track_vacuum_statistics)
+		return;
+
+	extVacStats->type = PGSTAT_EXTVAC_TABLE;
+	extVacStats->table.pages_scanned = vacrel->scanned_pages;
+	extVacStats->table.pages_removed = vacrel->removed_pages;
+	extVacStats->common.tuples_deleted = vacrel->tuples_deleted;
+	extVacStats->table.tuples_frozen = vacrel->tuples_frozen;
+}
+
+/*
+ * Report the per-index extended vacuum statistics, one report per index.
+ *
+ * The per-index counters (pages_deleted and the number of removed index
+ * entries) are derived directly from each index's final IndexBulkDeleteResult,
+ * which already holds the totals accumulated across all bulkdelete and cleanup
+ * passes -- so no per-pass sampling is needed here.  Used by the non-parallel
+ * path only; the parallel path reports its DSM-resident results from
+ * parallel_vacuum_end().
+ */
+static void
+report_index_vacuum_extstats(LVRelState *vacrel)
+{
+	if (!pgstat_track_vacuum_statistics)
+		return;
+
+	for (int idx = 0; idx < vacrel->nindexes; idx++)
+	{
+		Relation	indrel = vacrel->indrels[idx];
+		IndexBulkDeleteResult *istat = vacrel->indstats[idx];
+		PgStat_VacuumRelationCounts report;
+
+		/* Skip indexes that this vacuum did not process */
+		if (istat == NULL)
+			continue;
+
+		memset(&report, 0, sizeof(report));
+		report.type = PGSTAT_EXTVAC_INDEX;
+		report.common.tuples_deleted = istat->tuples_removed;
+		report.index.pages_deleted = istat->pages_deleted;
+
+		pgstat_report_vacuum_extstats(RelationGetRelid(indrel),
+									  indrel->rd_rel->relisshared,
+									  &report);
+	}
+}
+
+/*
  *	heap_vacuum_rel() -- perform VACUUM for one heap relation
  *
  *		This routine sets things up for and then calls lazy_scan_heap, where
@@ -643,6 +703,10 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	ErrorContextCallback errcallback;
 	char	  **indnames = NULL;
 	Size		dead_items_max_bytes = 0;
+	PgStat_VacuumRelationCounts extVacReport;
+
+	/* Initialize the extended vacuum statistics report */
+	memset(&extVacReport, 0, sizeof(PgStat_VacuumRelationCounts));
 
 	verbose = (params->options & VACOPT_VERBOSE) != 0;
 	instrument = (verbose || (AmAutoVacuumWorkerProcess() &&
@@ -686,6 +750,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	vacrel = palloc0_object(LVRelState);
 	vacrel->dbname = get_database_name(MyDatabaseId);
 	vacrel->relnamespace = get_namespace_name(RelationGetNamespace(rel));
+	vacrel->reloid = RelationGetRelid(rel);
 	vacrel->relname = pstrdup(RelationGetRelationName(rel));
 	vacrel->indname = NULL;
 	vacrel->phase = VACUUM_ERRCB_PHASE_UNKNOWN;
@@ -700,6 +765,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
 					 &vacrel->indrels);
 	vacrel->bstrategy = bstrategy;
+
 	if (instrument && vacrel->nindexes > 0)
 	{
 		/* Copy index names used by instrumentation (not error reporting) */
@@ -985,6 +1051,9 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	 * soon in cases where the failsafe prevented significant amounts of heap
 	 * vacuuming.
 	 */
+	accumulate_heap_vacuum_statistics(vacrel, &extVacReport);
+	pgstat_report_vacuum_extstats(vacrel->reloid, rel->rd_rel->relisshared,
+								  &extVacReport);
 	pgstat_report_vacuum(rel,
 						 Max(vacrel->new_live_tuples, 0),
 						 vacrel->recently_dead_tuples +
@@ -1618,6 +1687,15 @@ lazy_scan_heap(LVRelState *vacrel)
 	/* Do final index cleanup (call each index's amvacuumcleanup routine) */
 	if (vacrel->nindexes > 0 && vacrel->do_index_cleanup)
 		lazy_cleanup_all_indexes(vacrel);
+
+	/*
+	 * Report the per-index extended vacuum statistics accumulated over all
+	 * bulkdelete and cleanup passes, exactly once per index.  The parallel
+	 * path reports its DSM-resident totals from parallel_vacuum_end() instead,
+	 * so only do it here when index vacuuming ran in the leader.
+	 */
+	if (vacrel->nindexes > 0 && !ParallelVacuumIsActive(vacrel))
+		report_index_vacuum_extstats(vacrel);
 }
 
 /*

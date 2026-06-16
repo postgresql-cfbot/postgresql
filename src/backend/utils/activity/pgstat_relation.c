@@ -905,6 +905,12 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 }
 
 void
+pgstat_vacuum_relation_delete_pending_cb(Oid relid)
+{
+	pgstat_drop_transactional(PGSTAT_KIND_VACUUM_RELATION, relid, InvalidOid);
+}
+
+void
 pgstat_relation_delete_pending_cb(PgStat_EntryRef *entry_ref)
 {
 	PgStat_TableStatus *pending = (PgStat_TableStatus *) entry_ref->pending;

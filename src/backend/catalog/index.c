@@ -2345,6 +2345,7 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 
 	/* ensure that stats are dropped if transaction commits */
 	pgstat_drop_relation(userIndexRelation);
+	pgstat_vacuum_relation_delete_pending_cb(RelationGetRelid(userIndexRelation));
 
 	/*
 	 * Close and flush the index's relcache entry, to ensure relcache doesn't

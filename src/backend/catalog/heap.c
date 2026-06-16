@@ -1903,6 +1903,7 @@ heap_drop_with_catalog(Oid relid)
 
 	/* ensure that stats are dropped if transaction commits */
 	pgstat_drop_relation(rel);
+	pgstat_vacuum_relation_delete_pending_cb(RelationGetRelid(rel));
 
 	/*
 	 * Close relcache entry, but *keep* AccessExclusiveLock on the relation

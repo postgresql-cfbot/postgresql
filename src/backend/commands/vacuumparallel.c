@@ -535,6 +535,33 @@ parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 	DestroyParallelContext(pvs->pcxt);
 	ExitParallelMode();
 
+	/*
+	 * Report the per-index extended vacuum statistics, one report per index,
+	 * derived directly from each index's final IndexBulkDeleteResult.  The
+	 * indexes are still open here (pvs->indrels is the leader's own array, not
+	 * in the now-destroyed DSM).
+	 */
+	if (pgstat_track_vacuum_statistics)
+	{
+		for (int i = 0; i < pvs->nindexes; i++)
+		{
+			Relation	indrel = pvs->indrels[i];
+			PgStat_VacuumRelationCounts report;
+
+			if (istats[i] == NULL)
+				continue;
+
+			memset(&report, 0, sizeof(report));
+			report.type = PGSTAT_EXTVAC_INDEX;
+			report.common.tuples_deleted = istats[i]->tuples_removed;
+			report.index.pages_deleted = istats[i]->pages_deleted;
+
+			pgstat_report_vacuum_extstats(RelationGetRelid(indrel),
+										  indrel->rd_rel->relisshared,
+										  &report);
+		}
+	}
+
 	if (AmAutoVacuumWorkerProcess())
 		pv_shared_cost_params = NULL;
 

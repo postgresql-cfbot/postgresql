@@ -507,6 +507,12 @@ typedef struct PgStatShared_Relation
 	PgStat_StatTabEntry stats;
 } PgStatShared_Relation;
 
+typedef struct PgStatShared_VacuumRelation
+{
+	PgStatShared_Common header;
+	PgStat_VacuumRelationCounts stats;
+}			PgStatShared_VacuumRelation;
+
 typedef struct PgStatShared_Function
 {
 	PgStatShared_Common header;
@@ -688,6 +694,8 @@ extern PgStat_EntryRef *pgstat_fetch_pending_entry(PgStat_Kind kind,
 extern void *pgstat_fetch_entry(PgStat_Kind kind, Oid dboid, uint64 objid,
 								bool *may_free);
 extern void pgstat_snapshot_fixed(PgStat_Kind kind);
+
+extern bool pgstat_vacuum_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait);
 
 
 /*

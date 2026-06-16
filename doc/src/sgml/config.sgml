@@ -9110,6 +9110,26 @@ COPY postgres_log FROM '/full/path/to/logfile.csv' WITH csv;
       </listitem>
      </varlistentry>
 
+     <varlistentry id="guc-track-vacuum-statistics" xreflabel="track_vacuum_statistics">
+      <term><varname>track_vacuum_statistics</varname> (<type>boolean</type>)
+      <indexterm>
+       <primary><varname>track_vacuum_statistics</varname> configuration parameter</primary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        Enables collection of extended statistics about the work performed by
+        <command>VACUUM</command>, reported in the
+        <structname>pg_stat_vacuum_tables</structname>,
+        <structname>pg_stat_vacuum_indexes</structname> and
+        <structname>pg_stat_vacuum_database</structname> views.
+        This parameter is off by default.
+        Only superusers and users with the appropriate <literal>SET</literal>
+        privilege can change this setting.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-track-functions" xreflabel="track_functions">
       <term><varname>track_functions</varname> (<type>enum</type>)
       <indexterm>

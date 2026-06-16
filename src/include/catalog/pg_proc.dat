@@ -12635,6 +12635,16 @@
   proargnames => '{pid,io_id,io_generation,state,operation,off,length,target,handle_data_len,raw_result,result,target_desc,f_sync,f_localmem,f_buffered}',
   prosrc => 'pg_get_aios', proacl => '{POSTGRES=X,pg_read_all_stats=X}' },
 
+{ oid => '8001',
+  descr => 'pg_stat_get_vacuum_tables returns vacuum stats values for table',
+  proname => 'pg_stat_get_vacuum_tables', prorows => 1000, provolatile => 's', prorettype => 'record', proisstrict => 'f',
+  proretset => 't',
+  proargtypes => 'oid',
+  proallargtypes => '{oid,oid,int8,int8,int8,int8}',
+  proargmodes => '{i,o,o,o,o,o}',
+  proargnames => '{reloid,relid,pages_scanned,pages_removed,tuples_deleted,tuples_frozen}',
+  prosrc => 'pg_stat_get_vacuum_tables' }
+
 # oid8 related functions
 { oid => '6436', descr => 'convert oid to oid8',
   proname => 'oid8', prorettype => 'oid8', proargtypes => 'oid',
@@ -12700,4 +12710,13 @@
   proname => 'pg_stat_get_frozen_page_marks_cleared', provolatile => 's',
   proparallel => 'r', prorettype => 'int8', proargtypes => 'oid',
   prosrc => 'pg_stat_get_frozen_page_marks_cleared' },
+{ oid => '8004',
+  descr => 'pg_stat_get_vacuum_indexes returns vacuum stats values for index',
+  proname => 'pg_stat_get_vacuum_indexes', prorows => 1000, provolatile => 's', prorettype => 'record', proisstrict => 'f',
+  proretset => 't',
+  proargtypes => 'oid',
+  proallargtypes => '{oid,oid,int8,int8}',
+  proargmodes => '{i,o,o,o}',
+  proargnames => '{reloid,relid,pages_deleted,tuples_deleted}',
+  prosrc => 'pg_stat_get_vacuum_indexes' },
 ]

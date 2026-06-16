@@ -2421,6 +2421,30 @@ pg_stat_user_tables| SELECT relid,
     frozen_page_marks_cleared
    FROM pg_stat_all_tables
   WHERE ((schemaname <> ALL (ARRAY['pg_catalog'::name, 'information_schema'::name])) AND (schemaname !~ '^pg_toast'::text));
+pg_stat_vacuum_indexes| SELECT c.oid AS relid,
+    i.oid AS indexrelid,
+    n.nspname AS schemaname,
+    c.relname,
+    i.relname AS indexrelname,
+    s.pages_deleted,
+    s.tuples_deleted
+   FROM (((pg_class c
+     JOIN pg_index x ON ((c.oid = x.indrelid)))
+     JOIN pg_class i ON ((i.oid = x.indexrelid)))
+     LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
+    LATERAL pg_stat_get_vacuum_indexes(i.oid) s(relid, pages_deleted, tuples_deleted)
+  WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
+pg_stat_vacuum_tables| SELECT n.nspname AS schemaname,
+    c.relname,
+    s.relid,
+    s.pages_scanned,
+    s.pages_removed,
+    s.tuples_deleted,
+    s.tuples_frozen
+   FROM (pg_class c
+     JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
+    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen)
+  WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
 pg_stat_wal| SELECT wal_records,
     wal_fpi,
     wal_bytes,

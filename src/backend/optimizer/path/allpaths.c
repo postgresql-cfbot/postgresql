@@ -4807,20 +4807,19 @@ remove_unused_subquery_outputs(Query *subquery, RelOptInfo *rel,
 		 */
 		if (IsA(texpr, WindowFunc))
 		{
+			bool		is_rpr = false;
 			WindowFunc *wfunc = (WindowFunc *) texpr;
-			ListCell   *wlc;
 
-			foreach(wlc, subquery->windowClause)
+			foreach_node(WindowClause, wc, subquery->windowClause)
 			{
-				WindowClause *wc = lfirst_node(WindowClause, wlc);
-
-				if (wc->winref == wfunc->winref &&
-					wc->defineClause != NIL)
+				if (wc->winref == wfunc->winref && wc->defineClause != NIL)
 				{
+					is_rpr = true;
 					break;
 				}
 			}
-			if (wlc != NULL)
+
+			if (is_rpr)
 				continue;
 		}
 

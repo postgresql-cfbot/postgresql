@@ -1606,7 +1606,7 @@ nfa_reevaluate_dependent_vars(WindowAggState *winstate, RPRNFAContext *ctx,
 	/* Invalidate nav_slot cache since match_start changed */
 	winstate->nav_slot_pos = -1;
 
-	foreach_ptr(ExprState, exprState, winstate->defineClauseList)
+	foreach_ptr(ExprState, exprState, winstate->defineClauseExprs)
 	{
 		int			varIdx = foreach_current_index(exprState);
 

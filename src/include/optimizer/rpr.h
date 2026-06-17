@@ -67,10 +67,7 @@
 #define RPRElemIsFin(e)			((e)->varId == RPR_VARID_FIN)
 #define RPRElemCanSkip(e)		((e)->min == 0)
 
-extern List *collectPatternVariables(RPRPatternNode *pattern);
 extern void validate_rpr_define_volatility(List *defineClause);
-extern void buildDefineVariableList(List *defineClause,
-									List **defineVariableList);
 extern RPRPattern *buildRPRPattern(RPRPatternNode *pattern, List *defineVariableList,
 								   RPSkipTo rpSkipTo, int frameOptions,
 								   bool hasMatchStartDependent);

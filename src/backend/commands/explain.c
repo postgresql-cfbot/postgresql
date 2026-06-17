@@ -3212,76 +3212,72 @@ show_window_def(WindowAggState *planstate, List *ancestors, ExplainState *es)
 	/* Show Row Pattern Recognition pattern if present */
 	if (wagg->rpPattern != NULL)
 	{
+		RPRNavOffsetKind maxKind = wagg->navMaxOffsetKind;
+		int64		maxOffset = wagg->navMaxOffset;
+		RPRNavOffsetKind firstKind = wagg->navFirstOffsetKind;
+		int64		firstOffset = wagg->navFirstOffset;
+
 		char	   *patternStr = deparse_rpr_pattern(wagg->rpPattern);
 
-		if (patternStr != NULL)
-		{
-			ExplainPropertyText("Pattern", patternStr, es);
-			pfree(patternStr);
-		}
+		ExplainPropertyText("Pattern", patternStr, es);
+
+		pfree(patternStr);
 
 		/*
 		 * Show navigation offsets for tuplestore trim.  For EXPLAIN ANALYZE,
 		 * use the executor-resolved values (which may differ from the plan
 		 * when NEEDS_EVAL was resolved to FIXED or RETAIN_ALL at init).
 		 */
+		if (es->analyze)
 		{
-			RPRNavOffsetKind maxKind = wagg->navMaxOffsetKind;
-			int64		maxOffset = wagg->navMaxOffset;
-			RPRNavOffsetKind firstKind = wagg->navFirstOffsetKind;
-			int64		firstOffset = wagg->navFirstOffset;
+			maxKind = planstate->navMaxOffsetKind;
+			maxOffset = planstate->navMaxOffset;
+			firstKind = planstate->navFirstOffsetKind;
+			firstOffset = planstate->navFirstOffset;
+		}
 
-			if (es->analyze)
-			{
-				maxKind = planstate->navMaxOffsetKind;
-				maxOffset = planstate->navMaxOffset;
-				firstKind = planstate->navFirstOffsetKind;
-				firstOffset = planstate->navFirstOffset;
-			}
+		switch (maxKind)
+		{
+			case RPR_NAV_OFFSET_NEEDS_EVAL:
+				ExplainPropertyText("Nav Mark Lookback", "runtime", es);
+				break;
+			case RPR_NAV_OFFSET_RETAIN_ALL:
+				ExplainPropertyText("Nav Mark Lookback", "retain all", es);
+				break;
+			case RPR_NAV_OFFSET_FIXED:
+				ExplainPropertyInteger("Nav Mark Lookback", NULL,
+									   maxOffset, es);
+				break;
+			default:
+				elog(ERROR, "unrecognized RPR nav offset kind: %d",
+					 maxKind);
+				break;
+		}
 
-			switch (maxKind)
+		if (wagg->hasFirstNav)
+		{
+			switch (firstKind)
 			{
 				case RPR_NAV_OFFSET_NEEDS_EVAL:
-					ExplainPropertyText("Nav Mark Lookback", "runtime", es);
+					ExplainPropertyText("Nav Mark Lookahead", "runtime",
+										es);
 					break;
 				case RPR_NAV_OFFSET_RETAIN_ALL:
-					ExplainPropertyText("Nav Mark Lookback", "retain all", es);
+					ExplainPropertyText("Nav Mark Lookahead", "retain all",
+										es);
 					break;
 				case RPR_NAV_OFFSET_FIXED:
-					ExplainPropertyInteger("Nav Mark Lookback", NULL,
-										   maxOffset, es);
+					if (firstOffset == PG_INT64_MAX)
+						ExplainPropertyText("Nav Mark Lookahead", "infinite",
+											es);
+					else
+						ExplainPropertyInteger("Nav Mark Lookahead", NULL,
+											   firstOffset, es);
 					break;
 				default:
 					elog(ERROR, "unrecognized RPR nav offset kind: %d",
-						 maxKind);
+						 firstKind);
 					break;
-			}
-
-			if (wagg->hasFirstNav)
-			{
-				switch (firstKind)
-				{
-					case RPR_NAV_OFFSET_NEEDS_EVAL:
-						ExplainPropertyText("Nav Mark Lookahead", "runtime",
-											es);
-						break;
-					case RPR_NAV_OFFSET_RETAIN_ALL:
-						ExplainPropertyText("Nav Mark Lookahead", "retain all",
-											es);
-						break;
-					case RPR_NAV_OFFSET_FIXED:
-						if (firstOffset == PG_INT64_MAX)
-							ExplainPropertyText("Nav Mark Lookahead", "infinite",
-												es);
-						else
-							ExplainPropertyInteger("Nav Mark Lookahead", NULL,
-												   firstOffset, es);
-						break;
-					default:
-						elog(ERROR, "unrecognized RPR nav offset kind: %d",
-							 firstKind);
-						break;
-				}
 			}
 		}
 	}

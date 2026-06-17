@@ -96,9 +96,6 @@ static void computeAbsorbabilityRecursive(RPRPattern *pattern,
 										  bool *hasAbsorbable);
 static void computeAbsorbability(RPRPattern *pattern);
 
-static void collectPatternVariablesRecursive(RPRPatternNode *node,
-											 List **varNames);
-
 /*
  * rprPatternEqual
  *		Compare two RPRPatternNode trees for equality.
@@ -1825,59 +1822,6 @@ computeAbsorbability(RPRPattern *pattern)
 }
 
 /*
- * collectPatternVariablesRecursive
- *		Recursively collect variable names from pattern AST.
- */
-static void
-collectPatternVariablesRecursive(RPRPatternNode *node, List **varNames)
-{
-	Assert(node != NULL);
-
-	check_stack_depth();
-
-	switch (node->nodeType)
-	{
-		case RPR_PATTERN_VAR:
-			/* Add variable if not already in list */
-			foreach_node(String, varname, *varNames)
-			{
-				if (strcmp(strVal(varname), node->varName) == 0)
-					return;		/* Already collected */
-			}
-			*varNames = lappend(*varNames, makeString(pstrdup(node->varName)));
-			break;
-
-		case RPR_PATTERN_SEQ:
-		case RPR_PATTERN_ALT:
-		case RPR_PATTERN_GROUP:
-			foreach_node(RPRPatternNode, child, node->children)
-			{
-				collectPatternVariablesRecursive(child, varNames);
-			}
-			break;
-	}
-}
-
-/*
- * collectPatternVariables
- *		Collect unique variable names used in PATTERN clause.
- *
- * Returns a list of String nodes containing variable names.
- * Used to filter defineClause before varId assignment.
- */
-List *
-collectPatternVariables(RPRPatternNode *pattern)
-{
-	List	   *varNames = NIL;
-
-	/* Caller ensures pattern is not NULL */
-	Assert(pattern != NULL);
-
-	collectPatternVariablesRecursive(pattern, &varNames);
-	return varNames;
-}
-
-/*
  * rpr_volatile_func_checker
  *		check_functions_in_node callback: true if funcid is VOLATILE.
  */
@@ -1950,27 +1894,6 @@ validate_rpr_define_volatility(List *defineClause)
 		TargetEntry *te = lfirst_node(TargetEntry, lc);
 
 		(void) reject_volatile_in_define_walker((Node *) te->expr, NULL);
-	}
-}
-
-/*
- * buildDefineVariableList
- *		Build defineVariableList from defineClause.
- *
- * The parser already ensures that all DEFINE variables appear in PATTERN,
- * so no filtering is needed here.
- *
- * Sets *defineVariableList to list of variable names (String nodes).
- */
-void
-buildDefineVariableList(List *defineClause, List **defineVariableList)
-{
-	*defineVariableList = NIL;
-
-	foreach_node(TargetEntry, te, defineClause)
-	{
-		*defineVariableList = lappend(*defineVariableList,
-									  makeString(pstrdup(te->resname)));
 	}
 }
 

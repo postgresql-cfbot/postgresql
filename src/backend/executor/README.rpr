@@ -188,7 +188,6 @@ Chapter IV  Compilation Phase
 IV-1. Entry Point
 
   create_windowagg_plan() (createplan.c)
-    +-- buildDefineVariableList()    Build variable name list from DEFINE
     +-- buildRPRPattern()           NFA compilation (6 phases)
 
 IV-2. The 6 Phases of buildRPRPattern()
@@ -1468,8 +1467,6 @@ Appendix A. Key Function Index
   --------------------------------------------------------------------------
   transformRPR                  parse_rpr.c           Parser entry point
   transformDefineClause         parse_rpr.c           DEFINE transformation
-  collectPatternVariables       rpr.c                 Variable collection
-  buildDefineVariableList       rpr.c                 DEFINE variable list
   buildRPRPattern               rpr.c                 NFA compilation main
   optimizeRPRPattern            rpr.c                 AST optimization
   fillRPRPattern                rpr.c                 NFA element generation
@@ -1538,7 +1535,7 @@ Appendix B. Data Structure Relationship Diagram
     |--- rpSkipTo: RPSkipTo (AFTER MATCH SKIP mode)
     |--- rpPattern: RPRPattern* (copied from plan)
     |--- defineVariableList: List<String> (variable names, DEFINE order)
-    |--- defineClauseList: List<ExprState>
+    |--- defineClauseExprs: List<ExprState>
     |--- nfaVarMatched: bool[] (per-row cache)
     |--- defineMatchStartDependent: Bitmapset* (match_start_dependent
     |        DEFINE vars; see VI-4)

@@ -166,9 +166,9 @@ ORDER BY id;
 -- are used here because dedup only applies to inline windows.
 
 -- Baseline: two inline RPR windows that are structurally identical
--- (same ORDER BY, frame, PATTERN, and DEFINE) are deduped by the
--- parser into a single WindowAgg node, confirming that parser-level
--- dedup is active for RPR windows whose DEFINE matches.
+-- (same PARTITION BY, ORDER BY, frame, PATTERN, and DEFINE) are deduped by the
+-- parser into a single WindowAgg node, confirming that parser-level dedup is
+-- active for RPR windows whose DEFINE matches.
 EXPLAIN (COSTS OFF)
 SELECT
     count(*) OVER (ORDER BY id
@@ -214,16 +214,10 @@ ORDER BY id;
 -- A5. Unused window removal prevention
 -- ============================================================
 -- Verify that remove_unused_subquery_outputs() does not drop an RPR
--- window function even when the outer query does not reference its
--- result.  The RPR WindowAgg node is responsible for performing pattern
--- matching, so removing the window function would silently skip the
--- pattern match even though the surrounding query still depends on
--- RPR semantics.
-
--- The outer query ignores the per-row window result, yet pattern
--- matching must still execute.  The plan must still contain a
--- WindowAgg node below the outer Aggregate; if the window were
--- removed, only Aggregate + Seq Scan would appear.
+-- window function when the outer query does not reference its result.
+-- The WindowAgg node performs the pattern match itself; without it,
+-- the match would be silently skipped.  The plan must contain a
+-- WindowAgg node beneath the outer Aggregate.
 EXPLAIN (COSTS OFF)
 SELECT count(*) FROM (
     SELECT count(*) OVER w FROM rpr_integ
@@ -399,11 +393,8 @@ WHERE cnt > 0;
 -- EXPLAIN VERBOSE is therefore expected to show a clean targetlist on
 -- the outer WindowAgg, with no DEFINE-derived expression leaking in.
 -- Note: columns referenced by DEFINE (e.g., "val") may appear as
--- resjunk entries in upper WindowAgg targetlists -- that is a
--- harmless byproduct of the column guard's broad scope and does not
--- affect client output.  The claim here is limited to the full
--- DEFINE boolean expression.
-
+-- resjunk entries in upper WindowAgg targetlists -- but that is harmless.
+-- The claim here is limited to the full DEFINE boolean expression.
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT
     count(*) OVER w_rpr AS rpr_cnt,
@@ -417,10 +408,6 @@ WINDOW
     w_normal AS (ORDER BY id
         ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING);
 
--- Executing the same query shows the client result is limited to
--- the two projected columns; "id" and "val" that appeared in the
--- upper WindowAgg Output line are resjunk-only and do not reach
--- the client.
 SELECT
     count(*) OVER w_rpr AS rpr_cnt,
     count(*) OVER w_normal AS normal_cnt

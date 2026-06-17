@@ -687,7 +687,8 @@ typedef struct RPRNavExpr
 	Expr	   *offset_arg;		/* offset expression, or NULL for default */
 	Expr	   *compound_offset_arg;	/* outer offset for compound nav, or
 										 * NULL if simple */
-	Oid			resulttype;		/* result type (same as arg's type) */
+	/* result type (same as arg's type) */
+	Oid			resulttype pg_node_attr(query_jumble_ignore);
 	/* OID of collation of result */
 	Oid			resultcollid pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */

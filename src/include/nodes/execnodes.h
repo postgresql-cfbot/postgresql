@@ -2656,7 +2656,7 @@ typedef struct WindowAggState
 	struct RPRPattern *rpPattern;	/* compiled pattern for NFA execution */
 	List	   *defineVariableList; /* list of row pattern definition
 									 * variables (list of String) */
-	List	   *defineClauseList;	/* expression for row pattern definition
+	List	   *defineClauseExprs;	/* expression for row pattern definition
 									 * search conditions ExprState list */
 	RPRNFAContext *nfaContext;	/* active matching contexts (head) */
 	RPRNFAContext *nfaContextTail;	/* tail of active contexts (for reverse

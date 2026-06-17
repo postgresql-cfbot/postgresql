@@ -3067,27 +3067,26 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 
 	/* Set up row pattern recognition DEFINE clause */
 	winstate->defineVariableList = NIL;
-	winstate->defineClauseList = NIL;
-	if (node->defineClause != NIL)
-	{
-		/*
-		 * Compile DEFINE clause expressions.  PREV/NEXT navigation is handled
-		 * by EEOP_RPR_NAV_SET/RESTORE opcodes emitted during ExecInitExpr, so
-		 * no varno rewriting is needed here.
-		 */
-		foreach_node(TargetEntry, te, node->defineClause)
-		{
-			char	   *name = te->resname;
-			Expr	   *expr = te->expr;
-			ExprState  *exps;
+	winstate->defineClauseExprs = NIL;
 
-			winstate->defineVariableList =
-				lappend(winstate->defineVariableList,
-						makeString(pstrdup(name)));
-			exps = ExecInitExpr(expr, (PlanState *) winstate);
-			winstate->defineClauseList =
-				lappend(winstate->defineClauseList, exps);
-		}
+	/*
+	 * Compile DEFINE clause expressions.  PREV/NEXT navigation is handled by
+	 * EEOP_RPR_NAV_SET/RESTORE opcodes emitted during ExecInitExpr, so no
+	 * varno rewriting is needed here.
+	 */
+	foreach_node(TargetEntry, te, node->defineClause)
+	{
+		char	   *name = te->resname;
+		ExprState  *exprstate;
+
+		winstate->defineVariableList =
+			lappend(winstate->defineVariableList,
+					makeString(pstrdup(name)));
+
+		exprstate = ExecInitExpr(te->expr, (PlanState *) winstate);
+
+		winstate->defineClauseExprs =
+			lappend(winstate->defineClauseExprs, exprstate);
 	}
 
 	/* Initialize NFA free lists for row pattern matching */
@@ -4669,7 +4668,7 @@ nfa_evaluate_row(WindowObject winobj, int64 pos, bool *varMatched)
 	/* Invalidate nav_slot cache so PREV/NEXT re-fetch for new row */
 	winstate->nav_slot_pos = -1;
 
-	foreach_ptr(ExprState, exprState, winstate->defineClauseList)
+	foreach_ptr(ExprState, exprState, winstate->defineClauseExprs)
 	{
 		Datum		result;
 		bool		isnull;

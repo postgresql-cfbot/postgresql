@@ -290,9 +290,8 @@ static Memoize *make_memoize(Plan *lefttree, Oid *hashoperators,
 static WindowAgg *make_windowagg(List *tlist, WindowClause *wc,
 								 int partNumCols, AttrNumber *partColIdx, Oid *partOperators, Oid *partCollations,
 								 int ordNumCols, AttrNumber *ordColIdx, Oid *ordOperators, Oid *ordCollations,
-								 List *runCondition, RPSkipTo rpSkipTo,
+								 List *runCondition,
 								 RPRPattern *compiledPattern,
-								 List *defineClause,
 								 Bitmapset *defineMatchStartDependent,
 								 RPRNavOffsetKind navMaxOffsetKind, int64 navMaxOffset,
 								 bool hasFirstNav,
@@ -2822,7 +2821,6 @@ create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path)
 	Oid		   *ordCollations;
 	ListCell   *lc;
 	List	   *defineVariableList = NIL;
-	List	   *filteredDefineClause = NIL;
 	RPRPattern *compiledPattern = NULL;
 	Bitmapset  *matchStartDependent = NULL;
 	RPRNavOffsetKind navMaxOffsetKind = RPR_NAV_OFFSET_FIXED;
@@ -2889,8 +2887,9 @@ create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path)
 		 * rejects DEFINE variables not used in PATTERN, so no filtering is
 		 * needed.
 		 */
-		buildDefineVariableList(wc->defineClause, &defineVariableList);
-		filteredDefineClause = wc->defineClause;
+		foreach_node(TargetEntry, te, wc->defineClause)
+			defineVariableList = lappend(defineVariableList,
+										 makeString(pstrdup(te->resname)));
 
 		/*
 		 * Walk DEFINE once: collect nav offsets (for tuplestore trim) and the
@@ -2923,13 +2922,13 @@ create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path)
 						  ordOperators,
 						  ordCollations,
 						  best_path->runCondition,
-						  wc->rpSkipTo,
 						  compiledPattern,
-						  filteredDefineClause,
 						  matchStartDependent,
-						  navMaxOffsetKind, navMaxOffset,
+						  navMaxOffsetKind,
+						  navMaxOffset,
 						  hasFirstNav,
-						  navFirstOffsetKind, navFirstOffset,
+						  navFirstOffsetKind,
+						  navFirstOffset,
 						  best_path->qual,
 						  best_path->topwindow,
 						  subplan);
@@ -7000,9 +6999,8 @@ static WindowAgg *
 make_windowagg(List *tlist, WindowClause *wc,
 			   int partNumCols, AttrNumber *partColIdx, Oid *partOperators, Oid *partCollations,
 			   int ordNumCols, AttrNumber *ordColIdx, Oid *ordOperators, Oid *ordCollations,
-			   List *runCondition, RPSkipTo rpSkipTo,
+			   List *runCondition,
 			   RPRPattern *compiledPattern,
-			   List *defineClause,
 			   Bitmapset *defineMatchStartDependent,
 			   RPRNavOffsetKind navMaxOffsetKind, int64 navMaxOffset,
 			   bool hasFirstNav,
@@ -7034,12 +7032,12 @@ make_windowagg(List *tlist, WindowClause *wc,
 	node->inRangeAsc = wc->inRangeAsc;
 	node->inRangeNullsFirst = wc->inRangeNullsFirst;
 	node->topWindow = topWindow;
-	node->rpSkipTo = rpSkipTo;
+	node->rpSkipTo = wc->rpSkipTo;
 
 	/* Store compiled pattern for NFA execution */
 	node->rpPattern = compiledPattern;
 
-	node->defineClause = defineClause;
+	node->defineClause = wc->defineClause;
 
 	/* Store pre-computed match_start dependency bitmapset */
 	node->defineMatchStartDependent = defineMatchStartDependent;

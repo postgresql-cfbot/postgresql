@@ -1,5 +1,6 @@
 #include "postgres.h"
 
+#include "miscadmin.h"
 #include "plpy_elog.h"
 #include "plpy_typeio.h"
 #include "plpy_util.h"
@@ -142,6 +143,8 @@ PLyObject_FromJsonbContainer(JsonbContainer *jsonb)
 	JsonbValue	v;
 	JsonbIterator *it;
 	PyObject   *result;
+
+	check_stack_depth();
 
 	it = JsonbIteratorInit(jsonb);
 	r = JsonbIteratorNext(&it, &v, true);
@@ -409,6 +412,8 @@ static void
 PLyObject_ToJsonbValue(PyObject *obj, JsonbInState *jsonb_state, bool is_elem)
 {
 	JsonbValue *out;
+
+	check_stack_depth();
 
 	if (!PyUnicode_Check(obj))
 	{

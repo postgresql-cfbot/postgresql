@@ -3,6 +3,7 @@
 #include <math.h>
 
 #include "fmgr.h"
+#include "miscadmin.h"
 #include "plperl.h"
 #include "utils/fmgrprotos.h"
 #include "utils/jsonb.h"
@@ -65,6 +66,8 @@ Jsonb_to_SV(JsonbContainer *jsonb)
 	JsonbValue	v;
 	JsonbIterator *it;
 	JsonbIteratorToken r;
+
+	check_stack_depth();
 
 	it = JsonbIteratorInit(jsonb);
 	r = JsonbIteratorNext(&it, &v, true);
@@ -179,9 +182,14 @@ SV_to_JsonbValue(SV *in, JsonbInState *jsonb_state, bool is_elem)
 	dTHX;
 	JsonbValue	out;			/* result */
 
+	check_stack_depth();
+
 	/* Dereference references recursively. */
 	while (SvROK(in))
+	{
+		CHECK_FOR_INTERRUPTS();
 		in = SvRV(in);
+	}
 
 	switch (SvTYPE(in))
 	{

@@ -233,6 +233,13 @@ typedef struct PgStat_VacuumRelationCounts
 			int64		missed_dead_tuples; /* tuples not pruned by vacuum due
 											 * to failure to get a cleanup
 											 * lock */
+			int64		vm_new_frozen_pages;	/* pages marked in VM as
+												 * frozen */
+			int64		vm_new_visible_pages;	/* pages marked in VM as
+												 * all-visible */
+			int64		vm_new_visible_frozen_pages;	/* pages marked in VM as
+														 * all-visible and
+														 * frozen */
 		}			table;
 		struct
 		{

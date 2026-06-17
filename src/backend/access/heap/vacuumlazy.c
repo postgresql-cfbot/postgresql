@@ -624,6 +624,9 @@ accumulate_heap_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCount
 	extVacStats->type = PGSTAT_EXTVAC_TABLE;
 	extVacStats->table.pages_scanned = vacrel->scanned_pages;
 	extVacStats->table.pages_removed = vacrel->removed_pages;
+	extVacStats->table.vm_new_frozen_pages = vacrel->new_all_frozen_pages;
+	extVacStats->table.vm_new_visible_pages = vacrel->new_all_visible_pages;
+	extVacStats->table.vm_new_visible_frozen_pages = vacrel->new_all_visible_all_frozen_pages;
 	extVacStats->common.tuples_deleted = vacrel->tuples_deleted;
 	extVacStats->table.tuples_frozen = vacrel->tuples_frozen;
 	extVacStats->table.recently_dead_tuples = vacrel->recently_dead_tuples;

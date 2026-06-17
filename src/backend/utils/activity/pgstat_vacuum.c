@@ -76,6 +76,9 @@ pgstat_accumulate_extvac_stats_relations(PgStat_VacuumRelationCounts *dst,
 	{
 		ACCUMULATE_SUBFIELD(table, pages_scanned);
 		ACCUMULATE_SUBFIELD(table, pages_removed);
+				ACCUMULATE_SUBFIELD(table, vm_new_frozen_pages);
+		ACCUMULATE_SUBFIELD(table, vm_new_visible_pages);
+		ACCUMULATE_SUBFIELD(table, vm_new_visible_frozen_pages);
 		ACCUMULATE_SUBFIELD(table, missed_dead_pages);
 			ACCUMULATE_SUBFIELD(table, tuples_frozen);
 		ACCUMULATE_SUBFIELD(table, recently_dead_tuples);

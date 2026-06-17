@@ -55,6 +55,32 @@ SELECT recently_dead_tuples = 0 AS recently_dead_tuples,
        missed_dead_tuples = 0 AS missed_dead_tuples
   FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
 
+-- visibility-map page transitions.  Removing the interleaved dead tuples lets
+-- VACUUM mark every heap page all-visible (vm_new_visible_pages > 0).  Whether
+-- VACUUM also freezes those pages (vm_new_frozen_pages /
+-- vm_new_visible_frozen_pages) depends on opportunistic freezing, which is not
+-- deterministic here, so those are only checked for being non-negative; the
+-- positive freeze path is covered by the dedicated VACUUM (FREEZE) scenario
+-- below.
+SELECT vm_new_frozen_pages >= 0 AS vm_new_frozen_pages,
+       vm_new_visible_pages > 0 AS vm_new_visible_pages,
+       vm_new_visible_frozen_pages >= 0 AS vm_new_visible_frozen_pages
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- freeze path: a dedicated VACUUM (FREEZE) marks freshly-loaded heap pages
+-- all-visible and all-frozen in one pass, so vm_new_visible_frozen_pages
+-- advances.  This restores the coverage of the former
+-- 053_vacuum_extending_freeze TAP test.
+CREATE TABLE vacstat_frz (x int)
+  WITH (autovacuum_enabled = off, fillfactor = 10);
+INSERT INTO vacstat_frz SELECT g FROM generate_series(1, 1000) g;
+VACUUM (FREEZE) vacstat_frz;
+SELECT pg_stat_force_next_flush();
+SELECT vm_new_visible_pages > 0 AS vm_new_visible_pages,
+       vm_new_visible_frozen_pages > 0 AS vm_new_visible_frozen_pages
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_frz';
+DROP TABLE vacstat_frz;
+
 -- WAL metrics.  A vacuum that removes tuples always emits WAL
 -- (wal_records > 0, wal_bytes > 0).  wal_fpi depends on whether a checkpoint
 -- happened recently, so it is only checked for being non-negative here; the

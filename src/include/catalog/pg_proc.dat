@@ -12640,9 +12640,9 @@
   proname => 'pg_stat_get_vacuum_tables', prorows => 1000, provolatile => 's', prorettype => 'record', proisstrict => 'f',
   proretset => 't',
   proargtypes => 'oid',
-  proallargtypes => '{oid,oid,int8,int8,int8,int8,int8,int8,int8,int4,int8,int8,numeric}',
-  proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o,o}',
-  proargnames => '{reloid,relid,pages_scanned,pages_removed,tuples_deleted,tuples_frozen,recently_dead_tuples,missed_dead_pages,missed_dead_tuples,wraparound_failsafe,wal_records,wal_fpi,wal_bytes}',
+  proallargtypes => '{oid,oid,int8,int8,int8,int8,int8,int8,int8,int8,int8,int8,int4,int8,int8,numeric}',
+  proargmodes => '{i,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o}',
+  proargnames => '{reloid,relid,pages_scanned,pages_removed,tuples_deleted,tuples_frozen,recently_dead_tuples,missed_dead_pages,missed_dead_tuples,vm_new_frozen_pages,vm_new_visible_pages,vm_new_visible_frozen_pages,wraparound_failsafe,wal_records,wal_fpi,wal_bytes}',
   prosrc => 'pg_stat_get_vacuum_tables' }
 
 # oid8 related functions

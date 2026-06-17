@@ -5918,6 +5918,38 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
      </row>
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_read</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks missed (read from disk) by the vacuum.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_hit</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks found in the buffer cache (hits) by the vacuum.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_dirtied</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks dirtied by the vacuum.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_written</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks written out by the vacuum.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>wraparound_failsafe</structfield> <type>integer</type>
       </para>
       <para>
@@ -6041,6 +6073,38 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
      </row>
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_read</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks read while vacuuming the index.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_hit</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer block hits while vacuuming the index.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_dirtied</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks dirtied while vacuuming the index.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_written</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks written out while vacuuming the index.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>wal_records</structfield> <type>bigint</type>
       </para>
       <para>
@@ -6119,6 +6183,38 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </para>
       <para>
        Number of vacuum operations in this database that failed with an error.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>db_blks_read</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks read by vacuum operations in this database.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>db_blks_hit</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer block hits by vacuum operations in this database.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_dirtied</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks dirtied by vacuum operations in this database.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>total_blks_written</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of shared buffer blocks written out by vacuum operations in this database.
       </para></entry>
      </row>
      <row>

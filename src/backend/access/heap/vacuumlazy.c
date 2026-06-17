@@ -518,6 +518,7 @@ extvac_stats_start(Relation rel, LVExtStatCounters * counters)
 	memset(counters, 0, sizeof(LVExtStatCounters));
 
 	counters->walusage = pgWalUsage;
+	counters->bufusage = pgBufferUsage;
 }
 
 /* ----------
@@ -531,19 +532,27 @@ extvac_stats_end(Relation rel, LVExtStatCounters * counters,
 				 PgStat_CommonCounts * report)
 {
 	WalUsage	walusage;
+	BufferUsage bufusage;
 
 	if (!pgstat_track_vacuum_statistics)
 		return;
 
 	memset(report, 0, sizeof(PgStat_CommonCounts));
 
-	/* Calculate diffs of global stat parameters on WAL usage. */
+	/* Calculate diffs of global stat parameters on WAL and buffer usage. */
 	memset(&walusage, 0, sizeof(WalUsage));
 	WalUsageAccumDiff(&walusage, &pgWalUsage, &counters->walusage);
+
+	memset(&bufusage, 0, sizeof(BufferUsage));
+	BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &counters->bufusage);
 
 	/*
 	 * Fill additional statistics on a vacuum processing operation.
 	 */
+	report->total_blks_read += bufusage.local_blks_read + bufusage.shared_blks_read;
+	report->total_blks_hit += bufusage.local_blks_hit + bufusage.shared_blks_hit;
+	report->total_blks_dirtied += bufusage.local_blks_dirtied + bufusage.shared_blks_dirtied;
+	report->total_blks_written += bufusage.shared_blks_written;
 	report->wal_records += walusage.wal_records;
 	report->wal_fpi += walusage.wal_fpi;
 	report->wal_bytes += walusage.wal_bytes;
@@ -634,6 +643,10 @@ accumulate_heap_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCount
 	extVacStats->table.missed_dead_pages = vacrel->missed_dead_pages;
 	extVacStats->common.wraparound_failsafe_count = vacrel->wraparound_failsafe;
 
+	extVacStats->common.total_blks_dirtied -= vacrel->extVacReportIdx.common.total_blks_dirtied;
+	extVacStats->common.total_blks_hit -= vacrel->extVacReportIdx.common.total_blks_hit;
+	extVacStats->common.total_blks_read -= vacrel->extVacReportIdx.common.total_blks_read;
+	extVacStats->common.total_blks_written -= vacrel->extVacReportIdx.common.total_blks_written;
 	extVacStats->common.wal_bytes -= vacrel->extVacReportIdx.common.wal_bytes;
 	extVacStats->common.wal_fpi -= vacrel->extVacReportIdx.common.wal_fpi;
 	extVacStats->common.wal_records -= vacrel->extVacReportIdx.common.wal_records;
@@ -643,6 +656,10 @@ static void
 accumulate_idxs_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCounts * extVacIdxStats)
 {
 	/* Fill heap-specific extended stats fields */
+	vacrel->extVacReportIdx.common.total_blks_dirtied += extVacIdxStats->common.total_blks_dirtied;
+	vacrel->extVacReportIdx.common.total_blks_hit += extVacIdxStats->common.total_blks_hit;
+	vacrel->extVacReportIdx.common.total_blks_read += extVacIdxStats->common.total_blks_read;
+	vacrel->extVacReportIdx.common.total_blks_written += extVacIdxStats->common.total_blks_written;
 	vacrel->extVacReportIdx.common.wal_bytes += extVacIdxStats->common.wal_bytes;
 	vacrel->extVacReportIdx.common.wal_fpi += extVacIdxStats->common.wal_fpi;
 	vacrel->extVacReportIdx.common.wal_records += extVacIdxStats->common.wal_records;
@@ -664,6 +681,10 @@ extvac_accumulate_idx_report(PgStat_VacuumRelationCounts * dst,
 {
 	dst->type = PGSTAT_EXTVAC_INDEX;
 
+	dst->common.total_blks_read += src->common.total_blks_read;
+	dst->common.total_blks_hit += src->common.total_blks_hit;
+	dst->common.total_blks_dirtied += src->common.total_blks_dirtied;
+	dst->common.total_blks_written += src->common.total_blks_written;
 	dst->common.wal_records += src->common.wal_records;
 	dst->common.wal_fpi += src->common.wal_fpi;
 	dst->common.wal_bytes += src->common.wal_bytes;

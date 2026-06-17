@@ -175,6 +175,12 @@ typedef struct PgStat_TableCounts
 
 typedef struct PgStat_CommonCounts
 {
+	/* blocks */
+	int64		total_blks_read;
+	int64		total_blks_hit;
+	int64		total_blks_dirtied;
+	int64		total_blks_written;
+
 	/* WAL */
 	int64		wal_records;
 	int64		wal_fpi;

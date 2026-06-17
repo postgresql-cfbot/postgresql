@@ -38,6 +38,11 @@ bool		pgstat_track_vacuum_statistics_for_relations = false;
 static void
 pgstat_accumulate_common(PgStat_CommonCounts *dst, const PgStat_CommonCounts *src)
 {
+	ACCUMULATE_FIELD(total_blks_read);
+	ACCUMULATE_FIELD(total_blks_hit);
+	ACCUMULATE_FIELD(total_blks_dirtied);
+	ACCUMULATE_FIELD(total_blks_written);
+
 	ACCUMULATE_FIELD(wal_records);
 	ACCUMULATE_FIELD(wal_fpi);
 	ACCUMULATE_FIELD(wal_bytes);

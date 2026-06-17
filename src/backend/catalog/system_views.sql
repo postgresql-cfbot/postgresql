@@ -1576,6 +1576,10 @@ CREATE VIEW pg_stat_vacuum_tables AS
         S.vm_new_frozen_pages AS vm_new_frozen_pages,
         S.vm_new_visible_pages AS vm_new_visible_pages,
         S.vm_new_visible_frozen_pages AS vm_new_visible_frozen_pages,
+        S.total_blks_read AS total_blks_read,
+        S.total_blks_hit AS total_blks_hit,
+        S.total_blks_dirtied AS total_blks_dirtied,
+        S.total_blks_written AS total_blks_written,
         S.wraparound_failsafe AS wraparound_failsafe,
         S.wal_records AS wal_records,
         S.wal_fpi AS wal_fpi,
@@ -1597,6 +1601,10 @@ CREATE VIEW pg_stat_vacuum_indexes AS
             S.pages_deleted AS pages_deleted,
             S.tuples_deleted AS tuples_deleted,
 
+            S.total_blks_read AS total_blks_read,
+            S.total_blks_hit AS total_blks_hit,
+            S.total_blks_dirtied AS total_blks_dirtied,
+            S.total_blks_written AS total_blks_written,
             S.wal_records AS wal_records,
             S.wal_fpi AS wal_fpi,
             S.wal_bytes AS wal_bytes
@@ -1615,6 +1623,10 @@ CREATE VIEW pg_stat_vacuum_database AS
 
             S.errors AS errors,
 
+            S.db_blks_read AS db_blks_read,
+            S.db_blks_hit AS db_blks_hit,
+            S.total_blks_dirtied AS total_blks_dirtied,
+            S.total_blks_written AS total_blks_written,
             S.wraparound_failsafe AS wraparound_failsafe,
             S.wal_records AS wal_records,
             S.wal_fpi AS wal_fpi,

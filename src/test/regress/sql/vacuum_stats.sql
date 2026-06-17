@@ -81,6 +81,17 @@ SELECT vm_new_visible_pages > 0 AS vm_new_visible_pages,
   FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_frz';
 DROP TABLE vacstat_frz;
 
+-- total buffer access counters.  The vacuum always touches the table's pages
+-- through the buffer cache (total_blks_hit > 0) and dirties some of them while
+-- removing dead tuples (total_blks_dirtied > 0).  total_blks_read and
+-- total_blks_written depend on the buffer-cache and checkpoint state at run
+-- time, so they are only checked for being non-negative.
+SELECT total_blks_read >= 0 AS total_blks_read,
+       total_blks_hit > 0 AS total_blks_hit,
+       total_blks_dirtied > 0 AS total_blks_dirtied,
+       total_blks_written >= 0 AS total_blks_written
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
 -- WAL metrics.  A vacuum that removes tuples always emits WAL
 -- (wal_records > 0, wal_bytes > 0).  wal_fpi depends on whether a checkpoint
 -- happened recently, so it is only checked for being non-negative here; the
@@ -115,10 +126,16 @@ SELECT wraparound_failsafe = 0 AS wraparound_failsafe
 
 -- per-index view: the primary key index is processed by the same VACUUM.
 -- No btree leaf empties out (interleaved deletions), so pages_deleted = 0,
--- while every index entry for a removed heap tuple is deleted.
+-- while every index entry for a removed heap tuple is deleted.  The index is
+-- read through the buffer cache (total_blks_hit > 0); the read/written/dirtied
+-- counters depend on run-time cache state.
 SELECT indexrelname,
        pages_deleted = 0 AS pages_deleted,
        tuples_deleted = 500 AS tuples_deleted,
+       total_blks_read >= 0 AS total_blks_read,
+       total_blks_hit > 0 AS total_blks_hit,
+       total_blks_dirtied >= 0 AS total_blks_dirtied,
+       total_blks_written >= 0 AS total_blks_written,
        wal_records > 0 AS wal_records,
        wal_fpi >= 0 AS wal_fpi,
        wal_bytes > 0 AS wal_bytes
@@ -142,8 +159,13 @@ SELECT indexrelname,
 DROP TABLE vacstat_idxdel;
 
 -- per-database aggregate view: no vacuum errors occurred in this database, and
--- the vacuums in this database emit WAL (wal_records > 0).
+-- the vacuums in this database touched pages through the buffer cache
+-- (db_blks_hit > 0) and emit WAL (wal_records > 0).
 SELECT errors = 0 AS errors,
+       db_blks_read >= 0 AS db_blks_read,
+       db_blks_hit > 0 AS db_blks_hit,
+       total_blks_dirtied >= 0 AS total_blks_dirtied,
+       total_blks_written >= 0 AS total_blks_written,
        wraparound_failsafe = 0 AS wraparound_failsafe,
        wal_records > 0 AS wal_records,
        wal_fpi >= 0 AS wal_fpi,

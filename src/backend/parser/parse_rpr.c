@@ -515,8 +515,7 @@ define_walker(Node *node, void *context)
 			ctx->nav_count++;
 			return expression_tree_walker(node, define_walker, ctx);
 		}
-
-		if (ctx->phase == DEFINE_PHASE_NAV_OFFSET)
+		else if (ctx->phase == DEFINE_PHASE_NAV_OFFSET)
 		{
 			/*
 			 * A navigation offset must be a run-time constant, so it cannot
@@ -528,13 +527,13 @@ define_walker(Node *node, void *context)
 					errdetail("A navigation offset must be a run-time constant."),
 					parser_errposition(ctx->pstate, nav->location));
 		}
-
-		/*
-		 * PHASE_BODY: this is an outer nav at top level.  Walk arg first to
-		 * collect nesting / column-ref state, then validate and (for compound
-		 * forms) flatten, then walk offset(s).
-		 */
+		else
 		{
+			/*
+			 * PHASE_BODY: this is an outer nav at top level.  Walk arg first
+			 * to collect nesting / column-ref state, then validate and (for
+			 * compound forms) flatten, then walk offset(s).
+			 */
 			DefineWalkCtx saved = *ctx;
 			bool		outer_phys = (nav->kind == RPR_NAV_PREV ||
 									  nav->kind == RPR_NAV_NEXT);

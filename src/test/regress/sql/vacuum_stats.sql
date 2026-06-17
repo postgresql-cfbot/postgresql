@@ -92,6 +92,12 @@ SELECT total_blks_read >= 0 AS total_blks_read,
        total_blks_written >= 0 AS total_blks_written
   FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
 
+-- per-relation buffer access.  The heap is read through the buffer cache
+-- (rel_blks_hit > 0); rel_blks_read depends on the run-time cache state.
+SELECT rel_blks_read >= 0 AS rel_blks_read,
+       rel_blks_hit > 0 AS rel_blks_hit
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
 -- WAL metrics.  A vacuum that removes tuples always emits WAL
 -- (wal_records > 0, wal_bytes > 0).  wal_fpi depends on whether a checkpoint
 -- happened recently, so it is only checked for being non-negative here; the
@@ -136,6 +142,8 @@ SELECT indexrelname,
        total_blks_hit > 0 AS total_blks_hit,
        total_blks_dirtied >= 0 AS total_blks_dirtied,
        total_blks_written >= 0 AS total_blks_written,
+       rel_blks_read >= 0 AS rel_blks_read,
+       rel_blks_hit > 0 AS rel_blks_hit,
        wal_records > 0 AS wal_records,
        wal_fpi >= 0 AS wal_fpi,
        wal_bytes > 0 AS wal_bytes

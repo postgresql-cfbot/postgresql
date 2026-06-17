@@ -519,6 +519,19 @@ extvac_stats_start(Relation rel, LVExtStatCounters * counters)
 
 	counters->walusage = pgWalUsage;
 	counters->bufusage = pgBufferUsage;
+	counters->blocks_fetched = 0;
+	counters->blocks_hit = 0;
+
+	if (!rel->pgstat_info || !pgstat_track_counts)
+
+		/*
+		 * if something goes wrong or user doesn't want to track a database
+		 * activity - just suppress it.
+		 */
+		return;
+
+	counters->blocks_fetched = rel->pgstat_info->counts.blocks_fetched;
+	counters->blocks_hit = rel->pgstat_info->counts.blocks_hit;
 }
 
 /* ----------
@@ -556,6 +569,19 @@ extvac_stats_end(Relation rel, LVExtStatCounters * counters,
 	report->wal_records += walusage.wal_records;
 	report->wal_fpi += walusage.wal_fpi;
 	report->wal_bytes += walusage.wal_bytes;
+
+	if (!rel->pgstat_info || !pgstat_track_counts)
+
+		/*
+		 * if something goes wrong or an user doesn't want to track a database
+		 * activity - just suppress it.
+		 */
+		return;
+
+	report->blks_fetched +=
+		rel->pgstat_info->counts.blocks_fetched - counters->blocks_fetched;
+	report->blks_hit +=
+		rel->pgstat_info->counts.blocks_hit - counters->blocks_hit;
 }
 
 void
@@ -685,6 +711,8 @@ extvac_accumulate_idx_report(PgStat_VacuumRelationCounts * dst,
 	dst->common.total_blks_hit += src->common.total_blks_hit;
 	dst->common.total_blks_dirtied += src->common.total_blks_dirtied;
 	dst->common.total_blks_written += src->common.total_blks_written;
+	dst->common.blks_fetched += src->common.blks_fetched;
+	dst->common.blks_hit += src->common.blks_hit;
 	dst->common.wal_records += src->common.wal_records;
 	dst->common.wal_fpi += src->common.wal_fpi;
 	dst->common.wal_bytes += src->common.wal_bytes;

@@ -2374,7 +2374,7 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_VACUUM_TABLES_STATS_COLS 19
+#define PG_STAT_GET_VACUUM_TABLES_STATS_COLS 21
 
 	Oid			relid = PG_GETARG_OID(0);
 	PgStat_VacuumRelationCounts *extvacuum;
@@ -2415,6 +2415,8 @@ pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 	values[i++] = Int64GetDatum(extvacuum->common.total_blks_hit);
 	values[i++] = Int64GetDatum(extvacuum->common.total_blks_dirtied);
 	values[i++] = Int64GetDatum(extvacuum->common.total_blks_written);
+	values[i++] = Int64GetDatum(extvacuum->common.blks_fetched - extvacuum->common.blks_hit);
+	values[i++] = Int64GetDatum(extvacuum->common.blks_hit);
 	values[i++] = Int32GetDatum(extvacuum->common.wraparound_failsafe_count);
 	values[i++] = Int64GetDatum(extvacuum->common.wal_records);
 	values[i++] = Int64GetDatum(extvacuum->common.wal_fpi);
@@ -2436,7 +2438,7 @@ pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_vacuum_indexes(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_VACUUM_INDEX_STATS_COLS 10
+#define PG_STAT_GET_VACUUM_INDEX_STATS_COLS 12
 
 	Oid			relid = PG_GETARG_OID(0);
 	PgStat_VacuumRelationCounts *extvacuum;
@@ -2469,6 +2471,9 @@ pg_stat_get_vacuum_indexes(PG_FUNCTION_ARGS)
 	values[i++] = Int64GetDatum(extvacuum->common.total_blks_hit);
 	values[i++] = Int64GetDatum(extvacuum->common.total_blks_dirtied);
 	values[i++] = Int64GetDatum(extvacuum->common.total_blks_written);
+
+	values[i++] = Int64GetDatum(extvacuum->common.blks_fetched - extvacuum->common.blks_hit);
+	values[i++] = Int64GetDatum(extvacuum->common.blks_hit);
 
 	values[i++] = Int64GetDatum(extvacuum->common.wal_records);
 	values[i++] = Int64GetDatum(extvacuum->common.wal_fpi);

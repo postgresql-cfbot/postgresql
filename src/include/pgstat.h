@@ -181,6 +181,10 @@ typedef struct PgStat_CommonCounts
 	int64		total_blks_dirtied;
 	int64		total_blks_written;
 
+	/* heap blocks */
+	int64		blks_fetched;
+	int64		blks_hit;
+
 	/* WAL */
 	int64		wal_records;
 	int64		wal_fpi;

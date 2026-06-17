@@ -1580,6 +1580,8 @@ CREATE VIEW pg_stat_vacuum_tables AS
         S.total_blks_hit AS total_blks_hit,
         S.total_blks_dirtied AS total_blks_dirtied,
         S.total_blks_written AS total_blks_written,
+        S.rel_blks_read AS rel_blks_read,
+        S.rel_blks_hit AS rel_blks_hit,
         S.wraparound_failsafe AS wraparound_failsafe,
         S.wal_records AS wal_records,
         S.wal_fpi AS wal_fpi,
@@ -1605,6 +1607,8 @@ CREATE VIEW pg_stat_vacuum_indexes AS
             S.total_blks_hit AS total_blks_hit,
             S.total_blks_dirtied AS total_blks_dirtied,
             S.total_blks_written AS total_blks_written,
+            S.rel_blks_read AS rel_blks_read,
+            S.rel_blks_hit AS rel_blks_hit,
             S.wal_records AS wal_records,
             S.wal_fpi AS wal_fpi,
             S.wal_bytes AS wal_bytes

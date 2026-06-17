@@ -43,6 +43,9 @@ pgstat_accumulate_common(PgStat_CommonCounts *dst, const PgStat_CommonCounts *sr
 	ACCUMULATE_FIELD(total_blks_dirtied);
 	ACCUMULATE_FIELD(total_blks_written);
 
+	ACCUMULATE_FIELD(blks_fetched);
+	ACCUMULATE_FIELD(blks_hit);
+
 	ACCUMULATE_FIELD(wal_records);
 	ACCUMULATE_FIELD(wal_fpi);
 	ACCUMULATE_FIELD(wal_bytes);

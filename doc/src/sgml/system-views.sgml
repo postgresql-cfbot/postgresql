@@ -5950,6 +5950,22 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
      </row>
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rel_blks_read</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of this relation's blocks read from disk by the vacuum.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rel_blks_hit</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of this relation's blocks found in shared buffers by the vacuum.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>wraparound_failsafe</structfield> <type>integer</type>
       </para>
       <para>
@@ -6101,6 +6117,22 @@ SELECT * FROM pg_locks pl LEFT JOIN pg_prepared_xacts ppx
       </para>
       <para>
        Number of shared buffer blocks written out while vacuuming the index.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rel_blks_read</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of blocks of this index read from disk by the vacuum.
+      </para></entry>
+     </row>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>rel_blks_hit</structfield> <type>bigint</type>
+      </para>
+      <para>
+       Number of block hits within this index during the vacuum.
       </para></entry>
      </row>
      <row>

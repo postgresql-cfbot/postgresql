@@ -512,13 +512,19 @@ static void restore_vacuum_error_info(LVRelState *vacrel,
 static void
 extvac_stats_start(Relation rel, LVExtStatCounters * counters)
 {
+	TimestampTz starttime;
+
 	if (!pgstat_track_vacuum_statistics)
 		return;
 
 	memset(counters, 0, sizeof(LVExtStatCounters));
 
+	starttime = GetCurrentTimestamp();
+
+	counters->starttime = starttime;
 	counters->walusage = pgWalUsage;
 	counters->bufusage = pgBufferUsage;
+	counters->VacuumDelayTime = VacuumDelayTime;
 	counters->blocks_fetched = 0;
 	counters->blocks_hit = 0;
 
@@ -546,6 +552,9 @@ extvac_stats_end(Relation rel, LVExtStatCounters * counters,
 {
 	WalUsage	walusage;
 	BufferUsage bufusage;
+	TimestampTz endtime;
+	long		secs;
+	int			usecs;
 
 	if (!pgstat_track_vacuum_statistics)
 		return;
@@ -559,6 +568,9 @@ extvac_stats_end(Relation rel, LVExtStatCounters * counters,
 	memset(&bufusage, 0, sizeof(BufferUsage));
 	BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &counters->bufusage);
 
+	endtime = GetCurrentTimestamp();
+	TimestampDifference(counters->starttime, endtime, &secs, &usecs);
+
 	/*
 	 * Fill additional statistics on a vacuum processing operation.
 	 */
@@ -566,9 +578,18 @@ extvac_stats_end(Relation rel, LVExtStatCounters * counters,
 	report->total_blks_hit += bufusage.local_blks_hit + bufusage.shared_blks_hit;
 	report->total_blks_dirtied += bufusage.local_blks_dirtied + bufusage.shared_blks_dirtied;
 	report->total_blks_written += bufusage.shared_blks_written;
+
 	report->wal_records += walusage.wal_records;
 	report->wal_fpi += walusage.wal_fpi;
 	report->wal_bytes += walusage.wal_bytes;
+
+	report->blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage.local_blk_read_time);
+	report->blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage.shared_blk_read_time);
+	report->blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage.local_blk_write_time);
+	report->blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage.shared_blk_write_time);
+	report->delay_time += VacuumDelayTime - counters->VacuumDelayTime;
+
+	report->total_time += secs * 1000. + usecs / 1000.;
 
 	if (!rel->pgstat_info || !pgstat_track_counts)
 
@@ -669,6 +690,8 @@ accumulate_heap_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCount
 	extVacStats->table.missed_dead_pages = vacrel->missed_dead_pages;
 	extVacStats->common.wraparound_failsafe_count = vacrel->wraparound_failsafe;
 
+	extVacStats->common.blk_read_time -= vacrel->extVacReportIdx.common.blk_read_time;
+	extVacStats->common.blk_write_time -= vacrel->extVacReportIdx.common.blk_write_time;
 	extVacStats->common.total_blks_dirtied -= vacrel->extVacReportIdx.common.total_blks_dirtied;
 	extVacStats->common.total_blks_hit -= vacrel->extVacReportIdx.common.total_blks_hit;
 	extVacStats->common.total_blks_read -= vacrel->extVacReportIdx.common.total_blks_read;
@@ -676,12 +699,17 @@ accumulate_heap_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCount
 	extVacStats->common.wal_bytes -= vacrel->extVacReportIdx.common.wal_bytes;
 	extVacStats->common.wal_fpi -= vacrel->extVacReportIdx.common.wal_fpi;
 	extVacStats->common.wal_records -= vacrel->extVacReportIdx.common.wal_records;
+
+	extVacStats->common.total_time -= vacrel->extVacReportIdx.common.total_time;
+	extVacStats->common.delay_time -= vacrel->extVacReportIdx.common.delay_time;
 }
 
 static void
 accumulate_idxs_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCounts * extVacIdxStats)
 {
 	/* Fill heap-specific extended stats fields */
+	vacrel->extVacReportIdx.common.blk_read_time += extVacIdxStats->common.blk_read_time;
+	vacrel->extVacReportIdx.common.blk_write_time += extVacIdxStats->common.blk_write_time;
 	vacrel->extVacReportIdx.common.total_blks_dirtied += extVacIdxStats->common.total_blks_dirtied;
 	vacrel->extVacReportIdx.common.total_blks_hit += extVacIdxStats->common.total_blks_hit;
 	vacrel->extVacReportIdx.common.total_blks_read += extVacIdxStats->common.total_blks_read;
@@ -689,6 +717,8 @@ accumulate_idxs_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCount
 	vacrel->extVacReportIdx.common.wal_bytes += extVacIdxStats->common.wal_bytes;
 	vacrel->extVacReportIdx.common.wal_fpi += extVacIdxStats->common.wal_fpi;
 	vacrel->extVacReportIdx.common.wal_records += extVacIdxStats->common.wal_records;
+	vacrel->extVacReportIdx.common.delay_time += extVacIdxStats->common.delay_time;
+	vacrel->extVacReportIdx.common.total_time += extVacIdxStats->common.total_time;
 }
 
 /*
@@ -716,6 +746,10 @@ extvac_accumulate_idx_report(PgStat_VacuumRelationCounts * dst,
 	dst->common.wal_records += src->common.wal_records;
 	dst->common.wal_fpi += src->common.wal_fpi;
 	dst->common.wal_bytes += src->common.wal_bytes;
+	dst->common.blk_read_time += src->common.blk_read_time;
+	dst->common.blk_write_time += src->common.blk_write_time;
+	dst->common.delay_time += src->common.delay_time;
+	dst->common.total_time += src->common.total_time;
 	dst->common.tuples_deleted += src->common.tuples_deleted;
 
 	dst->index.pages_deleted += src->index.pages_deleted;
@@ -904,7 +938,6 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	Size		dead_items_max_bytes = 0;
 	LVExtStatCounters extVacCounters;
 	PgStat_VacuumRelationCounts extVacReport;
-	TimestampTz starttime;
 
 	/* Initialize vacuum statistics */
 	memset(&extVacReport, 0, sizeof(PgStat_VacuumRelationCounts));
@@ -922,7 +955,6 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 		}
 	}
 
-	starttime = GetCurrentTimestamp();
 	extvac_stats_start(rel, &extVacCounters);
 
 	pgstat_progress_start_command(PROGRESS_COMMAND_VACUUM,
@@ -1279,7 +1311,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 						 Max(vacrel->new_live_tuples, 0),
 						 vacrel->recently_dead_tuples +
 						 vacrel->missed_dead_tuples,
-						 starttime);
+						 extVacCounters.starttime);
 	pgstat_progress_end_command();
 
 	if (instrument)
@@ -1287,7 +1319,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 		TimestampTz endtime = GetCurrentTimestamp();
 
 		if (verbose || params->log_vacuum_min_duration == 0 ||
-			TimestampDifferenceExceeds(starttime, endtime,
+			TimestampDifferenceExceeds(extVacCounters.starttime, endtime,
 									   params->log_vacuum_min_duration))
 		{
 			long		secs_dur;
@@ -1303,7 +1335,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 			int64		total_blks_read;
 			int64		total_blks_dirtied;
 
-			TimestampDifference(starttime, endtime, &secs_dur, &usecs_dur);
+			TimestampDifference(extVacCounters.starttime, endtime, &secs_dur, &usecs_dur);
 			memset(&walusage, 0, sizeof(WalUsage));
 			WalUsageAccumDiff(&walusage, &pgWalUsage, &startwalusage);
 			memset(&bufferusage, 0, sizeof(BufferUsage));

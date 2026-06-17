@@ -1582,6 +1582,10 @@ CREATE VIEW pg_stat_vacuum_tables AS
         S.total_blks_written AS total_blks_written,
         S.rel_blks_read AS rel_blks_read,
         S.rel_blks_hit AS rel_blks_hit,
+        S.blk_read_time AS blk_read_time,
+        S.blk_write_time AS blk_write_time,
+        S.delay_time AS delay_time,
+        S.total_time AS total_time,
         S.wraparound_failsafe AS wraparound_failsafe,
         S.wal_records AS wal_records,
         S.wal_fpi AS wal_fpi,
@@ -1607,8 +1611,15 @@ CREATE VIEW pg_stat_vacuum_indexes AS
             S.total_blks_hit AS total_blks_hit,
             S.total_blks_dirtied AS total_blks_dirtied,
             S.total_blks_written AS total_blks_written,
+
             S.rel_blks_read AS rel_blks_read,
             S.rel_blks_hit AS rel_blks_hit,
+
+            S.blk_read_time AS blk_read_time,
+            S.blk_write_time AS blk_write_time,
+            S.delay_time AS delay_time,
+            S.total_time AS total_time,
+
             S.wal_records AS wal_records,
             S.wal_fpi AS wal_fpi,
             S.wal_bytes AS wal_bytes
@@ -1631,7 +1642,14 @@ CREATE VIEW pg_stat_vacuum_database AS
             S.db_blks_hit AS db_blks_hit,
             S.total_blks_dirtied AS total_blks_dirtied,
             S.total_blks_written AS total_blks_written,
+
             S.wraparound_failsafe AS wraparound_failsafe,
+
+            S.blk_read_time AS blk_read_time,
+            S.blk_write_time AS blk_write_time,
+            S.delay_time AS delay_time,
+            S.total_time AS total_time,
+
             S.wal_records AS wal_records,
             S.wal_fpi AS wal_fpi,
             S.wal_bytes AS wal_bytes,

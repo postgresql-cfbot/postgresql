@@ -190,6 +190,12 @@ typedef struct PgStat_CommonCounts
 	int64		wal_fpi;
 	uint64		wal_bytes;
 
+	/* Time */
+	double		blk_read_time;
+	double		blk_write_time;
+	double		delay_time;
+	double		total_time;
+
 	/* tuples */
 	int64		tuples_deleted;
 

@@ -50,6 +50,11 @@ pgstat_accumulate_common(PgStat_CommonCounts *dst, const PgStat_CommonCounts *sr
 	ACCUMULATE_FIELD(wal_fpi);
 	ACCUMULATE_FIELD(wal_bytes);
 
+	ACCUMULATE_FIELD(blk_read_time);
+	ACCUMULATE_FIELD(blk_write_time);
+	ACCUMULATE_FIELD(delay_time);
+	ACCUMULATE_FIELD(total_time);
+
 	ACCUMULATE_FIELD(tuples_deleted);
 	ACCUMULATE_FIELD(interrupts_count);
 }

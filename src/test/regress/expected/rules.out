@@ -2429,12 +2429,16 @@ pg_stat_vacuum_database| SELECT d.oid AS dboid,
     s.total_blks_dirtied,
     s.total_blks_written,
     s.wraparound_failsafe,
+    s.blk_read_time,
+    s.blk_write_time,
+    s.delay_time,
+    s.total_time,
     s.wal_records,
     s.wal_fpi,
     s.wal_bytes,
     s.interrupts_count
    FROM pg_database d,
-    LATERAL pg_stat_get_vacuum_database(d.oid) s(dboid, errors, db_blks_read, db_blks_hit, total_blks_dirtied, total_blks_written, wraparound_failsafe, wal_records, wal_fpi, wal_bytes, interrupts_count);
+    LATERAL pg_stat_get_vacuum_database(d.oid) s(dboid, errors, db_blks_read, db_blks_hit, total_blks_dirtied, total_blks_written, wraparound_failsafe, blk_read_time, blk_write_time, delay_time, total_time, wal_records, wal_fpi, wal_bytes, interrupts_count);
 pg_stat_vacuum_indexes| SELECT c.oid AS relid,
     i.oid AS indexrelid,
     n.nspname AS schemaname,
@@ -2448,6 +2452,10 @@ pg_stat_vacuum_indexes| SELECT c.oid AS relid,
     s.total_blks_written,
     s.rel_blks_read,
     s.rel_blks_hit,
+    s.blk_read_time,
+    s.blk_write_time,
+    s.delay_time,
+    s.total_time,
     s.wal_records,
     s.wal_fpi,
     s.wal_bytes
@@ -2455,7 +2463,7 @@ pg_stat_vacuum_indexes| SELECT c.oid AS relid,
      JOIN pg_index x ON ((c.oid = x.indrelid)))
      JOIN pg_class i ON ((i.oid = x.indexrelid)))
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
-    LATERAL pg_stat_get_vacuum_indexes(i.oid) s(relid, pages_deleted, tuples_deleted, total_blks_read, total_blks_hit, total_blks_dirtied, total_blks_written, rel_blks_read, rel_blks_hit, wal_records, wal_fpi, wal_bytes)
+    LATERAL pg_stat_get_vacuum_indexes(i.oid) s(relid, pages_deleted, tuples_deleted, total_blks_read, total_blks_hit, total_blks_dirtied, total_blks_written, rel_blks_read, rel_blks_hit, blk_read_time, blk_write_time, delay_time, total_time, wal_records, wal_fpi, wal_bytes)
   WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
 pg_stat_vacuum_tables| SELECT n.nspname AS schemaname,
     c.relname,
@@ -2476,13 +2484,17 @@ pg_stat_vacuum_tables| SELECT n.nspname AS schemaname,
     s.total_blks_written,
     s.rel_blks_read,
     s.rel_blks_hit,
+    s.blk_read_time,
+    s.blk_write_time,
+    s.delay_time,
+    s.total_time,
     s.wraparound_failsafe,
     s.wal_records,
     s.wal_fpi,
     s.wal_bytes
    FROM (pg_class c
      JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
-    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen, recently_dead_tuples, missed_dead_pages, missed_dead_tuples, vm_new_frozen_pages, vm_new_visible_pages, vm_new_visible_frozen_pages, total_blks_read, total_blks_hit, total_blks_dirtied, total_blks_written, rel_blks_read, rel_blks_hit, wraparound_failsafe, wal_records, wal_fpi, wal_bytes)
+    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen, recently_dead_tuples, missed_dead_pages, missed_dead_tuples, vm_new_frozen_pages, vm_new_visible_pages, vm_new_visible_frozen_pages, total_blks_read, total_blks_hit, total_blks_dirtied, total_blks_written, rel_blks_read, rel_blks_hit, blk_read_time, blk_write_time, delay_time, total_time, wraparound_failsafe, wal_records, wal_fpi, wal_bytes)
   WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
 pg_stat_wal| SELECT wal_records,
     wal_fpi,

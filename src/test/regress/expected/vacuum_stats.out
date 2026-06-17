@@ -148,6 +148,49 @@ SELECT rel_blks_read >= 0 AS rel_blks_read,
  t             | t
 (1 row)
 
+-- timing metrics and failsafe.  The vacuum always takes some wall-clock time
+-- (total_time > 0) and does not engage the wraparound failsafe under normal
+-- conditions (wraparound_failsafe = 0).  blk_read_time/blk_write_time are only
+-- non-zero when track_io_timing is enabled, and delay_time only when a vacuum
+-- cost delay is configured, so those are merely checked for being
+-- non-negative; the positive delay_time path is exercised separately below.
+SELECT blk_read_time >= 0 AS blk_read_time,
+       blk_write_time >= 0 AS blk_write_time,
+       delay_time >= 0 AS delay_time,
+       total_time > 0 AS total_time,
+       wraparound_failsafe = 0 AS wraparound_failsafe
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+ blk_read_time | blk_write_time | delay_time | total_time | wraparound_failsafe 
+---------------+----------------+------------+------------+---------------------
+ t             | t              | t          | t          | t
+(1 row)
+
+-- delay path: with a vacuum cost delay configured, a vacuum that accrues cost
+-- sleeps, so delay_time advances.
+CREATE TABLE vacstat_delay (id int PRIMARY KEY, v text)
+  WITH (autovacuum_enabled = off, fillfactor = 10);
+INSERT INTO vacstat_delay SELECT g, repeat('x', 100) FROM generate_series(1, 3000) g;
+DELETE FROM vacstat_delay WHERE id % 2 = 0;
+SET vacuum_cost_delay = '1ms';
+SET vacuum_cost_limit = 1;
+VACUUM vacstat_delay;
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+RESET vacuum_cost_delay;
+RESET vacuum_cost_limit;
+SELECT delay_time > 0 AS delay_time,
+       total_time > 0 AS total_time
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_delay';
+ delay_time | total_time 
+------------+------------
+ t          | t
+(1 row)
+
+DROP TABLE vacstat_delay;
 -- WAL metrics.  A vacuum that removes tuples always emits WAL
 -- (wal_records > 0, wal_bytes > 0).  wal_fpi depends on whether a checkpoint
 -- happened recently, so it is only checked for being non-negative here; the
@@ -186,17 +229,6 @@ SELECT wal_records > 0 AS wal_records,
 (1 row)
 
 DROP TABLE vacstat_fpi;
--- wraparound failsafe.  A normal vacuum does not engage the wraparound
--- failsafe (wraparound_failsafe = 0).  The positive path requires reaching the
--- failsafe XID age and is covered by a separate TAP test under
--- src/test/modules/xid_wraparound.
-SELECT wraparound_failsafe = 0 AS wraparound_failsafe
-  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
- wraparound_failsafe 
----------------------
- t
-(1 row)
-
 -- per-index view: the primary key index is processed by the same VACUUM.
 -- No btree leaf empties out (interleaved deletions), so pages_deleted = 0,
 -- while every index entry for a removed heap tuple is deleted.  The index is
@@ -211,13 +243,17 @@ SELECT indexrelname,
        total_blks_written >= 0 AS total_blks_written,
        rel_blks_read >= 0 AS rel_blks_read,
        rel_blks_hit > 0 AS rel_blks_hit,
+       blk_read_time >= 0 AS blk_read_time,
+       blk_write_time >= 0 AS blk_write_time,
+       delay_time >= 0 AS delay_time,
+       total_time > 0 AS total_time,
        wal_records > 0 AS wal_records,
        wal_fpi >= 0 AS wal_fpi,
        wal_bytes > 0 AS wal_bytes
   FROM pg_stat_vacuum_indexes WHERE relname = 'vacstat_t' ORDER BY indexrelname;
-  indexrelname  | pages_deleted | tuples_deleted | total_blks_read | total_blks_hit | total_blks_dirtied | total_blks_written | rel_blks_read | rel_blks_hit | wal_records | wal_fpi | wal_bytes 
-----------------+---------------+----------------+-----------------+----------------+--------------------+--------------------+---------------+--------------+-------------+---------+-----------
- vacstat_t_pkey | t             | t              | t               | t              | t                  | t                  | t             | t            | t           | t       | t
+  indexrelname  | pages_deleted | tuples_deleted | total_blks_read | total_blks_hit | total_blks_dirtied | total_blks_written | rel_blks_read | rel_blks_hit | blk_read_time | blk_write_time | delay_time | total_time | wal_records | wal_fpi | wal_bytes 
+----------------+---------------+----------------+-----------------+----------------+--------------------+--------------------+---------------+--------------+---------------+----------------+------------+------------+-------------+---------+-----------
+ vacstat_t_pkey | t             | t              | t               | t              | t                  | t                  | t             | t            | t             | t              | t          | t          | t           | t       | t
 (1 row)
 
 -- index page-deletion path: deleting a contiguous key range empties whole
@@ -253,20 +289,24 @@ SELECT indexrelname,
 DROP TABLE vacstat_idxdel;
 -- per-database aggregate view: no vacuum errors occurred in this database, and
 -- the vacuums in this database touched pages through the buffer cache
--- (db_blks_hit > 0) and emit WAL (wal_records > 0).
+-- (db_blks_hit > 0).
 SELECT errors = 0 AS errors,
        db_blks_read >= 0 AS db_blks_read,
        db_blks_hit > 0 AS db_blks_hit,
        total_blks_dirtied >= 0 AS total_blks_dirtied,
        total_blks_written >= 0 AS total_blks_written,
        wraparound_failsafe = 0 AS wraparound_failsafe,
+       blk_read_time >= 0 AS blk_read_time,
+       blk_write_time >= 0 AS blk_write_time,
+       delay_time >= 0 AS delay_time,
+       total_time > 0 AS total_time,
        wal_records > 0 AS wal_records,
        wal_fpi >= 0 AS wal_fpi,
        wal_bytes > 0 AS wal_bytes
   FROM pg_stat_vacuum_database WHERE dbname = current_database();
- errors | db_blks_read | db_blks_hit | total_blks_dirtied | total_blks_written | wraparound_failsafe | wal_records | wal_fpi | wal_bytes 
---------+--------------+-------------+--------------------+--------------------+---------------------+-------------+---------+-----------
- t      | t            | t           | t                  | t                  | t                   | t           | t       | t
+ errors | db_blks_read | db_blks_hit | total_blks_dirtied | total_blks_written | wraparound_failsafe | blk_read_time | blk_write_time | delay_time | total_time | wal_records | wal_fpi | wal_bytes 
+--------+--------------+-------------+--------------------+--------------------+---------------------+---------------+----------------+------------+------------+-------------+---------+-----------
+ t      | t            | t           | t                  | t                  | t                   | t             | t              | t          | t          | t           | t       | t
 (1 row)
 
 -- parallel index vacuum: index statistics must be captured for indexes

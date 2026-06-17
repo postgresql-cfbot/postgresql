@@ -25,6 +25,24 @@ FROM information_schema.tables
 WHERE table_name ~ 'tmp' AND table_schema ~ 'global_temp'
 ORDER BY table_name;
 
+-- Check pg_stat_activity
+SELECT tempfrozenxid, tempminmxid -- not visible without privilege
+FROM pg_stat_activity
+WHERE pid = pg_backend_pid();
+
+RESET ROLE;
+GRANT pg_read_all_stats TO regress_global_temp_user;
+SET ROLE regress_global_temp_user;
+
+SELECT tempfrozenxid::text::bigint = (SELECT min(relfrozenxid::text::bigint)
+                                      FROM pg_temp_class
+                                      WHERE relfrozenxid::text != '0'),
+       tempminmxid::text::bigint = (SELECT min(relminmxid::text::bigint)
+                                    FROM pg_temp_class
+                                    WHERE relminmxid::text != '0')
+FROM pg_stat_activity
+WHERE pid = pg_backend_pid();
+
 DROP SCHEMA global_temp_xxx CASCADE;
 DROP SCHEMA global_temp_yyy CASCADE;
 

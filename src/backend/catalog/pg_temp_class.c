@@ -53,11 +53,13 @@
 
 #include "access/genam.h"
 #include "access/htup_details.h"
+#include "access/multixact.h"
 #include "access/table.h"
 #include "access/xact.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_temp_class.h"
 #include "miscadmin.h"
+#include "storage/proc.h"
 #include "utils/fmgroids.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
@@ -104,6 +106,14 @@ static bool have_inserts_to_flush = false;
 
 /* Memory context for all tuples pending insert */
 static MemoryContext pending_inserts_tupctx = NULL;
+
+/*
+ * Latest minimum values of relfrozenxid and relminmxid over all global
+ * temporary tables, if changed in the current transaction.
+ */
+static TransactionId min_relfrozenxid = InvalidTransactionId;
+static MultiXactId min_relminmxid = InvalidMultiXactId;
+static bool min_frozenxids_updated = false;
 
 /*
  * open_pg_temp_class
@@ -189,6 +199,12 @@ get_pg_temp_class_tupdesc(void)
 		TupleDescInitEntry(tupdesc,
 						   (AttrNumber) Anum_pg_temp_class_relallfrozen,
 						   "relallfrozen", INT4OID, -1, 0);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_class_relfrozenxid,
+						   "relfrozenxid", XIDOID, -1, 0);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_class_relminmxid,
+						   "relminmxid", XIDOID, -1, 0);
 		TupleDescFinalize(tupdesc);
 
 		MemoryContextSwitchTo(oldcontext);
@@ -219,6 +235,8 @@ heap_form_pg_temp_class_tuple(Relation rel)
 	values[Anum_pg_temp_class_reltuples - 1] = Float4GetDatum(form->reltuples);
 	values[Anum_pg_temp_class_relallvisible - 1] = Int32GetDatum(form->relallvisible);
 	values[Anum_pg_temp_class_relallfrozen - 1] = Int32GetDatum(form->relallfrozen);
+	values[Anum_pg_temp_class_relfrozenxid - 1] = TransactionIdGetDatum(form->relfrozenxid);
+	values[Anum_pg_temp_class_relminmxid - 1] = MultiXactIdGetDatum(form->relminmxid);
 
 	return heap_form_tuple(get_pg_temp_class_tupdesc(), values, nulls);
 }
@@ -655,6 +673,142 @@ GetEffectivePgClassTuple(Oid relid)
 }
 
 /*
+ * UpdateTempFrozenXids
+ *
+ *	Update the tempfrozenxid and tempminmxid values for this backend by
+ *	finding the minimum relfrozenxid and relminmxid values in pg_temp_class --
+ *	i.e., the minimum frozen XIDs over all global temporary relations in use
+ *	in this backend.
+ *
+ *	The new values are set in this process's PGPROC struct when the current
+ *	transaction is committed, or discarded if the transaction is rolled back.
+ *
+ *	If no global temporary relations are in use, Invalid*Ids will be set.
+ */
+void
+UpdateTempFrozenXids(void)
+{
+	HASH_SEQ_STATUS status;
+	PendingInsert *entry;
+	Form_pg_temp_class temp_form;
+	TransactionId relfrozenxid;
+	MultiXactId relminmxid;
+	Relation	pg_temp_class;
+	SysScanDesc scan;
+	HeapTuple	tuple;
+
+	/* Defaults, if no global temporary relations are being used */
+	min_relfrozenxid = InvalidTransactionId;
+	min_relminmxid = InvalidMultiXactId;
+
+	/* Processing any pending inserts */
+	if (pending_inserts != NULL)
+	{
+		hash_seq_init(&status, pending_inserts);
+		while ((entry = hash_seq_search(&status)) != NULL)
+		{
+			temp_form = (Form_pg_temp_class) GETSTRUCT(entry->tuple);
+			relfrozenxid = temp_form->relfrozenxid;
+			relminmxid = (MultiXactId) temp_form->relminmxid;
+
+			/* Skip entries that have been deleted */
+			if (entry->deleted)
+				continue;
+
+			/* Ignore relations that don't hold unfrozen XIDs */
+			if (!TransactionIdIsValid(relfrozenxid) ||
+				!MultiXactIdIsValid(relminmxid))
+				continue;
+
+			/* Update the minimum values */
+			Assert(TransactionIdIsNormal(relfrozenxid));
+
+			if (!TransactionIdIsValid(min_relfrozenxid) ||
+				TransactionIdPrecedes(relfrozenxid, min_relfrozenxid))
+				min_relfrozenxid = relfrozenxid;
+
+			if (!MultiXactIdIsValid(min_relminmxid) ||
+				MultiXactIdPrecedes(relminmxid, min_relminmxid))
+				min_relminmxid = relminmxid;
+		}
+	}
+
+	/*
+	 * Process all pg_temp_class entries.  If we haven't opened pg_temp_class
+	 * in this session yet, it must be empty, and we can skip it.
+	 */
+	if (pg_temp_class_opened)
+	{
+		pg_temp_class = table_open(TempRelationRelationId, AccessShareLock);
+
+		scan = systable_beginscan(pg_temp_class, InvalidOid, false,
+								  NULL, 0, NULL);
+
+		while ((tuple = systable_getnext(scan)) != NULL)
+		{
+			temp_form = (Form_pg_temp_class) GETSTRUCT(tuple);
+			relfrozenxid = temp_form->relfrozenxid;
+			relminmxid = (MultiXactId) temp_form->relminmxid;
+
+			/* Ignore relations that don't hold unfrozen XIDs */
+			if (!TransactionIdIsValid(relfrozenxid) ||
+				!MultiXactIdIsValid(relminmxid))
+				continue;
+
+			/* Update the minimum values */
+			Assert(TransactionIdIsNormal(relfrozenxid));
+
+			if (!TransactionIdIsValid(min_relfrozenxid) ||
+				TransactionIdPrecedes(relfrozenxid, min_relfrozenxid))
+				min_relfrozenxid = relfrozenxid;
+
+			if (!MultiXactIdIsValid(min_relminmxid) ||
+				MultiXactIdPrecedes(relminmxid, min_relminmxid))
+				min_relminmxid = relminmxid;
+		}
+
+		/* Tidy up */
+		systable_endscan(scan);
+		table_close(pg_temp_class, AccessShareLock);
+	}
+
+	/* Flag the new values as to be applied on commit */
+	min_frozenxids_updated = true;
+}
+
+/*
+ * UpdateTempFrozenXidsForRel
+ *
+ *	Update the tempfrozenxid and tempminmxid values for this backend to take
+ *	into acount the relfrozenxid and relminmxid values from a new relation.
+ *
+ *	The new values are set in this process's PGPROC struct when the current
+ *	transaction is committed, or discarded if the transaction is rolled back.
+ */
+void
+UpdateTempFrozenXidsForRel(TransactionId relfrozenxid,
+						   MultiXactId relminmxid)
+{
+	/* Use current mimimum values the first time in this transaction */
+	if (!TransactionIdIsValid(min_relfrozenxid))
+		min_relfrozenxid = MyProc->tempfrozenxid;
+	if (!MultiXactIdIsValid(min_relminmxid))
+		min_relminmxid = MyProc->tempminmxid;
+
+	/* Update the minimum values */
+	if (!TransactionIdIsValid(min_relfrozenxid) ||
+		TransactionIdPrecedes(relfrozenxid, min_relfrozenxid))
+		min_relfrozenxid = relfrozenxid;
+
+	if (!MultiXactIdIsValid(min_relminmxid) ||
+		MultiXactIdPrecedes(relminmxid, min_relminmxid))
+		min_relminmxid = relminmxid;
+
+	/* Flag the new values as to be applied on commit */
+	min_frozenxids_updated = true;
+}
+
+/*
  * PreCCI_PgTempClass
  *
  *	Pre-end-of-command processing; flush out any pending inserts.
@@ -713,6 +867,19 @@ AtEOXact_PgTempClass(bool isCommit)
 	Assert(!(isCommit && have_inserts_to_flush));
 	if (pending_inserts != NULL)
 		discard_pending_pg_temp_class_inserts();
+
+	/*
+	 * On commit, save any new tempfrozenxid and tempminmxid values to our
+	 * PGPROC struct.  On rollback, any new values are simply discarded.
+	 */
+	if (min_frozenxids_updated && isCommit)
+	{
+		MyProc->tempfrozenxid = min_relfrozenxid;
+		MyProc->tempminmxid = min_relminmxid;
+	}
+	min_relfrozenxid = InvalidTransactionId;
+	min_relminmxid = InvalidMultiXactId;
+	min_frozenxids_updated = false;
 }
 
 /*

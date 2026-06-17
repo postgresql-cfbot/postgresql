@@ -70,6 +70,7 @@
 #include "commands/policy.h"
 #include "commands/publicationcmds.h"
 #include "commands/trigger.h"
+#include "commands/vacuum.h"
 #include "common/int.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
@@ -303,6 +304,7 @@ static void formrdesc(const char *relationName, Oid relationReltype,
 					  bool isshared, int natts, const FormData_pg_attribute *attrs);
 
 static HeapTuple ScanPgRelation(Oid targetRelId, bool indexOK, bool force_non_historic);
+static void ScanPgTempRelation(Oid relid, Form_pg_class pg_class_form);
 static Relation AllocateRelationDesc(Form_pg_class relp);
 static void RelationParseRelOptions(Relation relation, HeapTuple tuple);
 static void RelationBuildTupleDesc(Relation relation);
@@ -415,7 +417,8 @@ ScanPgRelation(Oid targetRelId, bool indexOK, bool force_non_historic)
 	 * this for pg_temp_class itself, or its index, because they may not have
 	 * been loaded yet.  That's OK because we only really need relfilenumber
 	 * and reltablespace to be correct at this stage, and we disallow changes
-	 * to those attributes for these relations.
+	 * to those attributes for these relations.  Final initialization of
+	 * pg_temp_class and its index is performed by RelationIdGetRelation().
 	 */
 	if (HeapTupleIsValid(pg_class_tuple) &&
 		targetRelId != TempRelationRelationId &&
@@ -426,21 +429,38 @@ ScanPgRelation(Oid targetRelId, bool indexOK, bool force_non_historic)
 		pg_class_form = (Form_pg_class) GETSTRUCT(pg_class_tuple);
 
 		if (pg_class_form->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
-		{
-			HeapTuple	pg_temp_class_tuple;
-			Form_pg_temp_class pg_temp_class_form;
-
-			pg_temp_class_tuple = GetPgTempClassTuple(targetRelId);
-			if (HeapTupleIsValid(pg_temp_class_tuple))
-			{
-				pg_temp_class_form = (Form_pg_temp_class) GETSTRUCT(pg_temp_class_tuple);
-				COPY_PG_TEMP_CLASS_ATTRS(pg_temp_class_form, pg_class_form);
-				heap_freetuple(pg_temp_class_tuple);
-			}
-		}
+			ScanPgTempRelation(targetRelId, pg_class_form);
 	}
 
 	return pg_class_tuple;
+}
+
+/*
+ *		ScanPgTempRelation
+ *
+ *		This is used by ScanPgRelation to update a global temporary relation's
+ *		relcache entry from its pg_temp_class tuple.
+ *
+ *		In addition, it is used by RelationIdGetRelation() to perform final
+ *		intialization for pg_temp_class itself, and its index --- as noted
+ *		above, ScanPgRelation() cannot scan pg_temp_class when initializing
+ *		pg_temp_class itself, or its index, and so this is used after building
+ *		initial relcache entries, creating storage, and inserting
+ *		pg_temp_class tuples for these relations.
+ */
+static void
+ScanPgTempRelation(Oid relid, Form_pg_class pg_class_form)
+{
+	HeapTuple	pg_temp_class_tuple;
+	Form_pg_temp_class pg_temp_class_form;
+
+	pg_temp_class_tuple = GetPgTempClassTuple(relid);
+	if (HeapTupleIsValid(pg_temp_class_tuple))
+	{
+		pg_temp_class_form = (Form_pg_temp_class) GETSTRUCT(pg_temp_class_tuple);
+		COPY_PG_TEMP_CLASS_ATTRS(pg_temp_class_form, pg_class_form);
+		heap_freetuple(pg_temp_class_tuple);
+	}
 }
 
 /*
@@ -2167,6 +2187,15 @@ RelationIdGetRelation(Oid relationId)
 				InitGlobalTempRelation(rd);
 
 			/*
+			 * Special-case: if it's pg_temp_class or its index, update its
+			 * relcache entry from the pg_temp_class tuple (ScanPgRelation()
+			 * couldn't do this when first loading these relations).
+			 */
+			if (rd->rd_id == TempRelationRelationId ||
+				rd->rd_id == TempClassOidIndexId)
+				ScanPgTempRelation(rd->rd_id, rd->rd_rel);
+
+			/*
 			 * Normally entries need to be valid here, but before the relcache
 			 * has been initialized, not enough infrastructure exists to
 			 * perform pg_class lookups. The structure of such entries doesn't
@@ -2189,6 +2218,9 @@ RelationIdGetRelation(Oid relationId)
 		RelationIncrementReferenceCount(rd);
 		if (RELATION_IS_GLOBAL_TEMP(rd))
 			InitGlobalTempRelation(rd);
+		if (rd->rd_id == TempRelationRelationId ||
+			rd->rd_id == TempClassOidIndexId)
+			ScanPgTempRelation(rd->rd_id, rd->rd_rel);
 	}
 	return rd;
 }
@@ -4038,7 +4070,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	}
 	else
 	{
-		/* Normal case, update the pg_class and pg_temp_class entries */
+		/* Normal case, update pg_class or pg_temp_class entry (not both) */
 		SetEffective_relfilenode(classform, temp_classform, newrelfilenumber);
 
 		/* relpages etc. never change for sequences */
@@ -4050,15 +4082,23 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 			SetEffective_relallvisible(classform, temp_classform, 0, NULL, NULL);
 			SetEffective_relallfrozen(classform, temp_classform, 0, NULL, NULL);
 		}
-		classform->relfrozenxid = freezeXid;
-		classform->relminmxid = minmulti;
-		classform->relpersistence = persistence;
+		SetEffective_relfrozenxid(classform, temp_classform, freezeXid, NULL, NULL);
+		SetEffective_relminmxid(classform, temp_classform, minmulti, NULL, NULL);
 
-		CatalogTupleUpdate(pg_class, &otid, tuple);
+		/* relpersistence can only change for permanent relations */
 		if (HeapTupleIsValid(temp_tuple))
 		{
+			Assert(classform->relpersistence == persistence);
 			UpdatePgTempClassTuple(RelationGetRelid(relation), temp_tuple);
 			heap_freetuple(temp_tuple);
+
+			/* Update this backend's tempfrozenxid and tempminmxid */
+			UpdateTempFrozenXids();
+		}
+		else
+		{
+			classform->relpersistence = persistence;
+			CatalogTupleUpdate(pg_class, &otid, tuple);
 		}
 	}
 
@@ -4068,7 +4108,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	table_close(pg_class, RowExclusiveLock);
 
 	/*
-	 * Make the pg_class and pg_temp_class row changes or relation map change
+	 * Make the pg_class/pg_temp_class row change or relation map change
 	 * visible.  This will cause the relcache entry to get updated, too.
 	 */
 	CommandCounterIncrement();

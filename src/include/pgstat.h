@@ -175,6 +175,11 @@ typedef struct PgStat_TableCounts
 
 typedef struct PgStat_CommonCounts
 {
+	/* WAL */
+	int64		wal_records;
+	int64		wal_fpi;
+	uint64		wal_bytes;
+
 	/* tuples */
 	int64		tuples_deleted;
 }			PgStat_CommonCounts;
@@ -236,6 +241,13 @@ typedef struct PgStat_VacuumRelationStatus
 	bool		shared;			/* is it a shared catalog? */
 	PgStat_VacuumRelationCounts counts; /* event counts to be sent */
 }			PgStat_VacuumRelationStatus;
+
+typedef struct PgStat_VacuumDBCounts
+{
+	Oid			dbjid;
+	PgStat_CommonCounts common;
+	int32		errors;
+}			PgStat_VacuumDBCounts;
 
 /* ----------
  * PgStat_TableStatus			Per-table status within a backend
@@ -917,11 +929,13 @@ extern int	pgstat_get_transactional_drops(bool isCommit, struct xl_xact_stats_it
 extern void pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_item *items, bool is_redo);
 
 
+extern void pgstat_drop_vacuum_database(Oid databaseid);
 extern void pgstat_vacuum_relation_delete_pending_cb(Oid relid);
 extern void
 			pgstat_report_vacuum_extstats(Oid tableoid, bool shared,
 										  PgStat_VacuumRelationCounts * params);
 extern PgStat_VacuumRelationCounts * pgstat_fetch_stat_vacuum_tabentry(Oid relid, Oid dbid);
+extern PgStat_VacuumDBCounts * pgstat_fetch_stat_vacuum_dbentry(Oid dbid);
 
 /*
  * Functions in pgstat_wal.c
@@ -940,6 +954,7 @@ extern PGDLLIMPORT bool pgstat_track_counts;
 extern PGDLLIMPORT int pgstat_track_functions;
 extern PGDLLIMPORT int pgstat_fetch_consistency;
 extern PGDLLIMPORT bool pgstat_track_vacuum_statistics;
+extern PGDLLIMPORT bool pgstat_track_vacuum_statistics_for_relations;
 
 /*
  * Variables in pgstat_bgwriter.c

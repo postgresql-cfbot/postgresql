@@ -7,7 +7,7 @@
  * kept separate from pgstat_relation.c and pgstat_database.c to reduce the
  * memory footprint of the regular relation and database statistics: vacuum
  * metrics require significantly more space per relation, so they live in their
- * own PGSTAT_KIND_VACUUM_RELATION stats kind.
+ * own PGSTAT_KIND_VACUUM_RELATION and PGSTAT_KIND_VACUUM_DB stats kinds.
  *
  * Copyright (c) 2001-2026, PostgreSQL Global Development Group
  *
@@ -22,15 +22,31 @@
 #include "utils/memutils.h"
 #include "utils/pgstat_internal.h"
 
+/* ----------
+ * GUC parameters
+ * ----------
+ */
+bool		pgstat_track_vacuum_statistics_for_relations = false;
+
+#define ACCUMULATE_FIELD(field) (dst->field += src->field)
 #define ACCUMULATE_SUBFIELD(substruct, field) (dst->substruct.field += src->substruct.field)
 
 /*
- * Accumulate the per-table extended vacuum counters collected so far.
- *
- * Only the counters derived directly from the vacuum's own bookkeeping are
- * summed here.  The buffer, WAL and timing counters (and the per-index
- * counters) are accumulated by additional code added together with the
- * helpers that gather them.
+ * Accumulate the counters that are common to heap relations, indexes and
+ * databases.
+ */
+static void
+pgstat_accumulate_common(PgStat_CommonCounts *dst, const PgStat_CommonCounts *src)
+{
+	ACCUMULATE_FIELD(wal_records);
+	ACCUMULATE_FIELD(wal_fpi);
+	ACCUMULATE_FIELD(wal_bytes);
+
+	ACCUMULATE_FIELD(tuples_deleted);
+}
+
+/*
+ * Accumulate per-relation (heap or index) extended vacuum counters.
  */
 static void
 pgstat_accumulate_extvac_stats_relations(PgStat_VacuumRelationCounts *dst,
@@ -46,15 +62,15 @@ pgstat_accumulate_extvac_stats_relations(PgStat_VacuumRelationCounts *dst,
 		   src->type != PGSTAT_EXTVAC_DB &&
 		   src->type == dst->type);
 
-	ACCUMULATE_SUBFIELD(common, tuples_deleted);
+	pgstat_accumulate_common(&dst->common, &src->common);
 
 	if (dst->type == PGSTAT_EXTVAC_TABLE)
 	{
 		ACCUMULATE_SUBFIELD(table, pages_scanned);
 		ACCUMULATE_SUBFIELD(table, pages_removed);
-		ACCUMULATE_SUBFIELD(table, tuples_frozen);
-		ACCUMULATE_SUBFIELD(table, recently_dead_tuples);
 		ACCUMULATE_SUBFIELD(table, missed_dead_pages);
+			ACCUMULATE_SUBFIELD(table, tuples_frozen);
+		ACCUMULATE_SUBFIELD(table, recently_dead_tuples);
 		ACCUMULATE_SUBFIELD(table, missed_dead_tuples);
 	}
 	else if (dst->type == PGSTAT_EXTVAC_INDEX)
@@ -64,8 +80,22 @@ pgstat_accumulate_extvac_stats_relations(PgStat_VacuumRelationCounts *dst,
 }
 
 /*
- * Report that the relation was just vacuumed, accumulating its extended
- * statistics into the per-relation entry.
+ * Accumulate per-database extended vacuum counters.
+ */
+static void
+pgstat_accumulate_extvac_stats_db(PgStat_VacuumDBCounts *dst,
+								  PgStat_VacuumDBCounts *src)
+{
+	if (!pgstat_track_vacuum_statistics)
+		return;
+
+	pgstat_accumulate_common(&dst->common, &src->common);
+	dst->errors += src->errors;
+}
+
+/*
+ * Report that the relation was just vacuumed, accumulating both its own
+ * extended statistics and the database-wide aggregate.
  */
 void
 pgstat_report_vacuum_extstats(Oid tableoid, bool shared,
@@ -73,20 +103,29 @@ pgstat_report_vacuum_extstats(Oid tableoid, bool shared,
 {
 	PgStat_EntryRef *entry_ref;
 	PgStat_RelationVacuumPending *relpending;
+	PgStat_VacuumDBCounts *dbpending;
 	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
 
 	if (!pgstat_track_vacuum_statistics)
 		return;
 
 	/*
-	 * Accumulate into a pending entry instead of taking a shared-stats lock
-	 * here; pgstat_report_stat() flushes it to shared memory through the
-	 * registered flush callback once the vacuum's transaction completes.
+	 * Accumulate into pending entries instead of taking a shared-stats lock
+	 * here; pgstat_report_stat() flushes them to shared memory through the
+	 * registered flush callbacks once the vacuum's transaction completes.
 	 */
+
+	/* Per-relation extended vacuum statistics */
 	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_VACUUM_RELATION,
 										  dboid, tableoid, NULL);
 	relpending = (PgStat_RelationVacuumPending *) entry_ref->pending;
 	pgstat_accumulate_extvac_stats_relations(&relpending->counts, params);
+
+	/* Database-wide aggregate of the same work */
+	entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_VACUUM_DB,
+										  dboid, InvalidOid, NULL);
+	dbpending = (PgStat_VacuumDBCounts *) entry_ref->pending;
+	pgstat_accumulate_common(&dbpending->common, &params->common);
 }
 
 /*
@@ -121,6 +160,31 @@ pgstat_vacuum_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 }
 
 /*
+ * Flush out pending per-database extended vacuum stats for the entry.
+ */
+bool
+pgstat_vacuum_db_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
+{
+	PgStatShared_VacuumDB *sharedent;
+	PgStat_VacuumDBCounts *pendingent;
+
+	pendingent = (PgStat_VacuumDBCounts *) entry_ref->pending;
+	sharedent = (PgStatShared_VacuumDB *) entry_ref->shared_stats;
+
+	if (pg_memory_is_all_zeros(pendingent, sizeof(PgStat_VacuumDBCounts)))
+		return true;
+
+	if (!pgstat_lock_entry(entry_ref, nowait))
+		return false;
+
+	pgstat_accumulate_extvac_stats_db(&sharedent->stats, pendingent);
+
+	pgstat_unlock_entry(entry_ref);
+
+	return true;
+}
+
+/*
  * Support function for the SQL-callable pgstat* functions. Returns the vacuum
  * collected statistics for one relation or NULL.
  */
@@ -129,4 +193,15 @@ pgstat_fetch_stat_vacuum_tabentry(Oid relid, Oid dbid)
 {
 	return (PgStat_VacuumRelationCounts *)
 		pgstat_fetch_entry(PGSTAT_KIND_VACUUM_RELATION, dbid, relid, NULL);
+}
+
+/*
+ * Support function for the SQL-callable pgstat* functions. Returns the vacuum
+ * collected statistics for one database or NULL.
+ */
+PgStat_VacuumDBCounts *
+pgstat_fetch_stat_vacuum_dbentry(Oid dbid)
+{
+	return (PgStat_VacuumDBCounts *)
+		pgstat_fetch_entry(PGSTAT_KIND_VACUUM_DB, dbid, InvalidOid, NULL);
 }

@@ -1572,7 +1572,10 @@ CREATE VIEW pg_stat_vacuum_tables AS
         S.tuples_frozen AS tuples_frozen,
         S.recently_dead_tuples AS recently_dead_tuples,
         S.missed_dead_pages AS missed_dead_pages,
-        S.missed_dead_tuples AS missed_dead_tuples
+        S.missed_dead_tuples AS missed_dead_tuples,
+        S.wal_records AS wal_records,
+        S.wal_fpi AS wal_fpi,
+        S.wal_bytes AS wal_bytes
 
     FROM pg_class C JOIN
             pg_namespace N ON N.oid = C.relnamespace,
@@ -1588,7 +1591,11 @@ CREATE VIEW pg_stat_vacuum_indexes AS
             I.relname AS indexrelname,
 
             S.pages_deleted AS pages_deleted,
-            S.tuples_deleted AS tuples_deleted
+            S.tuples_deleted AS tuples_deleted,
+
+            S.wal_records AS wal_records,
+            S.wal_fpi AS wal_fpi,
+            S.wal_bytes AS wal_bytes
     FROM
             pg_class C JOIN
             pg_index X ON C.oid = X.indrelid JOIN
@@ -1596,3 +1603,17 @@ CREATE VIEW pg_stat_vacuum_indexes AS
             LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace),
             LATERAL pg_stat_get_vacuum_indexes(I.oid) S
     WHERE C.relkind IN ('r', 't', 'm');
+
+CREATE VIEW pg_stat_vacuum_database AS
+    SELECT
+            D.oid AS dboid,
+            D.datname AS dbname,
+
+            S.errors AS errors,
+
+            S.wal_records AS wal_records,
+            S.wal_fpi AS wal_fpi,
+            S.wal_bytes AS wal_bytes
+    FROM
+            pg_database D,
+            LATERAL pg_stat_get_vacuum_database(D.oid) S;

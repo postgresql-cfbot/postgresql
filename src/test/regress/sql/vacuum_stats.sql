@@ -55,12 +55,40 @@ SELECT recently_dead_tuples = 0 AS recently_dead_tuples,
        missed_dead_tuples = 0 AS missed_dead_tuples
   FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
 
+-- WAL metrics.  A vacuum that removes tuples always emits WAL
+-- (wal_records > 0, wal_bytes > 0).  wal_fpi depends on whether a checkpoint
+-- happened recently, so it is only checked for being non-negative here; the
+-- positive wal_fpi path is exercised separately below.
+SELECT wal_records > 0 AS wal_records,
+       wal_fpi >= 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- WAL full-page-image path: a CHECKPOINT immediately before the vacuum forces
+-- the first modification of each page to emit a full page image, so wal_fpi
+-- advances.
+CREATE TABLE vacstat_fpi (id int PRIMARY KEY, v text)
+  WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_fpi SELECT g, repeat('x', 20) FROM generate_series(1, 1000) g;
+DELETE FROM vacstat_fpi WHERE id % 2 = 0;
+CHECKPOINT;
+VACUUM vacstat_fpi;
+SELECT pg_stat_force_next_flush();
+SELECT wal_records > 0 AS wal_records,
+       wal_fpi > 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_fpi';
+DROP TABLE vacstat_fpi;
+
 -- per-index view: the primary key index is processed by the same VACUUM.
 -- No btree leaf empties out (interleaved deletions), so pages_deleted = 0,
 -- while every index entry for a removed heap tuple is deleted.
 SELECT indexrelname,
        pages_deleted = 0 AS pages_deleted,
-       tuples_deleted = 500 AS tuples_deleted
+       tuples_deleted = 500 AS tuples_deleted,
+       wal_records > 0 AS wal_records,
+       wal_fpi >= 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
   FROM pg_stat_vacuum_indexes WHERE relname = 'vacstat_t' ORDER BY indexrelname;
 
 -- index page-deletion path: deleting a contiguous key range empties whole
@@ -79,3 +107,29 @@ SELECT indexrelname,
        tuples_deleted = 9000 AS tuples_deleted
   FROM pg_stat_vacuum_indexes WHERE relname = 'vacstat_idxdel' ORDER BY indexrelname;
 DROP TABLE vacstat_idxdel;
+
+-- per-database aggregate view: no vacuum errors occurred in this database, and
+-- the vacuums in this database emit WAL (wal_records > 0).
+SELECT errors = 0 AS errors,
+       wal_records > 0 AS wal_records,
+       wal_fpi >= 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
+  FROM pg_stat_vacuum_database WHERE dbname = current_database();
+
+-- parallel index vacuum: index statistics must be captured for indexes
+-- vacuumed through the parallel path, not folded into the heap.  Force the
+-- parallel path with min_parallel_index_scan_size = 0.
+SET min_parallel_index_scan_size = 0;
+CREATE TABLE vacstat_par (id int, x int) WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_par SELECT g, g FROM generate_series(1, 50000) g;
+CREATE INDEX vacstat_par_i1 ON vacstat_par (id);
+CREATE INDEX vacstat_par_i2 ON vacstat_par (x);
+DELETE FROM vacstat_par WHERE id % 2 = 0;
+VACUUM (PARALLEL 2) vacstat_par;
+SELECT pg_stat_force_next_flush();
+SELECT indexrelname,
+       tuples_deleted = 25000 AS tuples_deleted,
+       wal_records > 0 AS wal_records
+  FROM pg_stat_vacuum_indexes WHERE relname = 'vacstat_par' ORDER BY indexrelname;
+RESET min_parallel_index_scan_size;
+DROP TABLE vacstat_par;

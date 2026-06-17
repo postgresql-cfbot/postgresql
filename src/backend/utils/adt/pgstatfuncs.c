@@ -2374,13 +2374,14 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_VACUUM_TABLES_STATS_COLS 8
+#define PG_STAT_GET_VACUUM_TABLES_STATS_COLS 11
 
 	Oid			relid = PG_GETARG_OID(0);
 	PgStat_VacuumRelationCounts *extvacuum;
 	TupleDesc	tupdesc;
 	Datum		values[PG_STAT_GET_VACUUM_TABLES_STATS_COLS] = {0};
 	bool		nulls[PG_STAT_GET_VACUUM_TABLES_STATS_COLS] = {0};
+	char		buf[256];
 	int			i = 0;
 
 	/* Build a tuple descriptor for our result type */
@@ -2407,6 +2408,13 @@ pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 	values[i++] = Int64GetDatum(extvacuum->table.recently_dead_tuples);
 	values[i++] = Int64GetDatum(extvacuum->table.missed_dead_pages);
 	values[i++] = Int64GetDatum(extvacuum->table.missed_dead_tuples);
+	values[i++] = Int64GetDatum(extvacuum->common.wal_records);
+	values[i++] = Int64GetDatum(extvacuum->common.wal_fpi);
+	snprintf(buf, sizeof buf, UINT64_FORMAT, extvacuum->common.wal_bytes);
+	values[i++] = DirectFunctionCall3(numeric_in,
+									  CStringGetDatum(buf),
+									  ObjectIdGetDatum(0),
+									  Int32GetDatum(-1));
 
 	Assert(i == PG_STAT_GET_VACUUM_TABLES_STATS_COLS);
 
@@ -2420,13 +2428,14 @@ pg_stat_get_vacuum_tables(PG_FUNCTION_ARGS)
 Datum
 pg_stat_get_vacuum_indexes(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_GET_VACUUM_INDEX_STATS_COLS 3
+#define PG_STAT_GET_VACUUM_INDEX_STATS_COLS 6
 
 	Oid			relid = PG_GETARG_OID(0);
 	PgStat_VacuumRelationCounts *extvacuum;
 	TupleDesc	tupdesc;
 	Datum		values[PG_STAT_GET_VACUUM_INDEX_STATS_COLS] = {0};
 	bool		nulls[PG_STAT_GET_VACUUM_INDEX_STATS_COLS] = {0};
+	char		buf[256];
 	int			i = 0;
 
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
@@ -2448,7 +2457,57 @@ pg_stat_get_vacuum_indexes(PG_FUNCTION_ARGS)
 	values[i++] = Int64GetDatum(extvacuum->index.pages_deleted);
 	values[i++] = Int64GetDatum(extvacuum->common.tuples_deleted);
 
+	values[i++] = Int64GetDatum(extvacuum->common.wal_records);
+	values[i++] = Int64GetDatum(extvacuum->common.wal_fpi);
+	snprintf(buf, sizeof buf, UINT64_FORMAT, extvacuum->common.wal_bytes);
+	values[i++] = DirectFunctionCall3(numeric_in,
+									  CStringGetDatum(buf),
+									  ObjectIdGetDatum(0),
+									  Int32GetDatum(-1));
 	Assert(i == PG_STAT_GET_VACUUM_INDEX_STATS_COLS);
+
+	/* Returns the record as Datum */
+	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
+}
+
+/*
+ * Get the extended vacuum statistics for a database.
+ */
+Datum
+pg_stat_get_vacuum_database(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_VACUUM_DATABASE_STATS_COLS 5
+
+	Oid			dbid = PG_GETARG_OID(0);
+	PgStat_VacuumDBCounts *extvacuum;
+	TupleDesc	tupdesc;
+	Datum		values[PG_STAT_GET_VACUUM_DATABASE_STATS_COLS] = {0};
+	bool		nulls[PG_STAT_GET_VACUUM_DATABASE_STATS_COLS] = {0};
+	char		buf[256];
+	int			i = 0;
+
+	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
+		elog(ERROR, "return type must be a row type");
+
+	extvacuum = OidIsValid(dbid) ? pgstat_fetch_stat_vacuum_dbentry(dbid) : NULL;
+	if (!extvacuum)
+	{
+		InitMaterializedSRF(fcinfo, 0);
+		PG_RETURN_VOID();
+	}
+
+	values[i++] = ObjectIdGetDatum(dbid);
+
+	values[i++] = Int32GetDatum(extvacuum->errors);
+
+	values[i++] = Int64GetDatum(extvacuum->common.wal_records);
+	values[i++] = Int64GetDatum(extvacuum->common.wal_fpi);
+	snprintf(buf, sizeof buf, UINT64_FORMAT, extvacuum->common.wal_bytes);
+	values[i++] = DirectFunctionCall3(numeric_in,
+									  CStringGetDatum(buf),
+									  ObjectIdGetDatum(0),
+									  Int32GetDatum(-1));
+	Assert(i == PG_STAT_GET_VACUUM_DATABASE_STATS_COLS);
 
 	/* Returns the record as Datum */
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));

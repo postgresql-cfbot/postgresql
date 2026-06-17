@@ -500,6 +500,21 @@ static const PgStat_KindInfo pgstat_kind_builtin_infos[PGSTAT_KIND_BUILTIN_SIZE]
 		.reset_all_cb = pgstat_wal_reset_all_cb,
 		.snapshot_cb = pgstat_wal_snapshot_cb,
 	},
+	[PGSTAT_KIND_VACUUM_DB] = {
+		.name = "vacuum statistics",
+
+		.fixed_amount = false,
+		.write_to_file = true,
+		/* so pg_stat_database entries can be seen in all databases */
+		.accessed_across_databases = true,
+
+		.shared_size = sizeof(PgStatShared_VacuumDB),
+		.shared_data_off = offsetof(PgStatShared_VacuumDB, stats),
+		.shared_data_len = sizeof(((PgStatShared_VacuumDB *) 0)->stats),
+		.pending_size = sizeof(PgStat_VacuumDBCounts),
+
+		.flush_pending_cb = pgstat_vacuum_db_flush_cb,
+	},
 	[PGSTAT_KIND_VACUUM_RELATION] = {
 		.name = "vacuum statistics",
 

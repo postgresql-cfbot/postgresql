@@ -23,6 +23,7 @@ tests += {
       't/012_ddlutils.pl',
       't/013_temp_obj_multisession.pl',
       't/014_vacuum_stats.pl',
+      't/016_vacuum_stats_parallel.pl',
     ],
     # The injection points are cluster-wide, so disable installcheck
     'runningcheck': false,

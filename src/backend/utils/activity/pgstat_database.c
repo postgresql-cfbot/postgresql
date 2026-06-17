@@ -47,6 +47,15 @@ pgstat_drop_database(Oid databaseid)
 }
 
 /*
+ * Remove entry for the database being dropped.
+ */
+void
+pgstat_drop_vacuum_database(Oid databaseid)
+{
+	pgstat_drop_transactional(PGSTAT_KIND_VACUUM_DB, databaseid, InvalidOid);
+}
+
+/*
  * Called from autovacuum.c to report startup of an autovacuum process.
  * We are called before InitPostgres is done, so can't rely on MyDatabaseId;
  * the db OID must be passed in, instead.

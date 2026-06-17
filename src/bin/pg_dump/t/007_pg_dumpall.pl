@@ -387,6 +387,18 @@ $node->command_fails_like(
 	qr/\Qpg_restore: error: option -C\/--create must be specified when restoring an archive created by pg_dumpall\E/,
 	'When -C is not used in pg_restore with dump of pg_dumpall');
 
+# report an error when -C is not used for SQL output, even with --no-globals
+$node->command_fails_like(
+	[
+		'pg_restore',
+		"$tempdir/format_custom",
+		'--format' => 'custom',
+		'--no-globals',
+		'--file' => "$tempdir/error_test.sql",
+	],
+	qr/\Qpg_restore: error: option -C\/--create must be specified when restoring an archive created by pg_dumpall\E/,
+	'When -C is not used with --no-globals and --file in pg_restore with dump of pg_dumpall');
+
 # report an error when \l/--list option is used with dump of pg_dumpall
 $node->command_fails_like(
 	[

@@ -575,10 +575,13 @@ main(int argc, char **argv)
 
 		/*
 		 * To restore from a pg_dumpall archive, -C (create database) option
-		 * must be specified unless we are only restoring globals or we are
-		 * skipping globals.
+		 * must be specified unless we are only restoring globals, or we are
+		 * skipping globals in a direct restore.  When writing a SQL script,
+		 * -C is still required because the script needs CREATE DATABASE and
+		 * reconnect commands to separate each database's objects.
 		 */
-		if (!no_globals && !globals_only && opts->createDB != 1)
+		if (!globals_only && opts->createDB != 1 &&
+			(!no_globals || !opts->useDB))
 		{
 			pg_log_error("option %s must be specified when restoring an archive created by pg_dumpall",
 						 "-C/--create");

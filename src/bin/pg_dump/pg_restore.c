@@ -1,5 +1,5 @@
 /*-------------------------------------------------------------------------
- *
+*
  * pg_restore.c
  *	pg_restore is an utility extracting postgres database definitions
  *	from a backup archive created by pg_dump/pg_dumpall using the archiver
@@ -60,11 +60,11 @@ static void usage(const char *progname);
 static void read_restore_filters(const char *filename, RestoreOptions *opts);
 static bool file_exists_in_directory(const char *dir, const char *filename);
 static int	restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
-								 int numWorkers, bool append_data);
-static int	restore_global_objects(const char *inputFileSpec, RestoreOptions *opts);
+								 int numWorkers, bool append_data, bool is_pipe);
+static int	restore_global_objects(const char *inputFileSpec, RestoreOptions *opts, bool is_pipe);
 
 static int	restore_all_databases(const char *inputFileSpec,
-								  SimpleStringList db_exclude_patterns, RestoreOptions *opts, int numWorkers);
+								  SimpleStringList db_exclude_patterns, RestoreOptions *opts, int numWorkers, bool is_pipe);
 static int	get_dbnames_list_to_restore(PGconn *conn,
 										SimplePtrList *dbname_oid_list,
 										SimpleStringList db_exclude_patterns);
@@ -87,12 +87,14 @@ main(int argc, char **argv)
 	RestoreOptions *opts;
 	int			c;
 	int			numWorkers = 1;
-	char	   *inputFileSpec;
+	char	   *inputFileSpec = NULL;
+	char	   *pipe_command = NULL;
 	bool		data_only = false;
 	bool		schema_only = false;
 	int			n_errors = 0;
 	bool		globals_only = false;
 	SimpleStringList db_exclude_patterns = {NULL, NULL};
+	bool		is_pipe = false;
 	static int	disable_triggers = 0;
 	static int	enable_row_security = 0;
 	static int	if_exists = 0;
@@ -173,6 +175,7 @@ main(int argc, char **argv)
 		{"filter", required_argument, NULL, 4},
 		{"restrict-key", required_argument, NULL, 6},
 		{"exclude-database", required_argument, NULL, 7},
+		{"pipe", required_argument, NULL, 8},
 
 		{NULL, 0, NULL, 0}
 	};
@@ -356,6 +359,11 @@ main(int argc, char **argv)
 				simple_string_list_append(&db_exclude_patterns, optarg);
 				break;
 
+			case 8:				/* pipe */
+				pipe_command = pg_strdup(optarg);
+				is_pipe = true;
+				break;
+
 			default:
 				/* getopt_long already emitted a complaint */
 				pg_log_error_hint("Try \"%s --help\" for more information.", progname);
@@ -363,11 +371,25 @@ main(int argc, char **argv)
 		}
 	}
 
-	/* Get file name from command line */
+	/*
+	 * Get file name from command line. Note that filename argument and pipe
+	 * can't both be set.
+	 */
 	if (optind < argc)
+	{
+		if (is_pipe)
+			pg_fatal("cannot specify both an input file and --pipe");
 		inputFileSpec = argv[optind++];
-	else
+	}
+
+	/*
+	 * Even if the file argument is not provided, if the pipe is specified, we
+	 * need to use that as the file arg and not fallback to stdio.
+	 */
+	else if (!is_pipe)
+	{
 		inputFileSpec = NULL;
+	}
 
 	/* Complain if any arguments remain */
 	if (optind < argc)
@@ -514,10 +536,23 @@ main(int argc, char **argv)
 			pg_fatal("unrecognized archive format \"%s\"; please specify \"c\", \"d\", or \"t\"",
 					 opts->formatName);
 	}
+	else
+		opts->format = archUnknown;
+
+	if (is_pipe && opts->format != archDirectory)
+		pg_fatal("option --pipe is only supported with directory format");
+
+	if (is_pipe && numWorkers > 1 && strstr(pipe_command, "%f") == NULL)
+		pg_log_warning("parallel jobs with --pipe usually require the \"%%f\" placeholder to avoid data corruption from multiple workers reading from the same file");
 
 	/*
 	 * If toc.glo file is present, then restore all the databases from
 	 * map.dat, but skip restoring those matching --exclude-database patterns.
+	 *
+	 * Note: support for --pipe is currently skipped for cluster archives
+	 * (archives containing toc.glo) due to the added complexity of handling
+	 * nested directory paths and multiple databases. This could be considered
+	 * as a future enhancement.
 	 */
 	if (inputFileSpec != NULL &&
 		(file_exists_in_directory(inputFileSpec, "toc.glo")))
@@ -594,7 +629,7 @@ main(int argc, char **argv)
 		snprintf(global_path, MAXPGPATH, "%s/toc.glo", inputFileSpec);
 
 		if (!no_globals)
-			n_errors = restore_global_objects(global_path, tmpopts);
+			n_errors = restore_global_objects(global_path, tmpopts, is_pipe);
 		else
 			pg_log_info("skipping restore of global objects because %s was specified",
 						"--no-globals");
@@ -605,8 +640,8 @@ main(int argc, char **argv)
 		else
 		{
 			/* Now restore all the databases from map.dat */
-			n_errors = n_errors + restore_all_databases(inputFileSpec, db_exclude_patterns,
-														opts, numWorkers);
+			n_errors = n_errors + restore_all_databases(is_pipe ? pipe_command : inputFileSpec, db_exclude_patterns,
+														opts, numWorkers, is_pipe);
 		}
 
 		/* Free db pattern list. */
@@ -626,7 +661,7 @@ main(int argc, char **argv)
 					 "-g/--globals-only");
 
 		/* Process if toc.glo file does not exist. */
-		n_errors = restore_one_database(inputFileSpec, opts, numWorkers, false);
+		n_errors = restore_one_database(is_pipe ? pipe_command : inputFileSpec, opts, numWorkers, false, is_pipe);
 	}
 
 	/* Done, print a summary of ignored errors during restore. */
@@ -645,7 +680,7 @@ main(int argc, char **argv)
  * This restore all global objects.
  */
 static int
-restore_global_objects(const char *inputFileSpec, RestoreOptions *opts)
+restore_global_objects(const char *inputFileSpec, RestoreOptions *opts, bool is_pipe)
 {
 	Archive    *AH;
 	int			nerror = 0;
@@ -654,7 +689,7 @@ restore_global_objects(const char *inputFileSpec, RestoreOptions *opts)
 	opts->format = archCustom;
 	opts->txn_size = 0;
 
-	AH = OpenArchive(inputFileSpec, opts->format);
+	AH = OpenArchive(inputFileSpec, opts->format, is_pipe);
 
 	SetArchiveOptions(AH, NULL, opts);
 
@@ -691,12 +726,12 @@ restore_global_objects(const char *inputFileSpec, RestoreOptions *opts)
  */
 static int
 restore_one_database(const char *inputFileSpec, RestoreOptions *opts,
-					 int numWorkers, bool append_data)
+					 int numWorkers, bool append_data, bool is_pipe)
 {
 	Archive    *AH;
 	int			n_errors;
 
-	AH = OpenArchive(inputFileSpec, opts->format);
+	AH = OpenArchive(inputFileSpec, opts->format, is_pipe);
 
 	SetArchiveOptions(AH, NULL, opts);
 
@@ -752,6 +787,8 @@ usage(const char *progname)
 	printf(_("\nGeneral options:\n"));
 	printf(_("  -d, --dbname=NAME        connect to database name\n"));
 	printf(_("  -f, --file=FILENAME      output file name (- for stdout)\n"));
+	printf(_("  --pipe=COMMAND           execute command for each input file and\n"
+			 "                           read data from it via pipe\n"));
 	printf(_("  -F, --format=c|d|t       backup file format (should be automatic)\n"));
 	printf(_("  -l, --list               print summarized TOC of the archive\n"));
 	printf(_("  -v, --verbose            verbose mode\n"));
@@ -1145,7 +1182,7 @@ get_dbname_oid_list_from_mfile(const char *dumpdirpath,
 static int
 restore_all_databases(const char *inputFileSpec,
 					  SimpleStringList db_exclude_patterns, RestoreOptions *opts,
-					  int numWorkers)
+					  int numWorkers, bool is_pipe)
 {
 	SimplePtrList dbname_oid_list = {NULL, NULL};
 	int			num_db_restore = 0;
@@ -1309,7 +1346,7 @@ restore_all_databases(const char *inputFileSpec,
 		}
 
 		/* Restore the single database. */
-		n_errors = restore_one_database(subdirpath, tmpopts, numWorkers, true);
+		n_errors = restore_one_database(subdirpath, tmpopts, numWorkers, true, is_pipe);
 
 		n_errors_total += n_errors;
 

@@ -298,6 +298,15 @@ main(int argc, char *argv[])
 			case 'F':
 				format_name = pg_strdup(optarg);
 				break;
+
+				/*
+				 * Note: support for --pipe is currently skipped for
+				 * pg_dumpall due to the complexity of avoiding path
+				 * collisions between multiple databases and coordinating
+				 * nested directory structures. This could be considered as a
+				 * future enhancement.
+				 */
+
 			case 'g':
 				globals_only = true;
 				break;
@@ -678,7 +687,7 @@ main(int argc, char *argv[])
 
 		/* Open the output file */
 		fout = CreateArchive(global_path, archCustom, compression_spec,
-							 dosync, archModeWrite, NULL, DATA_DIR_SYNC_METHOD_FSYNC);
+							 dosync, archModeWrite, NULL, DATA_DIR_SYNC_METHOD_FSYNC, false);
 
 		/* Make dump options accessible right away */
 		SetArchiveOptions(fout, &dopt, NULL);

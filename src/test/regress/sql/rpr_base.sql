@@ -261,6 +261,65 @@ DROP TYPE truthyint;
 
 DROP TABLE rpr_bool;
 
+-- Coercion over a boolean domain is not a no-op; the wrapped Var must still
+-- propagate when referenced only in DEFINE (flag is not in the select list)
+CREATE DOMAIN boolish AS boolean;
+CREATE TABLE rpr_domain (id int, flag boolish);
+INSERT INTO rpr_domain VALUES (1, true), (2, false), (3, true);
+SELECT id, COUNT(*) OVER w AS cnt
+FROM rpr_domain
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS flag
+)
+ORDER BY id;
+DROP TABLE rpr_domain;
+DROP DOMAIN boolish;
+
+-- A Var referenced only inside a navigation operation must still propagate
+-- (val appears only inside PREV(), not as a bare operand or in the select list)
+CREATE TABLE rpr_nav (id int, val int);
+INSERT INTO rpr_nav VALUES (1, 0), (2, 1), (3, 0), (4, 2);
+SELECT id, COUNT(*) OVER w AS cnt
+FROM rpr_nav
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (UP+)
+    DEFINE UP AS id > PREV(val)
+)
+ORDER BY id;
+DROP TABLE rpr_nav;
+
+-- A non-boolean DEFINE expression is rejected
+CREATE TABLE rpr_noncoerce (id int, n int);
+INSERT INTO rpr_noncoerce VALUES (1, 1);
+SELECT id, COUNT(*) OVER w AS cnt
+FROM rpr_noncoerce
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS n
+);
+DROP TABLE rpr_noncoerce;
+
+-- A non-boolean later DEFINE is rejected at its own definition even when an
+-- earlier DEFINE variable is valid
+CREATE TABLE rpr_noncoerce2 (id int, n int);
+INSERT INTO rpr_noncoerce2 VALUES (1, 1);
+SELECT id, COUNT(*) OVER w AS cnt
+FROM rpr_noncoerce2
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A B+)
+    DEFINE A AS id > 0, B AS n
+);
+DROP TABLE rpr_noncoerce2;
+
 -- Complex expressions
 CREATE TABLE rpr_complex (id INT, val1 INT, val2 INT);
 INSERT INTO rpr_complex VALUES (1, 10, 20), (2, 15, 25), (3, 20, 30);

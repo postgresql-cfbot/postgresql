@@ -53,7 +53,7 @@ typedef struct
 
 /* Forward declarations */
 static void validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
-									   List *rpDefs, List **varNames);
+									   List **varNames);
 static List *transformDefineClause(ParseState *pstate, WindowDef *windef,
 								   List **targetlist);
 static bool define_walker(Node *node, void *context);
@@ -192,15 +192,14 @@ transformRPR(ParseState *pstate, WindowClause *wc, WindowDef *windef,
  * Throws an error if the number of unique variables would require a varId
  * greater than RPR_VARID_MAX.
  *
- * If rpDefs is non-NULL, each DEFINE variable name is also validated against
- * varNames; any DEFINE name not present in PATTERN is rejected with an error.
- * varNames itself is not extended by this step -- it carries only PATTERN
- * variable names, which is what transformColumnRef checks via
- * p_rpr_pattern_vars to identify pattern variable qualifiers.
+ * varNames collects the unique PATTERN variable names, which is what
+ * transformColumnRef checks via p_rpr_pattern_vars to identify pattern
+ * variable qualifiers.  Cross-checking DEFINE variable names against this
+ * list is the caller's responsibility, since it only needs to run once.
  */
 static void
 validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
-						   List *rpDefs, List **varNames)
+						   List **varNames)
 {
 	/* Pattern node must exist - parser always provides non-NULL root */
 	Assert(node != NULL);
@@ -255,38 +254,9 @@ validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
 			/* Recurse into children */
 			foreach_node(RPRPatternNode, child, node->children)
 			{
-				validateRPRPatternVarCount(pstate, child, NULL, varNames);
+				validateRPRPatternVarCount(pstate, child, varNames);
 			}
 			break;
-	}
-
-	/*
-	 * After the top-level call, validate that every DEFINE variable name is
-	 * present in the PATTERN variable list; reject names not used in PATTERN.
-	 * This is only done once at the outermost recursion level, detected by
-	 * rpDefs being non-NULL (recursive calls pass NULL).
-	 */
-	if (rpDefs)
-	{
-		foreach_node(ResTarget, rt, rpDefs)
-		{
-			bool		found = false;
-
-			foreach_node(String, varname, *varNames)
-			{
-				if (strcmp(strVal(varname), rt->name) == 0)
-				{
-					found = true;
-					break;
-				}
-			}
-			if (!found)
-				ereport(ERROR,
-						errcode(ERRCODE_SYNTAX_ERROR),
-						errmsg("DEFINE variable \"%s\" is not used in PATTERN",
-							   rt->name),
-						parser_errposition(pstate, rt->location));
-		}
 	}
 }
 
@@ -296,14 +266,16 @@ validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
  *
  * First:
  *   1. Validates PATTERN variable count and collects RPR variable names
+ *   2. Rejects DEFINE variables not used in PATTERN
+ *   3. Checks for duplicate variable names in DEFINE clause
  *
  * Then for each DEFINE variable:
- *   2. Checks for duplicate variable names in DEFINE clause
- *   3. Transforms expression via transformExpr() and ensures referenced
- *      Var nodes are present in the query targetlist (via pull_var_clause)
- *   4. Creates defineClause entry with proper resname (pattern variable name)
- *   5. Coerces expressions to boolean type
- *   6. Marks column origins and assigns collation information
+ *   4. Transforms expression via transformExpr() and coerces it to boolean
+ *   5. Creates defineClause entry with proper resname (pattern variable name)
+ *   6. Ensures referenced Var nodes are present in the query targetlist (via
+ *      pull_var_clause)
+ *
+ * Finally marks column origins and assigns collation information.
  *
  * Note: Variables not in DEFINE are evaluated as TRUE by the executor.
  * Variables in DEFINE but not in PATTERN are rejected as an error.
@@ -316,9 +288,7 @@ static List *
 transformDefineClause(ParseState *pstate, WindowDef *windef,
 					  List **targetlist)
 {
-	List	   *restargets;
 	List	   *defineClause = NIL;
-	char	   *name;
 	List	   *patternVarNames = NIL;
 
 	/*
@@ -328,56 +298,86 @@ transformDefineClause(ParseState *pstate, WindowDef *windef,
 	Assert(windef->rpCommonSyntax->rpDefs != NULL);
 
 	/*
-	 * Validate PATTERN variable count, reject DEFINE variables not used in
-	 * PATTERN, and collect PATTERN variable names for transformColumnRef.
+	 * Validate PATTERN variable count and collect the PATTERN variable names
+	 * for transformColumnRef.
 	 */
 	validateRPRPatternVarCount(pstate, windef->rpCommonSyntax->rpPattern,
-							   windef->rpCommonSyntax->rpDefs,
 							   &patternVarNames);
 	pstate->p_rpr_pattern_vars = patternVarNames;
 
 	/*
+	 * Reject any DEFINE variable whose name does not appear in PATTERN.  This
+	 * cross-check only needs to run once, so it lives here in the caller
+	 * rather than in the recursive validateRPRPatternVarCount().
+	 */
+	foreach_node(ResTarget, rt, windef->rpCommonSyntax->rpDefs)
+	{
+		bool		found = false;
+
+		foreach_node(String, varname, patternVarNames)
+		{
+			if (strcmp(strVal(varname), rt->name) == 0)
+			{
+				found = true;
+				break;
+			}
+		}
+		if (!found)
+			ereport(ERROR,
+					errcode(ERRCODE_SYNTAX_ERROR),
+					errmsg("DEFINE variable \"%s\" is not used in PATTERN",
+						   rt->name),
+					parser_errposition(pstate, rt->location));
+	}
+
+	/*
 	 * Check for duplicate row pattern definition variables.  The standard
 	 * requires that no two row pattern definition variable names shall be
-	 * equivalent.
+	 * equivalent.  Report the error at the later (duplicate) definition.
 	 */
-	restargets = NIL;
+	foreach_node(ResTarget, restarget, windef->rpCommonSyntax->rpDefs)
+	{
+		foreach_node(ResTarget, prior, windef->rpCommonSyntax->rpDefs)
+		{
+			if (prior == restarget)
+				break;
+			if (strcmp(prior->name, restarget->name) == 0)
+				ereport(ERROR,
+						errcode(ERRCODE_SYNTAX_ERROR),
+						errmsg("DEFINE variable \"%s\" appears more than once",
+							   restarget->name),
+						parser_errposition(pstate,
+										   exprLocation((Node *) restarget)));
+		}
+	}
+
 	foreach_node(ResTarget, restarget, windef->rpCommonSyntax->rpDefs)
 	{
 		TargetEntry *teDefine;
 		Node	   *expr;
 		List	   *vars;
 
-		name = restarget->name;
-
-		foreach_node(ResTarget, r, restargets)
-		{
-			char	   *n;
-
-			n = r->name;
-
-			if (!strcmp(n, name))
-				ereport(ERROR,
-						errcode(ERRCODE_SYNTAX_ERROR),
-						errmsg("DEFINE variable \"%s\" appears more than once",
-							   name),
-						parser_errposition(pstate, exprLocation((Node *) r)));
-		}
-
-		restargets = lappend(restargets, restarget);
-
 		/*
-		 * Transform the DEFINE expression.  We must NOT add the whole
-		 * expression to the query targetlist, because it may contain
-		 * RPRNavExpr nodes (PREV/NEXT/FIRST/LAST) that can only be evaluated
-		 * inside the owning WindowAgg.
-		 *
-		 * Instead, we transform the expression directly and only ensure that
-		 * the individual Var nodes it references are present in the
-		 * targetlist, so the planner can propagate the referenced columns.
+		 * Transform the DEFINE expression and coerce it to boolean.  We must
+		 * NOT add the whole expression to the query targetlist, because it
+		 * may contain RPRNavExpr nodes (PREV/NEXT/FIRST/LAST) that can only
+		 * be evaluated inside the owning WindowAgg.  Coercing here, before
+		 * pull_var_clause, keeps pull_var_clause operating on the final
+		 * expression form and surfaces a type mismatch before the targetlist
+		 * is touched.
 		 */
 		expr = transformExpr(pstate, restarget->val,
 							 EXPR_KIND_RPR_DEFINE);
+		expr = coerce_to_boolean(pstate, expr, "DEFINE");
+
+		/* Build the defineClause entry directly from the transformed expr */
+		teDefine = makeTargetEntry((Expr *) expr,
+								   list_length(defineClause) + 1,
+								   pstrdup(restarget->name),
+								   true);
+
+		/* build transformed DEFINE clause (list of TargetEntry) */
+		defineClause = lappend(defineClause, teDefine);
 
 		/*
 		 * Pull out Var nodes from the transformed expression and ensure each
@@ -412,25 +412,8 @@ transformDefineClause(ParseState *pstate, WindowDef *windef,
 			}
 		}
 		list_free(vars);
-
-		/* Build the defineClause entry directly from the transformed expr */
-		teDefine = makeTargetEntry((Expr *) expr,
-								   list_length(defineClause) + 1,
-								   pstrdup(name),
-								   true);
-
-		/* build transformed DEFINE clause (list of TargetEntry) */
-		defineClause = lappend(defineClause, teDefine);
 	}
-	list_free(restargets);
 	pstate->p_rpr_pattern_vars = NIL;
-
-	/*
-	 * Make sure that the row pattern definition search condition is a boolean
-	 * expression.
-	 */
-	foreach_ptr(TargetEntry, te, defineClause)
-		te->expr = (Expr *) coerce_to_boolean(pstate, (Node *) te->expr, "DEFINE");
 
 	/*
 	 * Validate DEFINE expressions: nested PREV/NEXT, column references,

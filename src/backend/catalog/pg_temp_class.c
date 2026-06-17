@@ -58,6 +58,7 @@
 #include "catalog/indexing.h"
 #include "catalog/pg_temp_class.h"
 #include "miscadmin.h"
+#include "utils/fmgroids.h"
 #include "utils/hsearch.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
@@ -176,6 +177,18 @@ get_pg_temp_class_tupdesc(void)
 		TupleDescInitEntry(tupdesc,
 						   (AttrNumber) Anum_pg_temp_class_reltablespace,
 						   "reltablespace", OIDOID, -1, 0);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_class_relpages,
+						   "relpages", INT4OID, -1, 0);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_class_reltuples,
+						   "reltuples", FLOAT4OID, -1, 0);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_class_relallvisible,
+						   "relallvisible", INT4OID, -1, 0);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_class_relallfrozen,
+						   "relallfrozen", INT4OID, -1, 0);
 		TupleDescFinalize(tupdesc);
 
 		MemoryContextSwitchTo(oldcontext);
@@ -202,6 +215,10 @@ heap_form_pg_temp_class_tuple(Relation rel)
 	values[Anum_pg_temp_class_oid - 1] = ObjectIdGetDatum(RelationGetRelid(rel));
 	values[Anum_pg_temp_class_relfilenode - 1] = ObjectIdGetDatum(form->relfilenode);
 	values[Anum_pg_temp_class_reltablespace - 1] = ObjectIdGetDatum(form->reltablespace);
+	values[Anum_pg_temp_class_relpages - 1] = Int32GetDatum(form->relpages);
+	values[Anum_pg_temp_class_reltuples - 1] = Float4GetDatum(form->reltuples);
+	values[Anum_pg_temp_class_relallvisible - 1] = Int32GetDatum(form->relallvisible);
+	values[Anum_pg_temp_class_relallfrozen - 1] = Int32GetDatum(form->relallfrozen);
 
 	return heap_form_tuple(get_pg_temp_class_tupdesc(), values, nulls);
 }
@@ -425,6 +442,80 @@ UpdatePgTempClassTuple(Oid relid, HeapTuple newtuple)
 
 	CatalogTupleUpdate(pg_temp_class, &oldtuple->t_self, newtuple);
 	ReleaseSysCache(oldtuple);
+
+	table_close(pg_temp_class, RowExclusiveLock);
+}
+
+/*
+ * UpdatePgTempClassTupleInPlace
+ *
+ *	Do an in-place update of the pg_temp_class tuple for a global temporary
+ *	relation.
+ */
+void
+UpdatePgTempClassTupleInPlace(Oid relid, HeapTuple newtuple)
+{
+	Relation	pg_temp_class;
+	ScanKeyData key[1];
+	HeapTuple	oldtuple;
+	void	   *inplace_state;
+
+	/* Is there a pending insert for this relation? */
+	if (pending_inserts != NULL)
+	{
+		PendingInsert *entry;
+
+		entry = hash_search(pending_inserts, &relid, HASH_FIND, NULL);
+		if (entry != NULL)
+		{
+			Form_pg_temp_class old_form;
+			Form_pg_temp_class new_form;
+
+			/* Should not have been deleted */
+			if (entry->deleted)
+				elog(ERROR,
+					 "pending insert for global temp relation %u was deleted",
+					 relid);
+
+			/* Update the entry, saving a copy for rollback, if necessary */
+			prepare_pending_insert_for_edit(entry);
+			old_form = (Form_pg_temp_class) GETSTRUCT(entry->tuple);
+			new_form = (Form_pg_temp_class) GETSTRUCT(newtuple);
+			COPY_PG_TEMP_CLASS_ATTRS(new_form, old_form);
+
+			/*
+			 * If it has not yet been flushed to the database, do so now. This
+			 * is important, because the caller might be relying on a relcache
+			 * invalidation being triggered.
+			 */
+			if (!entry->flushed)
+			{
+				pg_temp_class = open_pg_temp_class(RowExclusiveLock);
+				CatalogTupleInsert(pg_temp_class, newtuple);
+				table_close(pg_temp_class, RowExclusiveLock);
+				entry->flushed = true;
+				return;
+			}
+		}
+	}
+
+	/* Do an in-place update of the tuple in the database */
+	pg_temp_class = open_pg_temp_class(RowExclusiveLock);
+
+	ScanKeyInit(&key[0],
+				Anum_pg_temp_class_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(relid));
+
+	systable_inplace_update_begin(pg_temp_class, TempClassOidIndexId, true,
+								  NULL, 1, key, &oldtuple, &inplace_state);
+	if (!HeapTupleIsValid(oldtuple))
+		elog(ERROR, "cache lookup failed for global temp relation %u", relid);
+
+	ItemPointerCopy(&oldtuple->t_self, &newtuple->t_self);
+	systable_inplace_update_finish(inplace_state, newtuple);
+
+	heap_freetuple(oldtuple);
 
 	table_close(pg_temp_class, RowExclusiveLock);
 }

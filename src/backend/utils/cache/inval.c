@@ -1435,6 +1435,7 @@ static void
 CacheInvalidateHeapTupleCommon(Relation relation,
 							   HeapTuple tuple,
 							   HeapTuple newtuple,
+							   bool inplace_update,
 							   InvalidationInfo *(*prepare_callback) (void))
 {
 	InvalidationInfo *info;
@@ -1511,7 +1512,7 @@ CacheInvalidateHeapTupleCommon(Relation relation,
 		 * happens when the relation is dropped, which already triggers a
 		 * relcache inval from pg_class.
 		 */
-		if (HeapTupleIsValid(newtuple))
+		if (inplace_update || HeapTupleIsValid(newtuple))
 		{
 			relationId = temp_classtup->oid;
 			databaseId = MyDatabaseId;
@@ -1592,7 +1593,7 @@ CacheInvalidateHeapTuple(Relation relation,
 						 HeapTuple tuple,
 						 HeapTuple newtuple)
 {
-	CacheInvalidateHeapTupleCommon(relation, tuple, newtuple,
+	CacheInvalidateHeapTupleCommon(relation, tuple, newtuple, false,
 								   PrepareInvalidationState);
 }
 
@@ -1613,7 +1614,7 @@ void
 CacheInvalidateHeapTupleInplace(Relation relation,
 								HeapTuple key_equivalent_tuple)
 {
-	CacheInvalidateHeapTupleCommon(relation, key_equivalent_tuple, NULL,
+	CacheInvalidateHeapTupleCommon(relation, key_equivalent_tuple, NULL, true,
 								   PrepareInplaceInvalidationState);
 }
 

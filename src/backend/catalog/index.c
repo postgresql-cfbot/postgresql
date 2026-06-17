@@ -2806,11 +2806,14 @@ FormIndexDatum(IndexInfo *indexInfo,
 
 
 /*
- * index_update_stats --- update pg_class entry after CREATE INDEX or REINDEX
+ * index_update_stats --- update effective pg_class entry after CREATE INDEX
+ * or REINDEX
  *
- * This routine updates the pg_class row of either an index or its parent
- * relation after CREATE INDEX or REINDEX.  Its rather bizarre API is designed
- * to ensure we can do all the necessary work in just one update.
+ * This routine updates the effective pg_class row of either an index or its
+ * parent relation after CREATE INDEX or REINDEX.  Its rather bizarre API is
+ * designed to ensure we can do all the necessary work in just one update
+ * (except for a global temporary relation, which requires both pg_class and
+ * pg_temp_class to be updated).
  *
  * hasindex: set relhasindex to this value
  * reltuples: if >= 0, set reltuples to this value; else no change
@@ -2818,13 +2821,17 @@ FormIndexDatum(IndexInfo *indexInfo,
  * If reltuples >= 0, relpages, relallvisible, and relallfrozen are also
  * updated (using RelationGetNumberOfBlocks() and visibilitymap_count()).
  *
+ * For a global temporary relation, relhasindex is set in pg_class and all the
+ * other fields are set in pg_temp_class.  For any other type of relation, all
+ * the fields are set in pg_class.
+ *
  * NOTE: an important side-effect of this operation is that an SI invalidation
  * message is sent out to all backends --- including me --- causing relcache
  * entries to be flushed or updated with the new data.  This must happen even
- * if we find that no change is needed in the pg_class row.  When updating
- * a heap entry, this ensures that other backends find out about the new
- * index.  When updating an index, it's important because some index AMs
- * expect a relcache flush to occur after REINDEX.
+ * if we find that no change is needed in the pg_class or pg_temp_class rows.
+ * When updating a heap entry, this ensures that other backends find out about
+ * the new index.  When updating an index, it's important because some index
+ * AMs expect a relcache flush to occur after REINDEX.
  */
 static void
 index_update_stats(Relation rel,
@@ -2839,9 +2846,12 @@ index_update_stats(Relation rel,
 	Relation	pg_class;
 	ScanKeyData key[1];
 	HeapTuple	tuple;
+	HeapTuple	temp_tuple;
 	void	   *state;
 	Form_pg_class rd_rel;
+	Form_pg_temp_class temp_rd_rel;
 	bool		dirty;
+	bool		temp_dirty;
 
 	/*
 	 * As a special hack, if we are dealing with an empty table and the
@@ -2924,8 +2934,34 @@ index_update_stats(Relation rel,
 	 * relallvisible) if the caller isn't providing an updated reltuples
 	 * count, because that would bollix the reltuples/relpages ratio which is
 	 * what's really important.
+	 *
+	 * If not for (1) above, pg_temp_class could be updated normally, and in
+	 * fact we could work round (1) by simply not updating pg_temp_class in
+	 * bootstrap mode, since its value just gets thrown away when initdb
+	 * finishes.  However, for consistency, we update it in-place, like
+	 * pg_class --- see also vac_update_relstats().
 	 */
 
+	/*
+	 * For a global temporary relation, need a writable copy of its
+	 * pg_temp_class tuple.  Note: can't use systable_inplace_update_begin()
+	 * here because the tuple might be a pending insert --- see header
+	 * comments in pg_temp_class.c.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+	{
+		temp_tuple = GetPgTempClassTuple(relid);
+		if (!HeapTupleIsValid(temp_tuple))
+			elog(ERROR, "cache lookup failed for global temp relation %u", relid);
+		temp_rd_rel = (Form_pg_temp_class) GETSTRUCT(temp_tuple);
+	}
+	else
+	{
+		temp_tuple = NULL;
+		temp_rd_rel = NULL;
+	}
+
+	/* Fetch a copy of the pg_class tuple to scribble on */
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
 
 	ScanKeyInit(&key[0],
@@ -2942,9 +2978,10 @@ index_update_stats(Relation rel,
 	/* Should this be a more comprehensive test? */
 	Assert(rd_rel->relkind != RELKIND_PARTITIONED_INDEX);
 
-	/* Apply required updates, if any, to copied tuple */
+	/* Apply required updates, if any, to copied tuple(s) */
 
 	dirty = false;
+	temp_dirty = false;
 	if (rd_rel->relhasindex != hasindex)
 	{
 		rd_rel->relhasindex = hasindex;
@@ -2953,30 +2990,18 @@ index_update_stats(Relation rel,
 
 	if (update_stats)
 	{
-		if (rd_rel->relpages != (int32) relpages)
-		{
-			rd_rel->relpages = (int32) relpages;
-			dirty = true;
-		}
-		if (rd_rel->reltuples != (float4) reltuples)
-		{
-			rd_rel->reltuples = (float4) reltuples;
-			dirty = true;
-		}
-		if (rd_rel->relallvisible != (int32) relallvisible)
-		{
-			rd_rel->relallvisible = (int32) relallvisible;
-			dirty = true;
-		}
-		if (rd_rel->relallfrozen != (int32) relallfrozen)
-		{
-			rd_rel->relallfrozen = (int32) relallfrozen;
-			dirty = true;
-		}
+		SetEffective_relpages(rd_rel, temp_rd_rel, (int32) relpages,
+							  &dirty, &temp_dirty);
+		SetEffective_reltuples(rd_rel, temp_rd_rel, (float4) reltuples,
+							   &dirty, &temp_dirty);
+		SetEffective_relallvisible(rd_rel, temp_rd_rel, (int32) relallvisible,
+								   &dirty, &temp_dirty);
+		SetEffective_relallfrozen(rd_rel, temp_rd_rel, (int32) relallfrozen,
+								  &dirty, &temp_dirty);
 	}
 
 	/*
-	 * If anything changed, write out the tuple
+	 * If anything changed, write out the tuple(s)
 	 */
 	if (dirty)
 	{
@@ -2995,6 +3020,14 @@ index_update_stats(Relation rel,
 		 * our API contract.
 		 */
 		CacheInvalidateRelcacheByTuple(tuple);
+	}
+
+	if (HeapTupleIsValid(temp_tuple))
+	{
+		if (temp_dirty)
+			UpdatePgTempClassTupleInPlace(relid, temp_tuple);
+
+		heap_freetuple(temp_tuple);
 	}
 
 	heap_freetuple(tuple);

@@ -1698,12 +1698,12 @@ archprintf(Archive *AH, const char *fmt, ...)
 			break;				/* success */
 
 		/* Release buffer and loop around to try again with larger len. */
-		free(p);
+		pg_free(p);
 		len = cnt;
 	}
 
 	WriteData(AH, p, cnt);
-	free(p);
+	pg_free(p);
 	return (int) cnt;
 }
 
@@ -1802,12 +1802,12 @@ ahprintf(ArchiveHandle *AH, const char *fmt, ...)
 			break;				/* success */
 
 		/* Release buffer and loop around to try again with larger len. */
-		free(p);
+		pg_free(p);
 		len = cnt;
 	}
 
 	ahwrite(p, 1, cnt, AH);
-	free(p);
+	pg_free(p);
 	return (int) cnt;
 }
 
@@ -2272,7 +2272,7 @@ _discoverArchiveFormat(ArchiveHandle *AH)
 
 	pg_log_debug("attempting to ascertain archive format");
 
-	free(AH->lookahead);
+	pg_free(AH->lookahead);
 
 	AH->readHeader = 0;
 	AH->lookaheadSize = 512;
@@ -2865,7 +2865,7 @@ ReadToc(ArchiveHandle *AH)
 			}
 			else
 			{
-				free(deps);
+				pg_free(deps);
 				te->dependencies = NULL;
 				te->nDeps = 0;
 			}
@@ -2925,7 +2925,7 @@ processEncodingEntry(ArchiveHandle *AH, TocEntry *te)
 		pg_fatal("invalid ENCODING item: %s",
 				 te->defn);
 
-	free(defn);
+	pg_free(defn);
 }
 
 static void
@@ -3647,7 +3647,7 @@ _becomeUser(ArchiveHandle *AH, const char *user)
 	 * NOTE: currUser keeps track of what the imaginary session user in our
 	 * script is
 	 */
-	free(AH->currUser);
+	pg_free(AH->currUser);
 	AH->currUser = pg_strdup(user);
 }
 
@@ -3712,7 +3712,7 @@ _selectOutputSchema(ArchiveHandle *AH, const char *schemaName)
 	else
 		ahprintf(AH, "%s;\n\n", qry->data);
 
-	free(AH->currSchema);
+	pg_free(AH->currSchema);
 	AH->currSchema = pg_strdup(schemaName);
 
 	destroyPQExpBuffer(qry);
@@ -3773,7 +3773,7 @@ _selectTablespace(ArchiveHandle *AH, const char *tablespace)
 	else
 		ahprintf(AH, "%s;\n\n", qry->data);
 
-	free(AH->currTablespace);
+	pg_free(AH->currTablespace);
 	AH->currTablespace = pg_strdup(want);
 
 	destroyPQExpBuffer(qry);
@@ -3824,7 +3824,7 @@ _selectTableAccessMethod(ArchiveHandle *AH, const char *tableam)
 
 	destroyPQExpBuffer(cmd);
 
-	free(AH->currTableAm);
+	pg_free(AH->currTableAm);
 	AH->currTableAm = pg_strdup(want);
 }
 
@@ -3945,7 +3945,7 @@ _getObjectDescription(PQExpBuffer buf, const TocEntry *te)
 
 		appendPQExpBufferStr(buf, first);
 
-		free(first);
+		pg_free(first);
 		return;
 	}
 	/* these object types don't have separate owners */
@@ -4161,7 +4161,7 @@ _printTocEntry(ArchiveHandle *AH, TocEntry *te, const char *pfx)
 			char	   *cmdEnd = psprintf(" OWNER TO %s", fmtId(te->owner));
 
 			IssueCommandPerBlob(AH, te, "ALTER LARGE OBJECT ", cmdEnd);
-			pg_free(cmdEnd);
+			pfree(cmdEnd);
 		}
 		else
 		{
@@ -5141,7 +5141,7 @@ identify_locking_dependencies(ArchiveHandle *AH, TocEntry *te)
 
 	if (nlockids == 0)
 	{
-		free(lockids);
+		pg_free(lockids);
 		return;
 	}
 

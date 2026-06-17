@@ -1159,7 +1159,7 @@ process_directory_recursively(Oid tsoid,
 
 		/* Avoid leaking memory. */
 		if (checksum_payload != NULL)
-			pfree(checksum_payload);
+			pg_free(checksum_payload);
 	}
 
 	closedir(dir);

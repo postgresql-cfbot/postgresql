@@ -130,7 +130,14 @@ typedef struct ModifyTableContext
 typedef struct UpdateContext
 {
 	bool		crossPartUpdate;	/* was it a cross-partition update? */
-	TU_UpdateIndexes updateIndexes; /* Which index updates are required? */
+
+	/*
+	 * Set of indexed attributes the UPDATE changed (in/out for the table AM's
+	 * update callback).  Populated by ExecUpdateAct and consumed by
+	 * ExecUpdateEpilogue; the AM adds the whole-row attribute
+	 * (TableTupleUpdateAllIndexes) when every index needs a fresh entry.
+	 */
+	Bitmapset  *modified_attrs;
 
 	/*
 	 * Lock mode to acquire on the latest tuple version before performing
@@ -238,25 +245,23 @@ ExecUpdateModifiedIdxAttrs(ResultRelInfo *resultRelInfo,
 		return NULL;
 
 	/*
-	 * Get the set of all attributes across all indexes for this relation from
-	 * the relcache, it returns us a copy of the bitmap so we can modify it.
+	 * Determine which indexed attributes actually changed value by comparing
+	 * the old and new tuples attribute-by-attribute over the relation's full
+	 * indexed-attribute set.  We deliberately do NOT try to narrow the work
+	 * using the SQL UPDATE's target list (ExecGetAllUpdatedCols): that list
+	 * does not capture indexed columns mutated outside the SET clause, such
+	 * as a column rewritten by a BEFORE/INSTEAD-OF trigger via
+	 * heap_modify_tuple (see tsvector_update_trigger() in tsearch.sql), the
+	 * implicit temporal range column of a FOR PORTION OF update, or the
+	 * pre-built tuples applied by REPACK (CONCURRENTLY) and logical
+	 * replication through a synthetic ResultRelInfo.  Comparing the actual
+	 * tuple values is always correct.
 	 *
-	 * Note: We intentionally scan all indexed columns when looking for
-	 * changes rather than reduce that set by intersecting it with
-	 * ExecGetAllUpdatedCols().  Desipte the name it provides the set of
-	 * targeted attributes in the SQL used for the UPDATE and any triggers,
-	 * but that doesn't include any attributes updated using
-	 * heap_modifiy_tuple(). There is one test in tsearch.sql that does just
-	 * that, modifies an indexed attribute that isn't specified in the SQL and
-	 * so isn't present in that bitmapset.
+	 * RelationGetIndexAttrBitmap returns a copy we are free to mutate;
+	 * ExecCompareSlotAttrs deletes the attributes that did not change and
+	 * returns the surviving "modified indexed attributes" set.
 	 */
 	attrs = RelationGetIndexAttrBitmap(relation, INDEX_ATTR_BITMAP_INDEXED);
-
-	/*
-	 * When there are indexed attributes mentioned in the UPDATE then we need
-	 * to find the subset that changed value.  That's the
-	 * "modified_idx_attrs".
-	 */
 	attrs = ExecCompareSlotAttrs(attrs, tupdesc, old_tts, new_tts);
 
 	return attrs;
@@ -2513,8 +2518,8 @@ ExecUpdateAct(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	bool		partition_constraint_failed;
 	TM_Result	result;
 
-	/* The set of modified indexed attributes that trigger new index entries */
-	Bitmapset  *modified_idx_attrs = NULL;
+	/* Reset any state left over from a previous call */
+	updateCxt->modified_attrs = NULL;
 
 	updateCxt->crossPartUpdate = false;
 
@@ -2638,7 +2643,8 @@ lreplace:
 	 * we will overlook attributes directly modified by heap_modify_tuple()
 	 * which are not known to ExecGetUpdatedCols().
 	 */
-	modified_idx_attrs = ExecUpdateModifiedIdxAttrs(resultRelInfo, oldSlot, slot);
+	updateCxt->modified_attrs =
+		ExecUpdateModifiedIdxAttrs(resultRelInfo, oldSlot, slot);
 
 	/*
 	 * Call into the table AM to update the heap tuple.
@@ -2649,6 +2655,15 @@ lreplace:
 	 * for referential integrity updates in transaction-snapshot mode
 	 * transactions.
 	 */
+	/*
+	 * modified_attrs may legitimately already contain TableTupleUpdateAllIndexes
+	 * on input: an index whose expression references a whole-row Var records
+	 * attribute 0 in INDEX_ATTR_BITMAP_INDEXED, and ExecCompareSlotAttrs keeps
+	 * attribute 0 (whose bitmap index equals the sentinel) to force an
+	 * all-index update.  The AM also sets the sentinel as an output signal;
+	 * either way the epilogue treats the sentinel as "update all indexes", so
+	 * its presence is harmless here.
+	 */
 	result = table_tuple_update(resultRelationDesc, tupleid, slot,
 								estate->es_output_cid,
 								0,
@@ -2656,8 +2671,7 @@ lreplace:
 								estate->es_crosscheck_snapshot,
 								true /* wait for commit */ ,
 								&context->tmfd, &updateCxt->lockmode,
-								modified_idx_attrs,
-								&updateCxt->updateIndexes);
+								&updateCxt->modified_attrs);
 
 	return result;
 }
@@ -2678,16 +2692,37 @@ ExecUpdateEpilogue(ModifyTableContext *context, UpdateContext *updateCxt,
 	List	   *recheckIndexes = NIL;
 
 	/* insert index entries for tuple if necessary */
-	if (resultRelInfo->ri_NumIndices > 0 && (updateCxt->updateIndexes != TU_None))
+	if (resultRelInfo->ri_NumIndices > 0 &&
+		!bms_is_empty(updateCxt->modified_attrs))
 	{
-		uint32		flags = EIIT_IS_UPDATE;
+		bool		all_indexes =
+			bms_is_member(TableTupleUpdateAllIndexes,
+						  updateCxt->modified_attrs);
 
-		if (updateCxt->updateIndexes == TU_Summarizing)
-			flags |= EIIT_ONLY_SUMMARIZING;
+		/*
+		 * Populate per-index ii_IndexUnchanged before inserting.  When the AM
+		 * stored an independent new version (whole-row attribute present)
+		 * every index needs a fresh entry; for a HOT update only those whose
+		 * attributes overlap the modified set do.
+		 */
+		ExecSetIndexUnchanged(resultRelInfo, updateCxt->modified_attrs);
+
 		recheckIndexes = ExecInsertIndexTuples(resultRelInfo, context->estate,
-											   flags, slot, NIL,
+											   EIIT_IS_UPDATE |
+											   (all_indexes ?
+												0 : EIIT_IS_HOT_INDEXED),
+											   slot, NIL,
 											   NULL);
 	}
+
+	/*
+	 * Free the modified-attrs bitmap now that the index inserts have consumed
+	 * it.  It is palloc'd in the per-query context (via RelationGetIndexAttrBitmap)
+	 * once per updated row, so without this a bulk UPDATE would accumulate one
+	 * Bitmapset per row for the lifetime of the statement.
+	 */
+	bms_free(updateCxt->modified_attrs);
+	updateCxt->modified_attrs = NULL;
 
 	/* Compute temporal leftovers in FOR PORTION OF */
 	if (((ModifyTable *) context->mtstate->ps.plan)->forPortionOf)

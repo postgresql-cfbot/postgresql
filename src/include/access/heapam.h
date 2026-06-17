@@ -384,11 +384,47 @@ extern TM_Result heap_delete(Relation relation, const ItemPointerData *tid,
 							 bool wait, TM_FailureData *tmfd);
 extern void heap_finish_speculative(Relation relation, const ItemPointerData *tid);
 extern void heap_abort_speculative(Relation relation, const ItemPointerData *tid);
+
+/*
+ * HeapUpdateIndexMode --
+ *	Three-valued classification returned by HeapUpdateHotAllowable() that
+ *	tells heap_update() whether a HOT update is permitted for this tuple and,
+ *	if so, whether the indexes may be maintained selectively.
+ *
+ *	HEAP_UPDATE_ALL_INDEXES
+ *		HOT is not allowed; the new tuple must go on its own TID and every
+ *		index receives a fresh entry.  This is the classic pre-HOT-indexed
+ *		behavior for updates that modify a non-summarizing indexed attribute.
+ *
+ *	HEAP_HEAP_ONLY_UPDATE
+ *		Classic HOT update: no non-summarizing indexed attribute changed (only
+ *		summarizing ones, if any), so no index needs a new entry.
+ *
+ *	HEAP_SELECTIVE_INDEX_UPDATE
+ *		HOT with selective index update: at least one non-summarizing index's
+ *		attribute changed, but the new tuple can still join the HOT chain on
+ *		the same page; only the indexes whose attributes changed receive a new
+ *		entry.  As for classic HOT, heap_update() still falls back to a
+ *		non-HOT update if the new tuple does not fit on the page.
+ *
+ *	Callers should spell the exact mode they care about.  HEAP_UPDATE_ALL_INDEXES
+ *	is the zero/false value and doubles as a distinguished "no HOT" sentinel
+ *	(e.g. testing hot_mode != HEAP_UPDATE_ALL_INDEXES), but the values are not
+ *	meaningful as a numeric ordering.
+ */
+typedef enum HeapUpdateIndexMode
+{
+	HEAP_UPDATE_ALL_INDEXES = 0,
+	HEAP_HEAP_ONLY_UPDATE = 1,
+	HEAP_SELECTIVE_INDEX_UPDATE = 2,
+} HeapUpdateIndexMode;
+
 extern TM_Result heap_update(Relation relation, const ItemPointerData *otid,
 							 HeapTuple newtup, CommandId cid, uint32 options,
 							 Snapshot crosscheck, bool wait,
-							 TM_FailureData *tmfd, const LockTupleMode lockmode,
-							 const Bitmapset *modified_idx_attrs, const bool hot_allowed);
+							 TM_FailureData *tmfd, LockTupleMode lockmode,
+							 const Bitmapset *modified_idx_attrs,
+							 HeapUpdateIndexMode hot_mode);
 extern TM_Result heap_lock_tuple(Relation relation, HeapTuple tuple,
 								 CommandId cid, LockTupleMode mode, LockWaitPolicy wait_policy,
 								 bool follow_updates,
@@ -423,7 +459,7 @@ extern bool heap_tuple_needs_eventual_freeze(HeapTupleHeader tuple);
 extern void simple_heap_insert(Relation relation, HeapTuple tup);
 extern void simple_heap_delete(Relation relation, const ItemPointerData *tid);
 extern void simple_heap_update(Relation relation, const ItemPointerData *otid,
-							   HeapTuple tup, TU_UpdateIndexes *update_indexes);
+							   HeapTuple tup, bool *update_all_indexes);
 
 extern TransactionId heap_index_delete_tuples(Relation rel,
 											  TM_IndexDeleteOp *delstate);
@@ -434,7 +470,10 @@ extern void heapam_index_fetch_reset(IndexFetchTableData *scan);
 extern void heapam_index_fetch_end(IndexFetchTableData *scan);
 extern bool heap_hot_search_buffer(ItemPointer tid, Relation relation,
 								   Buffer buffer, Snapshot snapshot, HeapTuple heapTuple,
-								   bool *all_dead, bool first_call);
+								   bool *all_dead, bool first_call,
+								   bool *hot_indexed_recheck,
+								   uint8 *crossed_bitmap,
+								   bool *prefix_all_dead);
 extern bool heapam_index_fetch_tuple(struct IndexFetchTableData *scan,
 									 ItemPointer tid, Snapshot snapshot,
 									 TupleTableSlot *slot, bool *heap_continue,
@@ -464,8 +503,9 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 									  OffsetNumber *unused, int nunused);
 
 /* in heap/heapam.c */
-extern bool HeapUpdateHotAllowable(Relation relation, const Bitmapset *modified_idx_attrs,
-								   bool *summarized_only);
+
+extern HeapUpdateIndexMode HeapUpdateHotAllowable(Relation relation,
+												const Bitmapset *modified_idx_attrs);
 extern LockTupleMode HeapUpdateDetermineLockmode(Relation relation,
 												 const Bitmapset *modified_idx_attrs);
 

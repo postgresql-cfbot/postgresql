@@ -104,6 +104,7 @@ IndexOnlyNext(IndexOnlyScanState *node)
 
 		/* Set it up for index-only scan */
 		node->ioss_ScanDesc->xs_want_itup = true;
+		node->ioss_ScanDesc->xs_index_only = true;
 		node->ioss_VMBuffer = InvalidBuffer;
 
 		/*
@@ -172,6 +173,25 @@ IndexOnlyNext(IndexOnlyScanState *node)
 			if (!index_fetch_heap(scandesc, node->ioss_TableSlot))
 				continue;		/* no visible tuple, try next index entry */
 
+			/*
+			 * HOT-indexed stale entry: if the chain walk to reach this tuple
+			 * crossed a hot-indexed hop that changed an attribute this index
+			 * covers, the leaf we arrived through is stale.  For IOS we serve
+			 * values out of xs_itup, so a stale leaf would surface the wrong
+			 * values; drop it.  The fresh entry for the new value returns the
+			 * row with correct values via its own path.  Prune keeps any page
+			 * that can carry such a stale leaf -- one with a redirect to a
+			 * live HEAP_INDEXED_UPDATED tuple -- out of the visibility map
+			 * (see heap_prune_record_redirect), so an index-only scan always
+			 * reaches this heap fetch when staleness could apply.
+			 */
+			if (scandesc->xs_hot_indexed_stale)
+			{
+				InstrCountFiltered2(node, 1);
+				ExecClearTuple(node->ioss_TableSlot);
+				continue;
+			}
+
 			ExecClearTuple(node->ioss_TableSlot);
 
 			/*
@@ -228,6 +248,16 @@ IndexOnlyNext(IndexOnlyScanState *node)
 				continue;
 			}
 		}
+
+		/*
+		 * No HOT-indexed staleness check is needed on the VM-all-visible path
+		 * (where we skipped the heap fetch).  Prune keeps any page that could
+		 * carry a stale leaf -- one with a redirect to a live
+		 * HEAP_INDEXED_UPDATED tuple -- out of the visibility map, so an
+		 * all-visible entry never crossed a HOT/SIU hop.  (index_getnext_tid
+		 * also resets xs_hot_indexed_stale per entry, and only the heap fetch
+		 * in index_fetch_heap ever sets it, so it cannot be set here anyway.)
+		 */
 
 		/*
 		 * We don't currently support rechecking ORDER BY distances.  (In
@@ -775,6 +805,7 @@ ExecIndexOnlyScanInitializeDSM(IndexOnlyScanState *node,
 								 ScanRelIsReadOnly(&node->ss) ?
 								 SO_HINT_REL_READ_ONLY : SO_NONE);
 	node->ioss_ScanDesc->xs_want_itup = true;
+	node->ioss_ScanDesc->xs_index_only = true;
 	node->ioss_VMBuffer = InvalidBuffer;
 
 	/*
@@ -825,6 +856,7 @@ ExecIndexOnlyScanInitializeWorker(IndexOnlyScanState *node,
 								 ScanRelIsReadOnly(&node->ss) ?
 								 SO_HINT_REL_READ_ONLY : SO_NONE);
 	node->ioss_ScanDesc->xs_want_itup = true;
+	node->ioss_ScanDesc->xs_index_only = true;
 
 	/*
 	 * If no run-time keys to calculate or they are ready, go ahead and pass

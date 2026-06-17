@@ -218,6 +218,18 @@ retry:
 	while (index_getnext_slot(scan, ForwardScanDirection, outslot))
 	{
 		/*
+		 * A HOT-indexed update can leave a stale index leaf: an entry whose
+		 * key is a pre-update value but whose TID chain-resolves to a live
+		 * tuple now carrying a different key.  Such a tuple is not the
+		 * replica-identity match we are looking for (and the PK/RI fast path
+		 * below skips the equality recheck that would otherwise catch it), so
+		 * drop it -- exactly as IndexScan/IndexOnlyScan do.  The fresh leaf
+		 * for the current key, if any, is returned by a later iteration.
+		 */
+		if (scan->xs_hot_indexed_stale)
+			continue;
+
+		/*
 		 * Avoid expensive equality check if the index is primary key or
 		 * replica identity index.
 		 */
@@ -678,6 +690,10 @@ RelationFindDeletedTupleInfoByIndex(Relation rel, Oid idxoid,
 	/* Try to find the tuple */
 	while (index_getnext_slot(scan, ForwardScanDirection, scanslot))
 	{
+		/* Skip stale HOT-indexed leaves (see RelationFindReplTupleByIndex). */
+		if (scan->xs_hot_indexed_stale)
+			continue;
+
 		/*
 		 * Avoid expensive equality check if the index is primary key or
 		 * replica identity index.
@@ -911,7 +927,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 	bool		skip_tuple = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	ItemPointer tid = &(searchslot->tts_tid);
-	Bitmapset  *modified_idx_attrs;
+	Bitmapset  *modified_idx_attrs = NULL;
 
 	/*
 	 * We support only non-system tables, with
@@ -934,7 +950,6 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 	if (!skip_tuple)
 	{
 		List	   *recheckIndexes = NIL;
-		TU_UpdateIndexes update_indexes;
 		List	   *conflictindexes;
 		bool		conflict = false;
 
@@ -953,26 +968,33 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		modified_idx_attrs = ExecUpdateModifiedIdxAttrs(resultRelInfo,
 														searchslot, slot);
 
+		Assert(!bms_is_member(TableTupleUpdateAllIndexes, modified_idx_attrs));
 		simple_table_tuple_update(rel, tid, slot, estate->es_snapshot,
-								  modified_idx_attrs, &update_indexes);
-		bms_free(modified_idx_attrs);
-
+								  &modified_idx_attrs);
 
 		conflictindexes = resultRelInfo->ri_onConflictArbiterIndexes;
 
-		if (resultRelInfo->ri_NumIndices > 0 && (update_indexes != TU_None))
+		if (resultRelInfo->ri_NumIndices > 0 &&
+			!bms_is_empty(modified_idx_attrs))
 		{
+			bool		all_indexes =
+				bms_is_member(TableTupleUpdateAllIndexes, modified_idx_attrs);
 			uint32		flags = EIIT_IS_UPDATE;
 
 			if (conflictindexes != NIL)
 				flags |= EIIT_NO_DUPE_ERROR;
-			if (update_indexes == TU_Summarizing)
-				flags |= EIIT_ONLY_SUMMARIZING;
+			if (!all_indexes)
+				flags |= EIIT_IS_HOT_INDEXED;
+
+			ExecSetIndexUnchanged(resultRelInfo, modified_idx_attrs);
+
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   estate, flags,
 												   slot, conflictindexes,
 												   &conflict);
 		}
+
+		bms_free(modified_idx_attrs);
 
 		/*
 		 * Refer to the comments above the call to CheckAndReportConflict() in

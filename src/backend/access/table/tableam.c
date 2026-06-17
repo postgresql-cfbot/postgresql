@@ -242,19 +242,31 @@ bool
 table_index_fetch_tuple_check(Relation rel,
 							  ItemPointer tid,
 							  Snapshot snapshot,
-							  bool *all_dead)
+							  bool *all_dead,
+							  bool *hot_indexed_recheck_out,
+							  TupleTableSlot *keep_slot)
 {
 	IndexFetchTableData *scan;
 	TupleTableSlot *slot;
 	bool		call_again = false;
 	bool		found;
 
-	slot = table_slot_create(rel, NULL);
+	slot = keep_slot ? keep_slot : table_slot_create(rel, NULL);
 	scan = table_index_fetch_begin(rel, SO_NONE);
 	found = table_index_fetch_tuple(scan, tid, snapshot, slot, &call_again,
 									all_dead);
+
+	/*
+	 * Surface the table AM's HOT/SIU recheck signal to the caller (the index
+	 * AM, which rechecks the arriving leaf key against the live tuple); the
+	 * scan is freed below, so copy it out.
+	 */
+	if (hot_indexed_recheck_out != NULL)
+		*hot_indexed_recheck_out = found && scan->xs_hot_indexed_recheck;
+
 	table_index_fetch_end(scan);
-	ExecDropSingleTupleTableSlot(slot);
+	if (keep_slot == NULL)
+		ExecDropSingleTupleTableSlot(slot);
 
 	return found;
 }
@@ -361,8 +373,7 @@ void
 simple_table_tuple_update(Relation rel, ItemPointer otid,
 						  TupleTableSlot *slot,
 						  Snapshot snapshot,
-						  const Bitmapset *modified_idx_attrs,
-						  TU_UpdateIndexes *update_indexes)
+						  Bitmapset **modified_attrs)
 {
 	TM_Result	result;
 	TM_FailureData tmfd;
@@ -373,8 +384,7 @@ simple_table_tuple_update(Relation rel, ItemPointer otid,
 								0, snapshot, InvalidSnapshot,
 								true /* wait for commit */ ,
 								&tmfd, &lockmode,
-								modified_idx_attrs,
-								update_indexes);
+								modified_attrs);
 
 	switch (result)
 	{

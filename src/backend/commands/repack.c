@@ -256,6 +256,7 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 	bool		verbose = false;
 	bool		analyze = false;
 	bool		concurrently = false;
+	bool		have_gtrs;
 
 	/* Parse option list */
 	foreach_node(DefElem, opt, stmt->params)
@@ -445,6 +446,7 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 
 	/* Cluster the tables, each in a separate transaction */
 	Assert(rel == NULL);
+	have_gtrs = false;
 	foreach_ptr(RelToCluster, rtc, rtcs)
 	{
 		/* Start a new transaction for each relation. */
@@ -460,6 +462,8 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 			CommitTransactionCommand();
 			continue;
 		}
+		if (RELATION_IS_GLOBAL_TEMP(rel))
+			have_gtrs = true;
 
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
@@ -474,6 +478,13 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 
 	/* Start a new transaction for the cleanup work. */
 	StartTransactionCommand();
+
+	/*
+	 * Update our PGPROC struct's tempfrozenxid and tempminmxid, if we
+	 * processed any global temporary relations.
+	 */
+	if (have_gtrs)
+		vac_update_tempfrozenxids();
 
 	/* Clean up working storage */
 	MemoryContextDelete(repack_context);
@@ -1718,11 +1729,36 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	 * and then fail to commit the pg_class update.
 	 */
 
-	/* set rel1's frozen Xid and minimum MultiXid */
+	/*
+	 * Set rel1's frozen Xid and minimum MultiXid.  For a global temporary
+	 * relation, the supplied values are set in pg_temp_class and pg_class,
+	 * except that the values in pg_class are constrained to be no later than
+	 * min_tempfrozenxid and min_tempminmxid from all other backends' global
+	 * temporary relations --- see comments in vac_update_relstats().
+	 */
 	if (relform1->relkind != RELKIND_INDEX)
 	{
 		Assert(!TransactionIdIsValid(frozenXid) ||
 			   TransactionIdIsNormal(frozenXid));
+
+		if (temp_relform1 != NULL)
+		{
+			TransactionId min_tempfrozenxid;
+			MultiXactId min_tempminmxid;
+
+			vac_get_min_tempfrozenxids(&min_tempfrozenxid, &min_tempminmxid);
+
+			temp_relform1->relfrozenxid = frozenXid;
+			temp_relform1->relminmxid = cutoffMulti;
+
+			if (TransactionIdIsValid(min_tempfrozenxid) &&
+				TransactionIdPrecedes(min_tempfrozenxid, frozenXid))
+				frozenXid = min_tempfrozenxid;
+
+			if (MultiXactIdIsValid(min_tempminmxid) &&
+				MultiXactIdPrecedes(min_tempminmxid, cutoffMulti))
+				cutoffMulti = min_tempminmxid;
+		}
 		relform1->relfrozenxid = frozenXid;
 		relform1->relminmxid = cutoffMulti;
 	}
@@ -2512,6 +2548,7 @@ process_single_relation(RepackStmt *stmt, LOCKMODE lockmode, bool isTopLevel,
 	else
 	{
 		Oid			indexOid = InvalidOid;
+		bool		is_gtr = RELATION_IS_GLOBAL_TEMP(rel);
 
 		indexOid = determine_clustered_index(rel, stmt->usingindex,
 											 stmt->indexname);
@@ -2543,6 +2580,13 @@ process_single_relation(RepackStmt *stmt, LOCKMODE lockmode, bool isTopLevel,
 			PopActiveSnapshot();
 			CommandCounterIncrement();
 		}
+
+		/*
+		 * Update our PGPROC struct's tempfrozenxid and tempminmxid, if it was
+		 * a global temporary relation.
+		 */
+		if (is_gtr)
+			vac_update_tempfrozenxids();
 
 		return NULL;
 	}

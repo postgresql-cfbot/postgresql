@@ -55,6 +55,7 @@
 
 #include "access/amapi.h"
 #include "access/genam.h"
+#include "access/multixact.h"
 #include "access/parallel.h"
 #include "access/table.h"
 #include "access/tableam.h"
@@ -69,6 +70,7 @@
 #include "miscadmin.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
+#include "storage/proc.h"
 #include "storage/shmem.h"
 #include "storage/subsystems.h"
 #include "utils/memutils.h"
@@ -836,11 +838,23 @@ InitGlobalTempRelation(Relation relation)
 	{
 		/* Create (and track) storage for the relation */
 		if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
+		{
 			table_relation_set_new_filelocator(relation,
 											   &relation->rd_locator,
 											   relation->rd_rel->relpersistence,
 											   &relation->rd_rel->relfrozenxid,
 											   &relation->rd_rel->relminmxid);
+
+			/*
+			 * If tempfrozenxid and tempminmxid haven't been set for this
+			 * backend, then set them now (first global temporary table
+			 * accessed in this session).
+			 */
+			if (!TransactionIdIsValid(MyProc->tempfrozenxid))
+				MyProc->tempfrozenxid = relation->rd_rel->relfrozenxid;
+			if (!MultiXactIdIsValid(MyProc->tempminmxid))
+				MyProc->tempminmxid = (MultiXactId) relation->rd_rel->relminmxid;
+		}
 		else
 			RelationCreateStorage(relation->rd_id,
 								  relation->rd_locator,

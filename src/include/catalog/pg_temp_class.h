@@ -57,6 +57,12 @@ CATALOG(pg_temp_class,8082,TempRelationRelationId) BKI_TEMP_RELATION
 
 	/* # of all-frozen blocks (not always up-to-date) */
 	int32		relallfrozen BKI_DEFAULT(0);
+
+	/* all Xids < this are frozen in this rel */
+	TransactionId relfrozenxid BKI_DEFAULT(3);	/* FirstNormalTransactionId */
+
+	/* all multixacts in this rel are >= this; it is really a MultiXactId */
+	TransactionId relminmxid BKI_DEFAULT(1);	/* FirstMultiXactId */
 } FormData_pg_temp_class;
 
 END_CATALOG_STRUCT
@@ -87,6 +93,8 @@ MAKE_SYSCACHE(TEMPRELOID, pg_temp_class_oid_index, 128);
 		(target)->reltuples = (source)->reltuples; \
 		(target)->relallvisible = (source)->relallvisible; \
 		(target)->relallfrozen = (source)->relallfrozen; \
+		(target)->relfrozenxid = (source)->relfrozenxid; \
+		(target)->relminmxid = (source)->relminmxid; \
 	} while (0)
 
 /*
@@ -301,6 +309,9 @@ extern HeapTuple GetPgClassAndPgTempClassTuples(Oid relid, bool lock_tuple,
 												bool check_temp);
 
 extern HeapTuple GetEffectivePgClassTuple(Oid relid);
+
+extern void GetPgTempClassMinFrozenXids(TransactionId *min_relfrozenxid,
+										MultiXactId *min_relminmxid);
 
 extern void PreCCI_PgTempClass(void);
 

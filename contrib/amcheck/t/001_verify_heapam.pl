@@ -5,6 +5,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 
 use Test::More;
@@ -18,7 +19,9 @@ $node = PostgreSQL::Test::Cluster->new('test');
 $node->init(no_data_checksums => 1);
 $node->append_conf('postgresql.conf', 'autovacuum=off');
 $node->start;
-$node->safe_psql('postgres', q(CREATE EXTENSION amcheck));
+my $session = PostgreSQL::Test::Session->new(node => $node);
+
+$session->do(q(CREATE EXTENSION amcheck));
 
 #
 # Check a table with data loaded but no corruption, freezing, etc.
@@ -49,7 +52,7 @@ detects_heap_corruption(
 # Check a corrupt table with all-frozen data
 #
 fresh_test_table('test');
-$node->safe_psql('postgres', q(VACUUM (FREEZE, DISABLE_PAGE_SKIPPING) test));
+$session->do(q(VACUUM (FREEZE, DISABLE_PAGE_SKIPPING) test));
 detects_no_corruption("verify_heapam('test')",
 	"all-frozen not corrupted table");
 corrupt_first_page('test');
@@ -81,7 +84,7 @@ sub relation_filepath
 	my ($relname) = @_;
 
 	my $pgdata = $node->data_dir;
-	my $rel = $node->safe_psql('postgres',
+	my $rel = $session->query_oneval(
 		qq(SELECT pg_relation_filepath('$relname')));
 	die "path not found for relation $relname" unless defined $rel;
 	return "$pgdata/$rel";
@@ -92,8 +95,8 @@ sub fresh_test_table
 {
 	my ($relname) = @_;
 
-	return $node->safe_psql(
-		'postgres', qq(
+	return $session->do(
+		qq(
 		DROP TABLE IF EXISTS $relname CASCADE;
 		CREATE TABLE $relname (a integer, b text);
 		ALTER TABLE $relname SET (autovacuum_enabled=false);
@@ -117,8 +120,8 @@ sub fresh_test_sequence
 {
 	my ($seqname) = @_;
 
-	return $node->safe_psql(
-		'postgres', qq(
+	return $session->do(
+		qq(
 		DROP SEQUENCE IF EXISTS $seqname CASCADE;
 		CREATE SEQUENCE $seqname
 			INCREMENT BY 13
@@ -134,8 +137,8 @@ sub advance_test_sequence
 {
 	my ($seqname) = @_;
 
-	return $node->safe_psql(
-		'postgres', qq(
+	return $session->query_oneval(
+		qq(
 		SELECT nextval('$seqname');
 	));
 }
@@ -145,10 +148,7 @@ sub set_test_sequence
 {
 	my ($seqname) = @_;
 
-	return $node->safe_psql(
-		'postgres', qq(
-		SELECT setval('$seqname', 102);
-	));
+	return $session->query_oneval(qq(SELECT setval('$seqname', 102)));
 }
 
 # Call SQL functions to reset the sequence
@@ -156,8 +156,8 @@ sub reset_test_sequence
 {
 	my ($seqname) = @_;
 
-	return $node->safe_psql(
-		'postgres', qq(
+	return $session->do(
+		qq(
 		ALTER SEQUENCE $seqname RESTART WITH 51
 	));
 }
@@ -169,6 +169,7 @@ sub corrupt_first_page
 	my ($relname) = @_;
 	my $relpath = relation_filepath($relname);
 
+	$session->close;
 	$node->stop;
 
 	my $fh;
@@ -191,6 +192,7 @@ sub corrupt_first_page
 	  or BAIL_OUT("close failed: $!");
 
 	$node->start;
+	$session->reconnect;
 }
 
 sub detects_heap_corruption
@@ -216,7 +218,7 @@ sub detects_corruption
 
 	my ($function, $testname, @re) = @_;
 
-	my $result = $node->safe_psql('postgres', qq(SELECT * FROM $function));
+	my $result = $session->query_tuples(qq(SELECT * FROM $function));
 	like($result, $_, $testname) for (@re);
 }
 
@@ -226,7 +228,7 @@ sub detects_no_corruption
 
 	my ($function, $testname) = @_;
 
-	my $result = $node->safe_psql('postgres', qq(SELECT * FROM $function));
+	my $result = $session->query_tuples(qq(SELECT * FROM $function));
 	is($result, '', $testname);
 }
 

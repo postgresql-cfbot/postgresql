@@ -15,6 +15,7 @@ use warnings FATAL => 'all';
 
 use Math::BigInt;
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -38,10 +39,8 @@ my $tempdir = PostgreSQL::Test::Utils::tempdir;
 # versions.
 #
 # The first argument is the cluster to connect to, the second argument
-# is a cluster using the new version.  We need the 'psql' binary from
-# the new version, the new cluster is otherwise unused.  (We need to
-# use the new 'psql' because some of the more advanced background psql
-# perl module features depend on a fairly recent psql version.)
+# is a cluster using the new version.  We need the libpq library from
+# the new version (for Session), the new cluster is otherwise unused.
 sub mxact_workload
 {
 	my $node = shift;       # Cluster to connect to
@@ -79,18 +78,20 @@ sub mxact_workload
 	# in each connection.
 	for (0 .. $nclients)
 	{
-		# Use the psql binary from the new installation.  The
-		# BackgroundPsql functionality doesn't work with older psql
-		# versions.
-		my $conn = $binnode->background_psql(
-			'',
-			connstr => $node->connstr('postgres'),
-			timeout => $connection_timeout_secs);
+		# Connect to the (old) cluster, but load libpq from the new
+		# installation: the Session FFI wrapper binds libpq functions that
+		# may not be present in the old installation's libpq.  Passing the
+		# node (rather than an explicit libdir) lets Session locate the
+		# library correctly on all platforms, including Windows where it
+		# lives in bindir.
+		my $conn = PostgreSQL::Test::Session->new(
+			node => $binnode,
+			connstr => $node->connstr('postgres'));
 
-		$conn->query_safe("SET log_statement=none", verbose => $verbose)
+		$conn->do("SET log_statement=none")
 		  unless $verbose;
-		$conn->query_safe("SET enable_seqscan=off", verbose => $verbose);
-		$conn->query_safe("BEGIN", verbose => $verbose);
+		$conn->do("SET enable_seqscan=off");
+		$conn->do("BEGIN");
 
 		push(@connections, $conn);
 	}
@@ -108,9 +109,9 @@ sub mxact_workload
 		my $conn = $connections[ $i % $nclients ];
 
 		my $sql = ($i % $abort_every == 0) ? "ABORT" : "COMMIT";
-		$conn->query_safe($sql, verbose => $verbose);
+		$conn->do($sql);
 
-		$conn->query_safe("BEGIN", verbose => $verbose);
+		$conn->do("BEGIN");
 		if ($i % $update_every == 0)
 		{
 			$sql = qq[
@@ -126,12 +127,12 @@ sub mxact_workload
 			  ) as x
 			];
 		}
-		$conn->query_safe($sql, verbose => $verbose);
+		$conn->do($sql);
 	}
 
 	for my $conn (@connections)
 	{
-		$conn->quit();
+		$conn->close;
 	}
 
 	$node->stop;

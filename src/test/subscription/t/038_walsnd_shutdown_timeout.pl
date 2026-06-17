@@ -8,6 +8,7 @@ use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
+use PostgreSQL::Test::Session;
 use Test::More;
 use Time::HiRes qw(usleep);
 
@@ -45,7 +46,7 @@ $node_subscriber->wait_for_subscription_sync($node_publisher, 'test_sub');
 
 # Start a background session on the subscriber to run a transaction later
 # that will block the logical apply worker on a lock.
-my $sub_session = $node_subscriber->background_psql('postgres');
+my $sub_session = PostgreSQL::Test::Session->new(node => $node_subscriber);
 
 # Test that when the logical apply worker is blocked on a lock and replication
 # is stalled, shutting down the publisher causes the logical walsender to exit
@@ -53,7 +54,7 @@ my $sub_session = $node_subscriber->background_psql('postgres');
 
 # Cause the logical apply worker to block on a lock by running conflicting
 # transactions on the publisher and subscriber.
-$sub_session->query_safe("BEGIN; INSERT INTO test_tab VALUES (0);");
+$sub_session->do("BEGIN; INSERT INTO test_tab VALUES (0);");
 $node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (0);");
 
 my $log_offset = -s $node_publisher->logfile;
@@ -65,7 +66,7 @@ ok( $node_publisher->log_contains(
 		$log_offset),
 	"walsender exits due to wal_sender_shutdown_timeout");
 
-$sub_session->query_safe("ABORT;");
+$sub_session->do("ABORT;");
 $node_publisher->start;
 $node_publisher->wait_for_catchup('test_sub');
 
@@ -79,7 +80,7 @@ $node_publisher->wait_for_catchup('test_sub');
 
 # Run a transaction on the subscriber that blocks the logical apply worker
 # on a lock.
-$sub_session->query_safe("BEGIN; LOCK TABLE test_tab IN EXCLUSIVE MODE;");
+$sub_session->do("BEGIN; LOCK TABLE test_tab IN EXCLUSIVE MODE;");
 
 # Generate enough data to fill the logical walsender's output buffer.
 $node_publisher->safe_psql('postgres',
@@ -117,7 +118,7 @@ ok( $node_publisher->log_contains(
 	"walsender with full output buffer exits due to wal_sender_shutdown_timeout"
 );
 
-$sub_session->query_safe("ABORT;");
+$sub_session->do("ABORT;");
 
 # The next test depends on Perl's `kill`, which apparently is not
 # portable to Windows.  (It would be nice to use Test::More's `subtest`,
@@ -167,7 +168,7 @@ $node_standby->start;
 # Cause the logical apply worker to block on a lock by running conflicting
 # transactions on the publisher and subscriber, stalling logical replication.
 $node_publisher->wait_for_catchup('test_sub');
-$sub_session->query_safe("BEGIN; LOCK TABLE test_tab IN EXCLUSIVE MODE;");
+$sub_session->do("BEGIN; LOCK TABLE test_tab IN EXCLUSIVE MODE;");
 $node_publisher->safe_psql('postgres', "INSERT INTO test_tab VALUES (-1); ");
 
 # Cause the standby's walreceiver to be blocked with SIGSTOP signal,
@@ -193,7 +194,7 @@ ok( $node_publisher->log_contains(
 );
 
 kill 'CONT', $receiverpid;
-$sub_session->quit;
+$sub_session->close;
 
 $node_subscriber->stop('fast');
 $node_standby->stop('fast');

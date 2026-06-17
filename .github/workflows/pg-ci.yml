@@ -336,6 +336,22 @@ jobs:
             127.0.0.3 pg-loadbalancetest
           EOF
 
+          # The CI container images don't yet include FFI::Platypus,
+          # which PostgreSQL::Test::Session needs. Install it from the
+          # Debian package until the images provide it. The 32-bit job
+          # runs its TAP tests with the image's i386 perl, which needs
+          # the i386 build of the module; that package cannot be
+          # installed alongside the amd64 one (it depends on perl:i386,
+          # which conflicts with the installed perl), so extract it into
+          # place the same way the image provides the i386 perl itself.
+          echo ::group::apt_ffi_platypus
+          apt-get -y -q update
+          apt-get -y -q install libffi-platypus-perl
+          (cd /tmp &&
+            apt-get -y -q download libffi-platypus-perl:i386 &&
+            dpkg -x libffi-platypus-perl_*_i386.deb /)
+          echo ::endgroup::
+
       # By using a shell that includes su, the run commands themselves get
       # simpler. As there are quite a few commands that need to use su...
       - name: Configure
@@ -668,6 +684,16 @@ jobs:
 
       - name: Test world
         shell: *su_postgres_shell
+        # PostgreSQL::Test::Session loads the ASan-instrumented libpq
+        # in-process via FFI::Platypus.  ASan must come first in the link
+        # order; dlopening it into an otherwise uninstrumented perl aborts
+        # with "ASan runtime does not come first".  Preload the ASan
+        # runtime for the test run to satisfy that (a no-op for the
+        # already-instrumented server/client binaries).  Scoped to this
+        # step so the build is unaffected; detect_leaks is already
+        # disabled via ASAN_OPTIONS.
+        env:
+          ADDITIONAL_SETUP: export LD_PRELOAD="$(gcc -print-file-name=libasan.so)"
         run: *meson_test_world_cmd
 
       - *linux_collect_cores_step
@@ -702,12 +728,15 @@ jobs:
 
       MACOS_PACKAGE_LIST: >-
         ccache
+        curl
         icu
         kerberos5
+        libuuid
         lz4
         meson
         openldap
         openssl
+        p5.34-ffi-platypus
         p5.34-io-tty
         p5.34-ipc-run
         python312
@@ -1089,6 +1118,7 @@ jobs:
             ${MINGW_PACKAGE_PREFIX}-gcc \
             ${MINGW_PACKAGE_PREFIX}-icu \
             ${MINGW_PACKAGE_PREFIX}-libbacktrace \
+            ${MINGW_PACKAGE_PREFIX}-libffi \
             ${MINGW_PACKAGE_PREFIX}-libxml2 \
             ${MINGW_PACKAGE_PREFIX}-libxslt \
             ${MINGW_PACKAGE_PREFIX}-lz4 \
@@ -1110,6 +1140,15 @@ jobs:
           echo ::group::cpan_ipc_run
           (echo; echo o conf recommends_policy 0; echo notest install NJM/IPC-Run-20250809.0.tar.gz) | cpan
           perl -mIPC::Run -e 1
+          echo ::endgroup::
+
+          # FFI::Platypus, needed by PostgreSQL::Test::Session, is not
+          # packaged for MSYS2, so install it from CPAN. The mingw libffi
+          # installed above lets Alien::FFI use the system library rather
+          # than building its own.
+          echo ::group::cpan_ffi_platypus
+          (echo; echo o conf recommends_policy 0; echo notest install FFI::Platypus) | cpan
+          perl -mFFI::Platypus -e 1
           echo ::endgroup::
 
       - name: Setup socket directory

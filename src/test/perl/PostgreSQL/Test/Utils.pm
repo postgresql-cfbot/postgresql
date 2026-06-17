@@ -262,6 +262,19 @@ INIT
 		# Ignore dies inside evals
 		return if $^S == 1;
 
+		# Dies during global destruction happen after the test body has
+		# finished (done_testing() has already run).  They are typically
+		# harmless teardown-ordering artifacts -- for example FFI::Platypus
+		# bindings or callback closures being freed in an unpredictable order
+		# while the process exits.  Reporting them by calling done_testing()
+		# again would spuriously fail an otherwise-passing test, so just log
+		# them and return.
+		if (${^GLOBAL_PHASE} eq 'DESTRUCT')
+		{
+			diag("die during global destruction (ignored): $_[0]");
+			return;
+		}
+
 		diag("die: $_[0]");
 		# Also call done_testing() to avoid the confusing "no plan was declared"
 		# message in TAP output when a test dies.

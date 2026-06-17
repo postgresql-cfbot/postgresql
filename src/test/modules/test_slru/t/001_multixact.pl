@@ -6,6 +6,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 
 use Test::More;
@@ -30,8 +31,8 @@ $node->safe_psql('postgres', q(CREATE EXTENSION test_slru));
 # lost.
 
 # Create the first multixact
-my $bg_psql = $node->background_psql('postgres');
-my $multi1 = $bg_psql->query_safe(q(SELECT test_create_multixact();));
+my $bg_session = PostgreSQL::Test::Session->new(node => $node);
+my $multi1 = $bg_session->query_oneval(q(SELECT test_create_multixact();));
 
 # Assign the middle multixact. Use an injection point to prevent it
 # from being fully recorded.
@@ -39,11 +40,9 @@ $node->safe_psql('postgres',
 	q{SELECT injection_points_attach('multixact-create-from-members','wait');}
 );
 
-$bg_psql->query_until(
-	qr/assigning lost multi/, q(
-\echo assigning lost multi
-	SELECT test_create_multixact();
-));
+# Start the second multixact creation asynchronously - it will block at
+# the injection point
+$bg_session->do_async(q(SELECT test_create_multixact();));
 
 $node->wait_for_event('client backend', 'multixact-create-from-members');
 $node->safe_psql('postgres',
@@ -52,10 +51,10 @@ $node->safe_psql('postgres',
 # Create the third multixid
 my $multi2 = $node->safe_psql('postgres', q{SELECT test_create_multixact();});
 
-# All set and done, it's time for hard restart
+# All set and done, it's time for hard restart. The background session
+# will be terminated by the crash.
 $node->stop('immediate');
 $node->start;
-$bg_psql->{run}->finish;
 
 # Verify that the recorded multixids are readable
 is( $node->safe_psql('postgres', qq{SELECT test_read_multixact('$multi1');}),

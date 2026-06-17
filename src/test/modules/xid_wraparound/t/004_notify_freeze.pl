@@ -7,6 +7,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use Test::More;
 
 my $node = PostgreSQL::Test::Cluster->new('node');
@@ -24,9 +25,9 @@ $node->safe_psql('postgres',
 	'ALTER DATABASE template0 WITH ALLOW_CONNECTIONS true');
 
 # Start Session 1 and leave it idle in transaction
-my $psql_session1 = $node->background_psql('postgres');
-$psql_session1->query_safe('listen s;');
-$psql_session1->query_safe('begin;');
+my $session1 = PostgreSQL::Test::Session->new(node => $node);
+$session1->do('LISTEN s');
+$session1->do('BEGIN');
 
 # Send some notifys from other sessions
 for my $i (1 .. 10)
@@ -54,18 +55,20 @@ my $datafronzenxid_freeze = $node->safe_psql('postgres',
 	"select min(datfrozenxid::text::bigint) from pg_database");
 ok($datafronzenxid_freeze > $datafronzenxid, 'datfrozenxid advanced');
 
-# On Session 1, commit and ensure that the all the notifications are
+# On Session 1, commit and ensure that all the notifications are
 # received. This depends on correctly freezing the XIDs in the pending
 # notification entries.
-my $res = $psql_session1->query_safe('commit;');
-my $notifications_count = 0;
-foreach my $i (split('\n', $res))
+$session1->do('COMMIT');
+
+my $notifications = $session1->get_all_notifications();
+is(scalar(@$notifications), 10, 'received all committed notifications');
+
+my $expected_payload = 1;
+foreach my $notify (@$notifications)
 {
-	$notifications_count++;
-	like($i,
-		qr/Asynchronous notification "s" with payload "$notifications_count" received/
-	);
+	is($notify->{channel}, 's', "notification $expected_payload has correct channel");
+	is($notify->{payload}, $expected_payload, "notification $expected_payload has correct payload");
+	$expected_payload++;
 }
-is($notifications_count, 10, 'received all committed notifications');
 
 done_testing();

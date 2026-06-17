@@ -5,6 +5,7 @@ use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
+use PostgreSQL::Test::Session;
 use Test::More;
 
 use FindBin;
@@ -60,7 +61,7 @@ sub test_repeated_blocks
 	my $io_method = shift;
 	my $node = shift;
 
-	my $psql = $node->background_psql('postgres', on_error_stop => 0);
+	my $psql = PostgreSQL::Test::Session->new(node => $node);
 
 	# Preventing larger reads makes testing easier
 	$psql->query_safe(qq/SET io_combine_limit = 1/);
@@ -111,7 +112,7 @@ sub test_repeated_blocks
 		   ARRAY[0, 2, 2, 4, 4]);/);
 	ok(1, "$io_method: temp stream hitting the same block repeatedly");
 
-	$psql->quit();
+	$psql->close();
 }
 
 
@@ -120,10 +121,10 @@ sub test_inject_foreign
 	my $io_method = shift;
 	my $node = shift;
 
-	my $psql_a = $node->background_psql('postgres', on_error_stop => 0);
-	my $psql_b = $node->background_psql('postgres', on_error_stop => 0);
+	my $psql_a = PostgreSQL::Test::Session->new(node => $node);
+	my $psql_b = PostgreSQL::Test::Session->new(node => $node);
 
-	my $pid_a = $psql_a->query_safe(qq/SELECT pg_backend_pid();/);
+	my $pid_a = $psql_a->query_oneval(qq/SELECT pg_backend_pid();/);
 
 
 	###
@@ -136,9 +137,8 @@ sub test_inject_foreign
 		qq/SELECT inj_io_completion_wait(pid=>pg_backend_pid(),
 		   relfilenode=>pg_relation_filenode('largeish'));/);
 
-	$psql_b->{stdin} .= qq/SELECT read_rel_block_ll('largeish',
-		blockno=>5, nblocks=>1);\n/;
-	$psql_b->{run}->pump_nb();
+	$psql_b->do_async(qq/SELECT read_rel_block_ll('largeish',
+		blockno=>5, nblocks=>1);/);
 
 	$node->poll_query_until(
 		'postgres', qq/SELECT wait_event FROM pg_stat_activity
@@ -147,9 +147,8 @@ sub test_inject_foreign
 
 	# Block 5 is undergoing IO in session b, so session a will move on to start
 	# a new IO for block 7.
-	$psql_a->{stdin} .= qq/SELECT array_agg(blocknum) FROM
-		read_stream_for_blocks('largeish', ARRAY[0, 2, 5, 7]);\n/;
-	$psql_a->{run}->pump_nb();
+	$psql_a->do_async(qq/SELECT array_agg(blocknum) FROM
+		read_stream_for_blocks('largeish', ARRAY[0, 2, 5, 7]);/);
 
 	$node->poll_query_until('postgres',
 		qq(SELECT wait_event FROM pg_stat_activity WHERE pid = $pid_a),
@@ -157,14 +156,11 @@ sub test_inject_foreign
 
 	$node->safe_psql('postgres', qq/SELECT inj_io_completion_continue()/);
 
-	pump_until(
-		$psql_a->{run}, $psql_a->{timeout},
-		\$psql_a->{stdout}, qr/\{0,2,5,7\}/);
-	$psql_a->{stdout} = '';
+	like($psql_a->get_async_result()->{psqlout}, qr/\{0,2,5,7\}/,
+		qq/$io_method: read stream encounters succeeding IO by another backend/);
 
-	ok(1,
-		qq/$io_method: read stream encounters succeeding IO by another backend/
-	);
+	# Drain session b's now-completed low-level read before reusing it.
+	$psql_b->wait_for_completion;
 
 	###
 	# Test read stream encountering buffers undergoing IO in another backend,
@@ -181,9 +177,8 @@ sub test_inject_foreign
 		   pid=>pg_backend_pid(),
 		   relfilenode=>pg_relation_filenode('largeish'));/);
 
-	$psql_b->{stdin} .= qq/SELECT read_rel_block_ll('largeish',
-		blockno=>5, nblocks=>1);\n/;
-	$psql_b->{run}->pump_nb();
+	$psql_b->do_async(qq/SELECT read_rel_block_ll('largeish',
+		blockno=>5, nblocks=>1);/);
 
 	$node->poll_query_until(
 		'postgres',
@@ -191,9 +186,8 @@ sub test_inject_foreign
 		   WHERE wait_event = 'completion_wait';/,
 		'completion_wait');
 
-	$psql_a->{stdin} .= qq/SELECT array_agg(blocknum) FROM
-		read_stream_for_blocks('largeish', ARRAY[0, 2, 5, 7]);\n/;
-	$psql_a->{run}->pump_nb();
+	$psql_a->do_async(qq/SELECT array_agg(blocknum) FROM
+		read_stream_for_blocks('largeish', ARRAY[0, 2, 5, 7]);/);
 
 	$node->poll_query_until('postgres',
 		qq(SELECT wait_event FROM pg_stat_activity WHERE pid = $pid_a),
@@ -201,19 +195,15 @@ sub test_inject_foreign
 
 	$node->safe_psql('postgres', qq/SELECT inj_io_completion_continue()/);
 
-	pump_until(
-		$psql_a->{run}, $psql_a->{timeout},
-		\$psql_a->{stdout}, qr/\{0,2,5,7\}/);
-	$psql_a->{stdout} = '';
-
-	pump_until($psql_b->{run}, $psql_b->{timeout}, \$psql_b->{stderr},
-		qr/ERROR.*could not read blocks 5\.\.5/);
-	ok(1, "$io_method: injected error occurred");
-	$psql_b->{stderr} = '';
-	$psql_b->query_safe(qq/SELECT inj_io_short_read_detach();/);
-
-	ok(1,
+	like($psql_a->get_async_result()->{psqlout}, qr/\{0,2,5,7\}/,
 		qq/$io_method: read stream encounters failing IO by another backend/);
+
+	# Session b's low-level read hits the injected error.
+	my $res_b = $psql_b->get_async_result();
+	like($res_b->{error_message}, qr/ERROR.*could not read blocks 5\.\.5/,
+		"$io_method: injected error occurred");
+	$psql_b->clear_stderr();
+	$psql_b->query_safe(qq/SELECT inj_io_short_read_detach();/);
 
 
 	###
@@ -226,9 +216,8 @@ sub test_inject_foreign
 		qq/SELECT inj_io_completion_wait(pid=>pg_backend_pid(),
 		   relfilenode=>pg_relation_filenode('largeish'));/);
 
-	$psql_b->{stdin} .= qq/SELECT read_rel_block_ll('largeish',
-		blockno=>2, nblocks=>3);\n/;
-	$psql_b->{run}->pump_nb();
+	$psql_b->do_async(qq/SELECT read_rel_block_ll('largeish',
+		blockno=>2, nblocks=>3);/);
 
 	$node->poll_query_until(
 		'postgres',
@@ -237,9 +226,8 @@ sub test_inject_foreign
 		'completion_wait');
 
 	# Blocks 2 and 4 are undergoing IO initiated by session b
-	$psql_a->{stdin} .= qq/SELECT array_agg(blocknum) FROM
-		read_stream_for_blocks('largeish', ARRAY[0, 2, 4]);\n/;
-	$psql_a->{run}->pump_nb();
+	$psql_a->do_async(qq/SELECT array_agg(blocknum) FROM
+		read_stream_for_blocks('largeish', ARRAY[0, 2, 4]);/);
 
 	$node->poll_query_until('postgres',
 		qq(SELECT wait_event FROM pg_stat_activity WHERE pid = $pid_a),
@@ -247,15 +235,14 @@ sub test_inject_foreign
 
 	$node->safe_psql('postgres', qq/SELECT inj_io_completion_continue()/);
 
-	pump_until(
-		$psql_a->{run}, $psql_a->{timeout},
-		\$psql_a->{stdout}, qr/\{0,2,4\}/);
-	$psql_a->{stdout} = '';
+	like($psql_a->get_async_result()->{psqlout}, qr/\{0,2,4\}/,
+		qq/$io_method: read stream encounters two buffer read in one IO/);
 
-	ok(1, qq/$io_method: read stream encounters two buffer read in one IO/);
+	# Drain session b's now-completed low-level read.
+	$psql_b->wait_for_completion;
 
-	$psql_a->quit();
-	$psql_b->quit();
+	$psql_a->close();
+	$psql_b->close();
 }
 
 

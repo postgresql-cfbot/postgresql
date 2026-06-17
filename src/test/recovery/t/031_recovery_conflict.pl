@@ -7,6 +7,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -67,8 +68,7 @@ $node_primary->wait_for_replay_catchup($node_standby);
 
 
 # a longrunning psql that we can use to trigger conflicts
-my $psql_standby =
-  $node_standby->background_psql($test_db, on_error_stop => 0);
+my $psql_standby = PostgreSQL::Test::Session->new(node => $node_standby, dbname => $test_db);
 my $expected_conflicts = 0;
 
 
@@ -96,7 +96,7 @@ my $cursor1 = "test_recovery_conflict_cursor";
 
 # DECLARE and use a cursor on standby, causing buffer with the only block of
 # the relation to be pinned on the standby
-my $res = $psql_standby->query_safe(
+my $res = $psql_standby->query_oneval(
 	qq[
     BEGIN;
     DECLARE $cursor1 CURSOR FOR SELECT b FROM $table1;
@@ -119,7 +119,7 @@ $node_primary->safe_psql($test_db, qq[VACUUM FREEZE $table1;]);
 $node_primary->wait_for_replay_catchup($node_standby);
 
 check_conflict_log("User was holding shared buffer pin for too long");
-$psql_standby->reconnect_and_clear();
+$psql_standby->reconnect();
 check_conflict_stat("bufferpin");
 
 
@@ -132,7 +132,7 @@ $node_primary->safe_psql($test_db,
 $node_primary->wait_for_replay_catchup($node_standby);
 
 # DECLARE and FETCH from cursor on the standby
-$res = $psql_standby->query_safe(
+$res = $psql_standby->query_oneval(
 	qq[
         BEGIN;
         DECLARE $cursor1 CURSOR FOR SELECT b FROM $table1;
@@ -152,7 +152,7 @@ $node_primary->wait_for_replay_catchup($node_standby);
 
 check_conflict_log(
 	"User query might have needed to see row versions that must be removed");
-$psql_standby->reconnect_and_clear();
+$psql_standby->reconnect();
 check_conflict_stat("snapshot");
 
 
@@ -161,7 +161,7 @@ $sect = "lock conflict";
 $expected_conflicts++;
 
 # acquire lock to conflict with
-$res = $psql_standby->query_safe(
+$res = $psql_standby->query_oneval(
 	qq[
         BEGIN;
         LOCK TABLE $table1 IN ACCESS SHARE MODE;
@@ -175,7 +175,7 @@ $node_primary->safe_psql($test_db, qq[DROP TABLE $table1;]);
 $node_primary->wait_for_replay_catchup($node_standby);
 
 check_conflict_log("User was holding a relation lock for too long");
-$psql_standby->reconnect_and_clear();
+$psql_standby->reconnect();
 check_conflict_stat("lock");
 
 
@@ -186,7 +186,7 @@ $expected_conflicts++;
 # DECLARE a cursor for a query which, with sufficiently low work_mem, will
 # spill tuples into temp files in the temporary tablespace created during
 # setup.
-$res = $psql_standby->query_safe(
+$res = $psql_standby->query_oneval(
 	qq[
         BEGIN;
         SET work_mem = '64kB';
@@ -205,7 +205,7 @@ $node_primary->wait_for_replay_catchup($node_standby);
 
 check_conflict_log(
 	"User was or might have been using tablespace that must be dropped");
-$psql_standby->reconnect_and_clear();
+$psql_standby->reconnect();
 check_conflict_stat("tablespace");
 
 
@@ -220,8 +220,9 @@ $node_standby->adjust_conf(
 	'postgresql.conf',
 	'max_standby_streaming_delay',
 	"${PostgreSQL::Test::Utils::timeout_default}s");
+$psql_standby->close;
 $node_standby->restart();
-$psql_standby->reconnect_and_clear();
+$psql_standby->reconnect();
 
 # Generate a few dead rows, to later be cleaned up by vacuum. Then acquire a
 # lock on another relation in a prepared xact, so it's held continuously by
@@ -244,12 +245,15 @@ SELECT txid_current();
 
 $node_primary->wait_for_replay_catchup($node_standby);
 
-$res = $psql_standby->query_until(
-	qr/^1$/m, qq[
+$res = $psql_standby->query_oneval(
+	qq[
     BEGIN;
     -- hold pin
     DECLARE $cursor1 CURSOR FOR SELECT a FROM $table1;
     FETCH FORWARD FROM $cursor1;
+]);
+is ($res, 1, "pin held");
+$psql_standby->do_async(qq[
     -- wait for lock held by prepared transaction
 	SELECT * FROM $table2;
     ]);
@@ -270,15 +274,16 @@ $node_primary->safe_psql($test_db, qq[VACUUM FREEZE $table1;]);
 $node_primary->wait_for_replay_catchup($node_standby);
 
 check_conflict_log("User transaction caused buffer deadlock with recovery.");
-$psql_standby->reconnect_and_clear();
+$psql_standby->reconnect();
 check_conflict_stat("deadlock");
 
 # clean up for next tests
 $node_primary->safe_psql($test_db, qq[ROLLBACK PREPARED 'lock';]);
 $node_standby->adjust_conf('postgresql.conf', 'max_standby_streaming_delay',
-	'50ms');
+						   '50ms');
+$psql_standby->close;
 $node_standby->restart();
-$psql_standby->reconnect_and_clear();
+$psql_standby->reconnect();
 
 
 # Check that expected number of conflicts show in pg_stat_database. Needs to
@@ -302,7 +307,7 @@ check_conflict_log("User was connected to a database that must be dropped");
 
 # explicitly shut down psql instances gracefully - to avoid hangs or worse on
 # windows
-$psql_standby->quit;
+$psql_standby->close;
 
 $node_standby->stop();
 $node_primary->stop();

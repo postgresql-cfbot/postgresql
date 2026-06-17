@@ -20,21 +20,21 @@ use strict;
 use warnings;
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
-use PostgreSQL::Test::BackgroundPsql;
+use PostgreSQL::Test::Session;
 use Test::More;
 
 my $node = PostgreSQL::Test::Cluster->new('temp_lock');
 $node->init;
 $node->start;
 
-# Owner session.  Created via background_psql so it stays alive while
-# the second session probes its temp objects.
-my $psql1 = $node->background_psql('postgres');
+# Owner session.  Created as a persistent libpq session so it stays alive
+# while the second session probes its temp objects.
+my $psql1 = PostgreSQL::Test::Session->new(node => $node);
 
 # Initially create the table without an index, so read paths go straight
 # through the read-stream / buffer-manager entry points without being
 # masked by an index scan that would hit ReadBuffer_common from nbtree.
-$psql1->query_safe(q(CREATE TEMP TABLE foo AS SELECT 42 AS val;));
+$psql1->do(q(CREATE TEMP TABLE foo AS SELECT 42 AS val;));
 
 # Resolve the owner's temp schema so the probing session can refer to
 # the table by a fully-qualified name.
@@ -130,7 +130,7 @@ like($stderr,
 # Now create an index to exercise the index-scan path.  nbtree calls
 # ReadBuffer (which is ReadBufferExtended -> ReadBuffer_common), so
 # this exercises a different chain of buffer-manager entry points.
-$psql1->query_safe(q(CREATE INDEX ON foo(val);));
+$psql1->do(q(CREATE INDEX ON foo(val);));
 
 $node->psql(
 	'postgres',
@@ -156,7 +156,7 @@ like($stderr, qr/cannot alter temporary tables of other sessions/,
 # operations -- they don't read the underlying table -- which
 # documents the boundary between catalog and data access for temp
 # objects.
-$psql1->query_safe(
+$psql1->do(
 		q[CREATE FUNCTION pg_temp.foo_id(r foo) RETURNS int LANGUAGE SQL ]
 	  . q[AS 'SELECT r.val';]);
 
@@ -187,7 +187,7 @@ is($stderr, '', 'DROP TABLE is allowed');
 # into the creator's pg_temp namespace with an auto-dependency on
 # the borrowed type, so it disappears together with the session that
 # created it.
-$psql1->query_safe(q(CREATE TEMP TABLE foo2 AS SELECT 42 AS val;));
+$psql1->do(q(CREATE TEMP TABLE foo2 AS SELECT 42 AS val;));
 
 $node->psql(
 	'postgres',
@@ -216,8 +216,8 @@ my $foo2_oid = $node->safe_psql('postgres',
 # Cross-session LOCK TABLE scenario.  Ensure that LockRelationOid is working
 # properly for other temp tables since this mechanism is also used by
 # autovacuum during orphaned tables cleanup.
-my $psql2 = $node->background_psql('postgres');
-$psql2->query_safe(
+my $psql2 = PostgreSQL::Test::Session->new(node => $node);
+$psql2->do(
 	qq{
 	BEGIN;
 	LOCK TABLE $tempschema.foo2 IN ACCESS SHARE MODE;
@@ -233,15 +233,15 @@ $psql2->query_safe(
 # owner will try to acquire deletion lock all its temp objects via
 # findDependentObjects.
 my $log_offset = -s $node->logfile;
-$psql1->quit;
+$psql1->close;
 
 # Check whether session-exit cleanup is blocked.
 $node->wait_for_log(qr/waiting for AccessExclusiveLock on relation $foo2_oid/,
 	$log_offset);
 
 # Release lock on foo2 and allow session-exit cleanup to finish.
-$psql2->query_safe(q(COMMIT;));
-$psql2->quit;
+$psql2->do(q(COMMIT;));
+$psql2->close;
 
 # After releasing the lock, the owner can finally acquire
 # AccessExclusiveLock on foo2 and finish session-exit cleanup.  Verify

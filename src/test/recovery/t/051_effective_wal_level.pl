@@ -6,6 +6,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -382,20 +383,15 @@ if (   $ENV{enable_injection_points} eq 'yes'
 	test_wal_level($primary, "replica|replica",
 		"effective_wal_level got decreased to 'replica' on primary");
 
-	# Start a psql session to test the case where the activation process is
+	# Start a session to test the case where the activation process is
 	# interrupted.
-	my $psql_create_slot = $primary->background_psql('postgres');
+	my $psql_create_slot = PostgreSQL::Test::Session->new(node => $primary);
 
-	# Start the logical decoding activation process upon creating the logical
-	# slot, but it will wait due to the injection point.
-	$psql_create_slot->query_until(
-		qr/create_slot_canceled/,
-		q(\echo create_slot_canceled
-select injection_points_set_local();
-select injection_points_attach('logical-decoding-activation', 'wait');
-select pg_create_logical_replication_slot('slot_canceled', 'pgoutput');
-\q
-));
+	# Set up the injection point in this session (using set_local so it only
+	# affects this session), then start the slot creation which will block.
+	$psql_create_slot->do(q{select injection_points_set_local()});
+	$psql_create_slot->do(q{select injection_points_attach('logical-decoding-activation', 'wait')});
+	$psql_create_slot->do_async(q{select pg_create_logical_replication_slot('slot_canceled', 'pgoutput')});
 
 	$primary->wait_for_event('client backend', 'logical-decoding-activation');
 	note("injection_point 'logical-decoding-activation' is reached");
@@ -413,19 +409,17 @@ select pg_cancel_backend(pid) from pg_stat_activity where query ~ 'slot_canceled
 	wait_for_logical_decoding_disabled($primary);
 	pass("the activation process aborted");
 
-	# Test concurrent activation processes run and one is interrupted.
-	$psql_create_slot = $primary->background_psql('postgres');
+	# Clean up the session (the async query was cancelled, so we just close)
+	$psql_create_slot->close;
 
-	# Start a psql session and stops in the middle of the activation
-	# process.
-	$psql_create_slot->query_until(
-		qr/create_slot_canceled/,
-		q(\echo create_slot_canceled
-select injection_points_set_local();
-select injection_points_attach('logical-decoding-activation', 'wait');
-select pg_create_logical_replication_slot('slot_canceled2', 'pgoutput');
-\q
-));
+	# Test concurrent activation processes run and one is interrupted.
+	$psql_create_slot = PostgreSQL::Test::Session->new(node => $primary);
+
+	# Start a session and stop in the middle of the activation process.
+	$psql_create_slot->do(q{select injection_points_set_local()});
+	$psql_create_slot->do(q{select injection_points_attach('logical-decoding-activation', 'wait')});
+	$psql_create_slot->do_async(q{select pg_create_logical_replication_slot('slot_canceled2', 'pgoutput')});
+
 	$primary->wait_for_event('client backend', 'logical-decoding-activation');
 	note("injection_point 'logical-decoding-activation' is reached");
 
@@ -453,6 +447,9 @@ select pg_cancel_backend(pid) from pg_stat_activity where query ~ 'slot_canceled
 	test_wal_level($primary, "replica|logical",
 		"effective_wal_level remains 'logical' even after the concurrent activation is interrupted"
 	);
+
+	# Clean up the session (the async query was cancelled, so we just close)
+	$psql_create_slot->close;
 }
 
 $primary->stop;

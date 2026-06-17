@@ -8,6 +8,7 @@ use strict;
 use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -46,12 +47,12 @@ $node->safe_psql(
     CREATE FUNCTION foofunc(dummy integer) RETURNS integer AS \$\$ SELECT 1; /* $longtext */ \$\$ LANGUAGE SQL
 ]);
 
-my $psql_session = $node->background_psql('postgres');
-my $psql_session2 = $node->background_psql('postgres');
+my $psql_session = PostgreSQL::Test::Session->new(node => $node);
+my $psql_session2 = PostgreSQL::Test::Session->new(node => $node);
 
 # Set injection point in the session, to pause while populating the
 # catcache list
-$psql_session->query_safe(
+$psql_session->do(
 	qq[
     SELECT injection_points_set_local();
     SELECT injection_points_attach('catcache-list-miss-systable-scan-started', 'wait');
@@ -59,10 +60,9 @@ $psql_session->query_safe(
 
 # This pauses on the injection point while populating catcache list
 # for functions with name "foofunc"
-$psql_session->query_until(
-	qr/starting_bg_psql/, q(
-   \echo starting_bg_psql
-   SELECT foofunc(1);
+$psql_session->do_async(
+   q(
+      SELECT foofunc(1);
 ));
 
 # While the first session is building the catcache list, create a new
@@ -83,16 +83,19 @@ $node->safe_psql(
 # trying to exercise here.)
 #
 # The "SELECT foofunc(1)" query will now finish.
-$psql_session2->query_safe(
+$psql_session2->do(
 	qq[
     SELECT injection_points_wakeup('catcache-list-miss-systable-scan-started');
     SELECT injection_points_detach('catcache-list-miss-systable-scan-started');
 ]);
 
 # Test that the new function is visible to the session.
-$psql_session->query_safe("SELECT foofunc();");
+$psql_session->wait_for_completion;
+my $res = $psql_session->query("SELECT foofunc();");
 
-ok($psql_session->quit);
-ok($psql_session2->quit);
+is($res->{status}, PGRES_TUPLES_OK, "got TUPLES_OK");
+
+$psql_session->close;
+$psql_session2->close;
 
 done_testing();

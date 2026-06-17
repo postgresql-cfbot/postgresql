@@ -13,6 +13,10 @@ use Config;
 
 use IPC::Run 0.79;
 
+# PostgreSQL::Test::Session needs api => 1 and record_layout_1,
+# which arrived in FFI::Platypus 1.00.
+use FFI::Platypus 1.00;
+
 # Test::More and Time::HiRes are supposed to be part of core Perl,
 # but some distros omit them in a minimal installation.
 use Test::More 0.98;
@@ -20,6 +24,7 @@ use Time::HiRes 1.52;
 
 # While here, we might as well report exactly what versions we found.
 diag("IPC::Run::VERSION: $IPC::Run::VERSION");
+diag("FFI::Platypus::VERSION: $FFI::Platypus::VERSION");
 diag("Test::More::VERSION: $Test::More::VERSION");
 diag("Time::HiRes::VERSION: $Time::HiRes::VERSION");
 

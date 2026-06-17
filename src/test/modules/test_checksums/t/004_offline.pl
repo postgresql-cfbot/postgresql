@@ -8,6 +8,7 @@ use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
+use PostgreSQL::Test::Session;
 use Test::More;
 
 use FindBin;
@@ -53,8 +54,8 @@ test_checksum_state($node, 'off');
 # can accomplish this by setting up an interactive psql process which keeps the
 # temporary table created as we enable checksums in another psql process.
 
-my $bsession = $node->background_psql('postgres');
-$bsession->query_safe('CREATE TEMPORARY TABLE tt (a integer);');
+my $bsession = PostgreSQL::Test::Session->new(node => $node);
+$bsession->do('CREATE TEMPORARY TABLE tt (a integer);');
 
 # In another session, make sure we can see the blocking temp table but start
 # processing anyways and check that we are blocked with a proper wait event.
@@ -70,7 +71,7 @@ enable_data_checksums($node, wait => 'inprogress-on');
 # Stop the cluster before exiting the background session since otherwise
 # checksums might have time to get enabled before shutting down the cluster.
 $node->stop('fast');
-$bsession->quit;
+$bsession->close;
 $node->checksum_enable_offline;
 $node->start;
 

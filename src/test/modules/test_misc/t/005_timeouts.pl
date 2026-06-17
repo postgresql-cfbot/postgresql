@@ -6,6 +6,7 @@ use warnings FATAL => 'all';
 use locale;
 
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Time::HiRes qw(usleep);
 use Test::More;
@@ -42,24 +43,16 @@ $node->safe_psql('postgres', 'CREATE EXTENSION injection_points;');
 $node->safe_psql('postgres',
 	"SELECT injection_points_attach('transaction-timeout', 'wait');");
 
-my $psql_session = $node->background_psql('postgres');
+my $psql_session = PostgreSQL::Test::Session->new(node => $node);
 
-# The following query will generate a stream of SELECT 1 queries. This is done
-# so to exercise transaction timeout in the presence of short queries.
-# Note: the interval value is parsed with locale-aware strtod()
-$psql_session->query_until(
-	qr/starting_bg_psql/,
-	sprintf(
-		q(\echo starting_bg_psql
-		SET transaction_timeout to '10ms';
-		BEGIN;
-		SELECT 1 \watch %g
-		\q
-), 0.001));
+$psql_session->do("SET transaction_timeout to '10ms';");
+
+$psql_session->do_async("BEGIN; DO ' begin loop PERFORM pg_sleep(0.001); end loop; end ';");
 
 # Wait until the backend enters the timeout injection point. Will get an error
 # here if anything goes wrong.
 $node->wait_for_event('client backend', 'transaction-timeout');
+pass("got transaction timeout event");
 
 my $log_offset = -s $node->logfile;
 
@@ -70,11 +63,9 @@ $node->safe_psql('postgres',
 # Check that the timeout was logged.
 $node->wait_for_log('terminating connection due to transaction timeout',
 	$log_offset);
+pass("got transaction timeout log");
 
-# If we send \q with $psql_session->quit the command can be sent to the session
-# already closed. So \q is in initial script, here we only finish IPC::Run.
-$psql_session->{run}->finish;
-
+$psql_session->close;
 
 #
 # 2. Test of the idle in transaction timeout
@@ -85,10 +76,8 @@ $node->safe_psql('postgres',
 );
 
 # We begin a transaction and the hand on the line
-$psql_session = $node->background_psql('postgres');
-$psql_session->query_until(
-	qr/starting_bg_psql/, q(
-   \echo starting_bg_psql
+$psql_session->reconnect;
+$psql_session->do(q(
    SET idle_in_transaction_session_timeout to '10ms';
    BEGIN;
 ));
@@ -96,6 +85,7 @@ $psql_session->query_until(
 # Wait until the backend enters the timeout injection point.
 $node->wait_for_event('client backend',
 	'idle-in-transaction-session-timeout');
+pass("got idle in transaction timeout event");
 
 $log_offset = -s $node->logfile;
 
@@ -106,8 +96,9 @@ $node->safe_psql('postgres',
 # Check that the timeout was logged.
 $node->wait_for_log(
 	'terminating connection due to idle-in-transaction timeout', $log_offset);
+pass("got idle in transaction timeout log");
 
-ok($psql_session->quit);
+$psql_session->close;
 
 
 #
@@ -117,15 +108,14 @@ $node->safe_psql('postgres',
 	"SELECT injection_points_attach('idle-session-timeout', 'wait');");
 
 # We just initialize the GUC and wait. No transaction is required.
-$psql_session = $node->background_psql('postgres');
-$psql_session->query_until(
-	qr/starting_bg_psql/, q(
-   \echo starting_bg_psql
+$psql_session->reconnect;
+$psql_session->do(q(
    SET idle_session_timeout to '10ms';
 ));
 
 # Wait until the backend enters the timeout injection point.
 $node->wait_for_event('client backend', 'idle-session-timeout');
+pass("got idle session timeout event");
 
 $log_offset = -s $node->logfile;
 
@@ -136,7 +126,8 @@ $node->safe_psql('postgres',
 # Check that the timeout was logged.
 $node->wait_for_log('terminating connection due to idle-session timeout',
 	$log_offset);
+pass("got idle sesion tiemout log");
 
-ok($psql_session->quit);
+$psql_session->close;
 
 done_testing();

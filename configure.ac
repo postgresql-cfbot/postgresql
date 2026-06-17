@@ -229,7 +229,7 @@ AC_SUBST(enable_dtrace)
 # TAP tests
 #
 PGAC_ARG_BOOL(enable, tap-tests, no,
-              [enable TAP tests (requires Perl and IPC::Run)])
+              [enable TAP tests (requires Perl, IPC::Run and FFI::Platypus)])
 AC_SUBST(enable_tap_tests)
 AC_ARG_VAR(PG_TEST_EXTRA,
            [enable selected extra tests (overridden at runtime by PG_TEST_EXTRA environment variable)])

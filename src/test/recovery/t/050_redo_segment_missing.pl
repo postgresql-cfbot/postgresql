@@ -7,6 +7,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -44,15 +45,11 @@ $node->safe_psql('postgres',
 $node->safe_psql('postgres',
 	q{select injection_points_attach('create-checkpoint-run', 'wait')});
 
-# Start a psql session to run the checkpoint in the background and make
+# Start a session to run the checkpoint in the background and make
 # the test wait on the injection point so the checkpoint stops just after
 # it starts.
-my $checkpoint = $node->background_psql('postgres');
-$checkpoint->query_until(
-	qr/starting_checkpoint/,
-	q(\echo starting_checkpoint
-checkpoint;
-));
+my $checkpoint = PostgreSQL::Test::Session->new(node => $node);
+$checkpoint->do_async(q(CHECKPOINT;));
 
 # Wait for the initial point to finish, the checkpointer is still
 # outside its critical section.  Then release to reach the second
@@ -76,7 +73,8 @@ $node->safe_psql('postgres',
 	q{select injection_points_wakeup('create-checkpoint-run')});
 $node->wait_for_log(qr/checkpoint complete/, $log_offset);
 
-$checkpoint->quit;
+$checkpoint->wait_for_completion;
+$checkpoint->close;
 
 # Retrieve the WAL file names for the redo record and checkpoint record.
 my $redo_lsn = $node->safe_psql('postgres',

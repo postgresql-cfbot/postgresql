@@ -7,6 +7,7 @@
 use strict;
 use warnings FATAL => 'all';
 use PostgreSQL::Test::Cluster;
+use PostgreSQL::Test::Session;
 use PostgreSQL::Test::Utils;
 use Test::More;
 
@@ -33,19 +34,19 @@ GRANT pg_use_reserved_connections TO regress_reserved;
 CREATE USER regress_superuser LOGIN SUPERUSER;
 });
 
+my $node_connstr = $node->connstr('postgres');
+
 # With the limits we set in postgresql.conf, we can establish:
 # - 3 connections for any user with no special privileges
 # - 2 more connections for users belonging to "pg_use_reserved_connections"
 # - 1 more connection for superuser
 
-sub background_psql_as_user
+sub session_as_user
 {
 	my $user = shift;
+	my $connstr = "$node_connstr user=$user";
 
-	return $node->background_psql(
-		'postgres',
-		on_error_die => 1,
-		extra_params => [ '--username' => $user ]);
+	return PostgreSQL::Test::Session->new(node => $node, connstr => $connstr);
 }
 
 # Like connect_fails(), except that we also wait for the failed backend to
@@ -82,9 +83,9 @@ $node->restart;
 my @sessions = ();
 my @raw_connections = ();
 
-push(@sessions, background_psql_as_user('regress_regular'));
-push(@sessions, background_psql_as_user('regress_regular'));
-push(@sessions, background_psql_as_user('regress_regular'));
+push(@sessions, session_as_user('regress_regular'));
+push(@sessions, session_as_user('regress_regular'));
+push(@sessions, session_as_user('regress_regular'));
 connect_fails_wait(
 	$node,
 	"dbname=postgres user=regress_regular",
@@ -93,8 +94,8 @@ connect_fails_wait(
 	  qr/FATAL:  remaining connection slots are reserved for roles with privileges of the "pg_use_reserved_connections" role/
 );
 
-push(@sessions, background_psql_as_user('regress_reserved'));
-push(@sessions, background_psql_as_user('regress_reserved'));
+push(@sessions, session_as_user('regress_reserved'));
+push(@sessions, session_as_user('regress_reserved'));
 connect_fails_wait(
 	$node,
 	"dbname=postgres user=regress_reserved",
@@ -103,7 +104,7 @@ connect_fails_wait(
 	  qr/FATAL:  remaining connection slots are reserved for roles with the SUPERUSER attribute/
 );
 
-push(@sessions, background_psql_as_user('regress_superuser'));
+push(@sessions, session_as_user('regress_superuser'));
 connect_fails_wait(
 	$node,
 	"dbname=postgres user=regress_superuser",
@@ -150,7 +151,7 @@ SKIP:
 # Clean up
 foreach my $session (@sessions)
 {
-	$session->quit;
+	$session->close;
 }
 foreach my $socket (@raw_connections)
 {

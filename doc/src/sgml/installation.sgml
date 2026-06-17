@@ -1599,7 +1599,8 @@ build-postgresql:
        <listitem>
         <para>
          Enable tests using the Perl TAP tools.  This requires a Perl
-         installation and the Perl module <literal>IPC::Run</literal>.
+         installation and the Perl modules <literal>IPC::Run</literal>
+         and <literal>FFI::Platypus</literal>.
          See <xref linkend="regress-tap"/> for more information.
         </para>
        </listitem>
@@ -3169,7 +3170,8 @@ ninja install
       <listitem>
        <para>
         Enable tests using the Perl TAP tools.  Defaults to auto and requires
-        a Perl installation and the Perl module <literal>IPC::Run</literal>.
+        a Perl installation and the Perl modules <literal>IPC::Run</literal>
+        and <literal>FFI::Platypus</literal>.
         See <xref linkend="regress-tap"/> for more information.
        </para>
       </listitem>

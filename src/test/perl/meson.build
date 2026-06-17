@@ -4,6 +4,10 @@
 
 install_data(
   'PostgreSQL/Version.pm',
+  'PostgreSQL/FindLib.pm',
+  'PostgreSQL/PqFFI.pm',
+  'PostgreSQL/PqConstants.pm',
+  'PostgreSQL/PGTypes.pm',
   install_dir: dir_pgxs / 'src/test/perl/PostgreSQL')
 
 install_data(
@@ -15,4 +19,5 @@ install_data(
   'PostgreSQL/Test/BackgroundPsql.pm',
   'PostgreSQL/Test/AdjustDump.pm',
   'PostgreSQL/Test/AdjustUpgrade.pm',
+  'PostgreSQL/Test/Session.pm',
   install_dir: dir_pgxs / 'src/test/perl/PostgreSQL/Test')

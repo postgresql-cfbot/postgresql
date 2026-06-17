@@ -19,6 +19,7 @@ use warnings FATAL => 'all';
 
 use PostgreSQL::Test::Cluster;
 use PostgreSQL::Test::Utils;
+use PostgreSQL::Test::Session;
 use Test::More;
 
 plan skip_all => 'Injection points not supported by this build'
@@ -32,15 +33,12 @@ my $node;
 # Setup the 2 sessions
 sub setup_sessions
 {
-	$s1 = $node->background_psql('postgres');
-	$s2 = $node->background_psql('postgres');
+	$s1 = PostgreSQL::Test::Session->new(node => $node);
+	$s2 = PostgreSQL::Test::Session->new(node => $node);
 
 	# Setup injection points for the waiting session
-	$s2->query_until(
-		qr/attaching_injection_point/, q[
-			\echo attaching_injection_point
-			SELECT injection_points_attach('deadlock-timeout-fired', 'wait');
-		]);
+	$s2->do(
+		q[SELECT injection_points_attach('deadlock-timeout-fired', 'wait');]);
 }
 
 # Fetch waits and wait_time from pg_stat_lock for a given lock type
@@ -98,7 +96,7 @@ setup_sessions();
 
 my $log_offset = -s $node->logfile;
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT pg_stat_reset_shared('lock');
 BEGIN;
@@ -106,17 +104,13 @@ LOCK TABLE test_stat_tab;
 ]);
 
 # s2 setup
-$s2->query_safe(
+$s2->do(
 	q[
 BEGIN;
 SELECT pg_stat_force_next_flush();
 ]);
 # s2 blocks on LOCK.
-$s2->query_until(
-	qr/lock_s2/, q[
-\echo lock_s2
-LOCK TABLE test_stat_tab;
-]);
+$s2->do_async(q(LOCK TABLE test_stat_tab;));
 
 wait_and_detach($node, 'deadlock-timeout-fired');
 
@@ -136,8 +130,9 @@ $node->safe_psql(
 $node->wait_for_log(qr/logging memory contexts/, $log_offset);
 
 # deadlock_timeout fired, now commit in s1 and s2
-$s1->query_safe(q(COMMIT));
-$s2->query_safe(q(COMMIT));
+$s1->do(q(COMMIT));
+$s2->wait_for_completion;
+$s2->do(q(COMMIT));
 
 # check that pg_stat_lock has been updated
 wait_for_pg_stat_lock($node, 'relation');
@@ -158,8 +153,8 @@ is( scalar @still_waiting,
 );
 
 # close sessions
-$s1->quit;
-$s2->quit;
+$s1->close;
+$s2->close;
 
 ####### transaction lock
 
@@ -167,27 +162,31 @@ setup_sessions();
 
 $log_offset = -s $node->logfile;
 
-$s1->query_safe(
+# The INSERT must autocommit before the explicit transaction is opened, so
+# that session s2 can see rows k1/k2/k3 and block on s1's row lock.  Send it
+# separately from the BEGIN block: a single multi-statement query containing
+# BEGIN would run the INSERT inside the still-open transaction, leaving the
+# rows invisible to s2 (so its UPDATE would match nothing and never wait).
+$s1->do(
 	q[
 SELECT pg_stat_reset_shared('lock');
 INSERT INTO test_stat_tab(key, value) VALUES('k1', 1), ('k2', 1), ('k3', 1);
+]);
+$s1->do(
+	q[
 BEGIN;
 UPDATE test_stat_tab SET value = value + 1 WHERE key = 'k1';
 ]);
 
 # s2 setup
-$s2->query_safe(
+$s2->do(
 	q[
 SET log_lock_waits = on;
 BEGIN;
 SELECT pg_stat_force_next_flush();
 ]);
 # s2 blocks here on UPDATE
-$s2->query_until(
-	qr/lock_s2/, q[
-\echo lock_s2
-UPDATE test_stat_tab SET value = value + 1 WHERE key = 'k1';
-]);
+$s2->do_async(q(UPDATE test_stat_tab SET value = value + 1 WHERE key = 'k1';));
 
 wait_and_detach($node, 'deadlock-timeout-fired');
 
@@ -196,8 +195,9 @@ $node->wait_for_log(qr/still waiting for ShareLock on transaction/,
 	$log_offset);
 
 # deadlock_timeout fired, now commit in s1 and s2
-$s1->query_safe(q(COMMIT));
-$s2->query_safe(q(COMMIT));
+$s1->do(q(COMMIT));
+$s2->wait_for_completion;
+$s2->do(q(COMMIT));
 
 # check that pg_stat_lock has been updated
 wait_for_pg_stat_lock($node, 'transactionid');
@@ -208,8 +208,8 @@ ok(1, "Lock stats ok for transactionid");
 $node->wait_for_log(qr/acquired ShareLock on transaction/, $log_offset);
 
 # Close sessions
-$s1->quit;
-$s2->quit;
+$s1->close;
+$s2->close;
 
 ####### advisory lock
 
@@ -217,25 +217,21 @@ setup_sessions();
 
 $log_offset = -s $node->logfile;
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT pg_stat_reset_shared('lock');
 SELECT pg_advisory_lock(1);
 ]);
 
 # s2 setup
-$s2->query_safe(
+$s2->do(
 	q[
 SET log_lock_waits = on;
 BEGIN;
 SELECT pg_stat_force_next_flush();
 ]);
 # s2 blocks on the advisory lock.
-$s2->query_until(
-	qr/lock_s2/, q[
-\echo lock_s2
-SELECT pg_advisory_lock(1);
-]);
+$s2->do_async(q(SELECT pg_advisory_lock(1);));
 
 wait_and_detach($node, 'deadlock-timeout-fired');
 
@@ -244,8 +240,9 @@ $node->wait_for_log(qr/still waiting for ExclusiveLock on advisory lock/,
 	$log_offset);
 
 # deadlock_timeout fired, now unlock and commit s2
-$s1->query_safe(q(SELECT pg_advisory_unlock(1)));
-$s2->query_safe(
+$s1->do(q(SELECT pg_advisory_unlock(1)));
+$s2->wait_for_completion;
+$s2->do(
 	q[
 SELECT pg_advisory_unlock(1);
 COMMIT;
@@ -260,8 +257,8 @@ ok(1, "Lock stats ok for advisory");
 $node->wait_for_log(qr/acquired ExclusiveLock on advisory lock/, $log_offset);
 
 # Close sessions
-$s1->quit;
-$s2->quit;
+$s1->close;
+$s2->close;
 
 ####### Ensure log_lock_waits has no impact
 
@@ -269,7 +266,7 @@ setup_sessions();
 
 $log_offset = -s $node->logfile;
 
-$s1->query_safe(
+$s1->do(
 	q[
 SELECT pg_stat_reset_shared('lock');
 BEGIN;
@@ -277,24 +274,21 @@ LOCK TABLE test_stat_tab;
 ]);
 
 # s2 setup
-$s2->query_safe(
+$s2->do(
 	q[
 SET log_lock_waits = off;
 BEGIN;
 SELECT pg_stat_force_next_flush();
 ]);
 # s2 blocks on LOCK.
-$s2->query_until(
-	qr/lock_s2/, q[
-\echo lock_s2
-LOCK TABLE test_stat_tab;
-]);
+$s2->do_async(q(LOCK TABLE test_stat_tab;));
 
 wait_and_detach($node, 'deadlock-timeout-fired');
 
 # deadlock_timeout fired, now commit in s1 and s2
-$s1->query_safe(q(COMMIT));
-$s2->query_safe(q(COMMIT));
+$s1->do(q(COMMIT));
+$s2->wait_for_completion;
+$s2->do(q(COMMIT));
 
 # check that pg_stat_lock has been updated
 wait_for_pg_stat_lock($node, 'relation');
@@ -310,8 +304,8 @@ ok( !$node->log_contains(
 );
 
 # close sessions
-$s1->quit;
-$s2->quit;
+$s1->close;
+$s2->close;
 
 # cleanup
 $node->safe_psql('postgres', q[DROP TABLE test_stat_tab;]);

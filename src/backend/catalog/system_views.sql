@@ -1573,6 +1573,7 @@ CREATE VIEW pg_stat_vacuum_tables AS
         S.recently_dead_tuples AS recently_dead_tuples,
         S.missed_dead_pages AS missed_dead_pages,
         S.missed_dead_tuples AS missed_dead_tuples,
+        S.wraparound_failsafe AS wraparound_failsafe,
         S.wal_records AS wal_records,
         S.wal_fpi AS wal_fpi,
         S.wal_bytes AS wal_bytes
@@ -1611,9 +1612,11 @@ CREATE VIEW pg_stat_vacuum_database AS
 
             S.errors AS errors,
 
+            S.wraparound_failsafe AS wraparound_failsafe,
             S.wal_records AS wal_records,
             S.wal_fpi AS wal_fpi,
-            S.wal_bytes AS wal_bytes
+            S.wal_bytes AS wal_bytes,
+            S.interrupts_count AS interrupts_count
     FROM
             pg_database D,
             LATERAL pg_stat_get_vacuum_database(D.oid) S;

@@ -182,6 +182,12 @@ typedef struct PgStat_CommonCounts
 
 	/* tuples */
 	int64		tuples_deleted;
+
+	/* failsafe */
+	int32		wraparound_failsafe_count;
+
+	/* number of times a vacuum of the object was interrupted by an error */
+	int32		interrupts_count;
 }			PgStat_CommonCounts;
 
 /* ----------
@@ -934,6 +940,7 @@ extern void pgstat_vacuum_relation_delete_pending_cb(Oid relid);
 extern void
 			pgstat_report_vacuum_extstats(Oid tableoid, bool shared,
 										  PgStat_VacuumRelationCounts * params);
+extern void pgstat_report_vacuum_error(bool shared);
 extern PgStat_VacuumRelationCounts * pgstat_fetch_stat_vacuum_tabentry(Oid relid, Oid dbid);
 extern PgStat_VacuumDBCounts * pgstat_fetch_stat_vacuum_dbentry(Oid dbid);
 

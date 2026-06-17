@@ -80,6 +80,13 @@ SELECT wal_records > 0 AS wal_records,
   FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_fpi';
 DROP TABLE vacstat_fpi;
 
+-- wraparound failsafe.  A normal vacuum does not engage the wraparound
+-- failsafe (wraparound_failsafe = 0).  The positive path requires reaching the
+-- failsafe XID age and is covered by a separate TAP test under
+-- src/test/modules/xid_wraparound.
+SELECT wraparound_failsafe = 0 AS wraparound_failsafe
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
 -- per-index view: the primary key index is processed by the same VACUUM.
 -- No btree leaf empties out (interleaved deletions), so pages_deleted = 0,
 -- while every index entry for a removed heap tuple is deleted.
@@ -111,6 +118,7 @@ DROP TABLE vacstat_idxdel;
 -- per-database aggregate view: no vacuum errors occurred in this database, and
 -- the vacuums in this database emit WAL (wal_records > 0).
 SELECT errors = 0 AS errors,
+       wraparound_failsafe = 0 AS wraparound_failsafe,
        wal_records > 0 AS wal_records,
        wal_fpi >= 0 AS wal_fpi,
        wal_bytes > 0 AS wal_bytes

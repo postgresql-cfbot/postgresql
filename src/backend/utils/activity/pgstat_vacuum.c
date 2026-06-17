@@ -43,6 +43,7 @@ pgstat_accumulate_common(PgStat_CommonCounts *dst, const PgStat_CommonCounts *sr
 	ACCUMULATE_FIELD(wal_bytes);
 
 	ACCUMULATE_FIELD(tuples_deleted);
+	ACCUMULATE_FIELD(interrupts_count);
 }
 
 /*
@@ -63,6 +64,13 @@ pgstat_accumulate_extvac_stats_relations(PgStat_VacuumRelationCounts *dst,
 		   src->type == dst->type);
 
 	pgstat_accumulate_common(&dst->common, &src->common);
+
+	/*
+	 * The wraparound failsafe is a per-relation flag (0/1), not a running
+	 * count: reflect whether the latest vacuum of this relation engaged it,
+	 * rather than summing across vacuums.
+	 */
+	dst->common.wraparound_failsafe_count = src->common.wraparound_failsafe_count;
 
 	if (dst->type == PGSTAT_EXTVAC_TABLE)
 	{
@@ -90,6 +98,12 @@ pgstat_accumulate_extvac_stats_db(PgStat_VacuumDBCounts *dst,
 		return;
 
 	pgstat_accumulate_common(&dst->common, &src->common);
+
+	/*
+	 * At the database level the failsafe is a count: how many relation vacuums
+	 * engaged the wraparound failsafe.
+	 */
+	dst->common.wraparound_failsafe_count += src->common.wraparound_failsafe_count;
 	dst->errors += src->errors;
 }
 
@@ -126,6 +140,38 @@ pgstat_report_vacuum_extstats(Oid tableoid, bool shared,
 										  dboid, InvalidOid, NULL);
 	dbpending = (PgStat_VacuumDBCounts *) entry_ref->pending;
 	pgstat_accumulate_common(&dbpending->common, &params->common);
+	/* count this relation's failsafe flag into the database-wide total */
+	dbpending->common.wraparound_failsafe_count += params->common.wraparound_failsafe_count;
+}
+
+/*
+ * Report that a vacuum was interrupted by an error.
+ *
+ * This is a database-wide counter only: an interrupted vacuum aborts its
+ * transaction, so reporting per-relation would require creating a relation
+ * stats entry from the error path (which the aborting transaction may roll
+ * back).  Called from the vacuum error callback, we therefore update shared
+ * memory directly rather than going through pending entries, which might never
+ * be flushed.
+ *
+ * The database id is InvalidOid for shared relations, just as in
+ * pgstat_report_vacuum_extstats(); it must not be hard-coded to MyDatabaseId.
+ */
+void
+pgstat_report_vacuum_error(bool shared)
+{
+	PgStat_EntryRef *entry_ref;
+	PgStatShared_VacuumDB *shdbentry;
+	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
+
+	if (!pgstat_track_vacuum_statistics)
+		return;
+
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_VACUUM_DB,
+											dboid, InvalidOid, false);
+	shdbentry = (PgStatShared_VacuumDB *) entry_ref->shared_stats;
+	shdbentry->stats.common.interrupts_count++;
+	pgstat_unlock_entry(entry_ref);
 }
 
 /*

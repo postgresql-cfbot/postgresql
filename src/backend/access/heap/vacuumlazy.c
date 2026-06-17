@@ -412,9 +412,8 @@ typedef struct LVRelState
 	 */
 	BlockNumber eager_scan_remaining_fails;
 
-	int32		wraparound_failsafe_count;	/* number of emergency vacuums to
-											 * prevent anti-wraparound
-											 * shutdown */
+	bool		wraparound_failsafe;	/* did this vacuum engage the
+										 * wraparound failsafe? */
 
 	PgStat_VacuumRelationCounts extVacReportIdx;
 
@@ -630,6 +629,8 @@ accumulate_heap_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCount
 	extVacStats->table.recently_dead_tuples = vacrel->recently_dead_tuples;
 	extVacStats->table.missed_dead_tuples = vacrel->missed_dead_tuples;
 	extVacStats->table.missed_dead_pages = vacrel->missed_dead_pages;
+	extVacStats->common.wraparound_failsafe_count = vacrel->wraparound_failsafe;
+
 	extVacStats->common.wal_bytes -= vacrel->extVacReportIdx.common.wal_bytes;
 	extVacStats->common.wal_fpi -= vacrel->extVacReportIdx.common.wal_fpi;
 	extVacStats->common.wal_records -= vacrel->extVacReportIdx.common.wal_records;
@@ -1030,7 +1031,7 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	vacrel->aggressive = vacuum_get_cutoffs(rel, params, &vacrel->cutoffs);
 	vacrel->rel_pages = orig_rel_pages = RelationGetNumberOfBlocks(rel);
 	vacrel->vistest = GlobalVisTestFor(rel);
-	vacrel->wraparound_failsafe_count = 0;
+	vacrel->wraparound_failsafe = false;
 
 	/* Initialize state used to track oldest extant XID/MXID */
 	vacrel->NewRelfrozenXid = vacrel->cutoffs.OldestXmin;
@@ -3160,7 +3161,7 @@ lazy_check_wraparound_failsafe(LVRelState *vacrel)
 		int64		progress_val[3] = {0, 0, PROGRESS_VACUUM_MODE_FAILSAFE};
 
 		VacuumFailsafeActive = true;
-		vacrel->wraparound_failsafe_count++;
+		vacrel->wraparound_failsafe = true;
 
 		/*
 		 * Abandon use of a buffer access strategy to allow use of all of
@@ -4112,6 +4113,15 @@ static void
 vacuum_error_callback(void *arg)
 {
 	LVRelState *errinfo = arg;
+
+	/*
+	 * If an actual ERROR (not a lower-severity report that merely carries this
+	 * vacuum error context) is being raised while we have a relation in hand,
+	 * record at the database level that a vacuum was interrupted.  Any error
+	 * here aborts the vacuum, so the exact phase does not matter.
+	 */
+	if (errinfo->rel != NULL && geterrlevel() == ERROR)
+		pgstat_report_vacuum_error(errinfo->rel->rd_rel->relisshared);
 
 	switch (errinfo->phase)
 	{

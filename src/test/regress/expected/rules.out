@@ -2424,11 +2424,13 @@ pg_stat_user_tables| SELECT relid,
 pg_stat_vacuum_database| SELECT d.oid AS dboid,
     d.datname AS dbname,
     s.errors,
+    s.wraparound_failsafe,
     s.wal_records,
     s.wal_fpi,
-    s.wal_bytes
+    s.wal_bytes,
+    s.interrupts_count
    FROM pg_database d,
-    LATERAL pg_stat_get_vacuum_database(d.oid) s(dboid, errors, wal_records, wal_fpi, wal_bytes);
+    LATERAL pg_stat_get_vacuum_database(d.oid) s(dboid, errors, wraparound_failsafe, wal_records, wal_fpi, wal_bytes, interrupts_count);
 pg_stat_vacuum_indexes| SELECT c.oid AS relid,
     i.oid AS indexrelid,
     n.nspname AS schemaname,
@@ -2455,12 +2457,13 @@ pg_stat_vacuum_tables| SELECT n.nspname AS schemaname,
     s.recently_dead_tuples,
     s.missed_dead_pages,
     s.missed_dead_tuples,
+    s.wraparound_failsafe,
     s.wal_records,
     s.wal_fpi,
     s.wal_bytes
    FROM (pg_class c
      JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
-    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen, recently_dead_tuples, missed_dead_pages, missed_dead_tuples, wal_records, wal_fpi, wal_bytes)
+    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen, recently_dead_tuples, missed_dead_pages, missed_dead_tuples, wraparound_failsafe, wal_records, wal_fpi, wal_bytes)
   WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
 pg_stat_wal| SELECT wal_records,
     wal_fpi,

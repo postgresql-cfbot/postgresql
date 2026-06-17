@@ -1618,9 +1618,6 @@ nfa_reevaluate_dependent_vars(WindowAggState *winstate, RPRNFAContext *ctx,
 			result = ExecEvalExpr(exprState, econtext, &isnull);
 			winstate->nfaVarMatched[varIdx] = (!isnull && DatumGetBool(result));
 		}
-
-		if (varIdx + 1 >= list_length(winstate->defineVariableList))
-			break;
 	}
 
 	/* Restore original match_start, currentpos, and invalidate cache */

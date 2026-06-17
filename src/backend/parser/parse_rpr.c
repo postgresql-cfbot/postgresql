@@ -54,8 +54,8 @@ typedef struct
 /* Forward declarations */
 static void validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
 									   List *rpDefs, List **varNames);
-static List *transformDefineClause(ParseState *pstate, WindowClause *wc,
-								   WindowDef *windef, List **targetlist);
+static List *transformDefineClause(ParseState *pstate, WindowDef *windef,
+								   List **targetlist);
 static bool define_walker(Node *node, void *context);
 
 /*
@@ -178,7 +178,7 @@ transformRPR(ParseState *pstate, WindowClause *wc, WindowDef *windef,
 	wc->initial = windef->rpCommonSyntax->initial;
 
 	/* Transform DEFINE clause into list of TargetEntry's */
-	wc->defineClause = transformDefineClause(pstate, wc, windef, targetlist);
+	wc->defineClause = transformDefineClause(pstate, windef, targetlist);
 
 	/* Store PATTERN AST for deparsing */
 	wc->rpPattern = windef->rpCommonSyntax->rpPattern;
@@ -313,7 +313,7 @@ validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
  * parse_expr.c via the p_rpr_pattern_vars check.
  */
 static List *
-transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
+transformDefineClause(ParseState *pstate, WindowDef *windef,
 					  List **targetlist)
 {
 	List	   *restargets;
@@ -345,6 +345,8 @@ transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
 	foreach_node(ResTarget, restarget, windef->rpCommonSyntax->rpDefs)
 	{
 		TargetEntry *teDefine;
+		Node	   *expr;
+		List	   *vars;
 
 		name = restarget->name;
 
@@ -374,54 +376,48 @@ transformDefineClause(ParseState *pstate, WindowClause *wc, WindowDef *windef,
 		 * the individual Var nodes it references are present in the
 		 * targetlist, so the planner can propagate the referenced columns.
 		 */
+		expr = transformExpr(pstate, restarget->val,
+							 EXPR_KIND_RPR_DEFINE);
+
+		/*
+		 * Pull out Var nodes from the transformed expression and ensure each
+		 * one is present in the targetlist.  This is needed so the planner
+		 * propagates the referenced columns through the plan tree, making
+		 * them available to the WindowAgg's DEFINE evaluation.
+		 */
+		vars = pull_var_clause(expr, 0);
+		foreach_node(Var, var, vars)
 		{
-			Node	   *expr;
-			List	   *vars;
+			bool		found = false;
 
-			expr = transformExpr(pstate, restarget->val,
-								 EXPR_KIND_RPR_DEFINE);
-
-			/*
-			 * Pull out Var nodes from the transformed expression and ensure
-			 * each one is present in the targetlist.  This is needed so the
-			 * planner propagates the referenced columns through the plan
-			 * tree, making them available to the WindowAgg's DEFINE
-			 * evaluation.
-			 */
-			vars = pull_var_clause(expr, 0);
-			foreach_node(Var, var, vars)
+			foreach_node(TargetEntry, tle, *targetlist)
 			{
-				bool		found = false;
-
-				foreach_node(TargetEntry, tle, *targetlist)
+				if (IsA(tle->expr, Var) &&
+					((Var *) tle->expr)->varno == var->varno &&
+					((Var *) tle->expr)->varattno == var->varattno)
 				{
-					if (IsA(tle->expr, Var) &&
-						((Var *) tle->expr)->varno == var->varno &&
-						((Var *) tle->expr)->varattno == var->varattno)
-					{
-						found = true;
-						break;
-					}
-				}
-				if (!found)
-				{
-					TargetEntry *newtle;
-
-					newtle = makeTargetEntry((Expr *) copyObject(var),
-											 list_length(*targetlist) + 1,
-											 NULL,
-											 true);
-					*targetlist = lappend(*targetlist, newtle);
+					found = true;
+					break;
 				}
 			}
-			list_free(vars);
+			if (!found)
+			{
+				TargetEntry *newtle;
 
-			/* Build the defineClause entry directly from the transformed expr */
-			teDefine = makeTargetEntry((Expr *) expr,
-									   list_length(defineClause) + 1,
-									   pstrdup(name),
-									   true);
+				newtle = makeTargetEntry((Expr *) copyObject(var),
+										 list_length(*targetlist) + 1,
+										 NULL,
+										 true);
+				*targetlist = lappend(*targetlist, newtle);
+			}
 		}
+		list_free(vars);
+
+		/* Build the defineClause entry directly from the transformed expr */
+		teDefine = makeTargetEntry((Expr *) expr,
+								   list_length(defineClause) + 1,
+								   pstrdup(name),
+								   true);
 
 		/* build transformed DEFINE clause (list of TargetEntry) */
 		defineClause = lappend(defineClause, teDefine);

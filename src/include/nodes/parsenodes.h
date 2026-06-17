@@ -644,7 +644,7 @@ typedef struct RPRPatternNode
 } RPRPatternNode;
 
 /*
- * RowPatternCommonSyntax - raw representation of row pattern common syntax
+ * RPCommonSyntax - raw representation of row pattern common syntax
  */
 typedef struct RPCommonSyntax
 {

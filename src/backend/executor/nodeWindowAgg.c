@@ -3103,7 +3103,7 @@ ExecInitWindowAgg(WindowAgg *node, EState *estate, int eflags)
 	 * ordering (DEFINE order first), varId == defineIdx for all defined
 	 * variables, so no mapping is needed.
 	 */
-	if (list_length(winstate->defineVariableList) > 0)
+	if (winstate->defineVariableList != NIL)
 		winstate->nfaVarMatched = palloc0(sizeof(bool) *
 										  list_length(winstate->defineVariableList));
 	else
@@ -4642,8 +4642,6 @@ nfa_evaluate_row(WindowObject winobj, int64 pos, bool *varMatched)
 {
 	WindowAggState *winstate = winobj->winstate;
 	ExprContext *econtext = winstate->rprContext;
-	int			numDefineVars = list_length(winstate->defineVariableList);
-	int			varIdx = 0;
 	TupleTableSlot *slot;
 	int64		saved_pos;
 
@@ -4670,6 +4668,7 @@ nfa_evaluate_row(WindowObject winobj, int64 pos, bool *varMatched)
 
 	foreach_ptr(ExprState, exprState, winstate->defineClauseExprs)
 	{
+		int			varIdx = foreach_current_index(exprState);
 		Datum		result;
 		bool		isnull;
 
@@ -4677,10 +4676,6 @@ nfa_evaluate_row(WindowObject winobj, int64 pos, bool *varMatched)
 		result = ExecEvalExpr(exprState, econtext, &isnull);
 
 		varMatched[varIdx] = (!isnull && DatumGetBool(result));
-
-		varIdx++;
-		if (varIdx >= numDefineVars)
-			break;
 	}
 
 	winstate->currentpos = saved_pos;

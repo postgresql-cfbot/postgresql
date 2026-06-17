@@ -40,7 +40,6 @@
 #include "catalog/pg_proc.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
-#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/rpr.h"
 #include "tcop/tcopprot.h"
@@ -1887,12 +1886,8 @@ reject_volatile_in_define_walker(Node *node, void *context)
 void
 validate_rpr_define_volatility(List *defineClause)
 {
-	ListCell   *lc;
-
-	foreach(lc, defineClause)
+	foreach_node(TargetEntry, te, defineClause)
 	{
-		TargetEntry *te = lfirst_node(TargetEntry, lc);
-
 		(void) reject_volatile_in_define_walker((Node *) te->expr, NULL);
 	}
 }

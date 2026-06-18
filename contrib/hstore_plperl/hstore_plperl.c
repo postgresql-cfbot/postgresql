@@ -2,6 +2,7 @@
 
 #include "fmgr.h"
 #include "hstore/hstore.h"
+#include "miscadmin.h"
 #include "plperl.h"
 
 PG_MODULE_MAGIC_EXT(
@@ -111,7 +112,10 @@ plperl_to_hstore(PG_FUNCTION_ARGS)
 
 	/* Dereference references recursively. */
 	while (SvROK(in))
+	{
+		CHECK_FOR_INTERRUPTS();
 		in = SvRV(in);
+	}
 
 	/* Now we must have a hash. */
 	if (SvTYPE(in) != SVt_PVHV)

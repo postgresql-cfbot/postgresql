@@ -4702,6 +4702,36 @@ HeapUpdateHotAllowable(Relation relation, const Bitmapset *modified_idx_attrs)
 											   INDEX_ATTR_BITMAP_INDEXED);
 
 	/*
+	 * The logical-replication apply path gates HOT-indexed updates on the
+	 * per-subscription hot_indexed_on_apply option.  A HOT-indexed update of
+	 * a replica-identity attribute leaves a stale index leaf; the apply
+	 * worker's replica-identity lookups cope with that (see
+	 * RelationFindReplTupleByIndex), but only when the indexed attributes are
+	 * a subset of the replica identity.  "off" disqualifies whenever the
+	 * subscriber has any indexed attribute beyond its PK; "subset_only" (the
+	 * default) requires the indexed attributes to be a subset of the PK;
+	 * "always" applies no apply-path gating.
+	 */
+	if (IsLogicalWorker())
+	{
+		char		mode = GetHotIndexedApplyMode();
+		const Bitmapset  *pk_attrs = RelationGetIndexAttrBitmapNoCopy(relation,
+											  INDEX_ATTR_BITMAP_PRIMARY_KEY);
+
+		if (mode == LOGICALREP_HOT_INDEXED_OFF)
+		{
+			if (!bms_equal(all_idx_attrs, pk_attrs))
+				return HEAP_UPDATE_ALL_INDEXES;
+		}
+		else if (mode == LOGICALREP_HOT_INDEXED_SUBSET_ONLY)
+		{
+			if (!bms_is_subset(all_idx_attrs, pk_attrs))
+				return HEAP_UPDATE_ALL_INDEXES;
+		}
+		/* LOGICALREP_HOT_INDEXED_ALWAYS: no apply-path gating. */
+	}
+
+	/*
 	 * System catalogs keep classic HOT (an UPDATE touching no non-summarizing
 	 * indexed attribute already returned HEAP_HEAP_ONLY_UPDATE above), but do
 	 * NOT take the HOT-indexed path: catalog reads go through many code paths

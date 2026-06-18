@@ -95,6 +95,12 @@ dintdict_lexize(PG_FUNCTION_ARGS)
 	else
 		txt = pnstrdup(in, len);
 
+	/*
+	 * pnstrdup() stops at the first null byte, so recompute len from the copy;
+	 * otherwise the truncation below could write past the allocation.
+	 */
+	len = strlen(txt);
+
 	if (len > d->maxlen)
 	{
 		if (d->rejectlong)

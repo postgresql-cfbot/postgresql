@@ -1,0 +1,486 @@
+--
+-- key_join_mcdc
+--
+-- Focused local MC/DC coverage for build_key_join_quals(), its callers, and
+-- the equality-operator usability pre-guard.
+--
+
+\set VERBOSITY terse
+
+CREATE SCHEMA key_join_mcdc;
+SET search_path = key_join_mcdc, public;
+
+CREATE TABLE mcdc_parent
+(
+    id        int PRIMARY KEY,
+    tenant_id int NOT NULL,
+    code      int NOT NULL,
+    UNIQUE (tenant_id, code)
+);
+
+CREATE TABLE mcdc_child
+(
+    id        int PRIMARY KEY,
+    parent_id int UNIQUE NOT NULL REFERENCES mcdc_parent (id),
+    tenant_id int NOT NULL,
+    code      int NOT NULL,
+    UNIQUE (tenant_id, code),
+    FOREIGN KEY (tenant_id, code) REFERENCES mcdc_parent (tenant_id, code)
+);
+
+CREATE TABLE mcdc_reader
+(
+    id        int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES mcdc_parent (id),
+    tenant_id int NOT NULL,
+    code      int NOT NULL,
+    FOREIGN KEY (tenant_id, code) REFERENCES mcdc_parent (tenant_id, code)
+);
+
+CREATE TABLE mcdc_noinherit_child
+(
+    id        int PRIMARY KEY,
+    parent_id int,
+    NOT NULL parent_id NO INHERIT,
+    FOREIGN KEY (parent_id) REFERENCES mcdc_parent (id)
+);
+
+CREATE TABLE mcdc_self_ref
+(
+    id int PRIMARY KEY REFERENCES mcdc_self_ref (id)
+);
+
+INSERT INTO mcdc_parent VALUES (1, 10, 100), (2, 20, 200);
+INSERT INTO mcdc_child VALUES (11, 1, 10, 100), (22, 2, 20, 200);
+INSERT INTO mcdc_reader VALUES (101, 1, 10, 100), (202, 2, 20, 200);
+INSERT INTO mcdc_noinherit_child VALUES (111, 1), (222, 2);
+INSERT INTO mcdc_self_ref VALUES (1), (2);
+
+CREATE FUNCTION mcdc_positive_int(int) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT $1 > 0 $$;
+
+CREATE OPERATOR @+ (
+    RIGHTARG = int,
+    FUNCTION = mcdc_positive_int
+);
+
+-- Expression indexes split table-column self dependencies from function deps.
+CREATE INDEX mcdc_parent_positive_idx
+    ON mcdc_parent ((mcdc_positive_int(id)));
+DROP INDEX mcdc_parent_positive_idx;
+CREATE INDEX mcdc_parent_positive_partial_idx
+    ON mcdc_parent (id) WHERE mcdc_positive_int(id);
+DROP INDEX mcdc_parent_positive_partial_idx;
+CREATE TABLE mcdc_partition_expr_parent
+(
+    id int NOT NULL
+) PARTITION BY RANGE ((id + 0));
+DROP TABLE mcdc_partition_expr_parent;
+
+CREATE FUNCTION mcdc_stable_int_eq(a int, b int) RETURNS boolean
+LANGUAGE sql STABLE STRICT
+AS $$ SELECT a = b $$;
+
+CREATE OPERATOR === (
+    LEFTARG = int,
+    RIGHTARG = int,
+    PROCEDURE = mcdc_stable_int_eq
+);
+
+CREATE FUNCTION mcdc_hash_bridge_eq(a int, b bigint) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT a = b::int $$;
+
+CREATE OPERATOR =## (
+    LEFTARG = int,
+    RIGHTARG = bigint,
+    PROCEDURE = mcdc_hash_bridge_eq
+);
+
+CREATE OPERATOR FAMILY mcdc_btree_bridge_ops USING btree;
+
+ALTER OPERATOR FAMILY mcdc_btree_bridge_ops USING btree ADD
+    OPERATOR 3 =## (int, bigint);
+
+CREATE OPERATOR FAMILY mcdc_hash_bridge_ops USING hash;
+
+CREATE OPERATOR CLASS mcdc_hash_bridge_int_ops
+FOR TYPE int USING hash FAMILY mcdc_hash_bridge_ops AS
+    OPERATOR 1 = (int, int),
+    FUNCTION 1 hashint4(int);
+
+ALTER OPERATOR FAMILY mcdc_hash_bridge_ops USING hash ADD
+    OPERATOR 1 =## (int, bigint),
+    FUNCTION 1 hashint8(bigint);
+
+SET client_min_messages = warning;
+CREATE TYPE mcdc_nonstrict_eq_type;
+CREATE FUNCTION mcdc_nonstrict_eq_type_in(cstring)
+RETURNS mcdc_nonstrict_eq_type
+LANGUAGE internal STRICT IMMUTABLE AS 'int4in';
+CREATE FUNCTION mcdc_nonstrict_eq_type_out(mcdc_nonstrict_eq_type)
+RETURNS cstring
+LANGUAGE internal STRICT IMMUTABLE AS 'int4out';
+CREATE TYPE mcdc_nonstrict_eq_type (
+    input = mcdc_nonstrict_eq_type_in,
+    output = mcdc_nonstrict_eq_type_out,
+    like = int4
+);
+RESET client_min_messages;
+CREATE CAST (int4 AS mcdc_nonstrict_eq_type) WITHOUT FUNCTION;
+CREATE CAST (mcdc_nonstrict_eq_type AS int4) WITHOUT FUNCTION;
+
+CREATE FUNCTION mcdc_nonstrict_eq_type_cmp(a mcdc_nonstrict_eq_type,
+                                           b mcdc_nonstrict_eq_type)
+RETURNS int LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT btint4cmp(a::int4, b::int4) $$;
+
+CREATE FUNCTION mcdc_nonstrict_eq_type_eq(a mcdc_nonstrict_eq_type,
+                                          b mcdc_nonstrict_eq_type)
+RETURNS boolean LANGUAGE sql IMMUTABLE
+AS $$ SELECT a IS NULL OR b IS NULL OR a::int4 = b::int4 $$;
+
+CREATE OPERATOR === (
+    LEFTARG = mcdc_nonstrict_eq_type,
+    RIGHTARG = mcdc_nonstrict_eq_type,
+    PROCEDURE = mcdc_nonstrict_eq_type_eq,
+    COMMUTATOR = ===,
+    RESTRICT = eqsel,
+    JOIN = eqjoinsel,
+    MERGES
+);
+
+CREATE OPERATOR CLASS mcdc_nonstrict_eq_ops
+DEFAULT FOR TYPE mcdc_nonstrict_eq_type USING btree AS
+    OPERATOR 3 === (mcdc_nonstrict_eq_type, mcdc_nonstrict_eq_type),
+    FUNCTION 1 mcdc_nonstrict_eq_type_cmp(mcdc_nonstrict_eq_type,
+                                          mcdc_nonstrict_eq_type);
+
+CREATE TABLE mcdc_nonstrict_parent
+(
+    id mcdc_nonstrict_eq_type PRIMARY KEY
+);
+
+CREATE TABLE mcdc_nonstrict_reader
+(
+    id        int PRIMARY KEY,
+    parent_id mcdc_nonstrict_eq_type NOT NULL
+        REFERENCES mcdc_nonstrict_parent (id)
+);
+
+INSERT INTO mcdc_nonstrict_parent
+VALUES (1::int4::mcdc_nonstrict_eq_type),
+       (2::int4::mcdc_nonstrict_eq_type);
+INSERT INTO mcdc_nonstrict_reader
+VALUES (701, 1::int4::mcdc_nonstrict_eq_type),
+       (702, 2::int4::mcdc_nonstrict_eq_type);
+
+CREATE TABLE mcdc_text_cast_parent
+(
+    id text PRIMARY KEY
+);
+
+CREATE TABLE mcdc_text_cast_reader
+(
+    id        int PRIMARY KEY,
+    parent_id text NOT NULL REFERENCES mcdc_text_cast_parent (id)
+);
+
+CREATE TABLE mcdc_regclass_parent
+(
+    id regclass PRIMARY KEY
+);
+
+CREATE TABLE mcdc_regclass_reader
+(
+    id        int PRIMARY KEY,
+    parent_id regclass NOT NULL REFERENCES mcdc_regclass_parent (id)
+);
+
+CREATE DOMAIN mcdc_num_dom AS numeric(4,0);
+
+CREATE TABLE mcdc_numdom_parent
+(
+    id mcdc_num_dom PRIMARY KEY
+);
+
+CREATE TABLE mcdc_numdom_reader
+(
+    id        int PRIMARY KEY,
+    parent_id mcdc_num_dom NOT NULL REFERENCES mcdc_numdom_parent (id)
+);
+
+CREATE DOMAIN mcdc_sig_dom AS int;
+
+CREATE FUNCTION mcdc_sig_dom_cmp(a mcdc_sig_dom, b mcdc_sig_dom)
+RETURNS int LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT btint4cmp(a::int, b::int) $$;
+
+CREATE FUNCTION mcdc_sig_dom_eq(a mcdc_sig_dom, b mcdc_sig_dom)
+RETURNS boolean LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT a::int = b::int $$;
+
+CREATE OPERATOR === (
+    LEFTARG = mcdc_sig_dom,
+    RIGHTARG = mcdc_sig_dom,
+    PROCEDURE = mcdc_sig_dom_eq,
+    COMMUTATOR = ===,
+    RESTRICT = eqsel,
+    JOIN = eqjoinsel,
+    MERGES
+);
+
+CREATE OPERATOR CLASS mcdc_sig_dom_ops
+FOR TYPE mcdc_sig_dom USING btree AS
+    OPERATOR 3 === (mcdc_sig_dom, mcdc_sig_dom),
+    FUNCTION 1 mcdc_sig_dom_cmp(mcdc_sig_dom, mcdc_sig_dom);
+
+CREATE TABLE mcdc_sig_parent
+(
+    id mcdc_sig_dom
+);
+
+CREATE UNIQUE INDEX mcdc_sig_parent_idx
+    ON mcdc_sig_parent USING btree (id mcdc_sig_dom_ops);
+
+CREATE TABLE mcdc_sig_child
+(
+    id        int PRIMARY KEY,
+    parent_id mcdc_sig_dom NOT NULL REFERENCES mcdc_sig_parent (id)
+);
+
+INSERT INTO mcdc_text_cast_parent VALUES ('a'), ('b');
+INSERT INTO mcdc_text_cast_reader VALUES (401, 'a'), (402, 'b');
+INSERT INTO mcdc_regclass_parent VALUES ('pg_class'), ('pg_type');
+INSERT INTO mcdc_regclass_reader VALUES (451, 'pg_class'), (452, 'pg_type');
+INSERT INTO mcdc_numdom_parent VALUES (1), (2);
+INSERT INTO mcdc_numdom_reader VALUES (501, 1), (502, 2);
+INSERT INTO mcdc_sig_parent VALUES (1), (2);
+INSERT INTO mcdc_sig_child VALUES (601, 1), (602, 2);
+
+CREATE FUNCTION mcdc_varchar_eq(a varchar, b varchar) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT a::text = b::text $$;
+
+CREATE OPERATOR === (
+    LEFTARG = varchar,
+    RIGHTARG = varchar,
+    PROCEDURE = mcdc_varchar_eq
+);
+
+CREATE FUNCTION mcdc_varchar_cmp(a varchar, b varchar) RETURNS int
+LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT bttextcmp(a::text, b::text) $$;
+
+CREATE OPERATOR CLASS mcdc_varchar_ops
+FOR TYPE varchar USING btree AS
+    OPERATOR 3 === (varchar, varchar),
+    FUNCTION 1 mcdc_varchar_cmp(varchar, varchar);
+
+CREATE TABLE mcdc_varchar_parent
+(
+    id varchar(4) NOT NULL
+);
+
+CREATE UNIQUE INDEX mcdc_varchar_parent_custom_idx
+    ON mcdc_varchar_parent USING btree (id mcdc_varchar_ops);
+
+ALTER TABLE mcdc_varchar_parent ADD PRIMARY KEY (id);
+
+CREATE TABLE mcdc_varchar_child
+(
+    id        int PRIMARY KEY,
+    parent_id varchar(4) NOT NULL REFERENCES mcdc_varchar_parent (id)
+);
+
+CREATE DOMAIN mcdc_varchar_sig_dom AS varchar(4);
+
+CREATE FUNCTION mcdc_varchar_sig_dom_cmp(a mcdc_varchar_sig_dom,
+                                         b mcdc_varchar_sig_dom)
+RETURNS int LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT bttextcmp(a::text, b::text) $$;
+
+CREATE FUNCTION mcdc_varchar_sig_dom_eq(a mcdc_varchar_sig_dom,
+                                        b mcdc_varchar_sig_dom)
+RETURNS boolean LANGUAGE sql IMMUTABLE STRICT
+AS $$ SELECT a::text = b::text $$;
+
+CREATE OPERATOR === (
+    LEFTARG = mcdc_varchar_sig_dom,
+    RIGHTARG = mcdc_varchar_sig_dom,
+    PROCEDURE = mcdc_varchar_sig_dom_eq,
+    COMMUTATOR = ===,
+    RESTRICT = eqsel,
+    JOIN = eqjoinsel,
+    MERGES
+);
+
+CREATE OPERATOR CLASS mcdc_varchar_sig_dom_ops
+FOR TYPE mcdc_varchar_sig_dom USING btree AS
+    OPERATOR 3 === (mcdc_varchar_sig_dom, mcdc_varchar_sig_dom),
+    FUNCTION 1 mcdc_varchar_sig_dom_cmp(mcdc_varchar_sig_dom,
+                                        mcdc_varchar_sig_dom);
+
+CREATE TABLE mcdc_varchar_sig_parent
+(
+    id mcdc_varchar_sig_dom
+);
+
+CREATE UNIQUE INDEX mcdc_varchar_sig_parent_idx
+    ON mcdc_varchar_sig_parent USING btree (id mcdc_varchar_sig_dom_ops);
+
+CREATE TABLE mcdc_varchar_sig_child
+(
+    id        int PRIMARY KEY,
+    parent_id mcdc_varchar_sig_dom NOT NULL
+        REFERENCES mcdc_varchar_sig_parent (id)
+);
+
+INSERT INTO mcdc_varchar_parent VALUES ('aa'), ('bb');
+INSERT INTO mcdc_varchar_child VALUES (901, 'aa'), (902, 'bb');
+INSERT INTO mcdc_varchar_sig_parent VALUES ('aa'), ('bb');
+INSERT INTO mcdc_varchar_sig_child VALUES (911, 'aa'), (912, 'bb');
+
+-- Live parse path: single-column and multi-column key quals.
+SELECT p.id, c.id
+FROM mcdc_parent p
+JOIN mcdc_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id;
+
+SELECT p.tenant_id, p.code, c.id
+FROM mcdc_parent p
+JOIN mcdc_child c FOR KEY (tenant_id, code) -> p (tenant_id, code)
+ORDER BY p.tenant_id, p.code;
+
+SELECT p.id, c.id
+FROM mcdc_parent p
+JOIN mcdc_noinherit_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id;
+
+-- Self-join elimination must update the key-join arrow alias RT index.
+SET enable_self_join_elimination = on;
+SELECT s2.id
+FROM mcdc_self_ref s1
+JOIN mcdc_self_ref s2 FOR KEY (id) -> s1 (id)
+ORDER BY s2.id;
+RESET enable_self_join_elimination;
+
+CREATE TABLE mcdc_dupe_parent
+(
+    id int PRIMARY KEY
+);
+
+CREATE TABLE mcdc_dupe_reader
+(
+    id        int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES mcdc_dupe_parent (id)
+);
+
+CREATE TABLE mcdc_dupe_nullable_reader
+(
+    id        int PRIMARY KEY,
+    parent_id int REFERENCES mcdc_dupe_parent (id)
+);
+
+INSERT INTO mcdc_dupe_parent VALUES (1), (2);
+INSERT INTO mcdc_dupe_reader VALUES (701, 1), (702, 1), (703, 2);
+INSERT INTO mcdc_dupe_nullable_reader VALUES (801, 1), (802, NULL);
+
+CREATE VIEW mcdc_dupe_active_v AS
+SELECT DISTINCT p.id
+FROM mcdc_dupe_parent p;
+
+CREATE VIEW mcdc_group_inactive_rowcov_v AS
+SELECT p.id, p.tenant_id, p.code
+FROM mcdc_parent p
+GROUP BY p.id;
+
+CREATE VIEW mcdc_reader_parent_1_v AS
+SELECT *
+FROM mcdc_reader
+WHERE parent_id = 1;
+
+CREATE VIEW mcdc_second_cte_v AS
+WITH unused AS (SELECT id FROM mcdc_parent WHERE false),
+     parents AS (SELECT id FROM mcdc_parent)
+SELECT id FROM parents;
+
+-- Same-domain FK operators must use the normalized base equality type.
+SELECT c.id, p.id
+FROM mcdc_sig_parent p
+JOIN mcdc_sig_child c FOR KEY (parent_id) -> p (id)
+ORDER BY c.id;
+
+-- Varchar-domain FK operators must use varchar or text equality input.
+SELECT c.id, p.id
+FROM mcdc_varchar_sig_parent p
+JOIN mcdc_varchar_sig_child c FOR KEY (parent_id) -> p (id)
+ORDER BY c.id;
+
+-- Procedure dependents without stored SQL bodies have nothing to revalidate.
+CREATE FUNCTION mcdc_support_func(internal)
+RETURNS internal
+LANGUAGE internal STRICT
+AS 'textlike_support';
+
+CREATE FUNCTION mcdc_support_subject(int) RETURNS int
+LANGUAGE sql STABLE SUPPORT mcdc_support_func
+AS $$ SELECT $1 $$;
+
+ALTER FUNCTION mcdc_support_func(internal) STABLE;
+
+DROP FUNCTION mcdc_support_subject(int);
+DROP FUNCTION mcdc_support_func(internal);
+DROP VIEW mcdc_reader_parent_1_v;
+DROP VIEW mcdc_group_inactive_rowcov_v;
+DROP OPERATOR === (int, int);
+DROP FUNCTION mcdc_stable_int_eq(int, int);
+DROP OPERATOR CLASS mcdc_hash_bridge_int_ops USING hash;
+DROP OPERATOR FAMILY mcdc_hash_bridge_ops USING hash;
+DROP OPERATOR FAMILY mcdc_btree_bridge_ops USING btree;
+DROP OPERATOR =## (int, bigint);
+DROP FUNCTION mcdc_hash_bridge_eq(int, bigint);
+
+DROP TABLE mcdc_nonstrict_reader, mcdc_nonstrict_parent;
+DROP OPERATOR CLASS mcdc_nonstrict_eq_ops USING btree;
+DROP OPERATOR FAMILY mcdc_nonstrict_eq_ops USING btree;
+DROP OPERATOR === (mcdc_nonstrict_eq_type, mcdc_nonstrict_eq_type);
+DROP FUNCTION mcdc_nonstrict_eq_type_cmp(mcdc_nonstrict_eq_type,
+                                         mcdc_nonstrict_eq_type);
+DROP FUNCTION mcdc_nonstrict_eq_type_eq(mcdc_nonstrict_eq_type,
+                                        mcdc_nonstrict_eq_type);
+DROP CAST (mcdc_nonstrict_eq_type AS int4);
+DROP CAST (int4 AS mcdc_nonstrict_eq_type);
+SET client_min_messages = warning;
+DROP TYPE mcdc_nonstrict_eq_type CASCADE;
+RESET client_min_messages;
+
+DROP TABLE mcdc_text_cast_reader, mcdc_text_cast_parent;
+DROP TABLE mcdc_regclass_reader, mcdc_regclass_parent;
+DROP TABLE mcdc_varchar_child, mcdc_varchar_parent;
+DROP OPERATOR CLASS mcdc_varchar_ops USING btree;
+DROP OPERATOR FAMILY mcdc_varchar_ops USING btree;
+DROP FUNCTION mcdc_varchar_cmp(varchar, varchar);
+DROP OPERATOR === (varchar, varchar);
+DROP FUNCTION mcdc_varchar_eq(varchar, varchar);
+DROP TABLE mcdc_varchar_sig_child, mcdc_varchar_sig_parent;
+DROP OPERATOR CLASS mcdc_varchar_sig_dom_ops USING btree;
+DROP OPERATOR FAMILY mcdc_varchar_sig_dom_ops USING btree;
+DROP OPERATOR === (mcdc_varchar_sig_dom, mcdc_varchar_sig_dom);
+DROP FUNCTION mcdc_varchar_sig_dom_cmp(mcdc_varchar_sig_dom,
+                                       mcdc_varchar_sig_dom);
+DROP FUNCTION mcdc_varchar_sig_dom_eq(mcdc_varchar_sig_dom,
+                                      mcdc_varchar_sig_dom);
+DROP DOMAIN mcdc_varchar_sig_dom;
+DROP TABLE mcdc_numdom_reader, mcdc_numdom_parent;
+DROP DOMAIN mcdc_num_dom;
+DROP TABLE mcdc_sig_child, mcdc_sig_parent;
+DROP OPERATOR CLASS mcdc_sig_dom_ops USING btree;
+DROP OPERATOR FAMILY mcdc_sig_dom_ops USING btree;
+DROP OPERATOR === (mcdc_sig_dom, mcdc_sig_dom);
+DROP FUNCTION mcdc_sig_dom_cmp(mcdc_sig_dom, mcdc_sig_dom);
+DROP FUNCTION mcdc_sig_dom_eq(mcdc_sig_dom, mcdc_sig_dom);
+DROP DOMAIN mcdc_sig_dom;
+
+DROP SCHEMA key_join_mcdc CASCADE;

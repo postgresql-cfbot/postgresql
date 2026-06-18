@@ -1543,6 +1543,15 @@ KAXCompressReason
 KeyAction
 KeyActions
 KeyArray
+KeyJoinClause
+KeyJoinColumn
+KeyJoinDirection
+KeyJoinFact
+KeyJoinFactKind
+KeyJoinKeyPosition
+KeyJoinMatch
+KeyJoinNode
+KeyJoinSurfaceFacts
 KeySuffix
 KeyWord
 LARGE_INTEGER

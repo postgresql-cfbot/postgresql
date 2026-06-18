@@ -949,6 +949,7 @@ interpret_AS_clause(Oid languageOid, const char *languageName,
 				ParseState *pstate = make_parsestate(NULL);
 
 				pstate->p_sourcetext = queryString;
+				pstate->p_creating_stored_object = true;
 				sql_fn_parser_setup(pstate, pinfo);
 				q = transformStmt(pstate, stmt);
 				if (q->commandType == CMD_UTILITY)
@@ -968,6 +969,7 @@ interpret_AS_clause(Oid languageOid, const char *languageName,
 			ParseState *pstate = make_parsestate(NULL);
 
 			pstate->p_sourcetext = queryString;
+			pstate->p_creating_stored_object = true;
 			sql_fn_parser_setup(pstate, pinfo);
 			q = transformStmt(pstate, sql_body_in);
 			if (q->commandType == CMD_UTILITY)

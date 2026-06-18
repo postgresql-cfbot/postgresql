@@ -21,7 +21,10 @@
 #include "commands/view.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/queryjumble.h"
 #include "parser/analyze.h"
+#include "parser/parse_node.h"
+#include "utils/backend_status.h"
 #include "rewrite/rewriteDefine.h"
 #include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteSupport.h"
@@ -372,7 +375,23 @@ DefineView(ViewStmt *stmt, const char *queryString,
 	rawstmt->stmt_location = stmt_location;
 	rawstmt->stmt_len = stmt_len;
 
-	viewParse = parse_analyze_fixedparams(rawstmt, queryString, NULL, 0, NULL);
+	{
+		ParseState *pstate = make_parsestate(NULL);
+		JumbleState *jstate = NULL;
+
+		pstate->p_sourcetext = queryString;
+		pstate->p_creating_stored_object = true;
+
+		viewParse = transformTopLevelStmt(pstate, rawstmt);
+
+		if (IsQueryIdEnabled())
+			jstate = JumbleQuery(viewParse);
+		if (post_parse_analyze_hook)
+			(*post_parse_analyze_hook) (pstate, viewParse, jstate);
+
+		free_parsestate(pstate);
+		pgstat_report_query_id(viewParse->queryId, false);
+	}
 
 	/*
 	 * The grammar should ensure that the result is a single SELECT Query.

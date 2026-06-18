@@ -629,7 +629,9 @@ CreatePolicy(CreatePolicyStmt *stmt)
 
 	/* Parse the supplied clause */
 	qual_pstate = make_parsestate(NULL);
+	qual_pstate->p_creating_stored_object = true;
 	with_check_pstate = make_parsestate(NULL);
+	with_check_pstate->p_creating_stored_object = true;
 
 	/* zero-clear */
 	memset(values, 0, sizeof(values));
@@ -825,6 +827,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 		ParseNamespaceItem *nsitem;
 		ParseState *qual_pstate = make_parsestate(NULL);
 
+		qual_pstate->p_creating_stored_object = true;
 		nsitem = addRangeTableEntryForRelation(qual_pstate, target_table,
 											   AccessShareLock,
 											   NULL, false, false);
@@ -848,6 +851,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 		ParseNamespaceItem *nsitem;
 		ParseState *with_check_pstate = make_parsestate(NULL);
 
+		with_check_pstate->p_creating_stored_object = true;
 		nsitem = addRangeTableEntryForRelation(with_check_pstate, target_table,
 											   AccessShareLock,
 											   NULL, false, false);
@@ -991,6 +995,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 
 			/* parsestate is built just to build the range table */
 			qual_pstate = make_parsestate(NULL);
+			qual_pstate->p_creating_stored_object = true;
 
 			qual_value = TextDatumGetCString(value_datum);
 			qual = stringToNode(qual_value);
@@ -1033,6 +1038,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 
 			/* parsestate is built just to build the range table */
 			with_check_pstate = make_parsestate(NULL);
+			with_check_pstate->p_creating_stored_object = true;
 
 			with_check_value = TextDatumGetCString(value_datum);
 			with_check_qual = stringToNode(with_check_value);

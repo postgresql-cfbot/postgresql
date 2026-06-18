@@ -2317,14 +2317,23 @@ typedef struct RangeTblRef
 	int			rtindex;
 } RangeTblRef;
 
+typedef enum KeyJoinDirection
+{
+	KEY_JOIN_LEFT_ARROW,
+	KEY_JOIN_RIGHT_ARROW
+} KeyJoinDirection;
+
 /*----------
  * JoinExpr - for SQL JOIN expressions
  *
- * isNatural, usingClause, and quals are interdependent.  The user can write
- * only one of NATURAL, USING(), or ON() (this is enforced by the grammar).
+ * isNatural, usingClause, keyJoin, and quals are interdependent.  The user can
+ * write only one of NATURAL, USING(), FOR KEY, or ON() (this is enforced by
+ * the grammar).
  * If he writes NATURAL then parse analysis generates the equivalent USING()
  * list, and from that fills in "quals" with the right equality comparisons.
  * If he writes USING() then "quals" is filled with equality comparisons.
+ * If he writes FOR KEY then "keyJoin" is set initially, and parse analysis
+ * replaces it while filling "quals" with equality comparisons.
  * If he writes ON() then only "quals" is set.  Note that NATURAL/USING
  * are not equivalent to ON() since they also affect the output column list.
  *
@@ -2356,6 +2365,8 @@ typedef struct JoinExpr
 	List	   *usingClause pg_node_attr(query_jumble_ignore);
 	/* alias attached to USING clause, if any */
 	Alias	   *join_using_alias pg_node_attr(query_jumble_ignore);
+	/* KEY clause, if any */
+	Node	   *keyJoin pg_node_attr(query_jumble_ignore);
 	/* qualifiers on join, if any */
 	Node	   *quals;
 	/* user-written alias clause, if any */

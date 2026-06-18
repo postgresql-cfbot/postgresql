@@ -1,0 +1,81 @@
+src/backend/parser/README.key_join
+
+FOR KEY Joins
+=============
+
+This file gives a short overview of how FOR KEY joins work, followed by a
+glossary of the vocabulary used by the implementation.  The code lives
+mainly in parse_key_join.c, with the supporting node types in
+nodes/parsenodes.h.
+
+Overview
+--------
+
+A FOR KEY clause declares that one join input references another through a
+foreign key, so each referencing row is matched to its single referenced
+row.  In the raw parse tree it is a JoinExpr whose keyJoin field holds a
+KeyJoinClause.
+
+transformAndValidateKeyJoin() (parse_key_join.c) handles it, called from the
+JoinExpr transformation in parse_clause.c alongside the ON and USING qual
+handlers, once both operands are transformed and their namespaces are
+available.  It:
+
+  1. Resolves the named columns against each operand's surface and gathers
+     facts about those surfaces from the catalog (foreign-key, unique, and
+     not-null constraints).
+  2. Proves three things over the named columns: the referenced key values
+     are unique, every non-null referencing value is contained in them, and
+     referencing nulls cannot silently drop rows.  A failed proof rejects the
+     query here.
+  3. Generates the equality quals into JoinExpr.quals and replaces the raw
+     KeyJoinClause on JoinExpr.keyJoin with a KeyJoinNode identifying the
+     proof's referencing and referenced sides and columns.
+
+The clause is not rewritten away: the join executes as an ordinary equijoin
+through the generated quals, while the retained KeyJoinNode records the
+proof.
+
+The relationship
+----------------
+
+referencing / referenced
+    The two sides of the relationship.  The referencing side holds the
+    foreign-key columns; the referenced side holds the unique columns they
+    point at.  The arrow direction in FOR KEY chooses which input is which.
+
+usable (key)
+    A constraint sound enough to ground a proof: a foreign key that is
+    enforced, validated, and non-deferrable, or a unique/primary key with
+    the matching properties.  Constraints that are NOT VALID or deferrable
+    are not usable.
+
+key identity
+    The (type, typmod, collation, equality operator) signature that a
+    referencing position and its referenced position must share for the
+    generated equality to be valid.
+
+key position (KeyJoinKeyPosition)
+    One column-component of a (possibly composite) key, together with the
+    surface type it exposes and the equality operator used at that position.
+
+containment
+    The property that every all-non-null referencing key value appears among
+    the referenced key values -- one of the conditions a proof establishes.
+
+Proving a key join
+------------------
+
+proof
+    The parse-time derivation that a key join is sound: referenced
+    uniqueness, containment of referencing values, and correct handling of
+    nulls.
+
+fact (KeyJoinFact)
+    One transient piece of evidence used while building a proof.  Three
+    kinds: unique, foreign-key, and not-null.
+
+surface
+    The set of columns a range-table entry exposes to the query level above
+    it.  "Surface facts" are the facts attached to that exposed set; they are
+    cached per RTE and computed on demand.

@@ -1,0 +1,39 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_alter s2_create_view s1_commit
+step s1_begin: BEGIN;
+step s1_alter: 
+ CREATE OR REPLACE FUNCTION key_join_function_race.f() RETURNS int
+     LANGUAGE sql VOLATILE AS 'SELECT 1';
+
+step s2_create_view: 
+ CREATE VIEW key_join_function_race.v AS
+ SELECT v_c.cid, v_p.id
+ FROM key_join_function_race.v_p
+ JOIN key_join_function_race.v_c
+     FOR KEY (region, parent_id) -> v_p (region, id);
+ <waiting ...>
+step s1_commit: COMMIT;
+step s2_create_view: <... completed>
+ERROR:  key join from referencing relation v_c to referenced relation v_p cannot be proven
+
+starting permutation: s1_begin s1_lock_g s2_replace_g s1_drop_g s1_commit
+step s1_begin: BEGIN;
+step s1_lock_g: ALTER FUNCTION key_join_function_race.g() COST 1;
+step s2_replace_g: 
+ CREATE OR REPLACE FUNCTION key_join_function_race.g() RETURNS int
+     LANGUAGE sql STABLE AS 'SELECT 2';
+ <waiting ...>
+step s1_drop_g: DROP FUNCTION key_join_function_race.g();
+step s1_commit: COMMIT;
+step s2_replace_g: <... completed>
+ERROR:  function "g" was concurrently dropped
+
+starting permutation: s1_begin s1_lock_h s2_alter_h s1_drop_h s1_commit
+step s1_begin: BEGIN;
+step s1_lock_h: ALTER FUNCTION key_join_function_race.h() COST 1;
+step s2_alter_h: ALTER FUNCTION key_join_function_race.h() COST 2; <waiting ...>
+step s1_drop_h: DROP FUNCTION key_join_function_race.h();
+step s1_commit: COMMIT;
+step s2_alter_h: <... completed>
+ERROR:  function "key_join_function_race.h" was concurrently dropped

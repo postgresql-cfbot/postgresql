@@ -31,6 +31,7 @@
 #include "nodes/pg_list.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_collate.h"
+#include "parser/parse_key_join.h"
 #include "parser/parse_node.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteManip.h"
@@ -728,9 +729,11 @@ CreatePolicy(CreatePolicyStmt *stmt)
 
 	recordDependencyOnExpr(&myself, qual, qual_pstate->p_rtable,
 						   DEPENDENCY_NORMAL);
+	recordDependencyOnKeyJoinProofs(&myself, qual);
 
 	recordDependencyOnExpr(&myself, with_check_qual,
 						   with_check_pstate->p_rtable, DEPENDENCY_NORMAL);
+	recordDependencyOnKeyJoinProofs(&myself, with_check_qual);
 
 	/* Register role dependencies */
 	target.classId = AuthIdRelationId;
@@ -1063,8 +1066,22 @@ AlterPolicy(AlterPolicyStmt *stmt)
 
 	recordDependencyOnExpr(&myself, qual, qual_parse_rtable, DEPENDENCY_NORMAL);
 
+	/*
+	 * Key-join proof dependencies are no longer serialized in the stored
+	 * expression (KeyJoinNode evidence is read_write_ignore), so when the qual
+	 * was reloaded from the catalog its proof evidence is empty.  Re-derive it
+	 * against the current catalog before re-recording, otherwise the proof's
+	 * pg_depend edges would be silently dropped.
+	 */
+	if (qual != NULL && storedNodeContainsKeyJoin(qual))
+		revalidateStoredKeyJoinProofsInNode(qual);
+	recordDependencyOnKeyJoinProofs(&myself, qual);
+
 	recordDependencyOnExpr(&myself, with_check_qual, with_check_parse_rtable,
 						   DEPENDENCY_NORMAL);
+	if (with_check_qual != NULL && storedNodeContainsKeyJoin(with_check_qual))
+		revalidateStoredKeyJoinProofsInNode(with_check_qual);
+	recordDependencyOnKeyJoinProofs(&myself, with_check_qual);
 
 	/* Register role dependencies */
 	deleteSharedDependencyRecordsFor(PolicyRelationId, policy_id, 0);

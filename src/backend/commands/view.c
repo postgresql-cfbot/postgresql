@@ -17,6 +17,7 @@
 #include "access/relation.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
+#include "commands/keyjoin.h"
 #include "commands/tablecmds.h"
 #include "commands/view.h"
 #include "nodes/makefuncs.h"
@@ -184,6 +185,7 @@ DefineVirtualRelation(RangeVar *relation, List *tlist, bool replace,
 
 		/* Make the new view query visible */
 		CommandCounterIncrement();
+		RevalidateDependentKeyJoinObjectsOnRelation(viewOid);
 
 		/*
 		 * Update the view's options.

@@ -1070,9 +1070,10 @@ typedef struct GraphElementPattern
  * KeyJoinProofDependency -
  *	  catalog object that a key-join proof depends on
  *
- * ObjectAddress-like, but a Node so it can be embedded in query trees.
- * Key-join proofs depend only on whole objects (relations, constraints,
- * operators, and functions), so there is no objectSubId field.
+ * ObjectAddress-like, but a Node so it can be embedded in query trees and
+ * recorded as DEPENDENCY_KEYJOIN for stored parse trees.  Key-join proofs
+ * depend only on whole objects (relations, constraints, operators, and
+ * functions), so there is no objectSubId field.
  */
 typedef struct KeyJoinProofDependency
 {
@@ -1526,8 +1527,8 @@ typedef struct RangeTblEntry
 
 	/*
 	 * Transient proof caches for FOR KEY joins, populated lazily during live
-	 * parse analysis or view fact projection.  Never read from stored query
-	 * trees.
+	 * parse analysis, view fact projection, or stored-query revalidation.
+	 * Never read from stored query trees.
 	 */
 	bool		keyJoinFactsComputed pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(false));
 	KeyJoinSurfaceFacts *keyJoinFacts pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(NULL));
@@ -2357,8 +2358,9 @@ typedef struct KeyJoinClause
  *
  * Produced by parse analysis from a KeyJoinClause once the referencing and
  * referenced columns and supporting catalog objects have been resolved.
- * Stored on JoinExpr.keyJoin so the deparser can reproduce the original
- * FOR KEY syntax.
+ * Stored on JoinExpr.keyJoin so stored-object revalidation can replay the
+ * proof against the current catalog state and so the deparser can reproduce
+ * the original FOR KEY syntax.
  *
  * referencingVarno/referencingAttnums and referencedVarno/referencedAttnums
  * identify the referencing and referenced sides of the proof regardless of
@@ -2384,14 +2386,16 @@ typedef struct KeyJoinNode
 
 	/*
 	 * Proof evidence: the FK constraint plus the catalog dependencies the proof
-	 * relies on.  These are NOT serialized and NOT compared by equal(): they are
-	 * transient proof evidence derived when the proof is built, not part of the
-	 * node's executable identity.  This mirrors keyJoinFacts.
+	 * relies on.  These are NOT serialized and NOT compared by equal(): pg_depend
+	 * is the authoritative record (written by recordDependencyOnKeyJoinProofs and
+	 * reconciled on revalidation).  They are re-derived from the current catalog
+	 * whenever needed and must never be trusted as read back from a stored tree —
+	 * every reloaded-tree consumer re-derives first.  This mirrors keyJoinFacts.
 	 *
 	 * proofDependencies is the complete deduplicated set: FK, uniqueness,
 	 * row-coverage, and not-null evidence.  notNullConstraints is the not-null
 	 * subset, kept separate so condition-3 evidence stays identifiable while the
-	 * proof is being derived.
+	 * proof is being (re-)derived.
 	 */
 	Oid			constraint pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(0));
 	List	   *notNullConstraints pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(NULL));

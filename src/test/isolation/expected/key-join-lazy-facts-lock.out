@@ -1,0 +1,11 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_lock s2_select_child s1_commit
+step s1_lock: BEGIN; LOCK TABLE key_join_lazy_facts_lock.p IN ACCESS EXCLUSIVE MODE;
+step s2_select_child: SELECT id, parent_id FROM key_join_lazy_facts_lock.c;
+id|parent_id
+--+---------
+10|        1
+(1 row)
+
+step s1_commit: COMMIT;

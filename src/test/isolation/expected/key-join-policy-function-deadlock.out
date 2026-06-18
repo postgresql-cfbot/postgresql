@@ -1,0 +1,25 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_lock_table s2_alter_function s1_alter_policy s1_rollback
+step s1_lock_table: 
+ BEGIN;
+ SET deadlock_timeout = '10ms';
+ LOCK TABLE key_join_policy_function_deadlock.guarded IN ACCESS EXCLUSIVE MODE;
+
+step s2_alter_function: 
+ SET deadlock_timeout = '10s';
+ ALTER FUNCTION key_join_policy_function_deadlock.f() VOLATILE;
+
+step s1_alter_policy: 
+ ALTER POLICY pol ON key_join_policy_function_deadlock.guarded
+ USING (EXISTS (
+     SELECT 1
+     FROM (SELECT * FROM key_join_policy_function_deadlock.p
+           WHERE region = key_join_policy_function_deadlock.f()) p
+     JOIN (SELECT * FROM key_join_policy_function_deadlock.c
+           WHERE region = key_join_policy_function_deadlock.f()) c
+         FOR KEY (region, parent_id) -> p (region, id)
+ ));
+
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+step s1_rollback: ROLLBACK;

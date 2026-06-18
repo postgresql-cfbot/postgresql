@@ -5,8 +5,8 @@ FOR KEY Joins
 
 This file gives a short overview of how FOR KEY joins work, followed by a
 glossary of the vocabulary used by the implementation.  The code lives
-mainly in parse_key_join.c, with the supporting node types in
-nodes/parsenodes.h.
+mainly in parse_key_join.c, with dependency recording in
+catalog/dependency.c and the supporting node types in nodes/parsenodes.h.
 
 Overview
 --------
@@ -35,7 +35,9 @@ available.  It:
 
 The clause is not rewritten away: the join executes as an ordinary equijoin
 through the generated quals, while the retained KeyJoinNode records the
-proof.
+proof.  When the query is stored (a view, policy, function body, and so on),
+its dependencies are recorded as DEPENDENCY_KEYJOIN so the join can be
+revalidated if a referenced object later changes.
 
 The relationship
 ----------------
@@ -70,7 +72,8 @@ Proving a key join
 proof
     The parse-time derivation that a key join is sound: referenced
     uniqueness, containment of referencing values, and correct handling of
-    nulls.
+    nulls.  The derivation is recomputed on demand; only the catalog objects
+    it relied on are stored (see "proof dependency").
 
 fact (KeyJoinFact)
     One transient piece of evidence used while building a proof.  Four
@@ -100,3 +103,31 @@ base-table vs derived proof
     A proof grounded directly in base-table constraints, versus one carried
     through views, subqueries, CTEs, or earlier key joins whose definitions
     keep the needed facts visible.
+
+Storing and rechecking
+----------------------
+
+proof dependency (KeyJoinProofDependency)
+    A catalog object (constraint, relation, operator, or function) that a
+    proof relied on.  Recorded in pg_depend as DEPENDENCY_KEYJOIN so that
+    revalidation can find the stored joins a changed object affects.
+
+proof filter (PARAM_KEYJOIN)
+    A FILTER clause captured in a restricted, storable form.  These are
+    parser-private placeholders held only in transient surface facts; an
+    accepted key-join node stores dependencies, never these expressions.
+
+revalidation / re-pin
+    Rechecking a stored join's proof after DDL: re-deriving its facts and
+    re-pinning its dependencies to equivalent catalog objects.  pg_depend,
+    not the stored tree, is the authoritative dependency record.
+
+owner-aware replay
+    Re-proving a stored query using the visibility of its owning role rather
+    than the current user, so revalidation sees the objects the proof used.
+
+executable form
+    The parts of a stored key-join tree that actually run -- the equality
+    operators and rebuilt quals -- as distinct from the proof's catalog
+    evidence.  If revalidation changes the executable form, the operation is
+    rejected.

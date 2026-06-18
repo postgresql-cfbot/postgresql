@@ -101,6 +101,16 @@ extern bool ConditionalLockDatabaseObject(Oid classid, Oid objid,
 extern void UnlockDatabaseObject(Oid classid, Oid objid, uint16 objsubid,
 								 LOCKMODE lockmode);
 
+/*
+ * Key-join inheritance-shape interlock (see LockKeyJoinInheritanceShape in
+ * lmgr.c).  Reserved object subid: relations are otherwise never locked via the
+ * object-lock namespace (LockRelationOid uses LOCKTAG_RELATION), and 0xFFFF
+ * cannot collide with a real relation column subid.
+ */
+#define KEYJOIN_INHERIT_SHAPE_OBJSUBID	0xFFFF
+extern void LockKeyJoinInheritanceShape(Oid parentOid, LOCKMODE lockmode);
+extern void UnlockKeyJoinInheritanceShape(Oid parentOid, LOCKMODE lockmode);
+
 /* Lock a shared-across-databases object (other than a relation) */
 extern void LockSharedObject(Oid classid, Oid objid, uint16 objsubid,
 							 LOCKMODE lockmode);

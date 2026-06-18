@@ -57,6 +57,7 @@
 #include "utils/builtins.h"
 #include "utils/errcodes.h"
 #include "utils/fmgroids.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/relcache.h"
@@ -121,22 +122,26 @@ typedef struct KeyJoinMatch
 /*
  * KeyJoinFailureSide
  *
- *		Display fields for one side of an unproven key join: the relation alias
- *		and its raw KeyJoinColumn names from parse analysis.
+ *		Display fields for one side of an unproven key join.  Live parse
+ *		analysis has raw KeyJoinColumn names; stored-query revalidation has
+ *		only RTE aliases and attnums.
  */
 typedef struct KeyJoinFailureSide
 {
 	const char *alias;
 	KeyJoinColumn *columns;
 	int			ncolumns;
+	RangeTblEntry *rte;
+	List	   *attnums;
 } KeyJoinFailureSide;
 
 /*
  * KeyJoinQueryStack
  *
- *		View fact projection runs on a copied Query with no ParseState chain.
- *		Keep the copied Query ownership stack explicitly so CTE RTEs can resolve
- *		ctelevelsup without guessing or exposing facts from the wrong WITH level.
+ *		View fact projection and stored-query revalidation run on a copied
+ *		Query with no ParseState chain.  Keep the copied Query ownership stack
+ *		explicitly so CTE RTEs can resolve ctelevelsup without guessing or
+ *		exposing facts from the wrong WITH level.
  */
 typedef struct KeyJoinQueryStack
 {
@@ -147,17 +152,20 @@ typedef struct KeyJoinQueryStack
 /*
  * KeyJoinFactContext
  *
- *		Fact computation runs either during live parse analysis or while
- *		projecting facts from a copied Query (e.g. a view body).  Keep that
- *		mode explicit instead of spreading nullable ParseState/Query arguments
- *		through the proof code.  A NULL pstate marks the copied-query case:
- *		outer scopes resolve through query_stack rather than a ParseState.
+ *		Fact computation runs during live parse analysis, or on a copied Query
+ *		for either view fact projection or stored-query revalidation.  Keep
+ *		that mode explicit instead of spreading nullable ParseState/Query
+ *		arguments through the proof code.  A NULL pstate marks the copied-query
+ *		case: outer scopes resolve through query_stack rather than a ParseState
+ *		(for revalidation the owner-aware replay has already visited the CTE and
+ *		FROM-subquery trees).
  */
 typedef struct KeyJoinFactContext
 {
 	ParseState *pstate;
 	Query	   *query;
 	KeyJoinQueryStack *query_stack;
+	bool		for_stored_object;
 } KeyJoinFactContext;
 
 /*
@@ -225,6 +233,11 @@ static void compute_join_output_facts(JoinExpr *j, Index left_rtindex,
 									  Index right_rtindex,
 									  RangeTblEntry *right_rte,
 									  RangeTblEntry *joinrte);
+static bool revalidate_stored_key_join_node_walker(Node *node, void *context);
+static void revalidate_stored_key_join_proofs_in_query(Query *query,
+													   KeyJoinQueryStack *parent_stack);
+static void revalidate_query_jointree_proofs(Query *query, Node *jtnode,
+											 KeyJoinQueryStack *query_stack);
 static void add_inactive_projected(KeyJoinSurfaceFacts *dst, KeyJoinFact *old,
 								   List **attrmap,
 								   KeyJoinInactiveReason reason);
@@ -299,6 +312,10 @@ static List **build_join_attrmap(RangeTblEntry *joinrte, bool leftside,
 static bool join_null_extends_side(JoinType jointype, bool leftside);
 static Node *join_filter_for_side(JoinType jointype, bool leftside,
 								  Node *filter);
+static bool stored_node_contains_key_join_walker(Node *node, void *context);
+static void extract_key_join_qual_arg(Node *qual, List **referenced_args,
+									  List **referencing_args,
+									  List **locations);
 static KeyJoinFact *add_fact(KeyJoinSurfaceFacts *set,
 							 KeyJoinFactKind kind);
 static void add_paired_row_coverage(KeyJoinSurfaceFacts *set,
@@ -369,22 +386,13 @@ transformAndValidateKeyJoin(ParseState *pstate, JoinExpr *j,
 	List	   *ref_alias_attnums = NIL;
 	List	   *referencing_vars = NIL;
 	List	   *referenced_vars = NIL;
-	KeyJoinFactContext fk_context = {.pstate = pstate};
-	KeyJoinFactContext pk_context = {.pstate = pstate};
+	KeyJoinFactContext fk_context = {.pstate = pstate,
+								   .for_stored_object = pstate->p_creating_stored_object};
+	KeyJoinFactContext pk_context = {.pstate = pstate,
+								   .for_stored_object = pstate->p_creating_stored_object};
 	KeyJoinMatch match;
 	KeyJoinNode *key_join;
 	int			ncols = list_length(key_clause->localCols);
-
-	/*
-	 * A FOR KEY join is supported only in a directly executed query, not in
-	 * the stored definition of a view, materialized view, rule, policy, or
-	 * routine.
-	 */
-	if (pstate->p_creating_stored_object)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("FOR KEY join is not supported in a stored object definition"),
-				 parser_errposition(pstate, key_clause->location)));
 
 	if (ncols != list_length(key_clause->refCols))
 		ereport(ERROR,
@@ -477,6 +485,8 @@ transformAndValidateKeyJoin(ParseState *pstate, JoinExpr *j,
 		key_join_report_failure(pstate, key_clause->location, j->jointype,
 								&match, &referencing, &referenced);
 	}
+
+	INJECTION_POINT("key-join-after-proof-match", NULL);
 
 	/* Install the equality quals proven by condition 2. */
 	j->quals = build_key_join_quals(referenced_vars, referencing_vars,
@@ -1920,6 +1930,8 @@ lock_key_join_dependency_or_error(const KeyJoinProofDependency *dep)
 static void
 lock_key_join_dependencies_or_error(List *dependencies)
 {
+	INJECTION_POINT("key-join-before-filter-dependency-lock", NULL);
+
 	foreach_node(KeyJoinProofDependency, dep, dependencies)
 		lock_key_join_dependency_or_error(dep);
 }
@@ -1997,10 +2009,10 @@ lock_and_fetch_key_join_proc(Oid procid)
  *		joins whose output cannot preserve input facts), so the cache also
  *		records "computed, but no facts".
  *
- *		Keep that decision on a single path across live parse analysis and
- *		view projection.  Those callers reach the same RTEs with different
- *		context available (a ParseState for live parsing, a copied Query
- *		stack for views).
+ *		Keep that decision on a single path across live parse analysis, view
+ *		projection, and stored-query revalidation.  Those callers reach the
+ *		same RTEs with different context available (ParseState for live
+ *		parsing, copied Query stacks for stored queries).
  */
 static void
 ensure_key_join_surface_facts(KeyJoinFactContext *context, RangeTblEntry *rte)
@@ -2022,10 +2034,11 @@ ensure_key_join_surface_facts(KeyJoinFactContext *context, RangeTblEntry *rte)
 			{
 				/*
 				 * Live parser RTEs already hold their rellockmode lock from
-				 * range table construction, but view fact computation can reach
-				 * this helper with only a copied Query tree.  Hold this lock
-				 * until transaction end so DDL cannot change relation state or
-				 * view definitions during fact selection.
+				 * range table construction, but stored-query revalidation and
+				 * view fact computation can reach this helper with only a
+				 * copied Query tree.  Hold this lock until transaction end so
+				 * DDL cannot change relation state or view definitions between
+				 * fact selection and stored dependency creation.
 				 */
 				Relation	rel = relation_open(rte->relid, AccessShareLock);
 
@@ -2042,11 +2055,14 @@ ensure_key_join_surface_facts(KeyJoinFactContext *context, RangeTblEntry *rte)
 					KeyJoinFactContext view_context = *context;
 
 					viewquery = copyObject(viewquery);
+					revalidate_stored_key_join_proofs_in_query(viewquery,
+															   NULL);
 					qs.parent = NULL;
 					qs.query = viewquery;
 					view_context.pstate = NULL;
 					view_context.query = viewquery;
 					view_context.query_stack = &qs;
+					view_context.for_stored_object = true;
 					rte->keyJoinFacts =
 						project_key_join_query_facts(&view_context,
 													 viewquery);
@@ -2100,8 +2116,9 @@ ensure_key_join_surface_facts(KeyJoinFactContext *context, RangeTblEntry *rte)
 				}
 
 				/*
-				 * View fact projection reaches a FROM-subquery through this
-				 * demand path, which projects facts only.
+				 * Stored-query replay visits FROM-subqueries before their
+				 * owner's jointree, and view fact projection reaches them on
+				 * demand; either way this demand path projects facts only.
 				 */
 				Assert(context->pstate != NULL ||
 					   context->query_stack != NULL);
@@ -2204,8 +2221,9 @@ ensure_key_join_surface_facts(KeyJoinFactContext *context, RangeTblEntry *rte)
 					break;
 
 				/*
-				 * View fact projection keeps a CTE's owning Query on the stack
-				 * before any RTE_CTE fact projection reaches it.
+				 * Stored-query replay visits CTE queries from their owning
+				 * Query, and view fact projection keeps that Query on the
+				 * stack, before any RTE_CTE fact projection reaches them.
 				 */
 				Assert(context->pstate != NULL ||
 					   cte_owner_stack != NULL);
@@ -2238,9 +2256,9 @@ ensure_key_join_surface_facts(KeyJoinFactContext *context, RangeTblEntry *rte)
 				bool		use_query = (context->pstate == NULL);
 
 				/*
-				 * Live parse analysis can find the JoinExpr through
-				 * ParseState.  View fact projection has only the copied
-				 * Query tree, so retry the lookup there.
+				 * Live parse analysis can find the JoinExpr through ParseState.
+				 * View fact projection and stored-query revalidation have only
+				 * the copied Query tree, so retry the lookup there.
 				 */
 				if (j == NULL)
 				{
@@ -2313,7 +2331,8 @@ compute_key_join_relation_facts(KeyJoinFactContext *context,
 	KeyJoinSurfaceFacts *set;
 	TupleDesc	tupdesc;
 	List	   *fkeylist;
-	LOCKMODE	lockmode = AccessShareLock;
+	bool		locked_inheritance_shape = false;
+	LOCKMODE	lockmode = context->for_stored_object ? ShareUpdateExclusiveLock : AccessShareLock;
 
 	Assert(rte->rtekind == RTE_RELATION);
 
@@ -2330,11 +2349,32 @@ compute_key_join_relation_facts(KeyJoinFactContext *context,
 		return;
 
 	/*
-	 * An inherited scan of a table with children may include child rows that
-	 * break join-to-one, so derive facts only when the table has no children.
+	 * An inherited scan of a table with children may include child rows, so
+	 * derive facts only when the table has no children.  Take the inheritance-
+	 * shape interlock before the has_subclass() check: this ShareLock conflicts
+	 * with the ExclusiveLock that child attachment takes in
+	 * StoreCatalogInheritance1, held to transaction end, so no child can be
+	 * added between the check and the proof's commit.  It is a dedicated lock
+	 * tag, not a relation lock, so it conflicts only with child attachment --
+	 * not with vacuum, ANALYZE or index DDL -- and is taken on the live path
+	 * too, so a live SELECT ... FOR KEY blocks a concurrent INHERIT on this
+	 * parent until its transaction ends.
+	 *
+	 * The tag only spans one transaction.  The proof is derived here at parse
+	 * time and never re-checked when planning or executing, so a cached plan is
+	 * kept sound against a later INHERIT by plan-cache invalidation, which
+	 * re-derives the proof and rejects it.
 	 */
-	if (rte->relkind == RELKIND_RELATION && rte->inh && has_subclass(rte->relid))
-		return;
+	if (rte->relkind == RELKIND_RELATION && rte->inh)
+	{
+		LockKeyJoinInheritanceShape(rte->relid, ShareLock);
+		if (has_subclass(rte->relid))
+		{
+			UnlockKeyJoinInheritanceShape(rte->relid, ShareLock);
+			return;
+		}
+		locked_inheritance_shape = true;
+	}
 
 	set = makeNode(KeyJoinSurfaceFacts);
 	tupdesc = RelationGetDescr(rel);
@@ -2516,6 +2556,8 @@ compute_key_join_relation_facts(KeyJoinFactContext *context,
 	 */
 	fkeylist = copyObject(RelationGetFKeyList(rel));
 
+	INJECTION_POINT("key-join-after-fkey-list-copy", NULL);
+
 	foreach_node(ForeignKeyCacheInfo, fk, fkeylist)
 	{
 		HeapTuple	contup;
@@ -2684,6 +2726,8 @@ compute_key_join_relation_facts(KeyJoinFactContext *context,
 
 	if (set->facts != NIL)
 		rte->keyJoinFacts = set;
+	else if (locked_inheritance_shape)
+		UnlockKeyJoinInheritanceShape(rte->relid, ShareLock);
 }
 
 /*
@@ -2890,7 +2934,8 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
 
 			/*
 			 * Use the same expansion limit as aggregate parse checking.
-			 * Parse analysis rejects queries that exceed it.
+			 * Parse analysis rejects queries that exceed it, including
+			 * stored queries we later revalidate.
 			 */
 			expanded_sets = expand_grouping_sets(query->groupingSets,
 												 query->groupDistinct, 4096);
@@ -3015,8 +3060,8 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
 	 * output columns.  This mirrors the planner's query_is_distinct_for()
 	 * (analyzejoins.c); we re-derive it here rather than call that because this
 	 * runs at parse time and, unlike a bool distinctness check, must also emit
-	 * the catalog dependencies the proof relied on and the per-column key
-	 * identity used for cross-side matching.  These query-level
+	 * the catalog dependencies the proof relied on (for revalidation) and the
+	 * per-column key identity used for cross-side matching.  These query-level
 	 * facts have no base-relation relid, but still depend on the equality
 	 * operators and functions used below.  GROUPING SETS, ROLLUP, and CUBE do
 	 * not prove uniqueness; if SELECT DISTINCT is also present, derive
@@ -4177,6 +4222,371 @@ join_filter_for_side(JoinType jointype, bool leftside, Node *filter)
 	return NULL;
 }
 
+/*
+ * storedNodeContainsKeyJoin
+ *
+ *		Report whether a stored query or expression tree contains a
+ *		KeyJoinNode.
+ */
+bool
+storedNodeContainsKeyJoin(Node *node)
+{
+	return stored_node_contains_key_join_walker(node, NULL);
+}
+
+/*
+ * stored_node_contains_key_join_walker
+ *
+ *		Walk stored query and expression nodes looking for KeyJoinNodes.
+ */
+static bool
+stored_node_contains_key_join_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, KeyJoinNode))
+		return true;
+
+	if (IsA(node, JoinExpr))
+	{
+		JoinExpr   *join = castNode(JoinExpr, node);
+
+		if (stored_node_contains_key_join_walker(join->keyJoin, context))
+			return true;
+	}
+
+	if (IsA(node, Query))
+		return query_tree_walker(castNode(Query, node),
+								 stored_node_contains_key_join_walker,
+								 context, 0);
+
+	return expression_tree_walker(node, stored_node_contains_key_join_walker,
+								  context);
+}
+
+/*
+ * keyJoinExecutableFormUnchanged
+ *
+ *		Return true if a revalidated copy of a stored key-join tree has the same
+ *		executable form as what is stored: the re-derivation changed no executed
+ *		expression (the key-equality operators / rebuilt quals) and no structural
+ *		proof field.  If it differs, the stored tree would execute incorrectly and
+ *		the triggering operation must be rejected.
+ *
+ *		The proof's catalog evidence (constraint, notNullConstraints,
+ *		proofDependencies) is deliberately ignored: those fields are equal_ignore,
+ *		and pg_depend -- not the stored tree -- is the authoritative record.  The
+ *		caller reconciles pg_depend to the re-derived evidence, so the proof may
+ *		legitimately re-pin to equivalent catalog objects without rewriting the
+ *		stored tree.
+ */
+bool
+keyJoinExecutableFormUnchanged(Node *stored, Node *revalidated)
+{
+	return equal(stored, revalidated);
+}
+
+/*
+ * revalidateStoredKeyJoinProofsInNode
+ *
+ *		Revalidate and rebuild key-join proofs contained in a copied stored
+ *		query or expression tree.
+ */
+void
+revalidateStoredKeyJoinProofsInNode(Node *node)
+{
+	(void) revalidate_stored_key_join_node_walker(node, NULL);
+}
+
+/*
+ * revalidate_stored_key_join_node_walker
+ *
+ *		Walk a stored query or expression tree and revalidate any Query nodes
+ *		with the supplied owning-query stack, if any.
+ */
+static bool
+revalidate_stored_key_join_node_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Query))
+	{
+		revalidate_stored_key_join_proofs_in_query(castNode(Query, node),
+												   (KeyJoinQueryStack *) context);
+		return false;
+	}
+
+	return expression_tree_walker(node, revalidate_stored_key_join_node_walker,
+								  context);
+}
+
+/*
+ * revalidate_stored_key_join_proofs_in_query
+ *
+ *		Revalidate one stored Query with an explicit stack of owning query
+ *		levels.
+ *
+ *		Stored key-join proofs may depend on CTE ownership, outer references,
+ *		and facts cached on RTEs.  This routine rebuilds that context for one
+ *		Query level, clears cached facts, recursively revalidates CTEs
+ *		and FROM-subqueries with the current Query as their parent frame, then
+ *		revalidates key joins in the jointree.  The final expression walker
+ *		handles expression subqueries and intentionally skips FROM/CTE
+ *		subqueries already handled in owner-aware passes above.
+ *
+ *		Demand-driven RTE projection depends on these owner-aware passes and
+ *		must not call back here for CTE or FROM-subquery bodies.
+ */
+static void
+revalidate_stored_key_join_proofs_in_query(Query *query,
+										   KeyJoinQueryStack *parent_stack)
+{
+	KeyJoinQueryStack qs;
+
+	Assert(query != NULL);
+
+	qs.parent = parent_stack;
+	qs.query = query;
+
+	/*
+	 * Stored key-join proofs are re-derived from scratch below, so first reset
+	 * any surface facts cached on each RTE.  The input may be a catalog-reloaded
+	 * stored tree (already fact-clean, since key-join evidence is
+	 * read_write_ignore and never serialized) or a freshly parsed expression
+	 * that still carries the parser's scratch facts -- e.g. ALTER POLICY
+	 * re-supplying a USING/WITH CHECK clause.  Both are normalized to the
+	 * one-shot replay state here.
+	 */
+	foreach_node(RangeTblEntry, rte, query->rtable)
+	{
+		rte->keyJoinFacts = NULL;
+		rte->keyJoinFactsComputed = false;
+	}
+
+	foreach_node(CommonTableExpr, cte, query->cteList)
+	{
+		revalidate_stored_key_join_proofs_in_query(castNode(Query, cte->ctequery),
+												   &qs);
+	}
+
+	foreach_node(RangeTblEntry, rte, query->rtable)
+	{
+		if (rte->rtekind == RTE_SUBQUERY)
+		{
+			Assert(rte->subquery != NULL);
+			revalidate_stored_key_join_proofs_in_query(rte->subquery, &qs);
+		}
+	}
+
+	revalidate_query_jointree_proofs(query, (Node *) query->jointree, &qs);
+
+	(void) query_tree_walker(query, revalidate_stored_key_join_node_walker,
+							 &qs,
+							 QTW_IGNORE_RT_SUBQUERIES |
+							 QTW_IGNORE_CTE_SUBQUERIES);
+}
+
+/*
+ * revalidate_query_jointree_proofs
+ *
+ *		Recompute join facts and revalidate the proofs of stored KeyJoinNodes.
+ */
+static void
+revalidate_query_jointree_proofs(Query *query, Node *jtnode,
+								 KeyJoinQueryStack *query_stack)
+{
+	Assert(query != NULL);
+	Assert(jtnode != NULL);
+	Assert(query_stack != NULL);
+	Assert(query_stack->query == query);
+
+	if (IsA(jtnode, FromExpr))
+	{
+		foreach_ptr(Node, child, castNode(FromExpr, jtnode)->fromlist)
+			revalidate_query_jointree_proofs(query, child, query_stack);
+		return;
+	}
+	if (!IsA(jtnode, JoinExpr))
+		return;
+
+	{
+		JoinExpr   *j = castNode(JoinExpr, jtnode);
+		Index		left_rtindex = jtnode_surface_rtindex(j->larg);
+		Index		right_rtindex = jtnode_surface_rtindex(j->rarg);
+		RangeTblEntry *left_rte;
+		RangeTblEntry *right_rte;
+
+		revalidate_query_jointree_proofs(query, j->larg, query_stack);
+		revalidate_query_jointree_proofs(query, j->rarg, query_stack);
+
+		Assert(left_rtindex != 0);
+		Assert(right_rtindex != 0);
+		Assert(j->rtindex != 0);
+
+		left_rte = rt_fetch(left_rtindex, query->rtable);
+		right_rte = rt_fetch(right_rtindex, query->rtable);
+
+		if (j->keyJoin != NULL)
+		{
+			KeyJoinNode *key_join;
+			bool		referencing_left;
+			RangeTblEntry *referencing_rte;
+			RangeTblEntry *referenced_rte;
+			List	   *referenced_args;
+			List	   *referencing_args;
+			List	   *locations;
+			Node	   *key_quals = NULL;
+			int			nkeys;
+			KeyJoinMatch match;
+			KeyJoinFactContext context = {0};
+
+			key_join = castNode(KeyJoinNode, j->keyJoin);
+			referencing_left = (key_join->referencingVarno == left_rtindex);
+			referencing_rte = referencing_left ? left_rte : right_rte;
+			referenced_rte =
+				(key_join->referencedVarno == left_rtindex) ? left_rte : right_rte;
+			nkeys = list_length(key_join->referencingAttnums);
+
+			Assert(key_join->referencingVarno == left_rtindex ||
+				   key_join->referencingVarno == right_rtindex);
+			Assert(key_join->referencedVarno == left_rtindex ||
+				   key_join->referencedVarno == right_rtindex);
+			Assert(key_join->referencingVarno != key_join->referencedVarno);
+
+			context.query = query;
+			context.query_stack = query_stack;
+			context.for_stored_object = true;
+			ensure_key_join_surface_facts(&context, referencing_rte);
+			ensure_key_join_surface_facts(&context, referenced_rte);
+
+			if (!find_key_join_match(referencing_rte, referenced_rte,
+									 key_join->referencingAttnums,
+									 key_join->referencedAttnums,
+									 !join_preserves_side(j->jointype,
+														  referencing_left),
+									 &match))
+			{
+				bool		local_is_referencing =
+					(key_join->direction == KEY_JOIN_RIGHT_ARROW);
+				RangeTblEntry *ref_alias_rte =
+					rt_fetch(key_join->refAliasVarno, query->rtable);
+				KeyJoinFailureSide referencing = {0};
+				KeyJoinFailureSide referenced = {0};
+
+				referencing.rte =
+					local_is_referencing ? right_rte : ref_alias_rte;
+				referencing.attnums =
+					local_is_referencing ? key_join->referencingAttnums :
+					key_join->refAliasAttnums;
+				referenced.rte =
+					local_is_referencing ? ref_alias_rte : right_rte;
+				referenced.attnums =
+					local_is_referencing ? key_join->refAliasAttnums :
+					key_join->referencedAttnums;
+				key_join_report_failure(NULL, -1, j->jointype, &match,
+										&referencing, &referenced);
+			}
+
+			/*
+			 * Join-local FILTER quals are kept separately on joinFilter and
+			 * are re-merged after the key equality is rebuilt.  Stored
+			 * non-filtered joins keep the key equality directly in quals;
+			 * filtered joins store quals as key equality AND joinFilter.
+			 */
+			if (j->joinFilter == NULL)
+				key_quals = j->quals;
+			else
+			{
+				BoolExpr   *andexpr;
+
+				Assert(j->quals != NULL);
+				andexpr = castNode(BoolExpr, j->quals);
+				Assert(andexpr->boolop == AND_EXPR);
+				Assert(list_length(andexpr->args) == 2);
+				Assert(equal(lsecond(andexpr->args), j->joinFilter));
+
+				key_quals = linitial(andexpr->args);
+			}
+			Assert(key_quals != NULL);
+
+			referenced_args = NIL;
+			referencing_args = NIL;
+			locations = NIL;
+
+			/*
+			 * The parser stores a single key equality as the OpExpr itself.
+			 * Multi-column key joins are stored as an AND whose arguments are
+			 * the key equalities in key-column order.
+			 */
+			if (nkeys == 1)
+				extract_key_join_qual_arg(key_quals, &referenced_args,
+										  &referencing_args, &locations);
+			else
+			{
+				BoolExpr   *andexpr;
+
+				andexpr = castNode(BoolExpr, key_quals);
+				Assert(andexpr->boolop == AND_EXPR);
+				Assert(list_length(andexpr->args) == nkeys);
+
+				foreach_ptr(Node, qual, andexpr->args)
+					extract_key_join_qual_arg(qual, &referenced_args,
+											  &referencing_args, &locations);
+			}
+
+			/*
+			 * Rebuild the executable equality quals from the stored argument
+			 * expressions and the freshly proven equality operators.  The
+			 * stored operators might no longer be the proof operators after
+			 * DDL, but the argument expressions preserve locations and parse
+			 * structure.
+			 */
+			key_quals = build_key_join_quals(referenced_args,
+											 referencing_args,
+											 match.eqoperators,
+											 match.eqtypes,
+											 match.eqtypmods,
+											 locations, -1);
+			j->quals = key_quals;
+			if (j->joinFilter != NULL)
+				j->quals = (Node *) makeBoolExpr(AND_EXPR,
+												 list_make2(j->quals,
+															copyObject(j->joinFilter)),
+												 -1);
+
+			key_join->constraint = match.constraint;
+			key_join->notNullConstraints = match.notnulldeps;
+			key_join->proofDependencies = match.proofdeps;
+		}
+	}
+}
+
+/*
+ * extract_key_join_qual_arg
+ *
+ *		Extract one stored key equality.  The parser constructs key equality
+ *		operators as referenced-column argument first, referencing-column
+ *		argument second.
+ */
+static void
+extract_key_join_qual_arg(Node *qual, List **referenced_args,
+						  List **referencing_args, List **locations)
+{
+	OpExpr	   *op;
+
+	Assert(qual != NULL);
+	op = castNode(OpExpr, qual);
+	Assert(list_length(op->args) == 2);
+
+	*referenced_args = lappend(*referenced_args,
+							   copyObject(linitial(op->args)));
+	*referencing_args = lappend(*referencing_args,
+								copyObject(lsecond(op->args)));
+	*locations = lappend_int(*locations, op->location);
+}
+
 static KeyJoinFact *
 add_fact(KeyJoinSurfaceFacts *set, KeyJoinFactKind kind)
 {
@@ -4283,6 +4693,8 @@ key_join_equality_operator_is_usable(Oid opno, Oid expectedTypeOid,
 	operform = (Form_pg_operator) GETSTRUCT(optup);
 	lefttype = operform->oprleft;
 	funcid = operform->oprcode;
+
+	INJECTION_POINT("key-join-after-equality-operator-lock", NULL);
 
 	Assert(OidIsValid(lefttype));
 	Assert(lefttype == operform->oprright);
@@ -4638,10 +5050,13 @@ key_join_report_failure(ParseState *pstate, ParseLoc location,
 		bool		first = true;
 
 		Assert(side != NULL);
-		Assert(side->columns != NULL);
-		Assert(side->ncolumns > 0);
+		Assert((side->columns != NULL) != (side->rte != NULL));
+		Assert(side->columns == NULL || side->ncolumns > 0);
+		Assert(side->rte == NULL || side->attnums != NIL);
 
-		relations[i] = quote_identifier(side->alias);
+		relations[i] = quote_identifier(side->alias != NULL ?
+										 side->alias :
+										 side->rte->eref->aliasname);
 
 		initStringInfo(&colbuf);
 		if (side->columns != NULL)
@@ -4652,6 +5067,18 @@ key_join_report_failure(ParseState *pstate, ParseLoc location,
 					appendStringInfoString(&colbuf, ", ");
 				appendStringInfoString(&colbuf,
 									   quote_identifier(side->columns[j].name));
+				first = false;
+			}
+		}
+		else
+		{
+			foreach_int(attno, side->attnums)
+			{
+				char	   *colname = get_rte_attribute_name(side->rte, attno);
+
+				if (!first)
+					appendStringInfoString(&colbuf, ", ");
+				appendStringInfoString(&colbuf, quote_identifier(colname));
 				first = false;
 			}
 		}

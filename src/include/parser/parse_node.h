@@ -255,8 +255,9 @@ struct ParseState
 	 * True while parsing a query that will be stored in the catalog as a
 	 * parse tree rather than executed immediately: a view or materialized
 	 * view's defining query, a rule action, a policy expression, or a
-	 * function's SQL body.  FOR KEY join analysis rejects key joins in such
-	 * queries.  Inherited by child parse states.
+	 * function's SQL body.  Read by FOR KEY join analysis, which records a
+	 * stored join's proof dependencies so it can be revalidated when a
+	 * referenced object later changes.  Inherited by child parse states.
 	 */
 	bool		p_creating_stored_object;
 

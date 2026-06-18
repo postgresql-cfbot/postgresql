@@ -1,0 +1,19 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_create_matview s2_create_child s1_commit
+step s1_begin: BEGIN;
+step s1_create_matview: 
+ CREATE MATERIALIZED VIEW key_join_matview_stored_proof_blocks_inherits.mv AS
+ SELECT c.id, c.parent_id
+ FROM key_join_matview_stored_proof_blocks_inherits.p AS p
+ JOIN key_join_matview_stored_proof_blocks_inherits.c AS c
+ FOR KEY (parent_id) -> p (id)
+ WITH NO DATA;
+
+step s2_create_child: 
+ CREATE TABLE key_join_matview_stored_proof_blocks_inherits.p_child ()
+ INHERITS (key_join_matview_stored_proof_blocks_inherits.p);
+ <waiting ...>
+step s1_commit: COMMIT;
+step s2_create_child: <... completed>
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven

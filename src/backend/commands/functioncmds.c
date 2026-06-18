@@ -48,6 +48,7 @@
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "commands/extension.h"
+#include "commands/keyjoin.h"
 #include "commands/proclang.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
@@ -1429,8 +1430,9 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 	}
 
 	/*
-	 * Serialize concurrent changes to this procedure's definition, then refetch
-	 * the tuple before applying the requested changes.
+	 * Serialize definition changes with any session recording a dependency on
+	 * this procedure's definition, then refetch the tuple before applying the
+	 * requested changes.
 	 */
 	heap_freetuple(tup);
 	LockDatabaseObject(ProcedureRelationId, funcOid, 0, AccessExclusiveLock);
@@ -1560,6 +1562,16 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 
 	table_close(rel, NoLock);
 	heap_freetuple(tup);
+
+	/*
+	 * Revalidate stored key-join proofs that captured this function in a
+	 * matched-filter conjunct.  Proof volatility and strictness assumptions
+	 * were decided at parse time; a later relevant function change can break
+	 * those contracts, so conservatively re-run validation after ALTER
+	 * FUNCTION and abort this DDL if the proof no longer holds.
+	 */
+	CommandCounterIncrement();
+	RevalidateDependentKeyJoinObjectsOnProcedure(funcOid);
 
 	return address;
 }

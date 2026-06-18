@@ -334,6 +334,23 @@ ORDER BY ord_id;
    2 |      3
 (3 rows)
 
+-- accepted, reason: view containing FOR KEY, used as referenced side by outer FOR KEY
+CREATE VIEW v_prods_with_inventory AS
+    SELECT ref_products.prod_id, ref_products.prod_name, fk_inventory.inv_id
+    FROM ref_products
+    LEFT JOIN fk_inventory FOR KEY (inv_prod_id) -> ref_products (prod_id);
+SELECT v.prod_id, fk_orders.ord_id
+FROM v_prods_with_inventory v
+-- accepted
+JOIN fk_orders FOR KEY (ord_prod_id) -> v (prod_id)
+ORDER BY ord_id;
+ prod_id | ord_id 
+---------+--------
+       1 |      1
+       1 |      2
+       2 |      3
+(3 rows)
+
 -- accepted, reason: CTE chain with column renames
 WITH
 cte1 (cte_pid, cte_pname) AS (SELECT prod_id, prod_name FROM ref_products),
@@ -708,9 +725,10 @@ CREATE VIEW v_deferrable_key_join AS
 SELECT ref_products.prod_id, fk_deferrable_child.df_id
 FROM ref_products
 JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_products (prod_id);
-ERROR:  FOR KEY join is not supported in a stored object definition
+ERROR:  key join from referencing relation fk_deferrable_child to referenced relation ref_products cannot be proven
 LINE 4: JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_products (...
                                  ^
+DETAIL:  There is no matching foreign key constraint for fk_deferrable_child (df_p_id) referencing ref_products (prod_id).
 -- rejected, reason: prepared key join rejected when it depends on a DEFERRABLE constraint
 PREPARE p_deferrable_key_join AS
 SELECT ref_products.prod_id, fk_deferrable_child.df_id
@@ -884,6 +902,32 @@ ORDER BY rev.rev_id;
      20 |    3 |           1
 (2 rows)
 
+-- accepted, reason: view-with-FK-join resolution chain + nested FK chain with <- direction
+-- FROM: deep -> l2 -> l1 -> v_prods_with_inventory (view with key join inside)
+-- SELECT: scalar subquery with 3-level chain using <- at inner level
+SELECT rev.rev_id, deep.p_id,
+       (SELECT COUNT(*)
+        FROM ref_departments
+        JOIN (
+            fk_employees
+            JOIN ref_teams FOR KEY (team_id) <- fk_employees (emp_team_id)
+        ) FOR KEY (team_dept_id) -> ref_departments (dept_id)
+       ) AS emp_count
+FROM (
+    SELECT l2_id AS p_id FROM (
+        SELECT l1_id AS l2_id FROM (
+            SELECT prod_id AS l1_id FROM v_prods_with_inventory
+        ) l1
+    ) l2
+) deep
+JOIN fk_reviews rev FOR KEY (rev_prod_id) -> deep (p_id)
+ORDER BY rev.rev_id;
+ rev_id | p_id | emp_count 
+--------+------+-----------
+     10 |    1 |         2
+     20 |    3 |         2
+(2 rows)
+
 -- rejected, reason: row-filtering WHERE buried under rename layers (R violated)
 SELECT rev.rev_id, deep.p_id
 FROM (
@@ -906,6 +950,7 @@ DETAIL:  Not every rev (rev_prod_id) value can be proven to have a matching deep
 -- ============================================================
 -- Cleanup
 -- ============================================================
+DROP VIEW v_prods_with_inventory;
 DROP VIEW v_products_renamed;
 DROP VIEW v_products_filtered;
 DROP FUNCTION fn_products();

@@ -41,6 +41,7 @@
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_subscription.h"
 #include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_statistic.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
 #include "miscadmin.h"
@@ -2412,6 +2413,17 @@ get_rel_persistence(Oid relid)
 }
 
 /*
+ * rel_is_global_temp
+ *
+ *		Returns true if the given relation is a global temporary relation.
+ */
+bool
+rel_is_global_temp(Oid relid)
+{
+	return get_rel_persistence(relid) == RELPERSISTENCE_GLOBAL_TEMP;
+}
+
+/*
  * get_rel_relam
  *
  *		Returns the relam associated with a given relation.
@@ -3488,7 +3500,8 @@ get_attavgwidth(Oid relid, AttrNumber attnum)
 		if (stawidth > 0)
 			return stawidth;
 	}
-	tp = SearchSysCache3(STATRELATTINH,
+	tp = SearchSysCache3(rel_is_global_temp(relid) ?
+						 TEMPSTATRELATTINH : STATRELATTINH,
 						 ObjectIdGetDatum(relid),
 						 Int16GetDatum(attnum),
 						 BoolGetDatum(false));
@@ -3582,7 +3595,9 @@ get_attstatsslot(AttStatsSlot *sslot, HeapTuple statstuple,
 
 	if (flags & ATTSTATSSLOT_VALUES)
 	{
-		val = SysCacheGetAttrNotNull(STATRELATTINH, statstuple,
+		val = SysCacheGetAttrNotNull(IsTempStatisticTuple(statstuple) ?
+									 TEMPSTATRELATTINH : STATRELATTINH,
+									 statstuple,
 									 Anum_pg_statistic_stavalues1 + i);
 
 		/*
@@ -3627,7 +3642,9 @@ get_attstatsslot(AttStatsSlot *sslot, HeapTuple statstuple,
 
 	if (flags & ATTSTATSSLOT_NUMBERS)
 	{
-		val = SysCacheGetAttrNotNull(STATRELATTINH, statstuple,
+		val = SysCacheGetAttrNotNull(IsTempStatisticTuple(statstuple) ?
+									 TEMPSTATRELATTINH : STATRELATTINH,
+									 statstuple,
 									 Anum_pg_statistic_stanumbers1 + i);
 
 		/*

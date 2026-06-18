@@ -29,6 +29,7 @@
 #include "catalog/index.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_inherits.h"
+#include "catalog/pg_temp_statistic.h"
 #include "commands/progress.h"
 #include "commands/tablecmds.h"
 #include "commands/vacuum.h"
@@ -176,9 +177,11 @@ analyze_rel(Oid relid, RangeVar *relation,
 	}
 
 	/*
-	 * We can ANALYZE any table except pg_statistic. See update_attstats
+	 * We can ANALYZE any table except pg_statistic and pg_temp_statistic. See
+	 * update_attstats
 	 */
-	if (RelationGetRelid(onerel) == StatisticRelationId)
+	if (RelationGetRelid(onerel) == StatisticRelationId ||
+		RelationGetRelid(onerel) == TempStatisticRelationId)
 	{
 		relation_close(onerel, ShareUpdateExclusiveLock);
 		return;
@@ -1691,20 +1694,23 @@ acquire_inherited_sample_rows(Relation onerel, int elevel,
 /*
  *	update_attstats() -- update attribute statistics for one relation
  *
- *		Statistics are stored in several places: the pg_class row for the
- *		relation has stats about the whole relation, and there is a
- *		pg_statistic row for each (non-system) attribute that has ever
- *		been analyzed.  The pg_class values are updated by VACUUM, not here.
+ *		Statistics are stored in several places: the pg_class/pg_temp_class
+ *		row for the relation has stats about the whole relation, and there is
+ *		a pg_statistic/pg_temp_statistic row for each (non-system) attribute
+ *		that has ever been analyzed.  The pg_class/pg_temp_class values are
+ *		updated by VACUUM, not here.
  *
- *		pg_statistic rows are just added or updated normally.  This means
- *		that pg_statistic will probably contain some deleted rows at the
- *		completion of a vacuum cycle, unless it happens to get vacuumed last.
+ *		pg_statistic/pg_temp_statistic rows are just added or updated
+ *		normally.  This means that pg_statistic/pg_temp_statistic will
+ *		probably contain some deleted rows at the completion of a vacuum
+ *		cycle, unless it happens to get vacuumed last.
  *
- *		To keep things simple, we punt for pg_statistic, and don't try
- *		to compute or store rows for pg_statistic itself in pg_statistic.
+ *		To keep things simple, we punt for pg_statistic and pg_temp_statistic,
+ *		and don't try to compute or store rows for pg_statistic or
+ *		pg_temp_statistic themselves in pg_statistic or pg_temp_statistic.
  *		This could possibly be made to work, but it's not worth the trouble.
  *		Note analyze_rel() has seen to it that we won't come here when
- *		vacuuming pg_statistic itself.
+ *		vacuuming pg_statistic or pg_temp_statistic themselves.
  *
  *		Note: there would be a race condition here if two backends could
  *		ANALYZE the same table concurrently.  Presently, we lock that out
@@ -1716,11 +1722,21 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 	Relation	sd;
 	int			attno;
 	CatalogIndexState indstate = NULL;
+	SysCacheIdentifier cacheId;
 
 	if (natts <= 0)
 		return;					/* nothing to do */
 
-	sd = table_open(StatisticRelationId, RowExclusiveLock);
+	if (rel_is_global_temp(relid))
+	{
+		sd = table_open(TempStatisticRelationId, RowExclusiveLock);
+		cacheId = TEMPSTATRELATTINH;
+	}
+	else
+	{
+		sd = table_open(StatisticRelationId, RowExclusiveLock);
+		cacheId = STATRELATTINH;
+	}
 
 	for (attno = 0; attno < natts; attno++)
 	{
@@ -1811,7 +1827,7 @@ update_attstats(Oid relid, bool inh, int natts, VacAttrStats **vacattrstats)
 		}
 
 		/* Is there already a pg_statistic tuple for this attribute? */
-		oldtup = SearchSysCache3(STATRELATTINH,
+		oldtup = SearchSysCache3(cacheId,
 								 ObjectIdGetDatum(relid),
 								 Int16GetDatum(stats->tupattnum),
 								 BoolGetDatum(inh));

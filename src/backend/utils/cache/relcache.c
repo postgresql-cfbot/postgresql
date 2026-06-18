@@ -64,6 +64,7 @@
 #include "catalog/pg_tablespace.h"
 #include "catalog/pg_temp_class.h"
 #include "catalog/pg_temp_statistic.h"
+#include "catalog/pg_temp_statistic_ext_data.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/schemapg.h"

@@ -5838,7 +5838,8 @@ examine_variable(PlannerInfo *root, Node *node, int varRelid,
 						else if (index->indpred == NIL)
 						{
 							vardata->statsTuple =
-								SearchSysCache3(STATRELATTINH,
+								SearchSysCache3(rel_is_global_temp(index->indexoid) ?
+												TEMPSTATRELATTINH : STATRELATTINH,
 												ObjectIdGetDatum(index->indexoid),
 												Int16GetDatum(pos + 1),
 												BoolGetDatum(false));
@@ -6068,7 +6069,8 @@ examine_simple_variable(PlannerInfo *root, Var *var,
 		 * Plain table or parent of an inheritance appendrel, so look up the
 		 * column in pg_statistic
 		 */
-		vardata->statsTuple = SearchSysCache3(STATRELATTINH,
+		vardata->statsTuple = SearchSysCache3(rel_is_global_temp(rte->relid) ?
+											  TEMPSTATRELATTINH : STATRELATTINH,
 											  ObjectIdGetDatum(rte->relid),
 											  Int16GetDatum(var->varattno),
 											  BoolGetDatum(rte->inh));
@@ -6637,7 +6639,8 @@ examine_indexcol_variable(PlannerInfo *root, IndexOptInfo *index,
 		}
 		else
 		{
-			vardata->statsTuple = SearchSysCache3(STATRELATTINH,
+			vardata->statsTuple = SearchSysCache3(rel_is_global_temp(relid) ?
+												  TEMPSTATRELATTINH : STATRELATTINH,
 												  ObjectIdGetDatum(relid),
 												  Int16GetDatum(colnum),
 												  BoolGetDatum(rte->inh));
@@ -6663,7 +6666,8 @@ examine_indexcol_variable(PlannerInfo *root, IndexOptInfo *index,
 		}
 		else
 		{
-			vardata->statsTuple = SearchSysCache3(STATRELATTINH,
+			vardata->statsTuple = SearchSysCache3(rel_is_global_temp(relid) ?
+												  TEMPSTATRELATTINH : STATRELATTINH,
 												  ObjectIdGetDatum(relid),
 												  Int16GetDatum(colnum),
 												  BoolGetDatum(false));
@@ -9217,7 +9221,8 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			else
 			{
 				vardata.statsTuple =
-					SearchSysCache3(STATRELATTINH,
+					SearchSysCache3(rel_is_global_temp(rte->relid) ?
+									TEMPSTATRELATTINH : STATRELATTINH,
 									ObjectIdGetDatum(rte->relid),
 									Int16GetDatum(attnum),
 									BoolGetDatum(false));
@@ -9247,7 +9252,8 @@ brincostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			}
 			else
 			{
-				vardata.statsTuple = SearchSysCache3(STATRELATTINH,
+				vardata.statsTuple = SearchSysCache3(rel_is_global_temp(index->indexoid) ?
+													 TEMPSTATRELATTINH : STATRELATTINH,
 													 ObjectIdGetDatum(index->indexoid),
 													 Int16GetDatum(attnum),
 													 BoolGetDatum(false));

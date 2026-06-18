@@ -2516,6 +2516,43 @@ GRANT SELECT ON view_column_usage TO PUBLIC;
 
 
 /*
+ * VIEW_CONSTRAINT_USAGE
+ */
+
+CREATE VIEW view_constraint_usage AS
+    SELECT DISTINCT
+           CAST(current_database() AS sql_identifier) AS view_catalog,
+           CAST(nv.nspname AS sql_identifier) AS view_schema,
+           CAST(v.relname AS sql_identifier) AS view_name,
+           CAST(current_database() AS sql_identifier) AS constraint_catalog,
+           CAST(nc.nspname AS sql_identifier) AS constraint_schema,
+           CAST(c.conname AS sql_identifier) AS constraint_name
+
+    FROM pg_depend dv
+         JOIN pg_class v ON v.oid = dv.refobjid
+         JOIN pg_namespace nv ON nv.oid = v.relnamespace
+         JOIN pg_depend dc ON dc.objid = dv.objid
+            AND dc.classid = 'pg_catalog.pg_rewrite'::regclass
+            AND dc.refclassid = 'pg_catalog.pg_constraint'::regclass
+            AND dc.refobjsubid = 0
+            AND dc.deptype = 'k'
+         JOIN pg_constraint c ON c.oid = dc.refobjid
+         JOIN pg_namespace nc ON nc.oid = c.connamespace
+         JOIN pg_class r ON r.oid = c.conrelid
+
+    WHERE dv.refclassid = 'pg_catalog.pg_class'::regclass
+          AND dv.classid = 'pg_catalog.pg_rewrite'::regclass
+          AND dv.deptype = 'i'
+          AND v.relkind = 'v'
+          AND c.contypid = 0
+          AND c.contype NOT IN ('t', 'x')
+          AND r.relkind IN ('r', 'p')
+          AND pg_has_role(r.relowner, 'USAGE');
+
+GRANT SELECT ON view_constraint_usage TO PUBLIC;
+
+
+/*
  * 6.79
  * VIEW_PERIOD_USAGE
  */

@@ -4964,6 +4964,107 @@ DETAIL:  This inner join could filter rows from q. Referencing columns q (c_e_id
 DROP VIEW ne3_right_nested_v;
 DROP TABLE ne3_b, ne3_c, ne3_e, ne3_a;
 DROP TABLE t2_nn, t1_nn;
+--
+-- Test information_schema.view_constraint_usage
+--
+CREATE TABLE vcusage_parent
+(
+    id INTEGER,
+    CONSTRAINT vcusage_parent_pkey PRIMARY KEY (id)
+);
+CREATE TABLE vcusage_child
+(
+    id INTEGER,
+    parent_id INTEGER CONSTRAINT vcusage_child_parent_id_not_null NOT NULL,
+    CONSTRAINT vcusage_child_pkey PRIMARY KEY (id),
+    CONSTRAINT vcusage_child_parent_id_fkey
+        FOREIGN KEY (parent_id) REFERENCES vcusage_parent (id)
+);
+CREATE VIEW vcusage_plain_view AS
+SELECT c.parent_id
+FROM vcusage_child c;
+CREATE VIEW vcusage_key_view AS
+SELECT c.id AS child_id, p.id AS parent_id
+FROM vcusage_child c
+-- accepted
+JOIN vcusage_parent p FOR KEY (id) <- c (parent_id);
+SELECT *
+FROM information_schema.view_constraint_usage
+WHERE view_name LIKE 'vcusage_%'
+ORDER BY view_name, constraint_name;
+ view_catalog | view_schema |    view_name     | constraint_catalog | constraint_schema |         constraint_name          
+--------------+-------------+------------------+--------------------+-------------------+----------------------------------
+ regression   | public      | vcusage_key_view | regression         | public            | vcusage_child_parent_id_fkey
+ regression   | public      | vcusage_key_view | regression         | public            | vcusage_child_parent_id_not_null
+ regression   | public      | vcusage_key_view | regression         | public            | vcusage_parent_pkey
+(3 rows)
+
+CREATE OR REPLACE VIEW vcusage_key_view AS
+SELECT c.id AS child_id, p.id AS parent_id
+FROM vcusage_child c
+-- accepted
+LEFT JOIN vcusage_parent p FOR KEY (id) <- c (parent_id);
+SELECT *
+FROM information_schema.view_constraint_usage
+WHERE view_name LIKE 'vcusage_%'
+ORDER BY view_name, constraint_name;
+ view_catalog | view_schema |    view_name     | constraint_catalog | constraint_schema |       constraint_name        
+--------------+-------------+------------------+--------------------+-------------------+------------------------------
+ regression   | public      | vcusage_key_view | regression         | public            | vcusage_child_parent_id_fkey
+ regression   | public      | vcusage_key_view | regression         | public            | vcusage_parent_pkey
+(2 rows)
+
+CREATE VIEW vcusage_parent_view AS
+SELECT id
+FROM vcusage_parent;
+CREATE VIEW vcusage_key_via_plain AS
+SELECT c.id AS child_id, p.id AS parent_id
+FROM vcusage_parent_view p
+JOIN vcusage_child c FOR KEY (parent_id) -> p (id);
+SELECT d.deptype,
+       d.refclassid::regclass::text AS refclass,
+       count(*) AS ndeps
+FROM pg_depend d
+JOIN pg_rewrite r ON r.oid = d.objid
+JOIN pg_class v ON v.oid = r.ev_class
+WHERE d.classid = 'pg_rewrite'::regclass
+  AND v.relname = 'vcusage_key_via_plain'
+  AND d.refclassid IN ('pg_class'::regclass, 'pg_constraint'::regclass)
+  AND d.deptype IN ('n', 'k')
+GROUP BY d.deptype, d.refclassid
+ORDER BY d.deptype, refclass;
+ deptype |   refclass    | ndeps 
+---------+---------------+-------
+ k       | pg_class      |     3
+ k       | pg_constraint |     3
+ n       | pg_class      |     3
+(3 rows)
+
+SELECT count(*) AS normal_constraint_deps
+FROM pg_depend d
+JOIN pg_rewrite r ON r.oid = d.objid
+JOIN pg_class v ON v.oid = r.ev_class
+WHERE d.classid = 'pg_rewrite'::regclass
+  AND v.relname = 'vcusage_key_via_plain'
+  AND d.refclassid = 'pg_constraint'::regclass
+  AND d.deptype = 'n';
+ normal_constraint_deps 
+------------------------
+                      0
+(1 row)
+
+CREATE OR REPLACE VIEW vcusage_parent_view AS
+SELECT id
+FROM vcusage_parent
+WHERE id > 0;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join.
+ALTER TABLE vcusage_parent ENABLE ROW LEVEL SECURITY;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+DROP VIEW vcusage_key_via_plain, vcusage_parent_view, vcusage_key_view,
+          vcusage_plain_view;
+DROP TABLE vcusage_child, vcusage_parent;
 CREATE TABLE customer_addresses
 (
     customer_id INTEGER NOT NULL,

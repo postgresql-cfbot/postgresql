@@ -3,6 +3,7 @@
 backend_sources += files(
   'analyze.c',
   'parse_agg.c',
+  'parse_key_join.c',
   'parse_clause.c',
   'parse_coerce.c',
   'parse_collate.c',

@@ -3597,18 +3597,167 @@ WHERE id NOT IN (SELECT id FROM null_tab WHERE id IS NOT NULL);
                Filter: (id IS NOT NULL)
 (6 rows)
 
--- No ANTI JOIN: outer side is nullable (we don't check outer query quals for now)
+-- ANTI JOIN: outer side is forced non-nullable by an "IS NOT NULL" WHERE qual
 EXPLAIN (COSTS OFF)
 SELECT * FROM null_tab
 WHERE id IS NOT NULL
   AND id NOT IN (SELECT id FROM not_null_tab);
-                                   QUERY PLAN                                    
----------------------------------------------------------------------------------
- Seq Scan on null_tab
-   Filter: ((id IS NOT NULL) AND (NOT (ANY (id = (hashed SubPlan any_1).col1))))
+                  QUERY PLAN                  
+----------------------------------------------
+ Hash Anti Join
+   Hash Cond: (null_tab.id = not_null_tab.id)
+   ->  Seq Scan on null_tab
+         Filter: (id IS NOT NULL)
+   ->  Hash
+         ->  Seq Scan on not_null_tab
+(6 rows)
+
+-- ANTI JOIN: outer side is forced non-nullable by a strict WHERE qual
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab
+WHERE id > 0
+  AND id NOT IN (SELECT id FROM not_null_tab);
+                  QUERY PLAN                  
+----------------------------------------------
+ Hash Anti Join
+   Hash Cond: (null_tab.id = not_null_tab.id)
+   ->  Seq Scan on null_tab
+         Filter: (id > 0)
+   ->  Hash
+         ->  Seq Scan on not_null_tab
+(6 rows)
+
+-- ANTI JOIN: outer side is forced non-nullable by an inner join's ON qual
+-- located below the NOT IN
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab t1
+INNER JOIN not_null_tab t2 ON t1.id > 0
+WHERE t1.id NOT IN (SELECT id FROM not_null_tab);
+                     QUERY PLAN                     
+----------------------------------------------------
+ Nested Loop
+   ->  Seq Scan on not_null_tab t2
+   ->  Materialize
+         ->  Hash Anti Join
+               Hash Cond: (t1.id = not_null_tab.id)
+               ->  Seq Scan on null_tab t1
+                     Filter: (id > 0)
+               ->  Hash
+                     ->  Seq Scan on not_null_tab
+(9 rows)
+
+-- ANTI JOIN: both outer columns are forced non-nullable by WHERE quals
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab
+WHERE id IS NOT NULL AND val IS NOT NULL
+  AND (id, val) NOT IN (SELECT id, val FROM not_null_tab);
+                                      QUERY PLAN                                       
+---------------------------------------------------------------------------------------
+ Merge Anti Join
+   Merge Cond: ((null_tab.id = not_null_tab.id) AND (null_tab.val = not_null_tab.val))
+   ->  Sort
+         Sort Key: null_tab.id, null_tab.val
+         ->  Seq Scan on null_tab
+               Filter: ((id IS NOT NULL) AND (val IS NOT NULL))
+   ->  Sort
+         Sort Key: not_null_tab.id, not_null_tab.val
+         ->  Seq Scan on not_null_tab
+(9 rows)
+
+-- ANTI JOIN: outer side is forced non-nullable by the sibling ON qual
+EXPLAIN (COSTS OFF)
+SELECT * FROM not_null_tab t1
+LEFT JOIN null_tab t2
+ON t2.val > 0 AND t2.val NOT IN (SELECT id FROM not_null_tab);
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Nested Loop Left Join
+   ->  Seq Scan on not_null_tab t1
+   ->  Materialize
+         ->  Hash Anti Join
+               Hash Cond: (t2.val = not_null_tab.id)
+               ->  Seq Scan on null_tab t2
+                     Filter: (val > 0)
+               ->  Hash
+                     ->  Seq Scan on not_null_tab
+(9 rows)
+
+-- ANTI JOIN: outer side is forced non-nullable by the inner join's ON qual
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab t1 LEFT JOIN
+  (null_tab t2 INNER JOIN null_tab t3 ON t2.id = t3.id)
+  ON t2.id NOT IN (SELECT id FROM not_null_tab);
+                           QUERY PLAN                           
+----------------------------------------------------------------
+ Nested Loop Left Join
+   ->  Seq Scan on null_tab t1
+   ->  Materialize
+         ->  Merge Join
+               Merge Cond: (t2.id = t3.id)
+               ->  Sort
+                     Sort Key: t2.id
+                     ->  Hash Anti Join
+                           Hash Cond: (t2.id = not_null_tab.id)
+                           ->  Seq Scan on null_tab t2
+                           ->  Hash
+                                 ->  Seq Scan on not_null_tab
+               ->  Sort
+                     Sort Key: t3.id
+                     ->  Seq Scan on null_tab t3
+(15 rows)
+
+-- No ANTI JOIN: nothing proves the outer side non-nullable
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab t1 LEFT JOIN
+  (null_tab t2 INNER JOIN null_tab t3 ON t2.id = t3.id)
+  ON true
+WHERE t2.id NOT IN (SELECT id FROM not_null_tab);
+                         QUERY PLAN                          
+-------------------------------------------------------------
+ Nested Loop Left Join
+   Filter: (NOT (ANY (t2.id = (hashed SubPlan any_1).col1)))
+   ->  Seq Scan on null_tab t1
+   ->  Materialize
+         ->  Merge Join
+               Merge Cond: (t2.id = t3.id)
+               ->  Sort
+                     Sort Key: t2.id
+                     ->  Seq Scan on null_tab t2
+               ->  Sort
+                     Sort Key: t3.id
+                     ->  Seq Scan on null_tab t3
    SubPlan any_1
      ->  Seq Scan on not_null_tab
-(4 rows)
+(14 rows)
+
+-- Verify the conversion preserves NOT IN semantics
+CREATE TEMP TABLE qual_outer (a int, b int);
+CREATE TEMP TABLE qual_inner (y int NOT NULL);
+INSERT INTO qual_outer VALUES (1, NULL), (2, 5), (3, 7);
+INSERT INTO qual_inner VALUES (5);
+EXPLAIN (COSTS OFF)
+SELECT * FROM qual_outer
+WHERE b IS NOT NULL AND b NOT IN (SELECT y FROM qual_inner)
+ORDER BY a;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Sort
+   Sort Key: qual_outer.a
+   ->  Hash Anti Join
+         Hash Cond: (qual_outer.b = qual_inner.y)
+         ->  Seq Scan on qual_outer
+               Filter: (b IS NOT NULL)
+         ->  Hash
+               ->  Seq Scan on qual_inner
+(8 rows)
+
+SELECT * FROM qual_outer
+WHERE b IS NOT NULL AND b NOT IN (SELECT y FROM qual_inner)
+ORDER BY a;
+ a | b 
+---+---
+ 3 | 7
+(1 row)
 
 -- ANTI JOIN: outer side is defined NOT NULL, inner side is defined NOT NULL
 -- and is not nulled by outer join

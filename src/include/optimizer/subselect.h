@@ -23,7 +23,8 @@ extern ScalarArrayOpExpr *convert_VALUES_to_ANY(PlannerInfo *root,
 extern JoinExpr *convert_ANY_sublink_to_join(PlannerInfo *root,
 											 SubLink *sublink,
 											 bool under_not,
-											 Relids available_rels);
+											 Relids available_rels,
+											 List *nonnullable_quals);
 extern JoinExpr *convert_EXISTS_sublink_to_join(PlannerInfo *root,
 												SubLink *sublink,
 												bool under_not,

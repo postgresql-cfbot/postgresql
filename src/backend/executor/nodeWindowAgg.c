@@ -3985,10 +3985,15 @@ put_notnull_info(WindowObject winobj, int64 pos, int argno, bool isnull)
 
 /*
  * eval_nav_offset_helper
- *		Evaluate an offset expression at executor init time for trim
- *		optimization.  Returns the offset value, or 0 for NULL/negative
- *		(these will cause a runtime error during actual navigation, so the
- *		trim value is irrelevant).
+ *		Pre-evaluate a navigation offset expression at executor init time, to
+ *		bound how far navigation can reach (which sizes the frame trim).
+ *		Returns the offset value, or 0 for a NULL or negative offset.
+ *
+ * The offset is not validated here.  A NULL or negative value is caught later,
+ * per row, on the navigation path that consumes it (see EEOP_RPR_NAV_SET in
+ * execExprInterp.c), which errors out before navigation produces any result;
+ * the trim sizing computed from such an offset is therefore never used, and 0
+ * is returned as a harmless placeholder.
  */
 static int64
 eval_nav_offset_helper(WindowAggState *winstate, Expr *offset_expr,

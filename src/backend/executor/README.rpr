@@ -285,7 +285,7 @@ Element flags (1 byte, bitmask):
         absorption.
 
   0x08  RPR_ELEM_ABSORBABLE         (VAR, END)
-        Absorption judgment point.  Where to compare consecutive
+        Absorption comparison point.  Where to compare consecutive
         iterations for absorption.
           - Simple unbounded VAR (A+): set on the VAR itself
           - Unbounded GROUP ((A B)+): set on the END element only
@@ -1393,7 +1393,7 @@ XII-5. Execution Optimization Summary
     counts) combination through multiple paths. Additionally, for
     group absorption, nfa_match performs inline advance from bounded
     VARs (count >= max) within the absorbable region (ABSORBABLE_BRANCH)
-    through END chains to reach the judgment point (ABSORBABLE END).
+    through END chains to reach the comparison point (ABSORBABLE END).
     This process can also produce duplicate states reaching the same END.
     nfa_add_state_unique() blocks duplicate addition of identical states
     in both cases.

@@ -578,7 +578,7 @@ nfa_update_absorption_flags(RPRNFAContext *ctx)
 	/*
 	 * Iterate through all states to check absorption status. Uses
 	 * state->isAbsorbable which tracks if state is in absorbable region. This
-	 * is different from RPRElemIsAbsorbable(elem) which checks judgment
+	 * is different from RPRElemIsAbsorbable(elem) which checks comparison
 	 * point.
 	 */
 	for (state = ctx->states; state != NULL; state = state->next)
@@ -625,8 +625,8 @@ nfa_states_covered(RPRPattern *pattern, RPRNFAContext *older, RPRNFAContext *new
 		depth = elem->depth;
 
 		/*
-		 * Only compare at absorption judgment points (RPR_ELEM_ABSORBABLE).
-		 * Judgment points are where count-dominance guarantees the newer
+		 * Only compare at absorption comparison points (RPR_ELEM_ABSORBABLE).
+		 * Comparison points are where count-dominance guarantees the newer
 		 * context's future matches are a subset of the older's.
 		 */
 		if (!RPRElemIsAbsorbable(elem))
@@ -782,7 +782,8 @@ nfa_eval_var_match(WindowAggState *winstate, RPRPatternElement *elem,
  *     previous advance when count >= min was satisfied)
  *
  * For VARs that reached max count followed by END:
- *   - Advance through the END-element chain to the absorption judgment point
+ *   - Advance through the END-element chain to the absorption
+ *     comparison point
  *   - Only deterministic exits (count >= max, max != INF) are handled
  *   - Chains through END elements while count >= max (must-exit path)
  *
@@ -800,7 +801,7 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 	/*
 	 * Evaluate VAR elements against current row. For VARs that reach max
 	 * count with END next, advance through the chain of END elements inline
-	 * so absorb phase can compare states at judgment points.
+	 * so absorb phase can compare states at comparison points.
 	 */
 	for (state = ctx->states; state != NULL; state = nextState)
 	{
@@ -831,7 +832,7 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 
 				/*
 				 * For VAR at max count with END next, advance through END
-				 * chain to reach the absorption judgment point.  Only
+				 * chain to reach the absorption comparison point.  Only
 				 * deterministic exits (count >= max, max finite) are handled;
 				 * unbounded VARs stay for advance phase.
 				 *
@@ -841,10 +842,10 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 				 * to the next outer END.  The loop below walks this chain.
 				 *
 				 * ABSORBABLE_BRANCH marks elements inside the absorbable
-				 * region; ABSORBABLE marks the outermost judgment point where
-				 * count-dominance is evaluated.  We chain through BRANCH
-				 * elements until reaching the ABSORBABLE point or an element
-				 * that can still loop (count < max).
+				 * region; ABSORBABLE marks the outermost comparison point
+				 * where count-dominance is evaluated.  We chain through
+				 * BRANCH elements until reaching the ABSORBABLE point or an
+				 * element that can still loop (count < max).
 				 */
 				if (RPRElemIsAbsorbableBranch(elem) &&
 					!RPRElemIsAbsorbable(elem) &&
@@ -876,7 +877,7 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 
 					/*
 					 * Chain through END elements within the absorbable region
-					 * (ABSORBABLE_BRANCH) until reaching the judgment point
+					 * (ABSORBABLE_BRANCH) until reaching the comparison point
 					 * (ABSORBABLE).  Continue only on must-exit path (count
 					 * >= max) with END next.
 					 */
@@ -892,9 +893,9 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 						/*
 						 * Exit this intermediate group: clear its own count
 						 * (count-clear policy).  It sits below the absorbable
-						 * judgment point, so it is excluded from the
-						 * dominance comparison; the judgment point where the
-						 * chain stops keeps its count.
+						 * comparison point, so it is excluded from the
+						 * dominance comparison; the comparison point where
+						 * the chain stops keeps its count.
 						 */
 						state->counts[endDepth] = 0;
 

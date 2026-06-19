@@ -2937,7 +2937,7 @@ append_rpr_quantifier(StringInfo buf, RPRPatternElement *elem)
 		appendStringInfoChar(buf, '?');
 	}
 
-	/* Append absorption markers: " for judgment point, ' for branch only */
+	/* Append absorption markers: " for comparison point, ' for branch only */
 	if (RPRElemIsAbsorbable(elem))
 	{
 		Assert(elem->max == RPR_QUANTITY_INF);

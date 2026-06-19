@@ -53,7 +53,7 @@
  * optimizer/plan/rpr.c.
  */
 #define RPR_ELEM_ABSORBABLE_BRANCH	0x04	/* element in absorbable region */
-#define RPR_ELEM_ABSORBABLE			0x08	/* absorption judgment point */
+#define RPR_ELEM_ABSORBABLE			0x08	/* absorption comparison point */
 
 /* Accessor macros for RPRPatternElement */
 #define RPRElemIsReluctant(e)			(((e)->flags & RPR_ELEM_RELUCTANT) != 0)

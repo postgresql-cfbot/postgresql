@@ -3254,16 +3254,16 @@ WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
 -- Absorption Flag Display Tests
 -- ============================================================
 -- Tests absorption marker display in EXPLAIN output
--- Markers: ' = branch element, " = judgment point
+-- Markers: ' = branch element, " = comparison point
 -- Files: explain.c (append_rpr_quantifier, deparse_rpr_pattern)
 
--- Simple VAR: A+ -> a+" (judgment point)
+-- Simple VAR: A+ -> a+" (comparison point)
 EXPLAIN (COSTS OFF)
 SELECT COUNT(*) OVER w FROM rpr_plan
 WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
              AFTER MATCH SKIP PAST LAST ROW PATTERN (A+) DEFINE A AS val > 0);
 
--- GROUP unbounded: (A B)+ -> (a' b')+" (branch + judgment)
+-- GROUP unbounded: (A B)+ -> (a' b')+" (branch + comparison)
 EXPLAIN (COSTS OFF)
 SELECT COUNT(*) OVER w FROM rpr_plan
 WINDOW w AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING

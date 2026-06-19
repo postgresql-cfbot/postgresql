@@ -19,7 +19,7 @@
  *   complexity from O(n^2) to O(n) for patterns like A+ B.
  *
  *   The absorption analysis uses two element flags:
- *   - RPR_ELEM_ABSORBABLE: marks WHERE to compare (judgment point)
+ *   - RPR_ELEM_ABSORBABLE: marks WHERE to compare (comparison point)
  *   - RPR_ELEM_ABSORBABLE_BRANCH: marks the absorbable region
  *
  *   See computeAbsorbability() and the detailed comments before
@@ -1484,7 +1484,7 @@ finalizeRPRPattern(RPRPattern *result)
  *   than Ctx2's match (1 to current). So Ctx2 can be safely eliminated.
  *
  * Two Flags:
- *   1. RPR_ELEM_ABSORBABLE - "Absorption judgment point"
+ *   1. RPR_ELEM_ABSORBABLE - "Absorption comparison point"
  *      WHERE contexts can be compared for absorption.
  *      - Simple unbounded VAR (A+): the VAR element itself
  *      - Unbounded GROUP ((A B)+): the END element only
@@ -1506,20 +1506,20 @@ finalizeRPRPattern(RPRPattern *result)
  *                -> Both at END, comparable! Ctx1 absorbs Ctx2.
  *
  *   Contexts synchronize at END every group-length rows. Therefore:
- *   - ABSORBABLE marks END as judgment point (where to compare)
+ *   - ABSORBABLE marks END as comparison point (where to compare)
  *   - ABSORBABLE_BRANCH keeps state.isAbsorbable=true through A->B->END
  *
  * Pattern Examples:
  *
  *   Pattern: A+ B
- *   Element 0 (A): ABSORBABLE | ABSORBABLE_BRANCH  <- judgment point
+ *   Element 0 (A): ABSORBABLE | ABSORBABLE_BRANCH  <- comparison point
  *   Element 1 (B): (none)
  *   -> Compare at A every row. When contexts move to B, absorption stops.
  *
  *   Pattern: (A B)+ C
  *   Element 0 (A): ABSORBABLE_BRANCH
  *   Element 1 (B): ABSORBABLE_BRANCH
- *   Element 2 (END): ABSORBABLE | ABSORBABLE_BRANCH  <- judgment point
+ *   Element 2 (END): ABSORBABLE | ABSORBABLE_BRANCH  <- comparison point
  *   Element 3 (C): (none)
  *   -> Compare at END every 2 rows. When contexts move to C, absorption stops.
  *
@@ -1629,7 +1629,7 @@ isFixedLengthChildren(RPRPattern *pattern, RPRElemIdx idx, RPRDepth scopeDepth)
  *      All children must have min == max (recursively for nested subgroups).
  *      This is equivalent to unrolling to {1,1} VARs, e.g., (A B B)+ C.
  *      All elements within the group get ABSORBABLE_BRANCH.
- *      Only the unbounded END gets ABSORBABLE (judgment point).
+ *      Only the unbounded END gets ABSORBABLE (comparison point).
  *      Examples:
  *        (A B{2})+ C          - B{2} has min==max, step=3
  *        (A (B C){2} D)+ E    - nested {2} subgroup, step=6
@@ -1791,7 +1791,7 @@ computeAbsorbabilityRecursive(RPRPattern *pattern, RPRElemIdx startIdx,
  * decrease property required for safe absorption.
  *
  * This function sets two flags:
- *   RPR_ELEM_ABSORBABLE: Absorption judgment point
+ *   RPR_ELEM_ABSORBABLE: Absorption comparison point
  *     - Simple unbounded VAR: the VAR itself (e.g., A in A+)
  *     - Unbounded GROUP: the END element (e.g., END in (A B)+)
  *   RPR_ELEM_ABSORBABLE_BRANCH: All elements in absorbable region

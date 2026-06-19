@@ -124,11 +124,11 @@ static void append_rpr_quantifier(StringInfo buf, RPRPatternElement *elem);
 static char *deparse_rpr_pattern(RPRPattern *pattern);
 static int	deparse_rpr_seq(RPRPattern *pattern, int start, int limit,
 							StringInfo buf);
-static int	deparse_rpr_node(RPRPattern *pattern, int i, int limit,
+static int	deparse_rpr_node(RPRPattern *pattern, int idx, int limit,
 							 StringInfo buf);
 static int	rpr_match_end(RPRPattern *pattern, int beginIdx);
-static int	rpr_alt_scope_end(RPRPattern *pattern, int i);
-static int	rpr_next_branch(RPRPattern *pattern, int b, int altEnd);
+static int	rpr_alt_scope_end(RPRPattern *pattern, int idx);
+static int	rpr_next_branch(RPRPattern *pattern, int bno, int altEnd);
 static void show_storage_info(char *maxStorageType, int64 maxSpaceUsed,
 							  ExplainState *es);
 static void show_tablesample(TableSampleClause *tsc, PlanState *planstate,
@@ -3014,8 +3014,8 @@ deparse_rpr_seq(RPRPattern *pattern, int start, int limit, StringInfo buf)
 }
 
 /*
- * Deparse the single construct starting at index i, bounded by the inherited
- * limit.  Returns the index just past the construct.
+ * Deparse the single construct starting at index idx, bounded by the
+ * inherited limit.  Returns the index just past the construct.
  *
  * A VAR is its name plus quantifier.  A BEGIN opens a group spanning to its
  * matching END (rpr_match_end); when the group's sole child is an ALT that
@@ -3026,9 +3026,9 @@ deparse_rpr_seq(RPRPattern *pattern, int start, int limit, StringInfo buf)
  * handed down by rpr_next_branch.
  */
 static int
-deparse_rpr_node(RPRPattern *pattern, int i, int limit, StringInfo buf)
+deparse_rpr_node(RPRPattern *pattern, int idx, int limit, StringInfo buf)
 {
-	RPRPatternElement *elem = &pattern->elements[i];
+	RPRPatternElement *elem = &pattern->elements[idx];
 
 	if (RPRElemIsVar(elem))
 	{
@@ -3036,27 +3036,27 @@ deparse_rpr_node(RPRPattern *pattern, int i, int limit, StringInfo buf)
 		appendStringInfoString(buf,
 							   quote_identifier(pattern->varNames[elem->varId]));
 		append_rpr_quantifier(buf, elem);
-		return i + 1;
+		return idx + 1;
 	}
 
 	if (RPRElemIsBegin(elem))
 	{
-		int			end = rpr_match_end(pattern, i);
+		int			end = rpr_match_end(pattern, idx);
 		bool		loneAlt;
 
-		loneAlt = (i + 1 < end &&
-				   RPRElemIsAlt(&pattern->elements[i + 1]) &&
-				   rpr_alt_scope_end(pattern, i + 1) == end);
+		loneAlt = (idx + 1 < end &&
+				   RPRElemIsAlt(&pattern->elements[idx + 1]) &&
+				   rpr_alt_scope_end(pattern, idx + 1) == end);
 
 		if (loneAlt)
 		{
 			/* The ALT child already parenthesizes the whole group body. */
-			(void) deparse_rpr_node(pattern, i + 1, end, buf);
+			(void) deparse_rpr_node(pattern, idx + 1, end, buf);
 		}
 		else
 		{
 			appendStringInfoChar(buf, '(');
-			(void) deparse_rpr_seq(pattern, i + 1, end, buf);
+			(void) deparse_rpr_seq(pattern, idx + 1, end, buf);
 			appendStringInfoChar(buf, ')');
 		}
 		append_rpr_quantifier(buf, &pattern->elements[end]);
@@ -3065,7 +3065,7 @@ deparse_rpr_node(RPRPattern *pattern, int i, int limit, StringInfo buf)
 
 	Assert(RPRElemIsAlt(elem));
 	{
-		int			altEnd = rpr_alt_scope_end(pattern, i);
+		int			altEnd = rpr_alt_scope_end(pattern, idx);
 		int			b;
 		bool		first = true;
 
@@ -3073,7 +3073,7 @@ deparse_rpr_node(RPRPattern *pattern, int i, int limit, StringInfo buf)
 			altEnd = limit;
 
 		appendStringInfoChar(buf, '(');
-		b = i + 1;
+		b = idx + 1;
 		while (b < altEnd)
 		{
 			int			nb = rpr_next_branch(pattern, b, altEnd);
@@ -3097,41 +3097,41 @@ static int
 rpr_match_end(RPRPattern *pattern, int beginIdx)
 {
 	RPRDepth	d = pattern->elements[beginIdx].depth;
-	int			j;
+	int			i;
 
-	for (j = beginIdx + 1; j < pattern->numElements; j++)
+	for (i = beginIdx + 1; i < pattern->numElements; i++)
 	{
-		RPRPatternElement *e = &pattern->elements[j];
+		RPRPatternElement *e = &pattern->elements[i];
 
 		if (RPRElemIsEnd(e) && e->depth == d)
-			return j;
+			return i;
 	}
 	pg_unreachable();			/* a BEGIN always has a matching END */
 }
 
 /*
- * Scope end of the construct at index i: the first following element whose
- * depth is no greater than i's own.  For an ALT marker this is the index just
- * past its last branch, since depth stays constant across branch boundaries.
- * FIN sits at depth 0, so a top-level ALT stops there.
+ * Scope end of the construct at index idx: the first following element whose
+ * depth is no greater than idx's own.  For an ALT marker this is the index
+ * just past its last branch, since depth stays constant across branch
+ * boundaries.  FIN sits at depth 0, so a top-level ALT stops there.
  */
 static int
-rpr_alt_scope_end(RPRPattern *pattern, int i)
+rpr_alt_scope_end(RPRPattern *pattern, int idx)
 {
-	RPRDepth	d = pattern->elements[i].depth;
-	int			k;
+	RPRDepth	d = pattern->elements[idx].depth;
+	int			i;
 
-	for (k = i + 1; k < pattern->numElements; k++)
+	for (i = idx + 1; i < pattern->numElements; i++)
 	{
-		if (pattern->elements[k].depth <= d)
-			return k;
+		if (pattern->elements[i].depth <= d)
+			return i;
 	}
 	return pattern->numElements;
 }
 
 /*
- * Boundary of the alternation branch starting at b (i.e. the start of the next
- * branch, or altEnd if b is the last branch).
+ * Boundary of the alternation branch starting at bno (i.e. the start of the
+ * next branch, or altEnd if bno is the last branch).
  *
  * The branch-start element's jump points at the next branch when this is not
  * the last branch.  jump is overloaded (a group BEGIN also uses it for its
@@ -3140,9 +3140,9 @@ rpr_alt_scope_end(RPRPattern *pattern, int i)
  * next redirected past the alternation, so it does not point at j.
  */
 static int
-rpr_next_branch(RPRPattern *pattern, int b, int altEnd)
+rpr_next_branch(RPRPattern *pattern, int bno, int altEnd)
 {
-	int			j = pattern->elements[b].jump;
+	int			j = pattern->elements[bno].jump;
 
 	if (j != RPR_ELEMIDX_INVALID && j < altEnd &&
 		pattern->elements[j - 1].next != j)

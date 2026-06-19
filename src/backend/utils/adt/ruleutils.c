@@ -447,6 +447,10 @@ static void get_rule_groupingset(GroupingSet *gset, List *targetlist,
 								 bool omit_parens, deparse_context *context);
 static void get_rule_orderby(List *orderList, List *targetList,
 							 bool force_colno, deparse_context *context);
+static void append_pattern_quantifier(StringInfo buf, RPRPatternNode *node);
+static void get_rule_pattern_node(RPRPatternNode *node, deparse_context *context);
+static void get_rule_pattern(RPRPatternNode *rpPattern, deparse_context *context);
+static void get_rule_define(List *defineClause, deparse_context *context);
 static void get_rule_windowclause(Query *query, deparse_context *context);
 static void get_rule_windowspec(WindowClause *wc, List *targetList,
 								deparse_context *context);
@@ -7108,6 +7112,126 @@ get_rule_orderby(List *orderList, List *targetList,
 }
 
 /*
+ * Helper function to append quantifier string for pattern node
+ */
+static void
+append_pattern_quantifier(StringInfo buf, RPRPatternNode *node)
+{
+	bool		has_quantifier = true;
+
+	if (node->min == 1 && node->max == 1)
+	{
+		/* {1,1} = no quantifier */
+		has_quantifier = false;
+	}
+	else if (node->min == 0 && node->max == PG_INT32_MAX)
+		appendStringInfoChar(buf, '*');
+	else if (node->min == 1 && node->max == PG_INT32_MAX)
+		appendStringInfoChar(buf, '+');
+	else if (node->min == 0 && node->max == 1)
+		appendStringInfoChar(buf, '?');
+	else if (node->max == PG_INT32_MAX)
+		appendStringInfo(buf, "{%d,}", node->min);
+	else if (node->min == node->max)
+		appendStringInfo(buf, "{%d}", node->min);
+	else
+		appendStringInfo(buf, "{%d,%d}", node->min, node->max);
+
+	if (node->reluctant)
+	{
+		if (!has_quantifier)
+			appendStringInfoString(buf, "{1}"); /* make reluctant ?
+												 * unambiguous */
+		appendStringInfoChar(buf, '?');
+	}
+}
+
+/*
+ * Recursive helper to display RPRPatternNode tree
+ */
+static void
+get_rule_pattern_node(RPRPatternNode *node, deparse_context *context)
+{
+	StringInfo	buf = context->buf;
+	const char *sep;
+
+	Assert(node != NULL);
+
+	switch (node->nodeType)
+	{
+		case RPR_PATTERN_VAR:
+			appendStringInfoString(buf, quote_identifier(node->varName));
+			append_pattern_quantifier(buf, node);
+			break;
+
+		case RPR_PATTERN_SEQ:
+			sep = "";
+			foreach_node(RPRPatternNode, child, node->children)
+			{
+				appendStringInfoString(buf, sep);
+				get_rule_pattern_node(child, context);
+				sep = " ";
+			}
+			break;
+
+		case RPR_PATTERN_ALT:
+			sep = "";
+			foreach_node(RPRPatternNode, child, node->children)
+			{
+				appendStringInfoString(buf, sep);
+				get_rule_pattern_node(child, context);
+				sep = " | ";
+			}
+			break;
+
+		case RPR_PATTERN_GROUP:
+			appendStringInfoChar(buf, '(');
+			sep = "";
+			foreach_node(RPRPatternNode, child, node->children)
+			{
+				appendStringInfoString(buf, sep);
+				get_rule_pattern_node(child, context);
+				sep = " ";
+			}
+			appendStringInfoChar(buf, ')');
+			append_pattern_quantifier(buf, node);
+			break;
+	}
+}
+
+/*
+ * Display a PATTERN clause.
+ */
+static void
+get_rule_pattern(RPRPatternNode *rpPattern, deparse_context *context)
+{
+	StringInfo	buf = context->buf;
+
+	appendStringInfoChar(buf, '(');
+	get_rule_pattern_node(rpPattern, context);
+	appendStringInfoChar(buf, ')');
+}
+
+/*
+ * Display a DEFINE clause.
+ */
+static void
+get_rule_define(List *defineClause, deparse_context *context)
+{
+	StringInfo	buf = context->buf;
+	const char *sep;
+
+	sep = "  ";
+
+	foreach_node(TargetEntry, te, defineClause)
+	{
+		appendStringInfo(buf, "%s%s AS ", sep, quote_identifier(te->resname));
+		get_rule_expr((Node *) te->expr, context, false);
+		sep = ",\n  ";
+	}
+}
+
+/*
  * Display a WINDOW clause.
  *
  * Note that the windowClause list might contain only anonymous window
@@ -7187,6 +7311,7 @@ get_rule_windowspec(WindowClause *wc, List *targetList,
 		get_rule_orderby(wc->orderClause, targetList, false, context);
 		needspace = true;
 	}
+
 	/* framing clause is never inherited, so print unless it's default */
 	if (wc->frameOptions & FRAMEOPTION_NONDEFAULT)
 	{
@@ -7195,7 +7320,51 @@ get_rule_windowspec(WindowClause *wc, List *targetList,
 		get_window_frame_options(wc->frameOptions,
 								 wc->startOffset, wc->endOffset,
 								 context);
+		needspace = true;
 	}
+
+	/* RPR */
+	if (wc->rpSkipTo == ST_NEXT_ROW)
+	{
+		if (needspace)
+			appendStringInfoChar(buf, ' ');
+		appendStringInfoString(buf,
+							   "\n  AFTER MATCH SKIP TO NEXT ROW ");
+		needspace = true;
+	}
+	else if (wc->rpSkipTo == ST_PAST_LAST_ROW)
+	{
+		if (needspace)
+			appendStringInfoChar(buf, ' ');
+		appendStringInfoString(buf,
+							   "\n  AFTER MATCH SKIP PAST LAST ROW ");
+		needspace = true;
+	}
+	if (wc->initial)
+	{
+		if (needspace)
+			appendStringInfoChar(buf, ' ');
+		appendStringInfoString(buf, "\n  INITIAL");
+		needspace = true;
+	}
+	if (wc->rpPattern)
+	{
+		if (needspace)
+			appendStringInfoChar(buf, ' ');
+		appendStringInfoString(buf, "\n  PATTERN ");
+		get_rule_pattern(wc->rpPattern, context);
+		needspace = true;
+	}
+
+	if (wc->defineClause)
+	{
+		if (needspace)
+			appendStringInfoChar(buf, ' ');
+		appendStringInfoString(buf, "\n  DEFINE\n");
+		get_rule_define(wc->defineClause, context);
+		appendStringInfoChar(buf, ' ');
+	}
+
 	appendStringInfoChar(buf, ')');
 }
 
@@ -9444,6 +9613,7 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 		case T_FuncExpr:
 		case T_JsonConstructorExpr:
 		case T_JsonExpr:
+		case T_RPRNavExpr:
 			/* function-like: name(..) or name[..] */
 			return true;
 
@@ -9937,6 +10107,89 @@ get_rule_expr(Node *node, deparse_context *context,
 
 		case T_FuncExpr:
 			get_func_expr((FuncExpr *) node, context, showimplicit);
+			break;
+
+		case T_RPRNavExpr:
+			{
+				RPRNavExpr *nav = (RPRNavExpr *) node;
+				const char *outer_func = NULL;
+				const char *inner_func;
+
+				switch (nav->kind)
+				{
+					case RPR_NAV_PREV:
+						inner_func = "PREV(";
+						break;
+					case RPR_NAV_NEXT:
+						inner_func = "NEXT(";
+						break;
+					case RPR_NAV_FIRST:
+						inner_func = "FIRST(";
+						break;
+					case RPR_NAV_LAST:
+						inner_func = "LAST(";
+						break;
+					case RPR_NAV_PREV_FIRST:
+						outer_func = "PREV(";
+						inner_func = "FIRST(";
+						break;
+					case RPR_NAV_PREV_LAST:
+						outer_func = "PREV(";
+						inner_func = "LAST(";
+						break;
+					case RPR_NAV_NEXT_FIRST:
+						outer_func = "NEXT(";
+						inner_func = "FIRST(";
+						break;
+					case RPR_NAV_NEXT_LAST:
+						outer_func = "NEXT(";
+						inner_func = "LAST(";
+						break;
+					default:
+						elog(ERROR, "unrecognized RPR navigation kind: %d",
+							 nav->kind);
+						inner_func = NULL;	/* keep compiler quiet */
+						break;
+				}
+
+				if (outer_func != NULL)
+				{
+					/*
+					 * Compound: PREV(FIRST(arg [, inner_offset]) [,
+					 * outer_offset])
+					 */
+					appendStringInfoString(buf, outer_func);
+					appendStringInfoString(buf, inner_func);
+					get_rule_expr((Node *) nav->arg, context, showimplicit);
+					if (nav->offset_arg != NULL)
+					{
+						appendStringInfoString(buf, ", ");
+						get_rule_expr((Node *) nav->offset_arg, context,
+									  showimplicit);
+					}
+					appendStringInfoChar(buf, ')');
+					if (nav->compound_offset_arg != NULL)
+					{
+						appendStringInfoString(buf, ", ");
+						get_rule_expr((Node *) nav->compound_offset_arg,
+									  context, showimplicit);
+					}
+					appendStringInfoChar(buf, ')');
+				}
+				else
+				{
+					/* Simple: FUNC(arg [, offset]) */
+					appendStringInfoString(buf, inner_func);
+					get_rule_expr((Node *) nav->arg, context, showimplicit);
+					if (nav->offset_arg != NULL)
+					{
+						appendStringInfoString(buf, ", ");
+						get_rule_expr((Node *) nav->offset_arg, context,
+									  showimplicit);
+					}
+					appendStringInfoChar(buf, ')');
+				}
+			}
 			break;
 
 		case T_NamedArgExpr:

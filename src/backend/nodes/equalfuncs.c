@@ -20,6 +20,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "nodes/plannodes.h"
 #include "utils/datum.h"
 
 
@@ -147,6 +148,40 @@ static bool
 _equalBitmapset(const Bitmapset *a, const Bitmapset *b)
 {
 	return bms_equal(a, b);
+}
+
+static bool
+_equalRPRPattern(const RPRPattern *a, const RPRPattern *b)
+{
+	COMPARE_SCALAR_FIELD(numVars);
+	COMPARE_SCALAR_FIELD(maxDepth);
+	COMPARE_SCALAR_FIELD(numElements);
+
+	/* Compare varNames array */
+	if (a->numVars > 0)
+	{
+		if (a->varNames == NULL || b->varNames == NULL)
+			return false;
+		for (int i = 0; i < a->numVars; i++)
+		{
+			if (strcmp(a->varNames[i], b->varNames[i]) != 0)
+				return false;
+		}
+	}
+
+	/* Compare elements array */
+	if (a->numElements > 0)
+	{
+		if (a->elements == NULL || b->elements == NULL)
+			return false;
+		if (memcmp(a->elements, b->elements,
+				   a->numElements * sizeof(RPRPatternElement)) != 0)
+			return false;
+	}
+
+	COMPARE_SCALAR_FIELD(isAbsorbable);
+
+	return true;
 }
 
 /*

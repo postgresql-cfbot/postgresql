@@ -31,6 +31,7 @@
 #include "parser/parse_target.h"
 #include "parser/parse_type.h"
 #include "utils/builtins.h"
+#include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
 
@@ -763,8 +764,88 @@ ParseFuncOrColumn(ParseState *pstate, List *funcname, List *fargs,
 	if (retset)
 		check_srf_call_placement(pstate, last_srf, location);
 
+	/*
+	 * RPR navigation functions (PREV/NEXT/FIRST/LAST) are only meaningful
+	 * inside a WINDOW DEFINE clause.
+	 *
+	 * Outside DEFINE, these polymorphic placeholders can shadow column access
+	 * via functional notation (e.g., last(f) meaning f.last). For the 1-arg
+	 * form, try column projection first; if that succeeds, use it instead.
+	 * Otherwise, report a clear parser error.
+	 */
+	if (fdresult == FUNCDETAIL_NORMAL &&
+		pstate->p_expr_kind != EXPR_KIND_RPR_DEFINE &&
+		(funcid == F_PREV_ANYELEMENT || funcid == F_NEXT_ANYELEMENT ||
+		 funcid == F_PREV_ANYELEMENT_INT8 || funcid == F_NEXT_ANYELEMENT_INT8 ||
+		 funcid == F_FIRST_ANYELEMENT || funcid == F_LAST_ANYELEMENT ||
+		 funcid == F_FIRST_ANYELEMENT_INT8 || funcid == F_LAST_ANYELEMENT_INT8))
+	{
+		/* 1-arg form: try column projection before erroring out */
+		if (nargs == 1 && !agg_star && !agg_distinct && over == NULL &&
+			list_length(funcname) == 1)
+		{
+			Node	   *projection;
+
+			projection = ParseComplexProjection(pstate,
+												strVal(linitial(funcname)),
+												linitial(fargs),
+												location);
+			if (projection)
+				return projection;
+		}
+
+		/* Not a column projection -- report error */
+		ereport(ERROR,
+				errcode(ERRCODE_SYNTAX_ERROR),
+				errmsg("cannot use %s outside a DEFINE clause",
+					   NameListToString(funcname)),
+				parser_errposition(pstate, location));
+	}
+
 	/* build the appropriate output structure */
-	if (fdresult == FUNCDETAIL_NORMAL || fdresult == FUNCDETAIL_PROCEDURE)
+	if (fdresult == FUNCDETAIL_NORMAL &&
+		pstate->p_expr_kind == EXPR_KIND_RPR_DEFINE &&
+		(funcid == F_PREV_ANYELEMENT || funcid == F_NEXT_ANYELEMENT ||
+		 funcid == F_PREV_ANYELEMENT_INT8 || funcid == F_NEXT_ANYELEMENT_INT8 ||
+		 funcid == F_FIRST_ANYELEMENT || funcid == F_LAST_ANYELEMENT ||
+		 funcid == F_FIRST_ANYELEMENT_INT8 || funcid == F_LAST_ANYELEMENT_INT8))
+	{
+		/*
+		 * RPR navigation functions (PREV/NEXT/FIRST/LAST) are compiled into
+		 * EEOP_RPR_NAV_SET / EEOP_RPR_NAV_RESTORE opcodes instead of a normal
+		 * function call.  Represent them as RPRNavExpr nodes so that later
+		 * stages can identify them without relying on funcid comparisons.
+		 */
+		RPRNavKind	kind;
+		bool		has_offset;
+		RPRNavExpr *navexpr;
+
+		if (funcid == F_PREV_ANYELEMENT || funcid == F_PREV_ANYELEMENT_INT8)
+			kind = RPR_NAV_PREV;
+		else if (funcid == F_NEXT_ANYELEMENT || funcid == F_NEXT_ANYELEMENT_INT8)
+			kind = RPR_NAV_NEXT;
+		else if (funcid == F_FIRST_ANYELEMENT || funcid == F_FIRST_ANYELEMENT_INT8)
+			kind = RPR_NAV_FIRST;
+		else
+			kind = RPR_NAV_LAST;
+
+		has_offset = (funcid == F_PREV_ANYELEMENT_INT8 ||
+					  funcid == F_NEXT_ANYELEMENT_INT8 ||
+					  funcid == F_FIRST_ANYELEMENT_INT8 ||
+					  funcid == F_LAST_ANYELEMENT_INT8);
+
+		navexpr = makeNode(RPRNavExpr);
+
+		navexpr->kind = kind;
+		navexpr->arg = (Expr *) linitial(fargs);
+		navexpr->offset_arg = has_offset ? (Expr *) lsecond(fargs) : NULL;
+		navexpr->resulttype = rettype;
+		/* resultcollid will be set by parse_collate.c */
+		navexpr->location = location;
+
+		retval = (Node *) navexpr;
+	}
+	else if (fdresult == FUNCDETAIL_NORMAL || fdresult == FUNCDETAIL_PROCEDURE)
 	{
 		FuncExpr   *funcexpr = makeNode(FuncExpr);
 
@@ -2796,6 +2877,9 @@ check_srf_call_placement(ParseState *pstate, Node *last_srf, int location)
 			break;
 		case EXPR_KIND_FOR_PORTION:
 			err = _("set-returning functions are not allowed in FOR PORTION OF expressions");
+			break;
+		case EXPR_KIND_RPR_DEFINE:
+			errkind = true;
 			break;
 
 			/*

@@ -96,16 +96,16 @@ Chapter II  Overall Processing Pipeline
 
 RPR processing is divided into three phases:
 
-  +------------------------------------------------------------+
-  |  1. Parsing (Parser)                                       |
-  |     SQL text -> PATTERN AST + DEFINE expression tree       |
-  |                                                            |
-  |  2. Compilation (Optimizer/Planner)                        |
-  |     PATTERN AST -> optimization -> flat NFA element array  |
-  |                                                            |
-  |  3. Execution (Executor)                                   |
-  |     Row-by-row matching via NFA simulation                 |
-  +------------------------------------------------------------+
+  +--------------------------------------------------------------+
+  |  1. Parsing (Parser)                                         |
+  |     SQL text -> PATTERN parse tree + DEFINE expression tree  |
+  |                                                              |
+  |  2. Compilation (Optimizer/Planner)                          |
+  |     PATTERN parse tree -> optimization -> flat NFA elements  |
+  |                                                              |
+  |  3. Execution (Executor)                                     |
+  |     Row-by-row matching via NFA simulation                   |
+  +--------------------------------------------------------------+
 
 Each phase uses independent data structures, and the interfaces between
 phases are well-defined:
@@ -137,7 +137,7 @@ following:
 
   (3) DEFINE clause transformation (transformDefineClause)
 
-III-2. PATTERN AST (Abstract Syntax Tree)
+III-2. PATTERN parse tree
 
 The parser transforms the PATTERN clause into an RPRPatternNode tree.
 Each node has one of the following four types:
@@ -192,16 +192,16 @@ IV-1. Entry Point
 
 IV-2. The 6 Phases of buildRPRPattern()
 
-  Phase 1: AST optimization (optimizeRPRPattern)
+  Phase 1: parse tree optimization (optimizeRPRPattern)
   Phase 2: Statistics collection (scanRPRPattern)
   Phase 3: Memory allocation (makeRPRPattern)
   Phase 4: NFA element fill (fillRPRPattern)
   Phase 5: Finalization (finalizeRPRPattern)
   Phase 6: Absorbability analysis (computeAbsorbability)
 
-IV-3. Phase 1: AST Optimization
+IV-3. Phase 1: Parse Tree Optimization
 
-After copying the parser-generated AST, the following optimizations are
+After copying the parser-generated parse tree, the following optimizations are
 applied:
 
   (a) SEQ flattening: Unwrap nested SEQ nodes
@@ -236,7 +236,7 @@ applied:
 
 IV-4. Phase 4: NFA Element Array Generation
 
-Transforms the optimized AST into a flat array of RPRPatternElement.
+Transforms the optimized parse tree into a flat array of RPRPatternElement.
 This is the core data structure used for NFA simulation at runtime.
 
 RPRPatternElement struct (16 bytes):
@@ -298,7 +298,7 @@ Element flags (1 byte, bitmask):
 
 Example: PATTERN (A+ B | C)
 
-  AST: ALT(SEQ(VAR(A,1,INF), VAR(B,1,1)), VAR(C,1,1))
+  Parse tree: ALT(SEQ(VAR(A,1,INF), VAR(B,1,1)), VAR(C,1,1))
 
   Compilation result:
 
@@ -345,9 +345,9 @@ Example: PATTERN ((A B)+)
 
 IV-4a. Reluctant Flag (RPR_ELEM_RELUCTANT)
 
-The reluctant flag is set during Phase 4 (fillRPRPattern) when the AST node
-has reluctant == true. It reverses the priority of quantifier expansion at
-runtime:
+The reluctant flag is set during Phase 4 (fillRPRPattern) when the parse
+tree node has reluctant == true. It reverses the priority of quantifier
+expansion at runtime:
 
   Greedy (default):  try loop-back first, then exit  (prefer longer match)
   Reluctant:         try exit first, then loop-back   (prefer shorter match)
@@ -1363,9 +1363,9 @@ XII-5. Execution Optimization Summary
 
   -- Compile-time --
 
-  (1) AST Optimization (IV-3)
+  (1) Parse Tree Optimization (IV-3)
 
-    Simplifies the AST before converting the pattern to an NFA.
+    Simplifies the parse tree before converting the pattern to an NFA.
     Reduces the number of NFA elements through consecutive variable
     merging (A A -> A{2}), SEQ flattening, quantifier multiplication,
     and other transformations.
@@ -1468,7 +1468,7 @@ Appendix A. Key Function Index
   transformRPR                  parse_rpr.c           Parser entry point
   transformDefineClause         parse_rpr.c           DEFINE transformation
   buildRPRPattern               rpr.c                 NFA compilation main
-  optimizeRPRPattern            rpr.c                 AST optimization
+  optimizeRPRPattern            rpr.c                 parse tree optimization
   fillRPRPattern                rpr.c                 NFA element generation
   finalizeRPRPattern            rpr.c                 Finalization
   computeAbsorbability          rpr.c                 Absorption analysis

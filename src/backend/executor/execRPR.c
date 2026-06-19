@@ -821,8 +821,11 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 
 			if (matched)
 			{
-				/* Increment count */
-				if (count < RPR_COUNT_MAX)
+				/*
+				 * Increment count, saturating at RPR_COUNT_INF to avoid int32
+				 * overflow; a saturated count then compares as "unbounded".
+				 */
+				if (count < RPR_COUNT_INF)
 					count++;
 
 				/* Max constraint should not be exceeded */
@@ -857,7 +860,7 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 					int32		endCount = state->counts[endDepth];
 
 					/* Increment group count */
-					if (endCount < RPR_COUNT_MAX)
+					if (endCount < RPR_COUNT_INF)
 						endCount++;
 					Assert(endElem->max == RPR_QUANTITY_INF ||
 						   endCount <= endElem->max);
@@ -900,7 +903,7 @@ nfa_match(WindowAggState *winstate, RPRNFAContext *ctx, bool *varMatched)
 						state->counts[endDepth] = 0;
 
 						/* Increment outer group count */
-						if (outerCount < RPR_COUNT_MAX)
+						if (outerCount < RPR_COUNT_INF)
 							outerCount++;
 						Assert(outerEnd->max == RPR_QUANTITY_INF ||
 							   outerCount <= outerEnd->max);
@@ -1180,7 +1183,7 @@ nfa_advance_end(WindowAggState *winstate, RPRNFAContext *ctx,
 
 			/* END->END: increment outer END's count */
 			if (RPRElemIsEnd(nextElem) &&
-				ffState->counts[nextElem->depth] < RPR_COUNT_MAX)
+				ffState->counts[nextElem->depth] < RPR_COUNT_INF)
 				ffState->counts[nextElem->depth]++;
 		}
 
@@ -1235,7 +1238,7 @@ nfa_advance_end(WindowAggState *winstate, RPRNFAContext *ctx,
 			RPRElemIsAbsorbableBranch(nextElem);
 
 		/* END->END: increment outer END's count */
-		if (RPRElemIsEnd(nextElem) && state->counts[nextElem->depth] < RPR_COUNT_MAX)
+		if (RPRElemIsEnd(nextElem) && state->counts[nextElem->depth] < RPR_COUNT_INF)
 			state->counts[nextElem->depth]++;
 
 		nfa_route_to_elem(winstate, ctx, state, nextElem, currentPos);
@@ -1262,7 +1265,7 @@ nfa_advance_end(WindowAggState *winstate, RPRNFAContext *ctx,
 		nextElem = &elements[exitState->elemIdx];
 
 		/* END->END: increment outer END's count */
-		if (RPRElemIsEnd(nextElem) && exitState->counts[nextElem->depth] < RPR_COUNT_MAX)
+		if (RPRElemIsEnd(nextElem) && exitState->counts[nextElem->depth] < RPR_COUNT_INF)
 			exitState->counts[nextElem->depth]++;
 
 		/* Prepare loop state */
@@ -1355,7 +1358,7 @@ nfa_advance_var(WindowAggState *winstate, RPRNFAContext *ctx,
 			/* When exiting directly to an outer END, increment its count */
 			if (RPRElemIsEnd(nextElem))
 			{
-				if (cloneState->counts[nextElem->depth] < RPR_COUNT_MAX)
+				if (cloneState->counts[nextElem->depth] < RPR_COUNT_INF)
 					cloneState->counts[nextElem->depth]++;
 			}
 
@@ -1404,7 +1407,7 @@ nfa_advance_var(WindowAggState *winstate, RPRNFAContext *ctx,
 			 */
 			if (RPRElemIsEnd(nextElem))
 			{
-				if (state->counts[nextElem->depth] < RPR_COUNT_MAX)
+				if (state->counts[nextElem->depth] < RPR_COUNT_INF)
 					state->counts[nextElem->depth]++;
 			}
 
@@ -1438,7 +1441,7 @@ nfa_advance_var(WindowAggState *winstate, RPRNFAContext *ctx,
 		/* See comment above: increment outer END count for quantified VARs */
 		if (RPRElemIsEnd(nextElem))
 		{
-			if (state->counts[nextElem->depth] < RPR_COUNT_MAX)
+			if (state->counts[nextElem->depth] < RPR_COUNT_INF)
 				state->counts[nextElem->depth]++;
 		}
 

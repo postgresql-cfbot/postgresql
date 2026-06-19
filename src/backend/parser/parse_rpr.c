@@ -8,7 +8,7 @@
  *   - Validates frame options (must start at CURRENT ROW, no EXCLUDE)
  *   - Validates PATTERN variable count (max RPR_VARID_MAX + 1)
  *   - Transforms DEFINE clause
- *   - Stores the PATTERN AST and the SKIP TO/INITIAL flags
+ *   - Stores the PATTERN parse tree and the SKIP TO/INITIAL flags
  *
  * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
  * Portions Copyright (c) 1994, Regents of the University of California
@@ -67,7 +67,7 @@ static bool define_walker(Node *node, void *context);
  *   - Set AFTER MATCH SKIP TO flag
  *   - Set SEEK/INITIAL flag
  *   - Transforms DEFINE clause into TargetEntry list
- *   - Stores PATTERN AST for deparsing (optimization happens in planner)
+ *   - Stores PATTERN parse tree for deparsing (optimization happens in planner)
  *
  * Returns early if windef has no rpCommonSyntax (non-RPR window).
  */
@@ -180,7 +180,7 @@ transformRPR(ParseState *pstate, WindowClause *wc, WindowDef *windef,
 	/* Transform DEFINE clause into list of TargetEntry's */
 	wc->defineClause = transformDefineClause(pstate, windef, targetlist);
 
-	/* Store PATTERN AST for deparsing */
+	/* Store PATTERN parse tree for deparsing */
 	wc->rpPattern = windef->rpCommonSyntax->rpPattern;
 }
 
@@ -263,19 +263,6 @@ validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
 /*
  * transformDefineClause
  *		Process DEFINE clause and transform ResTarget into list of TargetEntry.
- *
- * First:
- *   1. Validates PATTERN variable count and collects RPR variable names
- *   2. Rejects DEFINE variables not used in PATTERN
- *   3. Checks for duplicate variable names in DEFINE clause
- *
- * Then for each DEFINE variable:
- *   4. Transforms expression via transformExpr() and coerces it to boolean
- *   5. Creates defineClause entry with proper resname (pattern variable name)
- *   6. Ensures referenced Var nodes are present in the query targetlist (via
- *      pull_var_clause)
- *
- * Finally marks column origins and assigns collation information.
  *
  * Note: Variables not in DEFINE are evaluated as TRUE by the executor.
  * Variables in DEFINE but not in PATTERN are rejected as an error.

@@ -3,13 +3,13 @@
  * rpr.c
  *	  Row Pattern Recognition pattern compilation for planner
  *
- * This file contains functions for optimizing RPR pattern AST and
+ * This file contains functions for optimizing the RPR pattern parse tree and
  * compiling it to a flat element array for NFA execution by WindowAgg.
  *
  * Key components:
  *   1. Pattern Optimization: Simplifies patterns before compilation
  *      (e.g., flatten nested SEQ/ALT, merge consecutive vars)
- *   2. Pattern Compilation: Converts AST to flat element array for NFA
+ *   2. Pattern Compilation: Converts parse tree to flat element array for NFA
  *   3. Absorption Analysis: Computes flags for O(n^2)->O(n) optimization
  *
  * Context Absorption Optimization:
@@ -995,7 +995,7 @@ collectDefineVariables(List *defineVariableList, char **varNames)
 
 /*
  * scanRPRPatternRecursive
- *		Recursively scan pattern AST (pass 1 internal).
+ *		Recursively scan pattern parse tree (pass 1 internal).
  *
  * Collects unique variable names and counts elements while tracking depth.
  * Variables from DEFINE clause are already in varNames; this adds any
@@ -1092,7 +1092,7 @@ scanRPRPatternRecursive(RPRPatternNode *node, char **varNames, int *numVars,
 
 /*
  * scanRPRPattern
- *		Scan pattern AST (pass 1 entry point).
+ *		Scan pattern parse tree (pass 1 entry point).
  *
  * Collects unique variable names (appending to those from DEFINE clause),
  * counts total elements (including FIN marker), and tracks maximum depth.
@@ -1297,7 +1297,7 @@ fillRPRPatternGroup(RPRPatternNode *node, RPRPattern *pat, int *idx, RPRDepth de
  * fillRPRPatternAlt
  *		Fill an ALT pattern and its alternatives.
  *
- * Creates ALT_START marker, fills each alternative at increased depth,
+ * Creates the ALT marker, fills each alternative at increased depth,
  * sets jump pointers for backtracking, and next pointers for successful paths.
  *
  * Returns true if any branch is nullable (OR semantics: one nullable
@@ -1383,9 +1383,10 @@ fillRPRPatternAlt(RPRPatternNode *node, RPRPattern *pat, int *idx, RPRDepth dept
 
 /*
  * fillRPRPattern
- *		Fill pattern elements array from AST (pass 2).
+ *		Fill pattern elements array from parse tree (pass 2).
  *
- * Recursively traverses AST and populates pre-allocated elements array.
+ * Recursively traverses the parse tree and populates pre-allocated elements
+ * array.
  * Dispatches to type-specific fill functions.
  *
  * Returns true if the pattern is nullable (can match zero rows).
@@ -1767,7 +1768,7 @@ computeAbsorbabilityRecursive(RPRPattern *pattern, RPRElemIdx startIdx,
 	}
 	else
 	{
-		/* Should never reach END - structural invariant of pattern AST */
+		/* Should never reach END - structural invariant of pattern parse tree */
 		Assert(!RPRElemIsEnd(elem));
 
 		/* Non-ALT, non-BEGIN: check if unbounded start */
@@ -1894,13 +1895,13 @@ validate_rpr_define_volatility(List *defineClause)
 
 /*
  * buildRPRPattern
- *		Compile pattern AST to flat bytecode array.
+ *		Compile pattern parse tree to flat bytecode array.
  *
  * Compilation phases:
- *   1. Optimize AST (flatten, merge, deduplicate)
+ *   1. Optimize parse tree (flatten, merge, deduplicate)
  *   2. Scan: collect variables, count elements (pass 1)
  *   3. Allocate result structure
- *   4. Fill elements from AST (pass 2)
+ *   4. Fill elements from parse tree (pass 2)
  *   5. Finalize pattern structure
  *   6. Compute context absorption eligibility
  *

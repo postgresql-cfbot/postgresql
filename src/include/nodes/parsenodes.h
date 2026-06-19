@@ -621,7 +621,7 @@ typedef enum RPRPatternNodeType
 } RPRPatternNodeType;
 
 /*
- * RPRPatternNode - Row Pattern Recognition pattern AST node
+ * RPRPatternNode - Row Pattern Recognition pattern parse tree node
  */
 typedef struct RPRPatternNode
 {
@@ -630,7 +630,7 @@ typedef struct RPRPatternNode
 	int32		min;			/* minimum repetitions (0 for *, ?) */
 	int32		max;			/* maximum repetitions (PG_INT32_MAX for *, +) */
 	bool		reluctant;		/* true for reluctant (non-greedy) */
-	ParseLoc	location;		/* token location, or -1 */
+	ParseLoc	location;		/* token location, or -1 if unknown */
 	char	   *varName;		/* VAR: variable name */
 	List	   *children;		/* SEQ, ALT, GROUP: child nodes */
 
@@ -652,10 +652,10 @@ typedef struct RPCommonSyntax
 	RPSkipTo	rpSkipTo;		/* Row Pattern AFTER MATCH SKIP type */
 	bool		initial;		/* true if <row pattern initial or seek> is
 								 * initial */
-	RPRPatternNode *rpPattern;	/* PATTERN clause AST */
+	RPRPatternNode *rpPattern;	/* PATTERN parse tree */
 	List	   *rpDefs;			/* row pattern definitions clause (list of
 								 * ResTarget) */
-	ParseLoc	location;		/* PATTERN keyword location, or -1 */
+	ParseLoc	location;		/* PATTERN keyword location, or -1 if unknown */
 } RPCommonSyntax;
 
 /*
@@ -1727,7 +1727,7 @@ typedef struct GroupingSet
  * options are never copied, per spec.
  * "defineClause" is Row Pattern Recognition DEFINE clause (list of
  * TargetEntry). TargetEntry.resname represents row pattern definition
- * variable name. "rpPattern" represents PATTERN clause as an AST tree
+ * variable name. "rpPattern" represents the PATTERN clause as a parse tree
  * (RPRPatternNode).
  *
  */
@@ -1763,7 +1763,7 @@ typedef struct WindowClause
 								 * initial */
 	/* Row Pattern DEFINE clause (list of TargetEntry) */
 	List	   *defineClause;
-	/* Row Pattern PATTERN clause AST */
+	/* Row Pattern PATTERN parse tree */
 	RPRPatternNode *rpPattern;
 } WindowClause;
 

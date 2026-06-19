@@ -17734,9 +17734,12 @@ row_pattern_primary:
 		;
 
 row_pattern_quantifier_opt:
-			/* EMPTY - no quantifier means exactly once; @$ is unused since
-			 * min=max=1 never produces an error */
+			/*EMPTY*/
 				{
+					/*
+					 * no quantifier means exactly once; @$ is unused since
+					 * min=max=1 never produces an error
+					 */
 					$$ = (Node *) makeRPRQuantifier(1, 1, false, @$);
 				}
 			| '*'

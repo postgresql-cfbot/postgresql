@@ -1303,9 +1303,7 @@ checkWellFormedSelectStmt(SelectStmt *stmt, CteState *cstate)
 /*
  * contain_rpr_walker
  *	  Returns true if the raw parse tree contains any <row pattern common
- *	  syntax> -- i.e., any WindowDef with PATTERN/DEFINE attached.  Used
- *	  by transformWithClause() to enforce ISO/IEC 9075-2:2016 7.17 SR 3)f)
- *	  on WITH RECURSIVE elements.
+ *	  syntax> -- i.e., any WindowDef with PATTERN/DEFINE attached.
  */
 static bool
 contain_rpr_walker(Node *node, void *context)

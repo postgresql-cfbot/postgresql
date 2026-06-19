@@ -5598,13 +5598,15 @@ EXPLAIN (COSTS OFF) SELECT * FROM rpr_ev_opt_mixed;
 -- find_window_run_conditions() pushes WHERE filters on monotonic window
 -- functions into WindowAgg as Run Conditions for early termination.
 -- With RPR's required frame (ROWS BETWEEN CURRENT ROW AND UNBOUNDED
--- FOLLOWING), the monotonic direction determines which operators trigger
--- Run Condition pushdown:
+-- FOLLOWING), the monotonic direction of the window function determines
+-- which comparison operators allow pushdown:
 --   INCREASING (<=): row_number, rank, dense_rank, percent_rank,
 --                    cume_dist, ntile
---   DECREASING (>):  count(*) (via int8inc, END_UNBOUNDED_FOLLOWING)
--- RPR window function results are match-dependent, not monotonic.
--- Test with count(*) > 0 as representative case.
+--   DECREASING (>):  count(*).  As the current row advances, the frame
+--                    (which ends at UNBOUNDED FOLLOWING) shrinks, so the
+--                    count decreases.
+-- RPR window function results are match-dependent, not monotonic, so this
+-- pushdown does not apply.  Test with count(*) > 0 as a representative case.
 --
 -- Without RPR: count(*) > 0 is pushed down as Run Condition
 EXPLAIN (COSTS OFF)

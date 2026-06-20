@@ -406,11 +406,9 @@ select * from int4_tbl o where exists
  Hash Semi Join
    Hash Cond: (o.f1 = i.f1)
    ->  Seq Scan on int4_tbl o
-         Bloom Filter 1: keys=(f1)
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on int4_tbl i
-(7 rows)
+(5 rows)
 
 explain (costs off)
 select * from int4_tbl o where not exists
@@ -1673,7 +1671,7 @@ select * from int4_tbl where
 ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
  Nested Loop Semi Join
    Output: int4_tbl.f1
-   Join Filter: (CASE WHEN (ANY (int4_tbl.f1 = (hashed SubPlan any_1).col1)) THEN int4_tbl.f1 ELSE NULL::integer END = b.ten)
+   Join Filter: (b.ten = CASE WHEN (ANY (int4_tbl.f1 = (hashed SubPlan any_1).col1)) THEN int4_tbl.f1 ELSE NULL::integer END)
    ->  Seq Scan on public.int4_tbl
          Output: int4_tbl.f1
    ->  Seq Scan on public.tenk1 b
@@ -2180,13 +2178,11 @@ order by t1.ten;
                Hash Cond: (t2.fivethous = t1.unique1)
                ->  Seq Scan on public.tenk1 t2
                      Output: t2.unique1, t2.unique2, t2.two, t2.four, t2.ten, t2.twenty, t2.hundred, t2.thousand, t2.twothousand, t2.fivethous, t2.tenthous, t2.odd, t2.even, t2.stringu1, t2.stringu2, t2.string4
-                     Bloom Filter 1: keys=(t2.fivethous)
                ->  Hash
                      Output: t1.ten, t1.unique1
-                     Bloom Filter 1
                      ->  Seq Scan on public.tenk1 t1
                            Output: t1.ten, t1.unique1
-(17 rows)
+(15 rows)
 
 select t1.ten, sum(x) from
   tenk1 t1 left join lateral (
@@ -2281,19 +2277,15 @@ order by 1, 2;
                Hash Cond: (t2.q2 = t3.q2)
                ->  Seq Scan on public.int8_tbl t2
                      Output: t2.q1, t2.q2
-                     Bloom Filter 1: keys=(t2.q2)
-                     Bloom Filter 2: keys=(t2.q2)
                ->  Hash
                      Output: t3.q2
-                     Bloom Filter 1
                      ->  Seq Scan on public.int8_tbl t3
                            Output: t3.q2
          ->  Hash
                Output: t1.q1, t1.q2
-               Bloom Filter 2
                ->  Seq Scan on public.int8_tbl t1
                      Output: t1.q1, t1.q2
-(23 rows)
+(19 rows)
 
 select t1.q1, x from
   int8_tbl t1 left join
@@ -2336,16 +2328,14 @@ order by 1, 2;
                Output: t2.q2, ((t2.q1 + 1))
                ->  Seq Scan on public.int8_tbl t2
                      Output: t2.q1, t2.q2
-                     Bloom Filter 1: keys=(t2.q2)
                ->  Seq Scan on public.int8_tbl t3
                      Output: t3.q2, (t2.q1 + 1)
                      Filter: (t2.q2 = t3.q2)
          ->  Hash
                Output: t1.q1, t1.q2
-               Bloom Filter 1
                ->  Seq Scan on public.int8_tbl t1
                      Output: t1.q1, t1.q2
-(19 rows)
+(17 rows)
 
 select t1.q1, x from
   int8_tbl t1 left join
@@ -2390,19 +2380,15 @@ order by 1, 2;
                Hash Cond: (t2.q2 = t3.q1)
                ->  Seq Scan on public.int8_tbl t2
                      Output: t2.q1, t2.q2
-                     Bloom Filter 1: keys=(t2.q2)
-                     Bloom Filter 2: keys=(t2.q1)
                ->  Hash
                      Output: t3.q1
-                     Bloom Filter 1
                      ->  Seq Scan on public.int8_tbl t3
                            Output: t3.q1
          ->  Hash
                Output: t1.q1
-               Bloom Filter 2
                ->  Seq Scan on public.int8_tbl t1
                      Output: t1.q1
-(23 rows)
+(19 rows)
 
 select t1.q1, x from
   int8_tbl t1 left join
@@ -2455,16 +2441,14 @@ order by 1, 2;
                Output: t2.q1, (t2.q2)
                ->  Seq Scan on public.int8_tbl t2
                      Output: t2.q1, t2.q2
-                     Bloom Filter 1: keys=(t2.q1)
                ->  Seq Scan on public.int8_tbl t3
                      Output: t3.q1, t2.q2
                      Filter: (t2.q2 = t3.q1)
          ->  Hash
                Output: t1.q1
-               Bloom Filter 1
                ->  Seq Scan on public.int8_tbl t1
                      Output: t1.q1
-(19 rows)
+(17 rows)
 
 select t1.q1, x from
   int8_tbl t1 left join
@@ -2528,21 +2512,19 @@ order by 1, 2, 3;
                      Hash Cond: (t2.q1 = t3.q2)
                      ->  Seq Scan on public.int8_tbl t2
                            Output: t2.q1, t2.q2
-                           Bloom Filter 1: keys=(t2.q2)
                      ->  Hash
                            Output: t3.q2, (COALESCE(t3.q1, t3.q1))
                            ->  Seq Scan on public.int8_tbl t3
                                  Output: t3.q2, COALESCE(t3.q1, t3.q1)
                ->  Hash
                      Output: t4.q1, t4.q2
-                     Bloom Filter 1
                      ->  Seq Scan on public.int8_tbl t4
                            Output: t4.q1, t4.q2
          ->  Hash
                Output: t1.q2
                ->  Seq Scan on public.int8_tbl t1
                      Output: t1.q2
-(28 rows)
+(26 rows)
 
 select ss2.* from
   int8_tbl t1 left join
@@ -2610,13 +2592,11 @@ order by 1, 2, 3;
                                  Output: t3.q2, COALESCE(t3.q1, t3.q1)
                ->  Seq Scan on public.int8_tbl t4
                      Output: t4.q1, t4.q2, (COALESCE(t3.q1, t3.q1))
-                     Bloom Filter 1: keys=(t4.q1)
          ->  Hash
                Output: t1.q2
-               Bloom Filter 1
                ->  Seq Scan on public.int8_tbl t1
                      Output: t1.q2
-(26 rows)
+(24 rows)
 
 select ss2.* from
   int8_tbl t1 left join
@@ -2917,13 +2897,11 @@ select * from tenk1 A where hundred in (select hundred from tenk2 B where B.odd 
  Hash Join
    Hash Cond: ((a.odd = b.odd) AND (a.hundred = b.hundred))
    ->  Seq Scan on tenk1 a
-         Bloom Filter 1: keys=(odd, hundred)
    ->  Hash
-         Bloom Filter 1
          ->  HashAggregate
                Group Key: b.odd, b.hundred
                ->  Seq Scan on tenk2 b
-(9 rows)
+(7 rows)
 
 explain (costs off)
 select * from tenk1 A where exists
@@ -2988,13 +2966,11 @@ ON B.hundred in (SELECT c.hundred FROM tenk2 C WHERE c.odd = b.odd);
          ->  Hash Join
                Hash Cond: ((b.odd = c.odd) AND (b.hundred = c.hundred))
                ->  Seq Scan on tenk2 b
-                     Bloom Filter 1: keys=(odd, hundred)
                ->  Hash
-                     Bloom Filter 1
                      ->  HashAggregate
                            Group Key: c.odd, c.hundred
                            ->  Seq Scan on tenk2 c
-(12 rows)
+(10 rows)
 
 -- we can pull up the sublink into the inner JoinExpr.
 explain (costs off)
@@ -3009,15 +2985,13 @@ WHERE a.thousand < 750;
          Hash Cond: (a.hundred = c.hundred)
          ->  Seq Scan on tenk1 a
                Filter: (thousand < 750)
-               Bloom Filter 1: keys=(hundred)
          ->  Hash
-               Bloom Filter 1
                ->  HashAggregate
                      Group Key: c.odd, c.hundred
                      ->  Seq Scan on tenk2 c
    ->  Hash
          ->  Seq Scan on tenk2 b
-(14 rows)
+(12 rows)
 
 -- we can pull up the aggregate sublink into RHS of a left join.
 explain (costs off)
@@ -3154,11 +3128,9 @@ WHERE a.ten IN (VALUES (1), (2));
    Hash Cond: (a.ten = c.ten)
    ->  Seq Scan on onek a
          Filter: (ten = ANY ('{1,2}'::integer[]))
-         Bloom Filter 1: keys=(ten)
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on tenk1 c
-(8 rows)
+(6 rows)
 
 EXPLAIN (COSTS OFF)
 SELECT c.unique1,c.ten FROM tenk1 c JOIN onek a USING (ten)
@@ -3169,11 +3141,9 @@ WHERE c.ten IN (VALUES (1), (2));
    Hash Cond: (c.ten = a.ten)
    ->  Seq Scan on tenk1 c
          Filter: (ten = ANY ('{1,2}'::integer[]))
-         Bloom Filter 1: keys=(ten)
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on onek a
-(8 rows)
+(6 rows)
 
 -- Constant expressions are simplified
 EXPLAIN (COSTS OFF)
@@ -3494,15 +3464,14 @@ WHERE id NOT IN (
    Hash Cond: (not_null_tab.id = t2.id)
    ->  Seq Scan on not_null_tab
    ->  Hash
-         ->  Merge Join
-               Merge Cond: (t1.id = t2.id)
-               ->  Sort
-                     Sort Key: t1.id
-                     ->  Seq Scan on not_null_tab t1
-               ->  Sort
-                     Sort Key: t2.id
+         ->  Hash Join
+               Hash Cond: (t1.id = t2.id)
+               ->  Seq Scan on not_null_tab t1
+                     Bloom Filter 1: keys=(id)
+               ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on not_null_tab t2
-(12 rows)
+(11 rows)
 
 -- ANTI JOIN: outer side is defined NOT NULL, inner side is forced nonnullable
 -- by qual clause
@@ -3543,11 +3512,8 @@ WHERE id NOT IN (
 );
                    QUERY PLAN                    
 -------------------------------------------------
- Merge Anti Join
-   Merge Cond: (not_null_tab.id = t1.id)
-   ->  Sort
-         Sort Key: not_null_tab.id
-         ->  Seq Scan on not_null_tab
+ Merge Right Anti Join
+   Merge Cond: (t1.id = not_null_tab.id)
    ->  Nested Loop Left Join
          ->  Merge Join
                Merge Cond: (t1.id = t2.id)
@@ -3559,6 +3525,9 @@ WHERE id NOT IN (
                      ->  Seq Scan on null_tab t2
          ->  Materialize
                ->  Seq Scan on null_tab t3
+   ->  Sort
+         Sort Key: not_null_tab.id
+         ->  Seq Scan on not_null_tab
 (16 rows)
 
 -- ANTI JOIN: outer side is defined NOT NULL and is not nulled by outer join,

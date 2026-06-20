@@ -90,17 +90,15 @@ set local work_mem = '4MB';
 set local hash_mem_multiplier = 1.0;
 explain (costs off)
   select count(*) from simple r join simple s using (id);
-               QUERY PLAN                
------------------------------------------
+               QUERY PLAN               
+----------------------------------------
  Aggregate
    ->  Hash Join
          Hash Cond: (r.id = s.id)
          ->  Seq Scan on simple r
-               Bloom Filter 1: keys=(id)
          ->  Hash
-               Bloom Filter 1
                ->  Seq Scan on simple s
-(8 rows)
+(6 rows)
 
 select count(*) from simple r join simple s using (id);
  count 
@@ -205,17 +203,15 @@ set local work_mem = '128kB';
 set local hash_mem_multiplier = 1.0;
 explain (costs off)
   select count(*) from simple r join simple s using (id);
-               QUERY PLAN                
------------------------------------------
+               QUERY PLAN               
+----------------------------------------
  Aggregate
    ->  Hash Join
          Hash Cond: (r.id = s.id)
          ->  Seq Scan on simple r
-               Bloom Filter 1: keys=(id)
          ->  Hash
-               Bloom Filter 1
                ->  Seq Scan on simple s
-(8 rows)
+(6 rows)
 
 select count(*) from simple r join simple s using (id);
  count 

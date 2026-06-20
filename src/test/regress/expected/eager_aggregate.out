@@ -147,15 +147,15 @@ GROUP BY t1.a ORDER BY t1.a;
                            Group Key: t2.b
                            ->  Hash Join
                                  Output: t2.c, t2.b, t3.c
-                                 Hash Cond: (t3.a = t2.a)
-                                 ->  Seq Scan on public.eager_agg_t3 t3
-                                       Output: t3.a, t3.b, t3.c
-                                       Bloom Filter 1: keys=(t3.a)
+                                 Hash Cond: (t2.a = t3.a)
+                                 ->  Seq Scan on public.eager_agg_t2 t2
+                                       Output: t2.a, t2.b, t2.c
+                                       Bloom Filter 1: keys=(t2.a)
                                  ->  Hash
-                                       Output: t2.c, t2.b, t2.a
+                                       Output: t3.c, t3.a
                                        Bloom Filter 1
-                                       ->  Seq Scan on public.eager_agg_t2 t2
-                                             Output: t2.c, t2.b, t2.a
+                                       ->  Seq Scan on public.eager_agg_t3 t3
+                                             Output: t3.c, t3.a
 (29 rows)
 
 SELECT t1.a, avg(t2.c + t3.c)
@@ -209,15 +209,15 @@ GROUP BY t1.a ORDER BY t1.a;
                                  Sort Key: t2.b
                                  ->  Hash Join
                                        Output: t2.c, t2.b, t3.c
-                                       Hash Cond: (t3.a = t2.a)
-                                       ->  Seq Scan on public.eager_agg_t3 t3
-                                             Output: t3.a, t3.b, t3.c
-                                             Bloom Filter 1: keys=(t3.a)
+                                       Hash Cond: (t2.a = t3.a)
+                                       ->  Seq Scan on public.eager_agg_t2 t2
+                                             Output: t2.a, t2.b, t2.c
+                                             Bloom Filter 1: keys=(t2.a)
                                        ->  Hash
-                                             Output: t2.c, t2.b, t2.a
+                                             Output: t3.c, t3.a
                                              Bloom Filter 1
-                                             ->  Seq Scan on public.eager_agg_t2 t2
-                                                   Output: t2.c, t2.b, t2.a
+                                             ->  Seq Scan on public.eager_agg_t3 t3
+                                                   Output: t3.c, t3.a
 (32 rows)
 
 SELECT t1.a, avg(t2.c + t3.c)
@@ -261,16 +261,14 @@ GROUP BY t1.a ORDER BY t1.a;
                Hash Cond: (t1.b = t2.b)
                ->  Seq Scan on public.eager_agg_t1 t1
                      Output: t1.a, t1.b, t1.c
-                     Bloom Filter 1: keys=(t1.b)
                ->  Hash
                      Output: t2.b, (PARTIAL avg(t2.c))
-                     Bloom Filter 1
                      ->  Partial HashAggregate
                            Output: t2.b, PARTIAL avg(t2.c)
                            Group Key: t2.b
                            ->  Seq Scan on public.eager_agg_t2 t2
                                  Output: t2.a, t2.b, t2.c
-(20 rows)
+(18 rows)
 
 SELECT t1.a, avg(t2.c)
   FROM eager_agg_t1 t1
@@ -309,13 +307,11 @@ GROUP BY t2.b ORDER BY t2.b;
                Hash Cond: (t2.b = t1.b)
                ->  Seq Scan on public.eager_agg_t2 t2
                      Output: t2.a, t2.b, t2.c
-                     Bloom Filter 1: keys=(t2.b)
                ->  Hash
                      Output: t1.b
-                     Bloom Filter 1
                      ->  Seq Scan on public.eager_agg_t1 t1
                            Output: t1.b
-(17 rows)
+(15 rows)
 
 SELECT t2.b, avg(t2.c)
   FROM eager_agg_t1 t1
@@ -460,12 +456,12 @@ GROUP BY t1.a ORDER BY t1.a;
    ->  Sort
          Sort Key: t1.a
          ->  Hash Join
-               Hash Cond: (t2.b = t1.b)
-               ->  Seq Scan on eager_agg_t2 t2
+               Hash Cond: (t1.b = t2.b)
+               ->  Seq Scan on eager_agg_t1 t1
                      Bloom Filter 1: keys=(b)
                ->  Hash
                      Bloom Filter 1
-                     ->  Seq Scan on eager_agg_t1 t1
+                     ->  Seq Scan on eager_agg_t2 t2
 (11 rows)
 
 EXPLAIN (COSTS OFF)
@@ -480,12 +476,12 @@ GROUP BY t1.a ORDER BY t1.a;
    ->  Sort
          Sort Key: t1.a
          ->  Hash Join
-               Hash Cond: (t2.b = t1.b)
-               ->  Seq Scan on eager_agg_t2 t2
+               Hash Cond: (t1.b = t2.b)
+               ->  Seq Scan on eager_agg_t1 t1
                      Bloom Filter 1: keys=(b)
                ->  Hash
                      Bloom Filter 1
-                     ->  Seq Scan on eager_agg_t1 t1
+                     ->  Seq Scan on eager_agg_t2 t2
 (11 rows)
 
 -- Eager aggregation must not push a partial aggregate onto the inner side of a
@@ -552,14 +548,16 @@ GROUP BY t2.b ORDER BY t2.b;
                Hash Cond: (t1.b = t2.b)
                ->  Seq Scan on public.eager_agg_t1 t1
                      Output: t1.a, t1.b, t1.c
+                     Bloom Filter 1: keys=(t1.b)
                ->  Hash
                      Output: t2.b, (PARTIAL count(*))
+                     Bloom Filter 1
                      ->  Partial HashAggregate
                            Output: t2.b, PARTIAL count(*)
                            Group Key: t2.b
                            ->  Seq Scan on public.eager_agg_t2 t2
                                  Output: t2.a, t2.b, t2.c
-(18 rows)
+(20 rows)
 
 SELECT t2.b, count(*)
   FROM eager_agg_t2 t2
@@ -621,10 +619,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t2.y = t1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p1 t2
                            Output: t2.y
-                           Bloom Filter 1: keys=(t2.y)
                      ->  Hash
                            Output: t1.x, (PARTIAL sum(t1.y)), (PARTIAL count(*))
-                           Bloom Filter 1
                            ->  Partial HashAggregate
                                  Output: t1.x, PARTIAL sum(t1.y), PARTIAL count(*)
                                  Group Key: t1.x
@@ -638,10 +634,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t2_1.y = t1_1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p2 t2_1
                            Output: t2_1.y
-                           Bloom Filter 2: keys=(t2_1.y)
                      ->  Hash
                            Output: t1_1.x, (PARTIAL sum(t1_1.y)), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t1_1.x, PARTIAL sum(t1_1.y), PARTIAL count(*)
                                  Group Key: t1_1.x
@@ -655,16 +649,14 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t2_2.y = t1_2.x)
                      ->  Seq Scan on public.eager_agg_tab2_p3 t2_2
                            Output: t2_2.y
-                           Bloom Filter 3: keys=(t2_2.y)
                      ->  Hash
                            Output: t1_2.x, (PARTIAL sum(t1_2.y)), (PARTIAL count(*))
-                           Bloom Filter 3
                            ->  Partial HashAggregate
                                  Output: t1_2.x, PARTIAL sum(t1_2.y), PARTIAL count(*)
                                  Group Key: t1_2.x
                                  ->  Seq Scan on public.eager_agg_tab1_p3 t1_2
                                        Output: t1_2.x, t1_2.y
-(55 rows)
+(49 rows)
 
 SELECT t1.x, sum(t1.y), count(*)
   FROM eager_agg_tab1 t1
@@ -709,10 +701,8 @@ GROUP BY t2.y ORDER BY t2.y;
                      Hash Cond: (t2.y = t1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p1 t2
                            Output: t2.y
-                           Bloom Filter 1: keys=(t2.y)
                      ->  Hash
                            Output: t1.x, (PARTIAL sum(t1.y)), (PARTIAL count(*))
-                           Bloom Filter 1
                            ->  Partial HashAggregate
                                  Output: t1.x, PARTIAL sum(t1.y), PARTIAL count(*)
                                  Group Key: t1.x
@@ -726,10 +716,8 @@ GROUP BY t2.y ORDER BY t2.y;
                      Hash Cond: (t2_1.y = t1_1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p2 t2_1
                            Output: t2_1.y
-                           Bloom Filter 2: keys=(t2_1.y)
                      ->  Hash
                            Output: t1_1.x, (PARTIAL sum(t1_1.y)), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t1_1.x, PARTIAL sum(t1_1.y), PARTIAL count(*)
                                  Group Key: t1_1.x
@@ -743,16 +731,14 @@ GROUP BY t2.y ORDER BY t2.y;
                      Hash Cond: (t2_2.y = t1_2.x)
                      ->  Seq Scan on public.eager_agg_tab2_p3 t2_2
                            Output: t2_2.y
-                           Bloom Filter 3: keys=(t2_2.y)
                      ->  Hash
                            Output: t1_2.x, (PARTIAL sum(t1_2.y)), (PARTIAL count(*))
-                           Bloom Filter 3
                            ->  Partial HashAggregate
                                  Output: t1_2.x, PARTIAL sum(t1_2.y), PARTIAL count(*)
                                  Group Key: t1_2.x
                                  ->  Seq Scan on public.eager_agg_tab1_p3 t1_2
                                        Output: t1_2.y, t1_2.x
-(55 rows)
+(49 rows)
 
 SELECT t2.y, sum(t1.y), count(*)
   FROM eager_agg_tab1 t1
@@ -799,10 +785,8 @@ GROUP BY t2.x HAVING avg(t1.x) > 5 ORDER BY t2.x;
                      Hash Cond: (t2.y = t1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p1 t2
                            Output: t2.x, t2.y
-                           Bloom Filter 1: keys=(t2.y)
                      ->  Hash
                            Output: t1.x, (PARTIAL sum(t1.x)), (PARTIAL count(*)), (PARTIAL avg(t1.x))
-                           Bloom Filter 1
                            ->  Partial HashAggregate
                                  Output: t1.x, PARTIAL sum(t1.x), PARTIAL count(*), PARTIAL avg(t1.x)
                                  Group Key: t1.x
@@ -813,10 +797,8 @@ GROUP BY t2.x HAVING avg(t1.x) > 5 ORDER BY t2.x;
                      Hash Cond: (t2_1.y = t1_1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p2 t2_1
                            Output: t2_1.x, t2_1.y
-                           Bloom Filter 2: keys=(t2_1.y)
                      ->  Hash
                            Output: t1_1.x, (PARTIAL sum(t1_1.x)), (PARTIAL count(*)), (PARTIAL avg(t1_1.x))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t1_1.x, PARTIAL sum(t1_1.x), PARTIAL count(*), PARTIAL avg(t1_1.x)
                                  Group Key: t1_1.x
@@ -827,16 +809,14 @@ GROUP BY t2.x HAVING avg(t1.x) > 5 ORDER BY t2.x;
                      Hash Cond: (t2_2.y = t1_2.x)
                      ->  Seq Scan on public.eager_agg_tab2_p3 t2_2
                            Output: t2_2.x, t2_2.y
-                           Bloom Filter 3: keys=(t2_2.y)
                      ->  Hash
                            Output: t1_2.x, (PARTIAL sum(t1_2.x)), (PARTIAL count(*)), (PARTIAL avg(t1_2.x))
-                           Bloom Filter 3
                            ->  Partial HashAggregate
                                  Output: t1_2.x, PARTIAL sum(t1_2.x), PARTIAL count(*), PARTIAL avg(t1_2.x)
                                  Group Key: t1_2.x
                                  ->  Seq Scan on public.eager_agg_tab1_p3 t1_2
                                        Output: t1_2.x
-(50 rows)
+(44 rows)
 
 SELECT t2.x, sum(t1.x), count(*)
   FROM eager_agg_tab1 t1
@@ -878,10 +858,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1.x = t2.x)
                      ->  Seq Scan on public.eager_agg_tab1_p1 t1
                            Output: t1.x
-                           Bloom Filter 2: keys=(t1.x)
                      ->  Hash
                            Output: t2.x, t3.x, (PARTIAL sum((t2.y + t3.y)))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t2.x, t3.x, PARTIAL sum((t2.y + t3.y))
                                  Group Key: t2.x
@@ -890,10 +868,8 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2.x = t3.x)
                                        ->  Seq Scan on public.eager_agg_tab1_p1 t2
                                              Output: t2.y, t2.x
-                                             Bloom Filter 1: keys=(t2.x)
                                        ->  Hash
                                              Output: t3.y, t3.x
-                                             Bloom Filter 1
                                              ->  Seq Scan on public.eager_agg_tab1_p1 t3
                                                    Output: t3.y, t3.x
          ->  Finalize HashAggregate
@@ -904,10 +880,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_1.x = t2_1.x)
                      ->  Seq Scan on public.eager_agg_tab1_p2 t1_1
                            Output: t1_1.x
-                           Bloom Filter 4: keys=(t1_1.x)
                      ->  Hash
                            Output: t2_1.x, t3_1.x, (PARTIAL sum((t2_1.y + t3_1.y)))
-                           Bloom Filter 4
                            ->  Partial HashAggregate
                                  Output: t2_1.x, t3_1.x, PARTIAL sum((t2_1.y + t3_1.y))
                                  Group Key: t2_1.x
@@ -916,10 +890,8 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2_1.x = t3_1.x)
                                        ->  Seq Scan on public.eager_agg_tab1_p2 t2_1
                                              Output: t2_1.y, t2_1.x
-                                             Bloom Filter 3: keys=(t2_1.x)
                                        ->  Hash
                                              Output: t3_1.y, t3_1.x
-                                             Bloom Filter 3
                                              ->  Seq Scan on public.eager_agg_tab1_p2 t3_1
                                                    Output: t3_1.y, t3_1.x
          ->  Finalize HashAggregate
@@ -930,10 +902,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_2.x = t2_2.x)
                      ->  Seq Scan on public.eager_agg_tab1_p3 t1_2
                            Output: t1_2.x
-                           Bloom Filter 6: keys=(t1_2.x)
                      ->  Hash
                            Output: t2_2.x, t3_2.x, (PARTIAL sum((t2_2.y + t3_2.y)))
-                           Bloom Filter 6
                            ->  Partial HashAggregate
                                  Output: t2_2.x, t3_2.x, PARTIAL sum((t2_2.y + t3_2.y))
                                  Group Key: t2_2.x
@@ -942,13 +912,11 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2_2.x = t3_2.x)
                                        ->  Seq Scan on public.eager_agg_tab1_p3 t2_2
                                              Output: t2_2.y, t2_2.x
-                                             Bloom Filter 5: keys=(t2_2.x)
                                        ->  Hash
                                              Output: t3_2.y, t3_2.x
-                                             Bloom Filter 5
                                              ->  Seq Scan on public.eager_agg_tab1_p3 t3_2
                                                    Output: t3_2.y, t3_2.x
-(82 rows)
+(70 rows)
 
 SELECT t1.x, sum(t2.y + t3.y)
   FROM eager_agg_tab1 t1
@@ -1118,10 +1086,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t2.y = t1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p1 t2
                            Output: t2.y
-                           Bloom Filter 1: keys=(t2.y)
                      ->  Hash
                            Output: t1.x, (PARTIAL sum(t1.y)), (PARTIAL count(*))
-                           Bloom Filter 1
                            ->  Partial HashAggregate
                                  Output: t1.x, PARTIAL sum(t1.y), PARTIAL count(*)
                                  Group Key: t1.x
@@ -1135,10 +1101,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t2_1.y = t1_1.x)
                      ->  Seq Scan on public.eager_agg_tab2_p2 t2_1
                            Output: t2_1.y
-                           Bloom Filter 2: keys=(t2_1.y)
                      ->  Hash
                            Output: t1_1.x, (PARTIAL sum(t1_1.y)), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t1_1.x, PARTIAL sum(t1_1.y), PARTIAL count(*)
                                  Group Key: t1_1.x
@@ -1152,16 +1116,14 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t2_2.y = t1_2.x)
                      ->  Seq Scan on public.eager_agg_tab2_p3 t2_2
                            Output: t2_2.y
-                           Bloom Filter 3: keys=(t2_2.y)
                      ->  Hash
                            Output: t1_2.x, (PARTIAL sum(t1_2.y)), (PARTIAL count(*))
-                           Bloom Filter 3
                            ->  Partial HashAggregate
                                  Output: t1_2.x, PARTIAL sum(t1_2.y), PARTIAL count(*)
                                  Group Key: t1_2.x
                                  ->  Seq Scan on public.eager_agg_tab1_p3 t1_2
                                        Output: t1_2.x, t1_2.y
-(55 rows)
+(49 rows)
 
 SELECT t1.x, sum(t1.y), count(*)
   FROM eager_agg_tab1 t1
@@ -1224,10 +1186,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1.x = t2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p1 t1
                            Output: t1.x
-                           Bloom Filter 1: keys=(t1.x)
                      ->  Hash
                            Output: t2.x, (PARTIAL sum(t2.y)), (PARTIAL count(*))
-                           Bloom Filter 1
                            ->  Partial HashAggregate
                                  Output: t2.x, PARTIAL sum(t2.y), PARTIAL count(*)
                                  Group Key: t2.x
@@ -1241,10 +1201,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_1.x = t2_1.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t1_1
                            Output: t1_1.x
-                           Bloom Filter 2: keys=(t1_1.x)
                      ->  Hash
                            Output: t2_1.x, (PARTIAL sum(t2_1.y)), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t2_1.x, PARTIAL sum(t2_1.y), PARTIAL count(*)
                                  Group Key: t2_1.x
@@ -1258,10 +1216,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_2.x = t2_2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t1_2
                            Output: t1_2.x
-                           Bloom Filter 3: keys=(t1_2.x)
                      ->  Hash
                            Output: t2_2.x, (PARTIAL sum(t2_2.y)), (PARTIAL count(*))
-                           Bloom Filter 3
                            ->  Partial HashAggregate
                                  Output: t2_2.x, PARTIAL sum(t2_2.y), PARTIAL count(*)
                                  Group Key: t2_2.x
@@ -1275,10 +1231,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_3.x = t2_3.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t1_3
                            Output: t1_3.x
-                           Bloom Filter 4: keys=(t1_3.x)
                      ->  Hash
                            Output: t2_3.x, (PARTIAL sum(t2_3.y)), (PARTIAL count(*))
-                           Bloom Filter 4
                            ->  Partial HashAggregate
                                  Output: t2_3.x, PARTIAL sum(t2_3.y), PARTIAL count(*)
                                  Group Key: t2_3.x
@@ -1292,16 +1246,14 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_4.x = t2_4.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t1_4
                            Output: t1_4.x
-                           Bloom Filter 5: keys=(t1_4.x)
                      ->  Hash
                            Output: t2_4.x, (PARTIAL sum(t2_4.y)), (PARTIAL count(*))
-                           Bloom Filter 5
                            ->  Partial HashAggregate
                                  Output: t2_4.x, PARTIAL sum(t2_4.y), PARTIAL count(*)
                                  Group Key: t2_4.x
                                  ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t2_4
                                        Output: t2_4.y, t2_4.x
-(89 rows)
+(79 rows)
 
 SELECT t1.x, sum(t2.y), count(*)
   FROM eager_agg_tab_ml t1
@@ -1362,10 +1314,8 @@ GROUP BY t1.y ORDER BY t1.y;
                      Hash Cond: (t1.x = t2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p1 t1
                            Output: t1.y, t1.x
-                           Bloom Filter 1: keys=(t1.x)
                      ->  Hash
                            Output: t2.x, (PARTIAL sum(t2.y)), (PARTIAL count(*))
-                           Bloom Filter 1
                            ->  Partial HashAggregate
                                  Output: t2.x, PARTIAL sum(t2.y), PARTIAL count(*)
                                  Group Key: t2.x
@@ -1376,10 +1326,8 @@ GROUP BY t1.y ORDER BY t1.y;
                      Hash Cond: (t1_1.x = t2_1.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t1_1
                            Output: t1_1.y, t1_1.x
-                           Bloom Filter 2: keys=(t1_1.x)
                      ->  Hash
                            Output: t2_1.x, (PARTIAL sum(t2_1.y)), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t2_1.x, PARTIAL sum(t2_1.y), PARTIAL count(*)
                                  Group Key: t2_1.x
@@ -1390,10 +1338,8 @@ GROUP BY t1.y ORDER BY t1.y;
                      Hash Cond: (t1_2.x = t2_2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t1_2
                            Output: t1_2.y, t1_2.x
-                           Bloom Filter 3: keys=(t1_2.x)
                      ->  Hash
                            Output: t2_2.x, (PARTIAL sum(t2_2.y)), (PARTIAL count(*))
-                           Bloom Filter 3
                            ->  Partial HashAggregate
                                  Output: t2_2.x, PARTIAL sum(t2_2.y), PARTIAL count(*)
                                  Group Key: t2_2.x
@@ -1404,10 +1350,8 @@ GROUP BY t1.y ORDER BY t1.y;
                      Hash Cond: (t1_3.x = t2_3.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t1_3
                            Output: t1_3.y, t1_3.x
-                           Bloom Filter 4: keys=(t1_3.x)
                      ->  Hash
                            Output: t2_3.x, (PARTIAL sum(t2_3.y)), (PARTIAL count(*))
-                           Bloom Filter 4
                            ->  Partial HashAggregate
                                  Output: t2_3.x, PARTIAL sum(t2_3.y), PARTIAL count(*)
                                  Group Key: t2_3.x
@@ -1418,16 +1362,14 @@ GROUP BY t1.y ORDER BY t1.y;
                      Hash Cond: (t1_4.x = t2_4.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t1_4
                            Output: t1_4.y, t1_4.x
-                           Bloom Filter 5: keys=(t1_4.x)
                      ->  Hash
                            Output: t2_4.x, (PARTIAL sum(t2_4.y)), (PARTIAL count(*))
-                           Bloom Filter 5
                            ->  Partial HashAggregate
                                  Output: t2_4.x, PARTIAL sum(t2_4.y), PARTIAL count(*)
                                  Group Key: t2_4.x
                                  ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t2_4
                                        Output: t2_4.y, t2_4.x
-(77 rows)
+(67 rows)
 
 SELECT t1.y, sum(t2.y), count(*)
   FROM eager_agg_tab_ml t1
@@ -1489,10 +1431,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1.x = t2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p1 t1
                            Output: t1.x
-                           Bloom Filter 2: keys=(t1.x)
                      ->  Hash
                            Output: t2.x, t3.x, (PARTIAL sum((t2.y + t3.y))), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t2.x, t3.x, PARTIAL sum((t2.y + t3.y)), PARTIAL count(*)
                                  Group Key: t2.x
@@ -1501,10 +1441,8 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2.x = t3.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p1 t2
                                              Output: t2.y, t2.x
-                                             Bloom Filter 1: keys=(t2.x)
                                        ->  Hash
                                              Output: t3.y, t3.x
-                                             Bloom Filter 1
                                              ->  Seq Scan on public.eager_agg_tab_ml_p1 t3
                                                    Output: t3.y, t3.x
          ->  Finalize HashAggregate
@@ -1515,10 +1453,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_1.x = t2_1.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t1_1
                            Output: t1_1.x
-                           Bloom Filter 4: keys=(t1_1.x)
                      ->  Hash
                            Output: t2_1.x, t3_1.x, (PARTIAL sum((t2_1.y + t3_1.y))), (PARTIAL count(*))
-                           Bloom Filter 4
                            ->  Partial HashAggregate
                                  Output: t2_1.x, t3_1.x, PARTIAL sum((t2_1.y + t3_1.y)), PARTIAL count(*)
                                  Group Key: t2_1.x
@@ -1527,10 +1463,8 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2_1.x = t3_1.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t2_1
                                              Output: t2_1.y, t2_1.x
-                                             Bloom Filter 3: keys=(t2_1.x)
                                        ->  Hash
                                              Output: t3_1.y, t3_1.x
-                                             Bloom Filter 3
                                              ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t3_1
                                                    Output: t3_1.y, t3_1.x
          ->  Finalize HashAggregate
@@ -1541,10 +1475,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_2.x = t2_2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t1_2
                            Output: t1_2.x
-                           Bloom Filter 6: keys=(t1_2.x)
                      ->  Hash
                            Output: t2_2.x, t3_2.x, (PARTIAL sum((t2_2.y + t3_2.y))), (PARTIAL count(*))
-                           Bloom Filter 6
                            ->  Partial HashAggregate
                                  Output: t2_2.x, t3_2.x, PARTIAL sum((t2_2.y + t3_2.y)), PARTIAL count(*)
                                  Group Key: t2_2.x
@@ -1553,10 +1485,8 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2_2.x = t3_2.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t2_2
                                              Output: t2_2.y, t2_2.x
-                                             Bloom Filter 5: keys=(t2_2.x)
                                        ->  Hash
                                              Output: t3_2.y, t3_2.x
-                                             Bloom Filter 5
                                              ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t3_2
                                                    Output: t3_2.y, t3_2.x
          ->  Finalize HashAggregate
@@ -1567,10 +1497,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_3.x = t2_3.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t1_3
                            Output: t1_3.x
-                           Bloom Filter 8: keys=(t1_3.x)
                      ->  Hash
                            Output: t2_3.x, t3_3.x, (PARTIAL sum((t2_3.y + t3_3.y))), (PARTIAL count(*))
-                           Bloom Filter 8
                            ->  Partial HashAggregate
                                  Output: t2_3.x, t3_3.x, PARTIAL sum((t2_3.y + t3_3.y)), PARTIAL count(*)
                                  Group Key: t2_3.x
@@ -1579,10 +1507,8 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2_3.x = t3_3.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t2_3
                                              Output: t2_3.y, t2_3.x
-                                             Bloom Filter 7: keys=(t2_3.x)
                                        ->  Hash
                                              Output: t3_3.y, t3_3.x
-                                             Bloom Filter 7
                                              ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t3_3
                                                    Output: t3_3.y, t3_3.x
          ->  Finalize HashAggregate
@@ -1593,10 +1519,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_4.x = t2_4.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t1_4
                            Output: t1_4.x
-                           Bloom Filter 10: keys=(t1_4.x)
                      ->  Hash
                            Output: t2_4.x, t3_4.x, (PARTIAL sum((t2_4.y + t3_4.y))), (PARTIAL count(*))
-                           Bloom Filter 10
                            ->  Partial HashAggregate
                                  Output: t2_4.x, t3_4.x, PARTIAL sum((t2_4.y + t3_4.y)), PARTIAL count(*)
                                  Group Key: t2_4.x
@@ -1605,13 +1529,11 @@ GROUP BY t1.x ORDER BY t1.x;
                                        Hash Cond: (t2_4.x = t3_4.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t2_4
                                              Output: t2_4.y, t2_4.x
-                                             Bloom Filter 9: keys=(t2_4.x)
                                        ->  Hash
                                              Output: t3_4.y, t3_4.x
-                                             Bloom Filter 9
                                              ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t3_4
                                                    Output: t3_4.y, t3_4.x
-(134 rows)
+(114 rows)
 
 SELECT t1.x, sum(t2.y + t3.y), count(*)
   FROM eager_agg_tab_ml t1
@@ -1673,10 +1595,8 @@ GROUP BY t3.y ORDER BY t3.y;
                      Hash Cond: (t1.x = t2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p1 t1
                            Output: t1.x
-                           Bloom Filter 2: keys=(t1.x)
                      ->  Hash
                            Output: t2.x, t3.y, t3.x, (PARTIAL sum((t2.y + t3.y))), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t2.x, t3.y, t3.x, PARTIAL sum((t2.y + t3.y)), PARTIAL count(*)
                                  Group Key: t2.x, t3.y, t3.x
@@ -1685,10 +1605,8 @@ GROUP BY t3.y ORDER BY t3.y;
                                        Hash Cond: (t2.x = t3.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p1 t2
                                              Output: t2.y, t2.x
-                                             Bloom Filter 1: keys=(t2.x)
                                        ->  Hash
                                              Output: t3.y, t3.x
-                                             Bloom Filter 1
                                              ->  Seq Scan on public.eager_agg_tab_ml_p1 t3
                                                    Output: t3.y, t3.x
                ->  Hash Join
@@ -1696,10 +1614,8 @@ GROUP BY t3.y ORDER BY t3.y;
                      Hash Cond: (t1_1.x = t2_1.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t1_1
                            Output: t1_1.x
-                           Bloom Filter 4: keys=(t1_1.x)
                      ->  Hash
                            Output: t2_1.x, t3_1.y, t3_1.x, (PARTIAL sum((t2_1.y + t3_1.y))), (PARTIAL count(*))
-                           Bloom Filter 4
                            ->  Partial HashAggregate
                                  Output: t2_1.x, t3_1.y, t3_1.x, PARTIAL sum((t2_1.y + t3_1.y)), PARTIAL count(*)
                                  Group Key: t2_1.x, t3_1.y, t3_1.x
@@ -1708,10 +1624,8 @@ GROUP BY t3.y ORDER BY t3.y;
                                        Hash Cond: (t2_1.x = t3_1.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t2_1
                                              Output: t2_1.y, t2_1.x
-                                             Bloom Filter 3: keys=(t2_1.x)
                                        ->  Hash
                                              Output: t3_1.y, t3_1.x
-                                             Bloom Filter 3
                                              ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t3_1
                                                    Output: t3_1.y, t3_1.x
                ->  Hash Join
@@ -1719,10 +1633,8 @@ GROUP BY t3.y ORDER BY t3.y;
                      Hash Cond: (t1_2.x = t2_2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t1_2
                            Output: t1_2.x
-                           Bloom Filter 6: keys=(t1_2.x)
                      ->  Hash
                            Output: t2_2.x, t3_2.y, t3_2.x, (PARTIAL sum((t2_2.y + t3_2.y))), (PARTIAL count(*))
-                           Bloom Filter 6
                            ->  Partial HashAggregate
                                  Output: t2_2.x, t3_2.y, t3_2.x, PARTIAL sum((t2_2.y + t3_2.y)), PARTIAL count(*)
                                  Group Key: t2_2.x, t3_2.y, t3_2.x
@@ -1731,10 +1643,8 @@ GROUP BY t3.y ORDER BY t3.y;
                                        Hash Cond: (t2_2.x = t3_2.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t2_2
                                              Output: t2_2.y, t2_2.x
-                                             Bloom Filter 5: keys=(t2_2.x)
                                        ->  Hash
                                              Output: t3_2.y, t3_2.x
-                                             Bloom Filter 5
                                              ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t3_2
                                                    Output: t3_2.y, t3_2.x
                ->  Hash Join
@@ -1742,10 +1652,8 @@ GROUP BY t3.y ORDER BY t3.y;
                      Hash Cond: (t1_3.x = t2_3.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t1_3
                            Output: t1_3.x
-                           Bloom Filter 8: keys=(t1_3.x)
                      ->  Hash
                            Output: t2_3.x, t3_3.y, t3_3.x, (PARTIAL sum((t2_3.y + t3_3.y))), (PARTIAL count(*))
-                           Bloom Filter 8
                            ->  Partial HashAggregate
                                  Output: t2_3.x, t3_3.y, t3_3.x, PARTIAL sum((t2_3.y + t3_3.y)), PARTIAL count(*)
                                  Group Key: t2_3.x, t3_3.y, t3_3.x
@@ -1754,10 +1662,8 @@ GROUP BY t3.y ORDER BY t3.y;
                                        Hash Cond: (t2_3.x = t3_3.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t2_3
                                              Output: t2_3.y, t2_3.x
-                                             Bloom Filter 7: keys=(t2_3.x)
                                        ->  Hash
                                              Output: t3_3.y, t3_3.x
-                                             Bloom Filter 7
                                              ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t3_3
                                                    Output: t3_3.y, t3_3.x
                ->  Hash Join
@@ -1765,10 +1671,8 @@ GROUP BY t3.y ORDER BY t3.y;
                      Hash Cond: (t1_4.x = t2_4.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t1_4
                            Output: t1_4.x
-                           Bloom Filter 10: keys=(t1_4.x)
                      ->  Hash
                            Output: t2_4.x, t3_4.y, t3_4.x, (PARTIAL sum((t2_4.y + t3_4.y))), (PARTIAL count(*))
-                           Bloom Filter 10
                            ->  Partial HashAggregate
                                  Output: t2_4.x, t3_4.y, t3_4.x, PARTIAL sum((t2_4.y + t3_4.y)), PARTIAL count(*)
                                  Group Key: t2_4.x, t3_4.y, t3_4.x
@@ -1777,13 +1681,11 @@ GROUP BY t3.y ORDER BY t3.y;
                                        Hash Cond: (t2_4.x = t3_4.x)
                                        ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t2_4
                                              Output: t2_4.y, t2_4.x
-                                             Bloom Filter 9: keys=(t2_4.x)
                                        ->  Hash
                                              Output: t3_4.y, t3_4.x
-                                             Bloom Filter 9
                                              ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t3_4
                                                    Output: t3_4.y, t3_4.x
-(122 rows)
+(102 rows)
 
 SELECT t3.y, sum(t2.y + t3.y), count(*)
   FROM eager_agg_tab_ml t1
@@ -1846,10 +1748,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1.x = t2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p1 t1
                            Output: t1.x
-                           Bloom Filter 1: keys=(t1.x)
                      ->  Hash
                            Output: t2.x, (PARTIAL sum(t2.y)), (PARTIAL count(*))
-                           Bloom Filter 1
                            ->  Partial HashAggregate
                                  Output: t2.x, PARTIAL sum(t2.y), PARTIAL count(*)
                                  Group Key: t2.x
@@ -1863,10 +1763,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_1.x = t2_1.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s1 t1_1
                            Output: t1_1.x
-                           Bloom Filter 2: keys=(t1_1.x)
                      ->  Hash
                            Output: t2_1.x, (PARTIAL sum(t2_1.y)), (PARTIAL count(*))
-                           Bloom Filter 2
                            ->  Partial HashAggregate
                                  Output: t2_1.x, PARTIAL sum(t2_1.y), PARTIAL count(*)
                                  Group Key: t2_1.x
@@ -1880,10 +1778,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_2.x = t2_2.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p2_s2 t1_2
                            Output: t1_2.x
-                           Bloom Filter 3: keys=(t1_2.x)
                      ->  Hash
                            Output: t2_2.x, (PARTIAL sum(t2_2.y)), (PARTIAL count(*))
-                           Bloom Filter 3
                            ->  Partial HashAggregate
                                  Output: t2_2.x, PARTIAL sum(t2_2.y), PARTIAL count(*)
                                  Group Key: t2_2.x
@@ -1897,10 +1793,8 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_3.x = t2_3.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s1 t1_3
                            Output: t1_3.x
-                           Bloom Filter 4: keys=(t1_3.x)
                      ->  Hash
                            Output: t2_3.x, (PARTIAL sum(t2_3.y)), (PARTIAL count(*))
-                           Bloom Filter 4
                            ->  Partial HashAggregate
                                  Output: t2_3.x, PARTIAL sum(t2_3.y), PARTIAL count(*)
                                  Group Key: t2_3.x
@@ -1914,16 +1808,14 @@ GROUP BY t1.x ORDER BY t1.x;
                      Hash Cond: (t1_4.x = t2_4.x)
                      ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t1_4
                            Output: t1_4.x
-                           Bloom Filter 5: keys=(t1_4.x)
                      ->  Hash
                            Output: t2_4.x, (PARTIAL sum(t2_4.y)), (PARTIAL count(*))
-                           Bloom Filter 5
                            ->  Partial HashAggregate
                                  Output: t2_4.x, PARTIAL sum(t2_4.y), PARTIAL count(*)
                                  Group Key: t2_4.x
                                  ->  Seq Scan on public.eager_agg_tab_ml_p3_s2 t2_4
                                        Output: t2_4.y, t2_4.x
-(89 rows)
+(79 rows)
 
 SELECT t1.x, sum(t2.y), count(*)
   FROM eager_agg_tab_ml t1

@@ -218,13 +218,13 @@ SELECT t1.a, t2.e
   WHERE t1.a = t2.d;
  a | e  
 ---+----
- 0 |   
  1 | -1
  2 |  2
- 2 |  4
  3 | -3
+ 2 |  4
  5 | -5
  5 | -5
+ 0 |   
 (7 rows)
 
 --
@@ -1573,13 +1573,13 @@ SELECT *
   FROM J1_TBL INNER JOIN J2_TBL USING (i);
  i | j |   t   | k  
 ---+---+-------+----
- 0 |   | zero  |   
  1 | 4 | one   | -1
  2 | 3 | two   |  2
- 2 | 3 | two   |  4
  3 | 2 | three | -3
+ 2 | 3 | two   |  4
  5 | 0 | five  | -5
  5 | 0 | five  | -5
+ 0 |   | zero  |   
 (7 rows)
 
 -- Same as above, slightly different syntax
@@ -1587,13 +1587,13 @@ SELECT *
   FROM J1_TBL JOIN J2_TBL USING (i);
  i | j |   t   | k  
 ---+---+-------+----
- 0 |   | zero  |   
  1 | 4 | one   | -1
  2 | 3 | two   |  2
- 2 | 3 | two   |  4
  3 | 2 | three | -3
+ 2 | 3 | two   |  4
  5 | 0 | five  | -5
  5 | 0 | five  | -5
+ 0 |   | zero  |   
 (7 rows)
 
 SELECT *
@@ -1681,35 +1681,35 @@ SELECT *
   FROM J1_TBL NATURAL JOIN J2_TBL;
  i | j |   t   | k  
 ---+---+-------+----
- 0 |   | zero  |   
  1 | 4 | one   | -1
  2 | 3 | two   |  2
- 2 | 3 | two   |  4
  3 | 2 | three | -3
+ 2 | 3 | two   |  4
  5 | 0 | five  | -5
  5 | 0 | five  | -5
+ 0 |   | zero  |   
 (7 rows)
 
 SELECT *
   FROM J1_TBL t1 (a, b, c) NATURAL JOIN J2_TBL t2 (a, d);
  a | b |   c   | d  
 ---+---+-------+----
- 0 |   | zero  |   
  1 | 4 | one   | -1
  2 | 3 | two   |  2
- 2 | 3 | two   |  4
  3 | 2 | three | -3
+ 2 | 3 | two   |  4
  5 | 0 | five  | -5
  5 | 0 | five  | -5
+ 0 |   | zero  |   
 (7 rows)
 
 SELECT *
   FROM J1_TBL t1 (a, b, c) NATURAL JOIN J2_TBL t2 (d, a);
  a | b |  c   | d 
 ---+---+------+---
- 0 |   | zero |  
  2 | 3 | two  | 2
  4 | 1 | four | 2
+ 0 |   | zero |  
 (3 rows)
 
 -- mismatch number of columns
@@ -1718,13 +1718,13 @@ SELECT *
   FROM J1_TBL t1 (a, b) NATURAL JOIN J2_TBL t2 (a);
  a | b |   t   | k  
 ---+---+-------+----
- 0 |   | zero  |   
  1 | 4 | one   | -1
  2 | 3 | two   |  2
- 2 | 3 | two   |  4
  3 | 2 | three | -3
+ 2 | 3 | two   |  4
  5 | 0 | five  | -5
  5 | 0 | five  | -5
+ 0 |   | zero  |   
 (7 rows)
 
 --
@@ -1734,22 +1734,22 @@ SELECT *
   FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i = J2_TBL.i);
  i | j |   t   | i | k  
 ---+---+-------+---+----
- 0 |   | zero  | 0 |   
  1 | 4 | one   | 1 | -1
  2 | 3 | two   | 2 |  2
- 2 | 3 | two   | 2 |  4
  3 | 2 | three | 3 | -3
+ 2 | 3 | two   | 2 |  4
  5 | 0 | five  | 5 | -5
  5 | 0 | five  | 5 | -5
+ 0 |   | zero  | 0 |   
 (7 rows)
 
 SELECT *
   FROM J1_TBL JOIN J2_TBL ON (J1_TBL.i = J2_TBL.k);
  i | j |  t   | i | k 
 ---+---+------+---+---
- 0 |   | zero |   | 0
  2 | 3 | two  | 2 | 2
  4 | 1 | four | 2 | 4
+ 0 |   | zero |   | 0
 (3 rows)
 
 --
@@ -1909,8 +1909,8 @@ select * from tenk1 a, tenk1 b
 where exists(select * from tenk1 c
              where b.twothousand = c.twothousand and b.fivethous <> c.fivethous)
       and a.tenthous = b.tenthous and a.tenthous < 5000;
-                    QUERY PLAN                    
---------------------------------------------------
+                  QUERY PLAN                   
+-----------------------------------------------
  Hash Semi Join
    Hash Cond: (b.twothousand = c.twothousand)
    Join Filter: (b.fivethous <> c.fivethous)
@@ -1918,15 +1918,13 @@ where exists(select * from tenk1 c
          Hash Cond: (b.tenthous = a.tenthous)
          ->  Seq Scan on tenk1 b
                Bloom Filter 1: keys=(tenthous)
-               Bloom Filter 2: keys=(twothousand)
          ->  Hash
                Bloom Filter 1
                ->  Seq Scan on tenk1 a
                      Filter: (tenthous < 5000)
    ->  Hash
-         Bloom Filter 2
          ->  Seq Scan on tenk1 c
-(15 rows)
+(13 rows)
 
 --
 -- More complicated constructs
@@ -2604,14 +2602,12 @@ select * from int4_tbl t1
                Join Filter: (t2.f1 > 0)
                Filter: (t3.f1 IS NULL)
                ->  Seq Scan on int4_tbl t2
-                     Bloom Filter 1: keys=(f1)
                ->  Materialize
                      ->  Seq Scan on int4_tbl t3
          ->  Seq Scan on tenk1 t4
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on int4_tbl t1
-(15 rows)
+(13 rows)
 
 explain (costs off)
 select * from int4_tbl t1
@@ -2630,15 +2626,13 @@ select * from int4_tbl t1
                Join Filter: (t2.f1 > 0)
                Filter: (t2.f1 <> COALESCE(t3.f1, '-1'::integer))
                ->  Seq Scan on int4_tbl t2
-                     Bloom Filter 1: keys=(f1)
                ->  Materialize
                      ->  Seq Scan on int4_tbl t3
          ->  Hash
-               Bloom Filter 1
                ->  Seq Scan on int4_tbl t1
    ->  Materialize
          ->  Seq Scan on tenk1 t4
-(16 rows)
+(14 rows)
 
 explain (costs off)
 select * from onek t1
@@ -3126,17 +3120,17 @@ set enable_memoize to off;
 explain (costs off)
 select count(*) from tenk1 a, tenk1 b
   where a.hundred = b.thousand and (b.fivethous % 10) < 10;
-                         QUERY PLAN                         
-------------------------------------------------------------
+                            QUERY PLAN                            
+------------------------------------------------------------------
  Aggregate
    ->  Hash Join
-         Hash Cond: (a.hundred = b.thousand)
-         ->  Index Only Scan using tenk1_hundred on tenk1 a
-               Bloom Filter 1: keys=(hundred)
+         Hash Cond: (b.thousand = a.hundred)
+         ->  Seq Scan on tenk1 b
+               Filter: ((fivethous % 10) < 10)
+               Bloom Filter 1: keys=(thousand)
          ->  Hash
                Bloom Filter 1
-               ->  Seq Scan on tenk1 b
-                     Filter: ((fivethous % 10) < 10)
+               ->  Index Only Scan using tenk1_hundred on tenk1 a
 (9 rows)
 
 select count(*) from tenk1 a, tenk1 b
@@ -3180,13 +3174,11 @@ ORDER BY 1;
                Hash Cond: (b.f1 = c.f1)
                Filter: (COALESCE(c.f1, 0) = 0)
                ->  Seq Scan on tt3 b
-                     Bloom Filter 1: keys=(f1)
                ->  Hash
                      ->  Seq Scan on tt3 c
          ->  Hash
-               Bloom Filter 1
                ->  Seq Scan on tt4 a
-(15 rows)
+(13 rows)
 
 SELECT a.f1
 FROM tt4 a
@@ -3224,12 +3216,10 @@ where t1.filt = 5;
  Hash Join
    Hash Cond: (t2.val = t1.val)
    ->  Seq Scan on skewedtable t2
-         Bloom Filter 1: keys=(val)
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on skewedtable t1
                Filter: (filt = 5)
-(8 rows)
+(6 rows)
 
 drop table skewedtable;
 --
@@ -3243,11 +3233,9 @@ where unique1 in (select unique2 from tenk1 b);
  Hash Semi Join
    Hash Cond: (a.unique1 = b.unique2)
    ->  Seq Scan on tenk1 a
-         Bloom Filter 1: keys=(unique1)
    ->  Hash
-         Bloom Filter 1
          ->  Index Only Scan using tenk1_unique2 on tenk1 b
-(7 rows)
+(5 rows)
 
 -- sadly, this is not an antijoin
 explain (costs off)
@@ -3269,11 +3257,9 @@ where exists (select 1 from tenk1 b where a.unique1 = b.unique2);
  Hash Semi Join
    Hash Cond: (a.unique1 = b.unique2)
    ->  Seq Scan on tenk1 a
-         Bloom Filter 1: keys=(unique1)
    ->  Hash
-         Bloom Filter 1
          ->  Index Only Scan using tenk1_unique2 on tenk1 b
-(7 rows)
+(5 rows)
 
 explain (costs off)
 select a.* from tenk1 a
@@ -3306,17 +3292,15 @@ select 1 from tenk1
 where (hundred, thousand) in (select twothousand, twothousand from onek);
                    QUERY PLAN                    
 -------------------------------------------------
- Hash Join
-   Hash Cond: (tenk1.hundred = onek.twothousand)
-   ->  Seq Scan on tenk1
-         Filter: (hundred = thousand)
-         Bloom Filter 1: keys=(hundred)
+ Hash Right Semi Join
+   Hash Cond: (onek.twothousand = tenk1.hundred)
+   ->  Seq Scan on onek
+         Bloom Filter 1: keys=(twothousand)
    ->  Hash
          Bloom Filter 1
-         ->  HashAggregate
-               Group Key: onek.twothousand
-               ->  Seq Scan on onek
-(10 rows)
+         ->  Seq Scan on tenk1
+               Filter: (hundred = thousand)
+(8 rows)
 
 reset enable_memoize;
 --
@@ -3333,19 +3317,17 @@ where t2.a is null;
  Hash Right Anti Join
    Hash Cond: (t2.b = t1.unique1)
    ->  Seq Scan on tbl_anti t2
-         Bloom Filter 1: keys=(b)
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on tenk1 t1
-(7 rows)
+(5 rows)
 
 -- this is an antijoin, as t2.a is non-null for any matching row
 explain (costs off)
 select * from tenk1 t1 left join
   (tbl_anti t2 left join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
 where t2.a is null;
-                  QUERY PLAN                  
-----------------------------------------------
+                QUERY PLAN                 
+-------------------------------------------
  Hash Right Anti Join
    Hash Cond: (t2.b = t1.unique1)
    ->  Merge Left Join
@@ -3353,22 +3335,20 @@ where t2.a is null;
          ->  Sort
                Sort Key: t2.c
                ->  Seq Scan on tbl_anti t2
-                     Bloom Filter 1: keys=(b)
          ->  Sort
                Sort Key: t3.c
                ->  Seq Scan on tbl_anti t3
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on tenk1 t1
-(14 rows)
+(12 rows)
 
 -- this is not an antijoin, as t3.a can be nulled by t2/t3 join
 explain (costs off)
 select * from tenk1 t1 left join
   (tbl_anti t2 left join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
 where t3.a is null;
-                  QUERY PLAN                  
-----------------------------------------------
+                QUERY PLAN                 
+-------------------------------------------
  Hash Right Join
    Hash Cond: (t2.b = t1.unique1)
    Filter: (t3.a IS NULL)
@@ -3377,14 +3357,12 @@ where t3.a is null;
          ->  Sort
                Sort Key: t2.c
                ->  Seq Scan on tbl_anti t2
-                     Bloom Filter 1: keys=(b)
          ->  Sort
                Sort Key: t3.c
                ->  Seq Scan on tbl_anti t3
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on tenk1 t1
-(15 rows)
+(13 rows)
 
 rollback;
 --
@@ -3398,11 +3376,9 @@ where exists (select 1 from tenk1 b where a.unique1 = b.unique2 group by b.uniqu
  Hash Semi Join
    Hash Cond: (a.unique1 = b.unique2)
    ->  Seq Scan on tenk1 a
-         Bloom Filter 1: keys=(unique1)
    ->  Hash
-         Bloom Filter 1
          ->  Index Only Scan using tenk1_unique2 on tenk1 b
-(7 rows)
+(5 rows)
 
 --
 -- regression test for proper handling of outer joins within antijoins
@@ -3572,14 +3548,16 @@ create temp table tidv (idv mycomptype);
 create index on tidv (idv);
 explain (costs off)
 select a.idv, b.idv from tidv a, tidv b where a.idv = b.idv;
-                        QUERY PLAN                        
-----------------------------------------------------------
- Merge Join
-   Merge Cond: (a.idv = b.idv)
-   ->  Index Only Scan using tidv_idv_idx on tidv a
-   ->  Materialize
-         ->  Index Only Scan using tidv_idv_idx on tidv b
-(5 rows)
+             QUERY PLAN             
+------------------------------------
+ Hash Join
+   Hash Cond: (a.idv = b.idv)
+   ->  Seq Scan on tidv a
+         Bloom Filter 1: keys=(idv)
+   ->  Hash
+         Bloom Filter 1
+         ->  Seq Scan on tidv b
+(7 rows)
 
 set enable_mergejoin = 0;
 set enable_hashjoin = 0;
@@ -4019,13 +3997,11 @@ where q1 = thousand or q2 = thousand;
                ->  Seq Scan on q2
          ->  Bitmap Heap Scan on tenk1
                Recheck Cond: ((q1.q1 = thousand) OR (q2.q2 = thousand))
-               Bloom Filter 1: keys=(twothousand)
                ->  Bitmap Index Scan on tenk1_thous_tenthous
                      Index Cond: (thousand = ANY (ARRAY[q1.q1, q2.q2]))
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on int4_tbl
-(14 rows)
+(12 rows)
 
 explain (costs off)
 select * from
@@ -4042,13 +4018,11 @@ where thousand = (q1 + q2);
                ->  Seq Scan on q2
          ->  Bitmap Heap Scan on tenk1
                Recheck Cond: (thousand = (q1.q1 + q2.q2))
-               Bloom Filter 1: keys=(twothousand)
                ->  Bitmap Index Scan on tenk1_thous_tenthous
                      Index Cond: (thousand = (q1.q1 + q2.q2))
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on int4_tbl
-(14 rows)
+(12 rows)
 
 --
 -- test ability to generate a suitable plan for a star-schema query
@@ -4154,10 +4128,8 @@ where t1.unique1 < i4.f1;
                      Hash Cond: (t2.ten = t1.tenthous)
                      ->  Seq Scan on public.tenk1 t2
                            Output: t2.unique1, t2.unique2, t2.two, t2.four, t2.ten, t2.twenty, t2.hundred, t2.thousand, t2.twothousand, t2.fivethous, t2.tenthous, t2.odd, t2.even, t2.stringu1, t2.stringu2, t2.string4
-                           Bloom Filter 1: keys=(t2.ten)
                      ->  Hash
                            Output: t1.tenthous, t1.unique1
-                           Bloom Filter 1
                            ->  Nested Loop
                                  Output: t1.tenthous, t1.unique1
                                  ->  Subquery Scan on ss0
@@ -4173,7 +4145,7 @@ where t1.unique1 < i4.f1;
          ->  Seq Scan on public.int8_tbl i8
                Output: i8.q1, i8.q2
                Filter: (i8.q1 = ((64)::information_schema.cardinal_number)::integer)
-(35 rows)
+(33 rows)
 
 select ss1.d1 from
   tenk1 as t1
@@ -5270,7 +5242,6 @@ order by i0.f1, x;
                Output: i1.f1, i2.q1, i2.q2, '123'::bigint
                ->  Seq Scan on public.int4_tbl i1
                      Output: i1.f1
-                     Bloom Filter 1: keys=(i1.f1)
                ->  Materialize
                      Output: i2.q1, i2.q2
                      ->  Seq Scan on public.int8_tbl i2
@@ -5278,10 +5249,9 @@ order by i0.f1, x;
                            Filter: (123 = i2.q2)
          ->  Hash
                Output: i0.f1
-               Bloom Filter 1
                ->  Seq Scan on public.int4_tbl i0
                      Output: i0.f1
-(21 rows)
+(19 rows)
 
 select * from
 int4_tbl i0 left join
@@ -5335,10 +5305,8 @@ select t1.* from
                            Hash Cond: (i8.q1 = i8b2.q1)
                            ->  Seq Scan on public.int8_tbl i8
                                  Output: i8.q1, i8.q2
-                                 Bloom Filter 1: keys=(i8.q1)
                            ->  Hash
                                  Output: i8b2.q1, (NULL::integer)
-                                 Bloom Filter 1
                                  ->  Seq Scan on public.int8_tbl i8b2
                                        Output: i8b2.q1, NULL::integer
                      ->  Hash
@@ -5349,7 +5317,7 @@ select t1.* from
          Output: i4.f1
          ->  Seq Scan on public.int4_tbl i4
                Output: i4.f1
-(32 rows)
+(30 rows)
 
 select t1.* from
   text_tbl t1
@@ -5400,12 +5368,10 @@ select t1.* from
                                  Output: i8b2.q1, NULL::integer
                                  ->  Seq Scan on public.int8_tbl i8b2
                                        Output: i8b2.q1, i8b2.q2
-                                       Bloom Filter 1: keys=(i8b2.q1)
                                  ->  Materialize
                                        ->  Seq Scan on public.int4_tbl i4b2
                            ->  Hash
                                  Output: i8.q1, i8.q2
-                                 Bloom Filter 1
                                  ->  Seq Scan on public.int8_tbl i8
                                        Output: i8.q1, i8.q2
                      ->  Hash
@@ -5416,7 +5382,7 @@ select t1.* from
          Output: i4.f1
          ->  Seq Scan on public.int4_tbl i4
                Output: i4.f1
-(36 rows)
+(34 rows)
 
 select t1.* from
   text_tbl t1
@@ -5469,16 +5435,12 @@ select t1.* from
                                  Hash Cond: (i8b2.q1 = i4b2.f1)
                                  ->  Seq Scan on public.int8_tbl i8b2
                                        Output: i8b2.q1, i8b2.q2
-                                       Bloom Filter 1: keys=(i8b2.q1)
-                                       Bloom Filter 2: keys=(i8b2.q1)
                                  ->  Hash
                                        Output: i4b2.f1
-                                       Bloom Filter 1
                                        ->  Seq Scan on public.int4_tbl i4b2
                                              Output: i4b2.f1
                            ->  Hash
                                  Output: i8.q1, i8.q2
-                                 Bloom Filter 2
                                  ->  Seq Scan on public.int8_tbl i8
                                        Output: i8.q1, i8.q2
                      ->  Hash
@@ -5489,7 +5451,7 @@ select t1.* from
          Output: i4.f1
          ->  Seq Scan on public.int4_tbl i4
                Output: i4.f1
-(41 rows)
+(37 rows)
 
 select t1.* from
   text_tbl t1
@@ -5840,17 +5802,15 @@ where ss1.c2 = 0;
                            Filter: (i43.f1 = 0)
                ->  Seq Scan on public.int4_tbl i41
                      Output: i41.f1
-                     Bloom Filter 1: keys=(i41.f1)
          ->  Hash
                Output: i42.f1
-               Bloom Filter 1
                ->  Seq Scan on public.int4_tbl i42
                      Output: i42.f1
    ->  Limit
          Output: (i41.f1), (i8.q1), (i8.q2), (i42.f1), (i43.f1), ((42))
          ->  Seq Scan on public.text_tbl
                Output: i41.f1, i8.q1, i8.q2, i42.f1, i43.f1, (42)
-(27 rows)
+(25 rows)
 
 select ss2.* from
   int4_tbl i41
@@ -5976,19 +5936,19 @@ explain (costs off)
 select a.unique1, b.unique2
   from onek a left join onek b on a.unique1 = b.unique2
   where (b.unique2, random() > 0) = any (select q1, random() > 0 from int8_tbl c where c.q1 < b.unique1);
-                                                        QUERY PLAN                                                        
---------------------------------------------------------------------------------------------------------------------------
+                                                           QUERY PLAN                                                           
+--------------------------------------------------------------------------------------------------------------------------------
  Hash Join
-   Hash Cond: (b.unique2 = a.unique1)
-   ->  Seq Scan on onek b
-         Filter: (ANY ((unique2 = (SubPlan any_1).col1) AND ((random() > '0'::double precision) = (SubPlan any_1).col2)))
-         Bloom Filter 1: keys=(unique2)
-         SubPlan any_1
-           ->  Seq Scan on int8_tbl c
-                 Filter: (q1 < b.unique1)
+   Hash Cond: (a.unique1 = b.unique2)
+   ->  Index Only Scan using onek_unique1 on onek a
+         Bloom Filter 1: keys=(unique1)
    ->  Hash
          Bloom Filter 1
-         ->  Index Only Scan using onek_unique1 on onek a
+         ->  Seq Scan on onek b
+               Filter: (ANY ((unique2 = (SubPlan any_1).col1) AND ((random() > '0'::double precision) = (SubPlan any_1).col2)))
+               SubPlan any_1
+                 ->  Seq Scan on int8_tbl c
+                       Filter: (q1 < b.unique1)
 (11 rows)
 
 select a.unique1, b.unique2
@@ -6142,16 +6102,14 @@ explain (costs off)
 select id from a where id in (
 	select b.id from b left join c on b.id = c.id
 );
-            QUERY PLAN             
------------------------------------
+         QUERY PLAN         
+----------------------------
  Hash Join
    Hash Cond: (a.id = b.id)
    ->  Seq Scan on a
-         Bloom Filter 1: keys=(id)
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on b
-(7 rows)
+(5 rows)
 
 -- check optimization with oddly-nested outer joins
 explain (costs off)
@@ -6574,18 +6532,16 @@ explain (costs off)
 select c.id, ss.a from c
   left join (select d.a from onerow, d left join b on d.a = b.id) ss
   on c.id = ss.a;
-               QUERY PLAN               
-----------------------------------------
+           QUERY PLAN           
+--------------------------------
  Hash Right Join
    Hash Cond: (d.a = c.id)
    ->  Nested Loop
          ->  Seq Scan on onerow
          ->  Seq Scan on d
-               Bloom Filter 1: keys=(a)
    ->  Hash
-         Bloom Filter 1
          ->  Seq Scan on c
-(9 rows)
+(7 rows)
 
 -- check the case when the placeholder relates to an outer join and its
 -- inner in the press field but actually uses only the outer side of the join
@@ -8254,33 +8210,32 @@ JOIN (
 		)
 	) _t2t3t4
 ON sj_t1.id = _t2t3t4.id;
-                                     QUERY PLAN                                      
--------------------------------------------------------------------------------------
+                                        QUERY PLAN                                         
+-------------------------------------------------------------------------------------------
  Nested Loop
-   Join Filter: (sj_t3.id = sj_t1.id)
+   Join Filter: (sj_t1.id = sj_t3.id)
    ->  Nested Loop
-         Join Filter: (sj_t2.id = sj_t3.id)
-         ->  Nested Loop Semi Join
+         Join Filter: (sj_t3.id = sj_t2_1.id)
+         ->  Nested Loop
+               Join Filter: (sj_t2.id = sj_t3.id)
                ->  Nested Loop
-                     ->  HashAggregate
-                           Group Key: sj_t3.id
+                     ->  Unique
                            ->  Nested Loop
+                                 ->  Index Only Scan using sj_t3_a_id_idx on sj_t3 sj_t3_1
+                                       Index Cond: (a = 1)
+                                 ->  Seq Scan on sj_t4 sj_t4_1
+                     ->  Index Only Scan using sj_t2_id_idx on sj_t2
+                           Index Cond: (id = sj_t3_1.id)
+               ->  Materialize
+                     ->  Unique
+                           ->  Nested Loop
+                                 ->  Index Only Scan using sj_t3_a_id_idx on sj_t3
+                                       Index Cond: (a = 1)
                                  ->  Seq Scan on sj_t4
-                                 ->  Materialize
-                                       ->  Bitmap Heap Scan on sj_t3
-                                             Recheck Cond: (a = 1)
-                                             ->  Bitmap Index Scan on sj_t3_a_id_idx
-                                                   Index Cond: (a = 1)
-                     ->  Index Only Scan using sj_t2_id_idx on sj_t2 sj_t2_1
-                           Index Cond: (id = sj_t3.id)
-               ->  Nested Loop
-                     ->  Index Only Scan using sj_t3_a_id_idx on sj_t3 sj_t3_1
-                           Index Cond: ((a = 1) AND (id = sj_t3.id))
-                     ->  Seq Scan on sj_t4 sj_t4_1
-         ->  Index Only Scan using sj_t2_id_idx on sj_t2
-               Index Cond: (id = sj_t2_1.id)
+         ->  Index Only Scan using sj_t2_id_idx on sj_t2 sj_t2_1
+               Index Cond: (id = sj_t2.id)
    ->  Seq Scan on sj_t1
-(24 rows)
+(23 rows)
 
 --
 -- Test RowMarks-related code
@@ -9143,15 +9098,13 @@ select * from
                                  Output: b.q1, COALESCE(b.q2, '42'::bigint)
                ->  Seq Scan on public.int8_tbl d
                      Output: d.q1, COALESCE((COALESCE(b.q2, '42'::bigint)), d.q2)
-                     Bloom Filter 1: keys=(d.q1)
          ->  Hash
                Output: c.q1, c.q2
-               Bloom Filter 1
                ->  Seq Scan on public.int8_tbl c
                      Output: c.q1, c.q2
    ->  Result
          Output: (COALESCE((COALESCE(b.q2, '42'::bigint)), d.q2))
-(26 rows)
+(24 rows)
 
 -- another case requiring nested PlaceHolderVars
 explain (verbose, costs off)
@@ -9210,29 +9163,25 @@ select c.*,a.*,ss1.q1,ss2.q1,ss3.* from
                            Join Filter: (b.q1 < b2.f1)
                            ->  Seq Scan on public.int8_tbl b
                                  Output: b.q1, b.q2
-                                 Bloom Filter 1: keys=(b.q1)
                            ->  Materialize
                                  Output: b2.f1
                                  ->  Seq Scan on public.int4_tbl b2
                                        Output: b2.f1
                      ->  Hash
                            Output: a.q1, a.q2
-                           Bloom Filter 1
                            ->  Seq Scan on public.int8_tbl a
                                  Output: a.q1, a.q2
                ->  Seq Scan on public.int8_tbl d
                      Output: d.q1, COALESCE((COALESCE(b.q2, (b2.f1)::bigint)), d.q2)
-                     Bloom Filter 2: keys=(d.q1)
          ->  Hash
                Output: c.q1, c.q2
-               Bloom Filter 2
                ->  Seq Scan on public.int8_tbl c
                      Output: c.q1, c.q2
    ->  Materialize
          Output: i.f1
          ->  Seq Scan on public.int4_tbl i
                Output: i.f1
-(38 rows)
+(34 rows)
 
 -- check processing of postponed quals (bug #9041)
 explain (verbose, costs off)
@@ -9539,10 +9488,8 @@ select t1.b, ss.phv from join_ut1 t1 left join lateral
                Hash Cond: (t3.b = t2.a)
                ->  Seq Scan on public.join_ut1 t3
                      Output: t3.a, t3.b, t3.c
-                     Bloom Filter 1: keys=(t3.b)
                ->  Hash
                      Output: t2.a
-                     Bloom Filter 1
                      ->  Append
                            ->  Seq Scan on public.join_pt1p1p1 t2_1
                                  Output: t2_1.a
@@ -9550,7 +9497,7 @@ select t1.b, ss.phv from join_ut1 t1 left join lateral
                            ->  Seq Scan on public.join_pt1p2 t2_2
                                  Output: t2_2.a
                                  Filter: (t1.a = t2_2.a)
-(23 rows)
+(21 rows)
 
 select t1.b, ss.phv from join_ut1 t1 left join lateral
               (select t2.a as t2a, t3.a t3a, least(t1.a, t2.a, t3.a) phv
@@ -9600,22 +9547,21 @@ select * from fkest f1
   join fkest f2 on (f1.x = f2.x and f1.x10 = f2.x10b and f1.x100 = f2.x100)
   join fkest f3 on f1.x = f3.x
   where f1.x100 = 2;
-                     QUERY PLAN                      
------------------------------------------------------
+                          QUERY PLAN                           
+---------------------------------------------------------------
  Hash Join
    Hash Cond: ((f2.x = f1.x) AND (f2.x10b = f1.x10))
-   ->  Hash Join
-         Hash Cond: (f3.x = f2.x)
-         ->  Seq Scan on fkest f3
-               Bloom Filter 1: keys=(x)
-         ->  Hash
-               Bloom Filter 1
-               ->  Seq Scan on fkest f2
-                     Filter: (x100 = 2)
+   ->  Nested Loop
+         ->  Seq Scan on fkest f2
+               Filter: (x100 = 2)
+               Bloom Filter 1: keys=(x, x10b)
+         ->  Index Scan using fkest_x_x10_x100_idx on fkest f3
+               Index Cond: (x = f2.x)
    ->  Hash
+         Bloom Filter 1
          ->  Seq Scan on fkest f1
                Filter: (x100 = 2)
-(13 rows)
+(12 rows)
 
 rollback;
 --
@@ -9668,21 +9614,19 @@ analyze j3;
 -- ensure join is properly marked as unique
 explain (verbose, costs off)
 select * from j1 inner join j2 on j1.id = j2.id;
-              QUERY PLAN              
---------------------------------------
+            QUERY PLAN             
+-----------------------------------
  Hash Join
    Output: j1.id, j2.id
    Inner Unique: true
    Hash Cond: (j1.id = j2.id)
    ->  Seq Scan on public.j1
          Output: j1.id
-         Bloom Filter 1: keys=(j1.id)
    ->  Hash
          Output: j2.id
-         Bloom Filter 1
          ->  Seq Scan on public.j2
                Output: j2.id
-(12 rows)
+(10 rows)
 
 -- ensure join is not unique when not an equi-join
 explain (verbose, costs off)
@@ -9707,17 +9651,16 @@ select * from j1 inner join j3 on j1.id = j3.id;
 --------------------------------------
  Hash Join
    Output: j1.id, j3.id
-   Inner Unique: true
-   Hash Cond: (j3.id = j1.id)
-   ->  Seq Scan on public.j3
-         Output: j3.id
-         Bloom Filter 1: keys=(j3.id)
-   ->  Hash
+   Hash Cond: (j1.id = j3.id)
+   ->  Seq Scan on public.j1
          Output: j1.id
+         Bloom Filter 1: keys=(j1.id)
+   ->  Hash
+         Output: j3.id
          Bloom Filter 1
-         ->  Seq Scan on public.j1
-               Output: j1.id
-(12 rows)
+         ->  Seq Scan on public.j3
+               Output: j3.id
+(11 rows)
 
 -- ensure left join is marked as unique
 explain (verbose, costs off)
@@ -9788,64 +9731,70 @@ select * from j1 cross join j2;
 -- ensure a natural join is marked as unique
 explain (verbose, costs off)
 select * from j1 natural join j2;
-              QUERY PLAN              
---------------------------------------
+            QUERY PLAN             
+-----------------------------------
  Hash Join
    Output: j1.id
    Inner Unique: true
    Hash Cond: (j1.id = j2.id)
    ->  Seq Scan on public.j1
          Output: j1.id
-         Bloom Filter 1: keys=(j1.id)
    ->  Hash
          Output: j2.id
-         Bloom Filter 1
          ->  Seq Scan on public.j2
                Output: j2.id
-(12 rows)
+(10 rows)
 
 -- ensure a distinct clause allows the inner to become unique
 explain (verbose, costs off)
 select * from j1
 inner join (select distinct id from j3) j3 on j1.id = j3.id;
-               QUERY PLAN                
------------------------------------------
- Nested Loop
+                  QUERY PLAN                   
+-----------------------------------------------
+ Hash Join
    Output: j1.id, j3.id
    Inner Unique: true
-   Join Filter: (j1.id = j3.id)
-   ->  Unique
-         Output: j3.id
-         ->  Sort
-               Output: j3.id
-               Sort Key: j3.id
-               ->  Seq Scan on public.j3
-                     Output: j3.id
+   Hash Cond: (j1.id = j3.id)
    ->  Seq Scan on public.j1
          Output: j1.id
-(13 rows)
+         Bloom Filter 1: keys=(j1.id)
+   ->  Hash
+         Output: j3.id
+         Bloom Filter 1
+         ->  Unique
+               Output: j3.id
+               ->  Sort
+                     Output: j3.id
+                     Sort Key: j3.id
+                     ->  Seq Scan on public.j3
+                           Output: j3.id
+(17 rows)
 
 -- ensure group by clause allows the inner to become unique
 explain (verbose, costs off)
 select * from j1
 inner join (select id from j3 group by id) j3 on j1.id = j3.id;
-               QUERY PLAN                
------------------------------------------
- Nested Loop
+                  QUERY PLAN                   
+-----------------------------------------------
+ Hash Join
    Output: j1.id, j3.id
    Inner Unique: true
-   Join Filter: (j1.id = j3.id)
-   ->  Group
-         Output: j3.id
-         Group Key: j3.id
-         ->  Sort
-               Output: j3.id
-               Sort Key: j3.id
-               ->  Seq Scan on public.j3
-                     Output: j3.id
+   Hash Cond: (j1.id = j3.id)
    ->  Seq Scan on public.j1
          Output: j1.id
-(14 rows)
+         Bloom Filter 1: keys=(j1.id)
+   ->  Hash
+         Output: j3.id
+         Bloom Filter 1
+         ->  Group
+               Output: j3.id
+               Group Key: j3.id
+               ->  Sort
+                     Output: j3.id
+                     Sort Key: j3.id
+                     ->  Seq Scan on public.j3
+                           Output: j3.id
+(18 rows)
 
 drop table j1;
 drop table j2;
@@ -9959,14 +9908,16 @@ create index j2_id1_idx on j2 (id1) where id1 % 1000 = 1;
 explain (costs off) select * from j1
 inner join j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
 where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1;
-               QUERY PLAN                
------------------------------------------
- Merge Join
-   Merge Cond: (j1.id1 = j2.id1)
-   Join Filter: (j2.id2 = j1.id2)
-   ->  Index Scan using j1_id1_idx on j1
-   ->  Index Scan using j2_id1_idx on j2
-(5 rows)
+                        QUERY PLAN                        
+----------------------------------------------------------
+ Nested Loop
+   Disabled: true
+   Join Filter: ((j2.id1 = j1.id1) AND (j2.id2 = j1.id2))
+   ->  Seq Scan on j1
+         Filter: ((id1 % 1000) = 1)
+   ->  Seq Scan on j2
+         Filter: ((id1 % 1000) = 1)
+(7 rows)
 
 select * from j1
 inner join j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
@@ -9981,15 +9932,16 @@ where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1;
 explain (costs off) select * from j1
 inner join j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
 where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1 and j2.id1 = any (array[1]);
-                     QUERY PLAN                     
-----------------------------------------------------
- Merge Join
-   Merge Cond: (j1.id1 = j2.id1)
-   Join Filter: (j2.id2 = j1.id2)
-   ->  Index Scan using j1_id1_idx on j1
-   ->  Index Scan using j2_id1_idx on j2
-         Index Cond: (id1 = ANY ('{1}'::integer[]))
-(6 rows)
+                               QUERY PLAN                                
+-------------------------------------------------------------------------
+ Nested Loop
+   Disabled: true
+   Join Filter: ((j2.id1 = j1.id1) AND (j2.id2 = j1.id2))
+   ->  Seq Scan on j1
+         Filter: ((id1 % 1000) = 1)
+   ->  Seq Scan on j2
+         Filter: ((id1 = ANY ('{1}'::integer[])) AND ((id1 % 1000) = 1))
+(7 rows)
 
 select * from j1
 inner join j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
@@ -10004,15 +9956,16 @@ where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1 and j2.id1 = any (array[1]);
 explain (costs off) select * from j1
 inner join j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2
 where j1.id1 % 1000 = 1 and j2.id1 % 1000 = 1 and j2.id1 >= any (array[1,5]);
-                      QUERY PLAN                       
--------------------------------------------------------
- Merge Join
-   Merge Cond: (j1.id1 = j2.id1)
-   Join Filter: (j2.id2 = j1.id2)
-   ->  Index Scan using j1_id1_idx on j1
-   ->  Index Scan using j2_id1_idx on j2
-         Index Cond: (id1 >= ANY ('{1,5}'::integer[]))
-(6 rows)
+                                 QUERY PLAN                                 
+----------------------------------------------------------------------------
+ Nested Loop
+   Disabled: true
+   Join Filter: ((j2.id1 = j1.id1) AND (j2.id2 = j1.id2))
+   ->  Seq Scan on j1
+         Filter: ((id1 % 1000) = 1)
+   ->  Seq Scan on j2
+         Filter: ((id1 >= ANY ('{1,5}'::integer[])) AND ((id1 % 1000) = 1))
+(7 rows)
 
 select * from j1
 inner join j2 on j1.id1 = j2.id1 and j1.id2 = j2.id2

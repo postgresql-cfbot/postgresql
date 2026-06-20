@@ -2019,15 +2019,16 @@ ExecHashJoinInitializeWorker(HashJoinState *state,
  * BLOOM FILTER PUSHDOWN
  *
  * The pushdown decision is done in try_push_bloom_filter, when constructing
- * the plan from the selected paths (see createplan.c). It decides which scan
- * node should receive the bloom filter (if any), and what expressions it
- * should use to calculate the hash value.
+ * the plan from the selected paths. The input paths track filters "expected"
+ * by scan nodes included in that path (if any). The planner then ensures all
+ * expected filters are either satisfied (by matching joins) or propagated up.
+ * In a valid plan all expected filters are satisfied.
  *
  * Then at execution time:
  *
  *   - ExecInitHashJoin registers itself in EState.es_bloom_producers
  *     before recursing into child plans, so by the time a recipient's
- *     ExecInit runs, the producer is already discoverable by plan_node_id.
+ *     ExecInit runs, the producer is already discoverable by filter ID.
  *     This registration only happens when there's at least one consumer.
  *     It also sets want_bloom_filter for the Hash node.
  *
@@ -2035,25 +2036,25 @@ ExecHashJoinInitializeWorker(HashJoinState *state,
  *     when HashState.want_bloom_filter is set (so no work happens when
  *     nobody will probe).
  *
- *   - Nodes with non-NIL plan->bloom_filters (and supporting bloom
+ *   - Nodes with non-NIL plan->bloom_filters (and supporting Bloom
  *     filters) call ExecInitBloomFilters() during its own ExecInit,
  *     which looks up the producer node (in the EState), compiles
  *     ExprStates for the hash expressions, etc. The filter state
  *     (BloomFilterState) gets added to ps->bloom_filters (a node may
- *     have multiple bloom filters from different hash joins).
+ *     have multiple Bloom filters from different hash joins).
  *
  *   - The per-tuple loop of the scan node calls ExecBloomFilters() (much
  *     like ExecQual) to test the tuple against every attached filter,
  *     dropping it on the first filter that excludes it. For scan nodes
  *     this call happens in ExecScanExtended.
  *
- * The scan nodes reach the bloom filter via the HashJoinState pointer
+ * The scan nodes reach the Bloom filter via the HashJoinState pointer
  * added to EState.es_bloom_producers, so that the rescans etc. (filter
  * freed + recreated when the hash table is destroyed and rebuilt) are
- * transparent to the consumer. The bloom filter gets reallocated after
+ * transparent to the consumer. The Bloom filter gets reallocated after
  * a rescan, so the pointer to it may change.
  *
- * XXX It's possible the bloom filter gets pushed down to a node that
+ * XXX It's possible the Bloom filter gets pushed down to a node that
  * fails to initialize/use it. It'll be added to the bloom_filters list,
  * but if the node does not call ExecInitBloomFilters, the filter will
  * be unused.

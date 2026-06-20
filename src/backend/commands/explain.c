@@ -2589,19 +2589,34 @@ show_upper_qual(List *qual, const char *qlabel,
 
 /*
  * show_bloom_filter_info
- *		Show info about every bloom filter pushed down to a scan node.
+ *		Show info about every Bloom filter pushed down to a scan node.
  *
  * In TEXT format each filter is rendered on a single line, e.g.
  *
- *   Bloom Filter N: (a, b) producer=3 checked=99999 rejected=99990
+ *   Bloom Filter N: keys=(a, b) checked=99999 rejected=99990
  *
- * The checked/rejected fields are omitted outside of ANALYZE). In
- * structured formats we emit a group per filter with the same fields
- * broken out as properties.
+ * The checked/rejected fields are omitted outside of ANALYZE). In structured
+ * formats we emit a group per filter with the same fields broken out as
+ * properties.
  *
- * Called from the per-recipient cases in ExplainNode; the recipient is
- * expected to be a scan node in the current PoC, but nothing here
- * depends on that.
+ * Called from the per-recipient cases in ExplainNode; the recipient is expected
+ * to be a scan node, but nothing here depends on that. We may choose to push
+ * filters to other nodes in the plan.
+ *
+ * This only prints information about the keys, and the checked/rejected counts.
+ * Detailed information about the filter itself (number of bits, number of hash
+ * functions, ...) is available on the producer side.
+ *
+ * XXX It might be a good idea to show the expected filter selectivity too,
+ * not just the one actually observed during execution. That'd make it easier
+ * to reason about the decisions and review the plan changes.
+ *
+ * XXX If we choose other filter types, we'd need some general way to show the
+ * information. I don't know if we should have a "generic" information provided
+ * by all the filters, or if we would need a way to print custom information.
+ * Chances are we'd have a limited number of supported filter types, in which
+ * case we can have a show_ function for each type. Only if users could inject
+ * arbitrary filters, that'd be an issue. But that seems unlikely.
  */
 static void
 show_bloom_filter_info(PlanState *planstate, List *ancestors,
@@ -3599,9 +3614,21 @@ show_hash_info(HashState *hashstate, ExplainState *es)
 	}
 
 	/*
-	 * Show infromation about the bloom filter produced by this Hash node
-	 * (if any). For plain EXPLAIN, the filter is not initialized / built,
-	 * but we still show available plan-time metadata (at least the ID).
+	 * Show infromation about the Bloom filter produced by this Hash node (if
+	 * any). For plain EXPLAIN, the filter is not initialized / built, but we
+	 * still show available plan-time metadata (at least the ID).
+	 *
+	 * Once the filter is built, we show the various filter parameters (number
+	 * of bits, hash functions, ...). Note that even with EXPLAIN ANALYZE the
+	 * filter may not be built, due to the hashjoin delaying the Hash build
+	 * until on the first outer tuple.
+	 *
+	 * XXX We don't show the keys, because those are always the join keys.
+	 *
+	 * XXX I think it makes sense to show the checked/rejected counters both
+	 * here and for the consumer. If/when we allow multiple consumers for the
+	 * filter, then this would show the "summary" while the scan node would
+	 * show just counters for that one consumer.
 	 */
 	if (hashstate->bloom_filter_id > 0)
 	{

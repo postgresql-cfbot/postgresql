@@ -54,6 +54,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
+#include "utils/resowner.h"
 #include "utils/syscache.h"
 
 /*
@@ -2264,37 +2265,63 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
  * Construct conninfo from a subscription's server. Like libpqrcv_connect(),
  * if an error occurs, set *err to the error message and return NULL.
  *
- * However, failures in ForeignServerConnectionString() may ereport(ERROR),
- * and (also like libpqrcv_connect) it's not worth adding the machinery to
- * pass all of those back to the caller just to cover this one case.
+ * Uses a subtransaction so that we can catch arbitrary errors from
+ * ForeignServerConnectionString().
  */
 static char *
 construct_subserver_conninfo(Oid subserver, Oid subowner, char **err)
 {
-	AclResult	aclresult;
-	ForeignServer *server;
+	MemoryContext oldcxt = CurrentMemoryContext;
+	ResourceOwner oldresowner = CurrentResourceOwner;
+	ErrorData  *edata = NULL;
+	char	   *conninfo = NULL;
 
 	*err = NULL;
 
-	server = GetForeignServer(subserver);
+	BeginInternalSubTransaction(NULL);
+	MemoryContextSwitchTo(oldcxt);
 
-	aclresult = object_aclcheck(ForeignServerRelationId, subserver,
-								subowner, ACL_USAGE);
-	if (aclresult != ACLCHECK_OK)
+	PG_TRY();
 	{
-		/*
-		 * Unable to generate connection string because permissions on the
-		 * foreign server have been removed. Follow the same logic as an
-		 * unusable subconninfo (which will result in an ERROR later unless
-		 * slot_name = NONE).
-		 */
-		*err = psprintf(_("subscription owner \"%s\" does not have permission on foreign server \"%s\""),
-						GetUserNameFromId(subowner, false),
-						server->servername);
-		return NULL;
+		AclResult	aclresult;
+		ForeignServer *server;
+
+		server = GetForeignServer(subserver);
+		aclresult = object_aclcheck(ForeignServerRelationId, subserver,
+									subowner, ACL_USAGE);
+		if (aclresult != ACLCHECK_OK)
+			ereport(ERROR,
+					errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+					errmsg("subscription owner \"%s\" does not have permission on foreign server \"%s\"",
+						   GetUserNameFromId(subowner, false),
+						   server->servername));
+
+		conninfo = ForeignServerConnectionString(subowner, server);
+		Assert(conninfo != NULL);
+		ReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(oldcxt);
+		CurrentResourceOwner = oldresowner;
+	}
+	PG_CATCH();
+	{
+		MemoryContextSwitchTo(oldcxt);
+		edata = CopyErrorData();
+		FlushErrorState();
+		RollbackAndReleaseCurrentSubTransaction();
+		MemoryContextSwitchTo(oldcxt);
+		CurrentResourceOwner = oldresowner;
+
+		conninfo = NULL;
+	}
+	PG_END_TRY();
+
+	if (!conninfo)
+	{
+		*err = pstrdup(edata->message);
+		FreeErrorData(edata);
 	}
 
-	return ForeignServerConnectionString(subowner, server);
+	return conninfo;
 }
 
 /*

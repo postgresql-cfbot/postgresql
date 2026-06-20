@@ -344,6 +344,7 @@ btbeginscan(Relation rel, int nkeys, int norderbys)
 	so->arrayKeys = NULL;
 	so->orderProcs = NULL;
 	so->arrayContext = NULL;
+	so->numNoMatchPages = 0;
 
 	scan->opaque = so;
 	scan->xs_recheck = false;

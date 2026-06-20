@@ -998,6 +998,12 @@ typedef struct BTScanOpaqueData
 	BTArrayKeyInfo *arrayKeys;	/* info about each equality-type array key */
 	FmgrInfo   *orderProcs;		/* ORDER procs for required equality keys */
 	MemoryContext arrayContext; /* scan-lifespan context for array data */
+
+	/*
+	 * Running count of leaf pages read without finding a match, compared
+	 * against scan->xs_index_pages_limit to bound planner scans
+	 */
+	int			numNoMatchPages;	/* no-batch-returned leaf page count */
 } BTScanOpaqueData;
 
 typedef BTScanOpaqueData *BTScanOpaque;

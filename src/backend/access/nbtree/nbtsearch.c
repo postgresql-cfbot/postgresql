@@ -1750,6 +1750,7 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno,
 				 BlockNumber lastcurrblkno, ScanDirection dir, bool firstpage)
 {
 	Relation	rel = scan->indexRelation;
+	BTScanOpaque so = (BTScanOpaque) scan->opaque;
 	IndexScanBatch newbatch;
 	BTBatchData *btnewbatch;
 
@@ -1832,10 +1833,18 @@ _bt_readnextpage(IndexScanDesc scan, BlockNumber blkno,
 		/* no matching tuples on this page */
 		_bt_relbuf(rel, btnewbatch->buf);
 
-		/* Continue the scan in this direction? */
+		/*
+		 * Continue the scan in this direction?
+		 *
+		 * Also give up if an opted-in planner scan (selfuncs.c) has now read
+		 * too many leaf pages without a match.  This bounds planning time
+		 * when the scanned end of the index is full of LP_DEAD-marked items.
+		 */
 		if (blkno == P_NONE ||
 			(ScanDirectionIsForward(dir) ?
-			 !btnewbatch->moreRight : !btnewbatch->moreLeft))
+			 !btnewbatch->moreRight : !btnewbatch->moreLeft) ||
+			(unlikely(scan->xs_index_pages_limit > 0) &&
+			 ++so->numNoMatchPages > scan->xs_index_pages_limit))
 		{
 			/*
 			 * blkno _bt_readpage call ended scan in this direction (though if

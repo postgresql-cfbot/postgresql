@@ -404,12 +404,13 @@ typedef struct IndexScanDescData
 	int			xs_name_cstring_count;
 
 	/*
-	 * An approximate limit on the amount of work, measured in pages touched,
+	 * Approximate limits on the amount of work, measured in pages touched,
 	 * imposed on the index scan.  The default, 0, means no limit.  Only
 	 * honored during index-only scans.  Used by selfuncs.c to bound the cost
 	 * of get_actual_variable_endpoint().
 	 */
 	uint8		xs_visited_pages_limit;
+	uint8		xs_index_pages_limit;
 
 	/* parallel index scan information, in shared memory */
 	struct ParallelIndexScanDescData *parallel_scan;

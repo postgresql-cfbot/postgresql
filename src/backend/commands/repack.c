@@ -879,8 +879,7 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 	{
 		Oid			thisIndexOid = lfirst_oid(index);
 
-		indexTuple = SearchSysCacheCopy1(INDEXRELID,
-										 ObjectIdGetDatum(thisIndexOid));
+		indexTuple = GetEffectivePgIndexTuple(thisIndexOid);
 		if (!HeapTupleIsValid(indexTuple))
 			elog(ERROR, "cache lookup failed for index %u", thisIndexOid);
 		indexForm = (Form_pg_index) GETSTRUCT(indexTuple);

@@ -37,6 +37,7 @@
 #include "catalog/namespace.h"
 #include "catalog/pg_enum.h"
 #include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_index.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
 #include "commands/tablecmds.h"
@@ -1149,7 +1150,7 @@ CommandCounterIncrement(void)
 					(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 					 errmsg("cannot start commands during a parallel operation")));
 
-		/* Flush out any pending inserts to pg_temp_class */
+		/* Flush out any pending pg_temp_class and pg_temp_index inserts */
 		PreCCI_PgTempClass();
 
 		currentCommandId += 1;
@@ -2365,7 +2366,7 @@ CommitTransaction(void)
 	 */
 	PreCommit_on_commit_actions();
 
-	/* Flush out any pending inserts to pg_temp_class */
+	/* Flush out any pending pg_temp_class and pg_temp_index inserts */
 	PreCommit_PgTempClass();
 
 	/*
@@ -2642,7 +2643,7 @@ PrepareTransaction(void)
 	 */
 	PreCommit_on_commit_actions();
 
-	/* Flush out any pending inserts to pg_temp_class */
+	/* Flush out any pending pg_temp_class and pg_temp_index inserts */
 	PreCommit_PgTempClass();
 
 	/*
@@ -5204,7 +5205,7 @@ CommitSubTransaction(void)
 	CallSubXactCallbacks(SUBXACT_EVENT_PRE_COMMIT_SUB, s->subTransactionId,
 						 s->parent->subTransactionId);
 
-	/* Flush out any pending inserts to pg_temp_class */
+	/* Flush out any pending pg_temp_class and pg_temp_index inserts */
 	PreSubCommit_PgTempClass();
 
 	/*

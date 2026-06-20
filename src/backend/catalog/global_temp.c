@@ -122,6 +122,7 @@ static bool eoxact_storage_list_overflowed = false;
 typedef struct GtrUsageEntry
 {
 	Oid			relid;			/* lookup key: OID of relation in use */
+	char		relkind;		/* relkind of the relation */
 	SubTransactionId started_subid; /* usage started in current xact */
 	SubTransactionId stopped_subid; /* usage ended with another subid set */
 } GtrUsageEntry;
@@ -531,7 +532,7 @@ gtr_init_usage_tables(void)
  *	Note: This is intentionally idempotent.
  */
 static void
-gtr_record_usage(Oid relid)
+gtr_record_usage(Oid relid, char relkind)
 {
 	GtrUsageEntry *local_entry;
 	GtrSharedUsageKey key;
@@ -545,6 +546,9 @@ gtr_record_usage(Oid relid)
 	local_entry = hash_search(gtr_local_usage, &relid, HASH_ENTER, &found);
 	if (found)
 		return;					/* already recorded, nothing to do */
+
+	/* Remember the relation's relkind */
+	local_entry->relkind = relkind;
 
 	/* Record the usage as starting in the current subtransaction */
 	local_entry->started_subid = GetCurrentSubTransactionId();
@@ -983,14 +987,33 @@ GlobalTempRelationCreated(Relation relation)
 {
 	/*
 	 * If this is the first time we've used this relation in this session,
-	 * insert a pg_temp_class tuple for it, and update the usage hash tables.
+	 * insert pg_temp_class and pg_temp_index tuples for it, and update the
+	 * usage hash tables.
 	 */
 	if (gtr_local_usage == NULL ||
 		hash_search(gtr_local_usage,
 					&relation->rd_id, HASH_FIND, NULL) == NULL)
 	{
 		InsertPgTempClassTuple(relation);
-		gtr_record_usage(relation->rd_id);
+
+		if (relation->rd_rel->relkind == RELKIND_INDEX ||
+			relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		{
+			/*
+			 * When creating a new index locally, relation->rd_index will be
+			 * NULL here.  Mark it as valid for now --- UpdateIndexRelation()
+			 * will update it later, if it's not actually valid (e.g., CREATE
+			 * INDEX ... ON ONLY ...).  Otherwise, for an index created in
+			 * another session, relation->rd_index->indisvalid will accurately
+			 * reflect whether or not the index needs to be marked invalid
+			 * locally (if our instance of the index's table is not empty).
+			 */
+			InsertPgTempIndexTuple(relation->rd_id,
+								   relation->rd_index == NULL ||
+								   relation->rd_index->indisvalid);
+		}
+
+		gtr_record_usage(relation->rd_id, relation->rd_rel->relkind);
 	}
 }
 
@@ -1021,8 +1044,12 @@ GlobalTempRelationDropped(Oid relid)
 		/* Flag the usage entry for eoxact cleanup */
 		EOXactUsageListAdd(relid);
 
-		/* Delete its pg_temp_class tuple */
+		/* Delete its pg_temp_class and pg_temp_index tuples */
 		DeletePgTempClassTuple(relid);
+
+		if (entry->relkind == RELKIND_INDEX ||
+			entry->relkind == RELKIND_PARTITIONED_INDEX)
+			DeletePgTempIndexTuple(relid);
 	}
 
 	/*
@@ -1156,7 +1183,7 @@ AtEOXact_GlobalTempRelation(bool isCommit)
 		}
 	}
 
-	/* Perform any pg_temp_class processing */
+	/* Perform any pg_temp_class and pg_temp_index processing */
 	AtEOXact_PgTempClass(isCommit);
 
 	/* Now we're out of the transaction and can clear the lists */
@@ -1230,7 +1257,7 @@ AtEOSubXact_GlobalTempRelation(bool isCommit, SubTransactionId mySubid,
 		}
 	}
 
-	/* Perform any pg_temp_class processing */
+	/* Perform any pg_temp_class and pg_temp_index processing */
 	AtEOSubXact_PgTempClass(isCommit, mySubid, parentSubid);
 
 	/* Don't reset the lists; we still need more cleanup later */

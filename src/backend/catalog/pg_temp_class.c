@@ -1,7 +1,8 @@
 /*-------------------------------------------------------------------------
  *
  * pg_temp_class.c
- *	  routines to support manipulation of the pg_temp_class relation
+ *	  routines to support manipulation of the pg_temp_class and
+ *	  pg_temp_index relations
  *
  * The pg_temp_class system catalog table is a global temporary table that
  * stores local overrides to various fields from the pg_class table for the
@@ -38,9 +39,14 @@
  * with the database, if they have been flushed), until the end of the
  * transaction, when they are discarded.
  *
- * NB: All reads and writes to pg_temp_class by backend code must go
- * through the functions defined here (though user SQL queries may read it
- * normally).
+ * Likewise pg_temp_index is the global temporary system catalog table that
+ * stores local overrides to fields (actually just indisvalid) in the
+ * pg_index table for the duration of the current session. It requires
+ * similar treatment, so for convenience we manage that here too.
+ *
+ * NB: All reads and writes to pg_temp_class and pg_temp_index by backend
+ * code must go through the functions defined here (though user SQL queries
+ * may read them normally).
  *
  * Copyright (c) 2026, PostgreSQL Global Development Group
  *
@@ -58,29 +64,35 @@
 #include "access/xact.h"
 #include "catalog/indexing.h"
 #include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_index.h"
 #include "miscadmin.h"
 #include "storage/proc.h"
 #include "utils/fmgroids.h"
 #include "utils/hsearch.h"
+#include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/syscache.h"
 
 /*
- * Have we opened and initialized pg_temp_class in this session?
+ * Have we opened and initialized pg_temp_class and pg_temp_index in this
+ * session?
  */
 static bool pg_temp_class_opened = false;
+static bool pg_temp_index_opened = false;
 
 /*
- * Subtransaction ID in which pg_temp_class was opened, if it was opened in
- * the current transaction, else zero.
+ * Subtransaction IDs in which pg_temp_class and pg_temp_index were opened, if
+ * they were opened in the current transaction, else zero.
  */
 static SubTransactionId pg_temp_class_subid = InvalidSubTransactionId;
+static SubTransactionId pg_temp_index_subid = InvalidSubTransactionId;
 
-/* Cached copy of the pg_temp_class tuple descriptor */
+/* Cached copies of the pg_temp_class and pg_temp_index tuple descriptors */
 static TupleDesc pg_temp_class_tupdesc = NULL;
+static TupleDesc pg_temp_index_tupdesc = NULL;
 
 /*
- * Pending inserts to pg_temp_class.
+ * Pending inserts to pg_temp_class and pg_temp_index.
  *
  * Each pending insert entry may be flushed to the database at any point
  * during the transaction which added it, but the entry is kept up-to-date
@@ -101,7 +113,10 @@ typedef struct PendingInsert
 	struct PendingInsert *prev; /* previous version, for subxact rollback */
 } PendingInsert;
 
-static HTAB *pending_inserts = NULL;
+static HTAB *pending_class_inserts = NULL;
+static HTAB *pending_index_inserts = NULL;
+
+/* Do we have any pending inserts of either kind that need flushing? */
 static bool have_inserts_to_flush = false;
 
 /* Memory context for all tuples pending insert */
@@ -136,27 +151,62 @@ open_pg_temp_class(LOCKMODE lockmode)
 }
 
 /*
- * init_pending_inserts_hashtable
+ * open_pg_temp_index
  *
- *	Initialize the pending inserts hashtable, if not already done.
+ *	Open pg_temp_index and make a note of the subtranscation ID, if this is
+ *	the first time opening it.
+ */
+static Relation
+open_pg_temp_index(LOCKMODE lockmode)
+{
+	Relation	pg_temp_index;
+
+	pg_temp_index = table_open(TempIndexRelationId, lockmode);
+	if (!pg_temp_index_opened)
+	{
+		pg_temp_index_opened = true;
+		pg_temp_index_subid = GetCurrentSubTransactionId();
+	}
+	return pg_temp_index;
+}
+
+/*
+ * init_pending_inserts_hashtables
+ *
+ *	Initialize the pending inserts hashtables, if not already done.
  */
 static void
-init_pending_inserts_hashtable(void)
+init_pending_inserts_hashtables(void)
 {
-	if (pending_inserts == NULL)
+	if (pending_class_inserts == NULL)
 	{
 		HASHCTL		ctl;
 
-		/* Create the hash table */
+		/* Create the hash table for pending pg_temp_class inserts */
 		ctl.keysize = sizeof(Oid);
 		ctl.entrysize = sizeof(PendingInsert);
 
-		pending_inserts = hash_create("Pending pg_temp_class inserts",
-									  128, &ctl, HASH_ELEM | HASH_BLOBS);
+		pending_class_inserts = hash_create("Pending pg_temp_class inserts",
+											128, &ctl, HASH_ELEM | HASH_BLOBS);
+	}
 
-		/* Create a separate memory context for all tuples in it */
+	if (pending_index_inserts == NULL)
+	{
+		HASHCTL		ctl;
+
+		/* Create the hash table for pending pg_temp_index inserts */
+		ctl.keysize = sizeof(Oid);
+		ctl.entrysize = sizeof(PendingInsert);
+
+		pending_index_inserts = hash_create("Pending pg_temp_index inserts",
+											128, &ctl, HASH_ELEM | HASH_BLOBS);
+	}
+
+	if (pending_inserts_tupctx == NULL)
+	{
+		/* Create a separate memory context for all pending tuples */
 		pending_inserts_tupctx = AllocSetContextCreate(TopMemoryContext,
-													   "Pending pg_temp_class tuples",
+													   "Pending pg_temp_class/index tuples",
 													   ALLOCSET_DEFAULT_SIZES);
 	}
 }
@@ -216,6 +266,39 @@ get_pg_temp_class_tupdesc(void)
 }
 
 /*
+ * get_pg_temp_index_tupdesc
+ *
+ *	Returns the tuple descriptor for pg_temp_index.
+ */
+static TupleDesc
+get_pg_temp_index_tupdesc(void)
+{
+	/* Build the tuple descriptor the first time through */
+	if (pg_temp_index_tupdesc == NULL)
+	{
+		MemoryContext oldcontext;
+		TupleDesc	tupdesc;
+
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+		tupdesc = CreateTemplateTupleDesc(Natts_pg_temp_index);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_index_indexrelid,
+						   "indexrelid", OIDOID, -1, 0);
+		TupleDescInitEntry(tupdesc,
+						   (AttrNumber) Anum_pg_temp_index_indisvalid,
+						   "indisvalid", BOOLOID, -1, 0);
+		TupleDescFinalize(tupdesc);
+
+		MemoryContextSwitchTo(oldcontext);
+
+		/* Cache it for all future use */
+		pg_temp_index_tupdesc = tupdesc;
+	}
+	return pg_temp_index_tupdesc;
+}
+
+/*
  * heap_form_pg_temp_class_tuple
  *
  *	Create a pg_temp_class tuple for the specified relation.  All tuple data
@@ -239,6 +322,23 @@ heap_form_pg_temp_class_tuple(Relation rel)
 	values[Anum_pg_temp_class_relminmxid - 1] = MultiXactIdGetDatum(form->relminmxid);
 
 	return heap_form_tuple(get_pg_temp_class_tupdesc(), values, nulls);
+}
+
+/*
+ * heap_form_pg_temp_index_tuple
+ *
+ *	Create a pg_temp_index tuple for the specified index relation.
+ */
+static HeapTuple
+heap_form_pg_temp_index_tuple(Oid indexrelid, bool indisvalid)
+{
+	Datum		values[Natts_pg_temp_index];
+	bool		nulls[Natts_pg_temp_index] = {0};
+
+	values[Anum_pg_temp_index_indexrelid - 1] = ObjectIdGetDatum(indexrelid);
+	values[Anum_pg_temp_index_indisvalid - 1] = BoolGetDatum(indisvalid);
+
+	return heap_form_tuple(get_pg_temp_index_tupdesc(), values, nulls);
 }
 
 /*
@@ -274,57 +374,98 @@ prepare_pending_insert_for_edit(PendingInsert *entry)
 }
 
 /*
- * flush_pending_pg_temp_class_inserts
+ * flush_pending_inserts
  *
- *	Flush any pending inserts to pg_temp_class.
+ *	Flush any pending inserts to pg_temp_class and pg_temp_index.
  */
 static void
-flush_pending_pg_temp_class_inserts(void)
+flush_pending_inserts(void)
 {
 	Relation	pg_temp_class;
-	CatalogIndexState indstate;
+	Relation	pg_temp_index;
+	CatalogIndexState class_indstate;
+	CatalogIndexState index_indstate;
 	HASH_SEQ_STATUS status;
 	PendingInsert *entry;
 
+	/*
+	 * Open pg_temp_class, pg_temp_index, and their indexes.  Note that this
+	 * might be the first time these have been opened in the current session,
+	 * so we open them all first, in case they lead to more pending inserts.
+	 */
 	pg_temp_class = open_pg_temp_class(RowExclusiveLock);
+	pg_temp_index = open_pg_temp_index(RowExclusiveLock);
+
+	class_indstate = CatalogOpenIndexes(pg_temp_class);
+	index_indstate = CatalogOpenIndexes(pg_temp_index);
 
 	/*
-	 * Flush all pending inserts, not already flushed or deleted.
+	 * Flush all pending pg_temp_class inserts, not already flushed or
+	 * deleted.
 	 */
-	indstate = CatalogOpenIndexes(pg_temp_class);
-	hash_seq_init(&status, pending_inserts);
+	hash_seq_init(&status, pending_class_inserts);
 	while ((entry = hash_seq_search(&status)) != NULL)
 	{
 		if (!entry->flushed && !entry->deleted)
 		{
-			CatalogTupleInsertWithInfo(pg_temp_class, entry->tuple, indstate);
+			CatalogTupleInsertWithInfo(pg_temp_class, entry->tuple,
+									   class_indstate);
 
 			/* Update the entry, saving a copy for rollback, if necessary */
 			prepare_pending_insert_for_edit(entry);
 			entry->flushed = true;
 		}
 	}
-	CatalogCloseIndexes(indstate);
+
+	/* And likewise for pending pg_temp_index inserts */
+	hash_seq_init(&status, pending_index_inserts);
+	while ((entry = hash_seq_search(&status)) != NULL)
+	{
+		if (!entry->flushed && !entry->deleted)
+		{
+			CatalogTupleInsertWithInfo(pg_temp_index, entry->tuple,
+									   index_indstate);
+
+			/* Update the entry, saving a copy for rollback, if necessary */
+			prepare_pending_insert_for_edit(entry);
+			entry->flushed = true;
+		}
+	}
+
+	/* Tidy up */
+	CatalogCloseIndexes(class_indstate);
+	CatalogCloseIndexes(index_indstate);
 
 	table_close(pg_temp_class, RowExclusiveLock);
+	table_close(pg_temp_index, RowExclusiveLock);
 
 	have_inserts_to_flush = false;
 }
 
 /*
- * discard_pending_pg_temp_class_inserts
+ * discard_pending_inserts
  *
- *	Discard any pending inserts to pg_temp_class.
+ *	Discard any pending inserts to pg_temp_class and pg_temp_index.
  */
 static void
-discard_pending_pg_temp_class_inserts(void)
+discard_pending_inserts(void)
 {
-	/* Just blow away the hash table and tuple memory context */
-	hash_destroy(pending_inserts);
-	MemoryContextDelete(pending_inserts_tupctx);
-
-	pending_inserts = NULL;
-	pending_inserts_tupctx = NULL;
+	/* Just blow away the hash tables and tuple memory context */
+	if (pending_class_inserts != NULL)
+	{
+		hash_destroy(pending_class_inserts);
+		pending_class_inserts = NULL;
+	}
+	if (pending_index_inserts != NULL)
+	{
+		hash_destroy(pending_index_inserts);
+		pending_index_inserts = NULL;
+	}
+	if (pending_inserts_tupctx != NULL)
+	{
+		MemoryContextDelete(pending_inserts_tupctx);
+		pending_inserts_tupctx = NULL;
+	}
 	have_inserts_to_flush = false;
 }
 
@@ -342,9 +483,9 @@ GetPgTempClassTuple(Oid relid)
 	PendingInsert *entry = NULL;
 
 	/* If there is a pending insert for this relation, return that */
-	if (pending_inserts != NULL)
+	if (pending_class_inserts != NULL)
 	{
-		entry = hash_search(pending_inserts, &relid, HASH_FIND, NULL);
+		entry = hash_search(pending_class_inserts, &relid, HASH_FIND, NULL);
 		if (entry != NULL)
 			return entry->deleted ? NULL : heap_copytuple(entry->tuple);
 	}
@@ -355,6 +496,35 @@ GetPgTempClassTuple(Oid relid)
 
 	/* Otherwise, look for the tuple in the database */
 	return SearchSysCacheCopy1(TEMPRELOID, ObjectIdGetDatum(relid));
+}
+
+/*
+ * GetPgTempIndexTuple
+ *
+ *	Get the pg_temp_index tuple for a global temporary index relation.
+ *
+ *	Returns NULL if the tuple could not be found.  Otherwise, the tuple
+ *	returned should be freed with heap_freetuple().
+ */
+HeapTuple
+GetPgTempIndexTuple(Oid indexrelid)
+{
+	PendingInsert *entry;
+
+	/* Is there a pending insert for this relation? */
+	if (pending_index_inserts != NULL)
+	{
+		entry = hash_search(pending_index_inserts, &indexrelid, HASH_FIND, NULL);
+		if (entry != NULL)
+			return entry->deleted ? NULL : heap_copytuple(entry->tuple);
+	}
+
+	/* If we haven't opened pg_temp_index yet, it must be empty */
+	if (!pg_temp_index_opened)
+		return NULL;
+
+	/* Otherwise, fetch a copy of the tuple from the database */
+	return SearchSysCacheCopy1(TEMPINDEXRELID, ObjectIdGetDatum(indexrelid));
 }
 
 /*
@@ -383,15 +553,58 @@ InsertPgTempClassTuple(Relation rel)
 	 * taking care to allocate the tuple in the long-term memory context for
 	 * pending insert tuples.
 	 */
-	init_pending_inserts_hashtable();
+	init_pending_inserts_hashtables();
 
-	entry = hash_search(pending_inserts, &relid, HASH_ENTER, &found);
+	entry = hash_search(pending_class_inserts, &relid, HASH_ENTER, &found);
 	if (found)
 		/* Should never try to re-insert the same relid */
 		elog(ERROR, "pg_temp_class tuple for relation %u already exists", relid);
 
 	oldcontext = MemoryContextSwitchTo(pending_inserts_tupctx);
 	entry->tuple = heap_form_pg_temp_class_tuple(rel);
+	entry->flushed = false;
+	entry->deleted = false;
+	entry->subid = GetCurrentSubTransactionId();
+	entry->prev = NULL;
+	MemoryContextSwitchTo(oldcontext);
+
+	have_inserts_to_flush = true;
+}
+
+/*
+ * InsertPgTempIndexTuple
+ *
+ *	Insert a new pg_temp_index tuple for a global temporary index relation.
+ *
+ *	This is called when a global temporary index relation is created or
+ *	accessed for the first time in a session.
+ *
+ *	Note: The new tuple is not written to the database unless and until
+ *	CommandCounterIncrement() is called for a non-read-only command, or the
+ *	(sub)transaction is committed.  However, the new tuple *is* visible to all
+ *	the functions defined here.
+ */
+void
+InsertPgTempIndexTuple(Oid indexrelid, bool indisvalid)
+{
+	PendingInsert *entry;
+	bool		found;
+	MemoryContext oldcontext;
+
+	/*
+	 * Add a new tuple for the relation to the pending inserts hash table,
+	 * taking care to allocate the tuple in the long-term memory context for
+	 * pending insert tuples.
+	 */
+	init_pending_inserts_hashtables();
+
+	entry = hash_search(pending_index_inserts, &indexrelid, HASH_ENTER, &found);
+	if (found)
+		/* Should never try to re-insert the same indexrelid */
+		elog(ERROR, "pg_temp_index tuple for index %u already exists", indexrelid);
+
+	oldcontext = MemoryContextSwitchTo(pending_inserts_tupctx);
+	entry->tuple = heap_form_pg_temp_index_tuple(indexrelid, indisvalid);
 	entry->flushed = false;
 	entry->deleted = false;
 	entry->subid = GetCurrentSubTransactionId();
@@ -413,11 +626,11 @@ UpdatePgTempClassTuple(Oid relid, HeapTuple newtuple)
 	HeapTuple	oldtuple;
 
 	/* Is there a pending insert for this relation? */
-	if (pending_inserts != NULL)
+	if (pending_class_inserts != NULL)
 	{
 		PendingInsert *entry;
 
-		entry = hash_search(pending_inserts, &relid, HASH_FIND, NULL);
+		entry = hash_search(pending_class_inserts, &relid, HASH_FIND, NULL);
 		if (entry != NULL)
 		{
 			Form_pg_temp_class old_form;
@@ -479,11 +692,11 @@ UpdatePgTempClassTupleInPlace(Oid relid, HeapTuple newtuple)
 	void	   *inplace_state;
 
 	/* Is there a pending insert for this relation? */
-	if (pending_inserts != NULL)
+	if (pending_class_inserts != NULL)
 	{
 		PendingInsert *entry;
 
-		entry = hash_search(pending_inserts, &relid, HASH_FIND, NULL);
+		entry = hash_search(pending_class_inserts, &relid, HASH_FIND, NULL);
 		if (entry != NULL)
 		{
 			Form_pg_temp_class old_form;
@@ -539,6 +752,69 @@ UpdatePgTempClassTupleInPlace(Oid relid, HeapTuple newtuple)
 }
 
 /*
+ * UpdatePgTempIndexTuple
+ *
+ *	Update the pg_temp_index tuple for a global temporary index relation.
+ */
+void
+UpdatePgTempIndexTuple(Oid indexrelid, HeapTuple newtuple)
+{
+	Relation	pg_temp_index;
+	HeapTuple	oldtuple;
+
+	/* Is there a pending insert for this relation? */
+	if (pending_index_inserts != NULL)
+	{
+		PendingInsert *entry;
+
+		entry = hash_search(pending_index_inserts, &indexrelid, HASH_FIND, NULL);
+		if (entry != NULL)
+		{
+			Form_pg_temp_index old_form;
+			Form_pg_temp_index new_form;
+
+			/* Should not have been deleted */
+			if (entry->deleted)
+				elog(ERROR,
+					 "pending insert for global temp index %u was deleted",
+					 indexrelid);
+
+			/* Update the entry, saving a copy for rollback, if necessary */
+			prepare_pending_insert_for_edit(entry);
+			old_form = (Form_pg_temp_index) GETSTRUCT(entry->tuple);
+			new_form = (Form_pg_temp_index) GETSTRUCT(newtuple);
+			old_form->indisvalid = new_form->indisvalid;
+
+			/*
+			 * If it has not yet been flushed to the database, do so now. This
+			 * is important, because the caller might be relying on a relcache
+			 * invalidation being triggered.
+			 */
+			if (!entry->flushed)
+			{
+				pg_temp_index = open_pg_temp_index(RowExclusiveLock);
+				CatalogTupleInsert(pg_temp_index, newtuple);
+				table_close(pg_temp_index, RowExclusiveLock);
+				entry->flushed = true;
+				return;
+			}
+		}
+	}
+
+	/* Update the tuple in the database */
+	pg_temp_index = open_pg_temp_index(RowExclusiveLock);
+
+	oldtuple = SearchSysCache1(TEMPINDEXRELID, ObjectIdGetDatum(indexrelid));
+	if (!HeapTupleIsValid(oldtuple))
+		elog(ERROR, "cache lookup failed for global temp index %u", indexrelid);
+
+	CatalogTupleUpdate(pg_temp_index, &oldtuple->t_self, newtuple);
+	ReleaseSysCache(oldtuple);
+
+	table_close(pg_temp_index, RowExclusiveLock);
+}
+
+/*
  * DeletePgTempClassTuple
  *
  *	Delete the pg_temp_class tuple for a global temporary relation.
@@ -550,11 +826,11 @@ DeletePgTempClassTuple(Oid relid)
 	HeapTuple	oldtuple;
 
 	/* Is there a pending insert for this relation? */
-	if (pending_inserts != NULL)
+	if (pending_class_inserts != NULL)
 	{
 		PendingInsert *entry;
 
-		entry = hash_search(pending_inserts, &relid, HASH_FIND, NULL);
+		entry = hash_search(pending_class_inserts, &relid, HASH_FIND, NULL);
 		if (entry != NULL)
 		{
 			/* Should not have already been deleted */
@@ -587,6 +863,57 @@ DeletePgTempClassTuple(Oid relid)
 	ReleaseSysCache(oldtuple);
 
 	table_close(pg_temp_class, RowExclusiveLock);
+}
+
+/*
+ * DeletePgTempIndexTuple
+ *
+ *	Delete the pg_temp_index tuple for a global temporary index relation.
+ */
+void
+DeletePgTempIndexTuple(Oid indexrelid)
+{
+	Relation	pg_temp_index;
+	HeapTuple	oldtuple;
+
+	/* Is there a pending insert for this relation? */
+	if (pending_index_inserts != NULL)
+	{
+		PendingInsert *entry;
+
+		entry = hash_search(pending_index_inserts, &indexrelid, HASH_FIND, NULL);
+		if (entry != NULL)
+		{
+			/* Should not have already been deleted */
+			if (entry->deleted)
+				elog(ERROR,
+					 "pending insert for global temp relation %u already deleted",
+					 indexrelid);
+
+			/* Update the entry, saving a copy for rollback, if necessary */
+			prepare_pending_insert_for_edit(entry);
+			entry->deleted = true;
+
+			/*
+			 * If it has been flushed to the database, need to delete it there
+			 * too.  Otherwise, we're done.
+			 */
+			if (!entry->flushed)
+				return;
+		}
+	}
+
+	/* Delete the tuple from the database */
+	pg_temp_index = open_pg_temp_index(RowExclusiveLock);
+
+	oldtuple = SearchSysCache1(TEMPINDEXRELID, ObjectIdGetDatum(indexrelid));
+	if (!HeapTupleIsValid(oldtuple))
+		elog(ERROR, "cache lookup failed for global temp index %u", indexrelid);
+
+	CatalogTupleDelete(pg_temp_index, &oldtuple->t_self);
+	ReleaseSysCache(oldtuple);
+
+	table_close(pg_temp_index, RowExclusiveLock);
 }
 
 /*
@@ -624,6 +951,39 @@ GetPgClassAndPgTempClassTuples(Oid relid, bool lock_tuple,
 		*temp_tuple = GetPgTempClassTuple(relid);
 		if (check_temp && !HeapTupleIsValid(*temp_tuple))
 			elog(ERROR, "cache lookup failed for global temp relation %u", relid);
+	}
+	else
+		*temp_tuple = NULL;
+
+	return tuple;
+}
+
+/*
+ * GetPgIndexAndPgTempIndexTuples
+ *
+ *	Get the pg_index tuple for an index relation, and if it's a global
+ *	temporary index relation, also get the corresponding pg_temp_index tuple,
+ *	if present.
+ *
+ *	Returns NULL if the pg_index tuple could not be found.  Otherwise, the
+ *	tuple(s) returned should be freed with heap_freetuple().
+ */
+HeapTuple
+GetPgIndexAndPgTempIndexTuples(Oid indexrelid, HeapTuple *temp_tuple,
+							   bool check_temp)
+{
+	HeapTuple	tuple;
+
+	/* Get a copy of the pg_index tuple */
+	tuple = SearchSysCacheCopy1(INDEXRELID, ObjectIdGetDatum(indexrelid));
+
+	if (HeapTupleIsValid(tuple) &&
+		rel_is_global_temp(((Form_pg_index) GETSTRUCT(tuple))->indexrelid))
+	{
+		/* Get the pg_temp_index tuple, and check it exists, if requested */
+		*temp_tuple = GetPgTempIndexTuple(indexrelid);
+		if (check_temp && !HeapTupleIsValid(*temp_tuple))
+			elog(ERROR, "cache lookup failed for global temp index %u", indexrelid);
 	}
 	else
 		*temp_tuple = NULL;
@@ -673,6 +1033,47 @@ GetEffectivePgClassTuple(Oid relid)
 }
 
 /*
+ * GetEffectivePgIndexTuple
+ *
+ *	Get the effective pg_index tuple for an index relation.
+ *
+ *	This will fetch the pg_index tuple for the relation and then, if it's a
+ *	global temporary relation, fetch the corresponding pg_temp_index tuple and
+ *	use the values in it to override the corresponding values in the pg_index
+ *	tuple (currently just indisvalid).  Thus, the result represents the
+ *	effective state of the index relation in this session.
+ *
+ *	For a global temporary index relation that has not yet been opened in this
+ *	session, there will be no pg_temp_index tuple, and the pg_index tuple will
+ *	be returned unchanged.
+ *
+ *	Returns NULL if the pg_index tuple could not be found.  Otherwise, the
+ *	tuple returned should be freed with heap_freetuple().
+ */
+HeapTuple
+GetEffectivePgIndexTuple(Oid indexrelid)
+{
+	HeapTuple	tuple;
+	HeapTuple	temp_tuple;
+	Form_pg_index indexform;
+	Form_pg_temp_index temp_indexform;
+
+	/*
+	 * Get the pg_index and pg_temp_index tuples.  If we have the latter, use
+	 * it to update the former.
+	 */
+	tuple = GetPgIndexAndPgTempIndexTuples(indexrelid, &temp_tuple, false);
+
+	if (HeapTupleIsValid(tuple) && HeapTupleIsValid(temp_tuple))
+	{
+		indexform = (Form_pg_index) GETSTRUCT(tuple);
+		temp_indexform = (Form_pg_temp_index) GETSTRUCT(temp_tuple);
+		indexform->indisvalid = temp_indexform->indisvalid;
+	}
+	return tuple;
+}
+
+/*
  * UpdateTempFrozenXids
  *
  *	Update the tempfrozenxid and tempminmxid values for this backend by
@@ -701,10 +1102,10 @@ UpdateTempFrozenXids(void)
 	min_relfrozenxid = InvalidTransactionId;
 	min_relminmxid = InvalidMultiXactId;
 
-	/* Processing any pending inserts */
-	if (pending_inserts != NULL)
+	/* Processing any pending pg_temp_class inserts */
+	if (pending_class_inserts != NULL)
 	{
-		hash_seq_init(&status, pending_inserts);
+		hash_seq_init(&status, pending_class_inserts);
 		while ((entry = hash_seq_search(&status)) != NULL)
 		{
 			temp_form = (Form_pg_temp_class) GETSTRUCT(entry->tuple);
@@ -817,7 +1218,7 @@ void
 PreCCI_PgTempClass(void)
 {
 	if (have_inserts_to_flush)
-		flush_pending_pg_temp_class_inserts();
+		flush_pending_inserts();
 }
 
 /*
@@ -829,7 +1230,7 @@ void
 PreCommit_PgTempClass(void)
 {
 	if (have_inserts_to_flush)
-		flush_pending_pg_temp_class_inserts();
+		flush_pending_inserts();
 }
 
 /*
@@ -841,7 +1242,7 @@ void
 PreSubCommit_PgTempClass(void)
 {
 	if (have_inserts_to_flush)
-		flush_pending_pg_temp_class_inserts();
+		flush_pending_inserts();
 }
 
 /*
@@ -860,13 +1261,17 @@ AtEOXact_PgTempClass(bool isCommit)
 		pg_temp_class_opened = false;
 	pg_temp_class_subid = InvalidSubTransactionId;
 
+	/* Likewise for pg_temp_index */
+	if (!isCommit && pg_temp_index_subid != InvalidSubTransactionId)
+		pg_temp_index_opened = false;
+	pg_temp_index_subid = InvalidSubTransactionId;
+
 	/*
-	 * Blow away the pending inserts hash table.  On commit, there should be
+	 * Blow away the pending inserts hash tables.  On commit, there should be
 	 * no remaining inserts to flush, but on rollback, there may be.
 	 */
 	Assert(!(isCommit && have_inserts_to_flush));
-	if (pending_inserts != NULL)
-		discard_pending_pg_temp_class_inserts();
+	discard_pending_inserts();
 
 	/*
 	 * On commit, save any new tempfrozenxid and tempminmxid values to our
@@ -888,8 +1293,8 @@ AtEOXact_PgTempClass(bool isCommit)
  *	Sub-transaction commit or abort processing for a single pending insert.
  */
 static void
-AtEOSubXact_PendingInsert(PendingInsert *entry, bool isCommit,
-						  SubTransactionId mySubid,
+AtEOSubXact_PendingInsert(HTAB *pending_inserts, PendingInsert *entry,
+						  bool isCommit, SubTransactionId mySubid,
 						  SubTransactionId parentSubid)
 {
 	/*
@@ -936,6 +1341,9 @@ void
 AtEOSubXact_PgTempClass(bool isCommit, SubTransactionId mySubid,
 						SubTransactionId parentSubid)
 {
+	HASH_SEQ_STATUS status;
+	PendingInsert *entry;
+
 	/*
 	 * Was pg_temp_class first opened and initialized in the current
 	 * subtransaction?
@@ -954,18 +1362,37 @@ AtEOSubXact_PgTempClass(bool isCommit, SubTransactionId mySubid,
 		}
 	}
 
-	/*
-	 * Tidy up any pending inserts.
-	 */
-	if (pending_inserts != NULL)
+	/* Likewise for pg_temp_index */
+	if (pg_temp_index_subid == mySubid)
 	{
-		HASH_SEQ_STATUS status;
-		PendingInsert *entry;
+		if (isCommit)
+			pg_temp_index_subid = parentSubid;
+		else
+		{
+			pg_temp_index_opened = false;
+			pg_temp_index_subid = InvalidSubTransactionId;
+		}
+	}
 
-		hash_seq_init(&status, pending_inserts);
+	/* Tidy up any pending pg_temp_class inserts */
+	if (pending_class_inserts != NULL)
+	{
+		hash_seq_init(&status, pending_class_inserts);
 		while ((entry = hash_seq_search(&status)) != NULL)
 		{
-			AtEOSubXact_PendingInsert(entry, isCommit, mySubid, parentSubid);
+			AtEOSubXact_PendingInsert(pending_class_inserts, entry,
+									  isCommit, mySubid, parentSubid);
+		}
+	}
+
+	/* Likewise for pg_temp_index */
+	if (pending_index_inserts != NULL)
+	{
+		hash_seq_init(&status, pending_index_inserts);
+		while ((entry = hash_seq_search(&status)) != NULL)
+		{
+			AtEOSubXact_PendingInsert(pending_index_inserts, entry,
+									  isCommit, mySubid, parentSubid);
 		}
 	}
 }

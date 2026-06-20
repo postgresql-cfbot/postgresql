@@ -369,20 +369,27 @@ SetEffective_relminmxid(Form_pg_class cf, Form_pg_temp_class tf,
 
 
 extern HeapTuple GetPgTempClassTuple(Oid relid);
+extern HeapTuple GetPgTempIndexTuple(Oid indexrelid);
 
 extern void InsertPgTempClassTuple(Relation rel);
+extern void InsertPgTempIndexTuple(Oid indexrelid, bool indisvalid);
 
 extern void UpdatePgTempClassTuple(Oid relid, HeapTuple newtuple);
-
 extern void UpdatePgTempClassTupleInPlace(Oid relid, HeapTuple newtuple);
+extern void UpdatePgTempIndexTuple(Oid indexrelid, HeapTuple newtuple);
 
 extern void DeletePgTempClassTuple(Oid relid);
+extern void DeletePgTempIndexTuple(Oid indexrelid);
 
 extern HeapTuple GetPgClassAndPgTempClassTuples(Oid relid, bool lock_tuple,
 												HeapTuple *temp_tuple,
 												bool check_temp);
+extern HeapTuple GetPgIndexAndPgTempIndexTuples(Oid indexrelid,
+												HeapTuple *temp_tuple,
+												bool check_temp);
 
 extern HeapTuple GetEffectivePgClassTuple(Oid relid);
+extern HeapTuple GetEffectivePgIndexTuple(Oid indexrelid);
 
 extern void UpdateTempFrozenXids(void);
 

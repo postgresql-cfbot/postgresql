@@ -80,6 +80,7 @@ step get_tblspace2 {
     LEFT JOIN pg_tablespace s2 ON s2.oid = t.reltablespace
    WHERE c.relname = 'tmp';
 }
+step analyze2 { ANALYZE tmp; }
 
 # Create test tablespace for remaining tests
 permutation create_tblspace list_tblspaces
@@ -103,6 +104,7 @@ permutation create1 ins1_2 ins2_2 alter1a alter1b seltype1 seltype2 drop1
 permutation ins1 idx1 sel1_idx ins2 sel2_idx
 permutation ins1 ins2 idx1 sel1_idx sel2_idx
 permutation ins1 ins2 idx1 sel1_idx sel2_idx reidx2 sel2_idx
+permutation ins1 ins2 idx1 sel1_idx sel2_idx analyze2 sel2_idx reidx2 sel2_idx
 
 # Test local TRUNCATE
 permutation ins1 ins2 t2 sel1 sel2 ins2 t1 sel1 sel2 ins1 t2 sel1 sel2

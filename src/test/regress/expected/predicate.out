@@ -748,14 +748,16 @@ SELECT id FROM dist_tab WHERE row_nn IS DISTINCT FROM ROW(1, 5)::dist_row_t;
 SET enable_nestloop TO off;
 EXPLAIN (COSTS OFF)
 SELECT * FROM dist_tab t1 JOIN dist_tab t2 ON t1.val_nn IS NOT DISTINCT FROM t2.val_nn;
-              QUERY PLAN              
---------------------------------------
+              QUERY PLAN               
+---------------------------------------
  Hash Join
    Hash Cond: (t1.val_nn = t2.val_nn)
    ->  Seq Scan on dist_tab t1
+         Bloom Filter 1: keys=(val_nn)
    ->  Hash
+         Bloom Filter 1
          ->  Seq Scan on dist_tab t2
-(5 rows)
+(7 rows)
 
 SELECT * FROM dist_tab t1 JOIN dist_tab t2 ON t1.val_nn IS NOT DISTINCT FROM t2.val_nn;
  id | val_nn | val_null | row_nn | id | val_nn | val_null | row_nn 

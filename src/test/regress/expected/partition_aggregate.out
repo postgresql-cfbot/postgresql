@@ -460,23 +460,29 @@ SELECT t1.x, sum(t1.y), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2
                ->  Hash Join
                      Hash Cond: (t1.x = t2.y)
                      ->  Seq Scan on pagg_tab1_p1 t1
+                           Bloom Filter 1: keys=(x)
                      ->  Hash
+                           Bloom Filter 1
                            ->  Seq Scan on pagg_tab2_p1 t2
          ->  HashAggregate
                Group Key: t1_1.x
                ->  Hash Join
                      Hash Cond: (t1_1.x = t2_1.y)
                      ->  Seq Scan on pagg_tab1_p2 t1_1
+                           Bloom Filter 2: keys=(x)
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on pagg_tab2_p2 t2_1
          ->  HashAggregate
                Group Key: t1_2.x
                ->  Hash Join
                      Hash Cond: (t2_2.y = t1_2.x)
                      ->  Seq Scan on pagg_tab2_p3 t2_2
+                           Bloom Filter 3: keys=(y)
                      ->  Hash
+                           Bloom Filter 3
                            ->  Seq Scan on pagg_tab1_p3 t1_2
-(24 rows)
+(30 rows)
 
 SELECT t1.x, sum(t1.y), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2.y GROUP BY t1.x ORDER BY 1, 2, 3;
  x  | sum  | count 
@@ -533,23 +539,29 @@ SELECT t2.y, sum(t1.y), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2
                ->  Hash Join
                      Hash Cond: (t1.x = t2.y)
                      ->  Seq Scan on pagg_tab1_p1 t1
+                           Bloom Filter 1: keys=(x)
                      ->  Hash
+                           Bloom Filter 1
                            ->  Seq Scan on pagg_tab2_p1 t2
          ->  HashAggregate
                Group Key: t2_1.y
                ->  Hash Join
                      Hash Cond: (t1_1.x = t2_1.y)
                      ->  Seq Scan on pagg_tab1_p2 t1_1
+                           Bloom Filter 2: keys=(x)
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on pagg_tab2_p2 t2_1
          ->  HashAggregate
                Group Key: t2_2.y
                ->  Hash Join
                      Hash Cond: (t2_2.y = t1_2.x)
                      ->  Seq Scan on pagg_tab2_p3 t2_2
+                           Bloom Filter 3: keys=(y)
                      ->  Hash
+                           Bloom Filter 3
                            ->  Seq Scan on pagg_tab1_p3 t1_2
-(24 rows)
+(30 rows)
 
 -- When GROUP BY clause does not match; partial aggregation is performed for each partition.
 -- Also test GroupAggregate paths by disabling hash aggregates.
@@ -572,7 +584,9 @@ SELECT t1.y, sum(t1.x), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2
                            ->  Hash Join
                                  Hash Cond: (t1.x = t2.y)
                                  ->  Seq Scan on pagg_tab1_p1 t1
+                                       Bloom Filter 1: keys=(x)
                                  ->  Hash
+                                       Bloom Filter 1
                                        ->  Seq Scan on pagg_tab2_p1 t2
                ->  Partial GroupAggregate
                      Group Key: t1_1.y
@@ -581,7 +595,9 @@ SELECT t1.y, sum(t1.x), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2
                            ->  Hash Join
                                  Hash Cond: (t1_1.x = t2_1.y)
                                  ->  Seq Scan on pagg_tab1_p2 t1_1
+                                       Bloom Filter 2: keys=(x)
                                  ->  Hash
+                                       Bloom Filter 2
                                        ->  Seq Scan on pagg_tab2_p2 t2_1
                ->  Partial GroupAggregate
                      Group Key: t1_2.y
@@ -590,9 +606,11 @@ SELECT t1.y, sum(t1.x), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2
                            ->  Hash Join
                                  Hash Cond: (t2_2.y = t1_2.x)
                                  ->  Seq Scan on pagg_tab2_p3 t2_2
+                                       Bloom Filter 3: keys=(y)
                                  ->  Hash
+                                       Bloom Filter 3
                                        ->  Seq Scan on pagg_tab1_p3 t1_2
-(34 rows)
+(40 rows)
 
 SELECT t1.y, sum(t1.x), count(*) FROM pagg_tab1 t1, pagg_tab2 t2 WHERE t1.x = t2.y GROUP BY t1.y HAVING avg(t1.x) > 10 ORDER BY 1, 2, 3;
  y  | sum  | count 
@@ -638,9 +656,11 @@ SELECT b.y, sum(a.y) FROM pagg_tab1 a LEFT JOIN pagg_tab2 b ON a.x = b.y GROUP B
                      ->  Hash Right Join
                            Hash Cond: (b_2.y = a_2.x)
                            ->  Seq Scan on pagg_tab2_p3 b_2
+                                 Bloom Filter 1: keys=(y)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on pagg_tab1_p3 a_2
-(26 rows)
+(28 rows)
 
 SELECT b.y, sum(a.y) FROM pagg_tab1 a LEFT JOIN pagg_tab2 b ON a.x = b.y GROUP BY b.y ORDER BY 1 NULLS LAST;
  y  | sum  
@@ -667,14 +687,18 @@ SELECT b.y, sum(a.y) FROM pagg_tab1 a RIGHT JOIN pagg_tab2 b ON a.x = b.y GROUP 
                ->  Hash Right Join
                      Hash Cond: (a.x = b.y)
                      ->  Seq Scan on pagg_tab1_p1 a
+                           Bloom Filter 1: keys=(x)
                      ->  Hash
+                           Bloom Filter 1
                            ->  Seq Scan on pagg_tab2_p1 b
          ->  HashAggregate
                Group Key: b_1.y
                ->  Hash Right Join
                      Hash Cond: (a_1.x = b_1.y)
                      ->  Seq Scan on pagg_tab1_p2 a_1
+                           Bloom Filter 2: keys=(x)
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on pagg_tab2_p2 b_1
          ->  HashAggregate
                Group Key: b_2.y
@@ -683,7 +707,7 @@ SELECT b.y, sum(a.y) FROM pagg_tab1 a RIGHT JOIN pagg_tab2 b ON a.x = b.y GROUP 
                      ->  Seq Scan on pagg_tab2_p3 b_2
                      ->  Hash
                            ->  Seq Scan on pagg_tab1_p3 a_2
-(24 rows)
+(28 rows)
 
 SELECT b.y, sum(a.y) FROM pagg_tab1 a RIGHT JOIN pagg_tab2 b ON a.x = b.y GROUP BY b.y ORDER BY 1 NULLS LAST;
  y  | sum  

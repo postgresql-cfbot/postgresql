@@ -686,9 +686,11 @@ select count(*) from tenk1 a
    ->  Hash Semi Join
          Hash Cond: (a.unique1 = x.unique1)
          ->  Index Only Scan using tenk1_unique1 on tenk1 a
+               Bloom Filter 1: keys=(unique1)
          ->  Hash
+               Bloom Filter 1
                ->  CTE Scan on x
-(8 rows)
+(10 rows)
 
 explain (costs off)
 with x as materialized (insert into tenk1 default values returning unique1)
@@ -3246,8 +3248,10 @@ WHEN NOT MATCHED THEN INSERT VALUES(o.k, o.v);
          Hash Cond: (m.k = o.k)
          ->  Seq Scan on public.m
                Output: m.ctid, m.k
+               Bloom Filter 1: keys=(m.k)
          ->  Hash
                Output: o.k, o.v, o.*
+               Bloom Filter 1
                ->  Subquery Scan on o
                      Output: o.k, o.v, o.*
                      ->  Result
@@ -3258,7 +3262,7 @@ WHEN NOT MATCHED THEN INSERT VALUES(o.k, o.v);
            ->  CTE Scan on cte_basic
                  Output: (cte_basic.b || ' merge update'::text)
                  Filter: (cte_basic.a = m.k)
-(21 rows)
+(23 rows)
 
 -- InitPlan
 WITH cte_init AS MATERIALIZED (SELECT 1 a, 'cte_init val' b)
@@ -3295,13 +3299,15 @@ WHEN NOT MATCHED THEN INSERT VALUES(o.k, o.v);
          Hash Cond: (m.k = o.k)
          ->  Seq Scan on public.m
                Output: m.ctid, m.k
+               Bloom Filter 1: keys=(m.k)
          ->  Hash
                Output: o.k, o.v, o.*
+               Bloom Filter 1
                ->  Subquery Scan on o
                      Output: o.k, o.v, o.*
                      ->  Result
                            Output: 1, 'merge source InitPlan'::text
-(21 rows)
+(23 rows)
 
 -- MERGE source comes from CTE:
 WITH merge_source_cte AS MATERIALIZED (SELECT 15 a, 'merge_source_cte val' b)
@@ -3339,11 +3345,13 @@ WHEN NOT MATCHED THEN INSERT VALUES(o.a, o.b || (SELECT merge_source_cte.*::text
          Hash Cond: (m.k = merge_source_cte.a)
          ->  Seq Scan on public.m
                Output: m.ctid, m.k
+               Bloom Filter 1: keys=(m.k)
          ->  Hash
                Output: merge_source_cte.a, merge_source_cte.b, merge_source_cte.*
+               Bloom Filter 1
                ->  CTE Scan on merge_source_cte
                      Output: merge_source_cte.a, merge_source_cte.b, merge_source_cte.*
-(20 rows)
+(22 rows)
 
 DROP TABLE m;
 -- check that run to completion happens in proper ordering

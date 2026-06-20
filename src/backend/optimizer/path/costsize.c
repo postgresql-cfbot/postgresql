@@ -156,6 +156,7 @@ bool		enable_material = true;
 bool		enable_memoize = true;
 bool		enable_mergejoin = true;
 bool		enable_hashjoin = true;
+bool		enable_hashjoin_bloom = true;
 bool		enable_gathermerge = true;
 bool		enable_partitionwise_join = false;
 bool		enable_partitionwise_aggregate = false;

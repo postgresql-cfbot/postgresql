@@ -4689,6 +4689,298 @@ create_mergejoin_plan(PlannerInfo *root,
 	return join_plan;
 }
 
+/*
+ * BLOOM FILTER PUSHDOWN
+ *
+ * When creating a hash join plan, consider building a bloom filter and
+ * pushing it down to the outer subtree. For now we only push filters to
+ * scan nodes containing all the join keys. When we find such scan node,
+ * we append the BloomFilter ID to the node's bloom_filters list, and
+ * increment the bloom_consumer_count for the hashjoin.
+ *
+ * As setrefs hashn't run yet, the join keys are still the raw Vars.
+ * So it's safe to compare var->varno against the scanrelid, and copy
+ * the keys verbatim onto the recipient. setrefs will rewrite the Vars
+ * later as usual, just like for the recipient's qual.
+ *
+ * XXX In most cases there'll be only a single consumer node. To get
+ * multiple consumers, we'd need either joins on the same keys, or
+ * ability to produce filters for subsets of the join keys (for cases
+ * where the join is more complex, and does not map to a single scan
+ * node directly). Seems like a possible future improvement.
+ *
+ * XXX Actually, we could have multiple consumer nodes for partitioned
+ * tables, where each partition gets a separate scan. Which seems like
+ * something we should support.
+ *
+ * XXX For simplicity, all outer join keys have to be bare Vars (from
+ * the same RTE). We could relax this later, and allow joins on more
+ * complex expressions. Not sure if that'll erase some of the benefits,
+ * which relies on filter probes being much cheaper hashtable probes.
+ * It also doesn't seem like a very common case.
+ *
+ * XXX The recipient node must be one of a small set of scan nodes. We
+ * could relax this, and allow pushing to other nodes (e.g. joins or
+ * aggregates). Future improvement.
+ *
+ * XXX We don't currently push the same HashJoin to multiple recipients,
+ * but multiple HashJoins may attach a filter to the same scan node.
+ * --------------------------------------------------------------------------
+ */
+
+/*
+ * bloom_join_side_preserved
+ *		Decide if we can push filter to inner/outer side of a join.
+ *
+ * Outer joins that emit unmatched outer tuples (LEFT/ANTI/FULL) are
+ * skipped: dropping outer tuples there would be incorrect.
+ */
+static bool
+bloom_join_side_preserved(JoinType jointype, bool to_outer)
+{
+	switch (jointype)
+	{
+		case JOIN_INNER:
+			return true;
+		case JOIN_LEFT:
+		case JOIN_SEMI:
+		case JOIN_ANTI:
+			return to_outer;
+		case JOIN_RIGHT:
+		case JOIN_RIGHT_SEMI:
+		case JOIN_RIGHT_ANTI:
+			return !to_outer;
+		case JOIN_FULL:
+			return false;
+		default:
+			return false;
+	}
+}
+
+/*
+ * find_bloom_filter_recipient
+ *		Try to find a scan node to push filter to.
+ *
+ * We support pushing filter to a subset of scan nodes (could be extended
+ * later). We support pushing filters through intermediate nodes (joins,
+ * sorts, ...). See bloom_join_side_preserved for joins.
+ *
+ * XXX We could push filters through more nodes - e.g. aggregates if the
+ * hash keys match GROUP BY keys (are a subset of).
+ *
+ * XXX We could do pushdown to parallel parts of a query. But we'd need
+ * a different way to communicate if a filter is built etc. (the worker
+ * won't have access to the hashjoin state).
+ */
+static Plan *
+find_bloom_filter_recipient(Plan *plan, Index target_relid)
+{
+	/* XXX shouldn't really happen, I think */
+	if (plan == NULL)
+		return NULL;
+
+	/* XXX no pushdown to parallel parts of a query */
+	if (plan->parallel_aware)
+		return NULL;
+
+	switch (nodeTag(plan))
+	{
+		case T_SeqScan:
+		case T_SampleScan:
+		case T_IndexScan:
+		case T_IndexOnlyScan:
+		case T_BitmapHeapScan:
+		case T_TidScan:
+		case T_TidRangeScan:
+			{
+				Scan	   *scan = (Scan *) plan;
+
+				if (scan->scanrelid == target_relid)
+					return plan;
+				return NULL;
+			}
+		case T_Sort:
+		case T_IncrementalSort:
+		case T_Material:
+		case T_Memoize:
+		case T_Unique:
+		case T_Limit:
+			return find_bloom_filter_recipient(outerPlan(plan), target_relid);
+		case T_HashJoin:
+		case T_NestLoop:
+		case T_MergeJoin:
+			{
+				JoinType	jt = ((Join *) plan)->jointype;
+				Plan	   *res;
+
+				/*
+				 * We can only push to one node, but we don't know on which
+				 * side of the join it is (e.g. for inner joins it can be on
+				 * both sides). So make sure to check both, if compatible
+				 * with the join type (per bloom_join_side_preserved).
+				 */
+				if (bloom_join_side_preserved(jt, true))
+				{
+					res = find_bloom_filter_recipient(outerPlan(plan),
+													  target_relid);
+					if (res != NULL)
+						return res;
+				}
+				if (bloom_join_side_preserved(jt, false))
+				{
+					res = find_bloom_filter_recipient(innerPlan(plan),
+													  target_relid);
+					if (res != NULL)
+						return res;
+				}
+				return NULL;
+			}
+		default:
+			return NULL;
+	}
+}
+
+/*
+ * try_push_bloom_filter
+ *		Attempt to pushdown a bloom filter for the current hashjoin.
+ *
+ * The filter pushdown happens during plan creation, i.e. after the plan was
+ * already selected. That is not entirely optimal, and it has a couple of
+ * annoying consequences.
+ *
+ * The main disadvantage is that injecting the filter to a scan node may
+ * significantly alter the number of tuples produced by that scan node. If a
+ * filter eliminates 99% of the rows, the scan produces 1/100 of the rows it
+ * was planned with. It would not affect the scan itself, but if there are
+ * other nodes (between the scan and the join), maybe we'd have planned them
+ * differently if we knew about the lower cardinality?
+ *
+ * Similarly, it's confusing in the explain. That is, we'll get "rows=N"
+ * with the planner cardinality (before the filter was pushed down), but
+ * then in EXPLAIN ANALYZE it'll get much lower values. It'd be easy to
+ * confuse with inaccurate estimates.
+ *
+ * It'd be better to know about the filter earlier, when constructing the scan
+ * path. But that's not quite feasible with our bottom-up planner. When planing
+ * the scan, we don't know which of the joins above it will be hashjoins, or
+ * if it can pushdown the filter. We'd have to speculate, or maybe build more
+ * paths with/without expectation of the bloom filter pushdown. But that seems
+ * not great, as it'd add overhead for everyone.
+ */
+static void
+try_push_bloom_filter(PlannerInfo *root, HashJoin *hj, Plan *outer_plan)
+{
+	List	   *hashkeys = hj->hashkeys;
+	List	   *hashops = hj->hashoperators;
+	List	   *hashcolls = hj->hashcollations;
+	ListCell   *lc;
+	Index		target_relid = 0;
+	Plan	   *recipient;
+	BloomFilter *bf;
+
+	/* bail out if feature disabled. */
+	if (!enable_hashjoin_bloom)
+		return;
+
+	/* XXX shouldn't really happen, I think */
+	if (hashkeys == NIL)
+		return;
+
+	Assert(list_length(hashkeys) == list_length(hashops));
+	Assert(list_length(hashkeys) == list_length(hashcolls));
+
+	/*
+	 * Pushdown is unsafe for join types that emit unmatched outer tuples
+	 * (LEFT/ANTI/FULL): we'd risk dropping outer tuples the join would
+	 * otherwise have emitted (possibly NULL-extended).
+	 */
+	switch (hj->join.jointype)
+	{
+		case JOIN_INNER:
+		case JOIN_RIGHT:
+		case JOIN_SEMI:
+		case JOIN_RIGHT_SEMI:
+		case JOIN_RIGHT_ANTI:
+			/* these join types are OK */
+			break;
+		default:
+			return;
+	}
+
+	/*
+	 * All hashkeys must be bare Vars referencing the same base RTE.
+	 *
+	 * XXX We could be a bit less strict, and check that at least some of the
+	 * hashkeys are bare Vars, not all of them. So with joins on multiple
+	 * expressions we'd have better chance to push a filter down. Doesn't
+	 * seem worth it, at least for now.
+	 */
+	foreach(lc, hashkeys)
+	{
+		Node	   *k = (Node *) lfirst(lc);
+		Var		   *var;
+
+		/* not a plain Var */
+		if (!IsA(k, Var))
+			return;
+
+		var = (Var *) k;
+
+		/*
+		 * Reject outer references, whole-row or system columns, and
+		 * special varnos (not sure we can get them here, though).
+		 */
+		if ((var->varlevelsup != 0) ||
+			(var->varattno <= 0) ||
+			IS_SPECIAL_VARNO(var->varno))
+			return;
+
+		/* make sure all the vars are for the same relid */
+		if (target_relid == 0)
+			target_relid = var->varno;
+		else if (var->varno != target_relid)
+			return;
+	}
+
+	/* should have found at least one var */
+	Assert(target_relid != 0);
+
+	/*
+	 * See if we can find the scan node for target_relid. It certainly is
+	 * in the plan somewhere, but it may not be able to pushdown the filter
+	 * to it (because of a join or so).
+	 */
+	recipient = find_bloom_filter_recipient(outer_plan, target_relid);
+	if (recipient == NULL)
+		return;
+
+	/*
+	 * If we found a recipient, assign the filter an ID. We'll use it to
+	 * register the filter in ExecRegisterBloomFilterProducer, and then
+	 * for lookups in LookupBloomFilterProducer during execution.
+	 *
+	 * XXX We can't use plan_node_id, as it's not assigned yet, that only
+	 * happens in set_plan_refs. Also, if we ever allow multiple filters
+	 * per hashtable (e.g. for different subsets of keys), it's not work.
+	 */
+	hj->bloom_filter_id = ++root->glob->lastBloomFilterId;
+
+	bf = makeNode(BloomFilter);
+	bf->filter_exprs = (List *) copyObject(hashkeys);
+	bf->hashops = list_copy(hashops);
+	bf->hashcollations = list_copy(hashcolls);
+	bf->producer_id = hj->bloom_filter_id;
+
+	recipient->bloom_filters = lappend(recipient->bloom_filters, bf);
+
+	/*
+	 * XXX We've manged to push the filter to the scan node, but maybe
+	 * we should wait with updating bloom_consumer_count when it actually
+	 * initializes the filters in ExecInit()?
+	 */
+	hj->bloom_consumer_count++;
+}
+
 static HashJoin *
 create_hashjoin_plan(PlannerInfo *root,
 					 HashPath *best_path)
@@ -4858,6 +5150,13 @@ create_hashjoin_plan(PlannerInfo *root,
 							  best_path->jpath.inner_unique);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
+
+	/*
+	 * Try to push the bloom filter for the hashtable down to nodes in the outer
+	 * subtree. If a suitable scan node exists, add the filter to bloom_filters,
+	 * and bump our bloom_consumer_count.
+	 */
+	try_push_bloom_filter(root, join_plan, outer_plan);
 
 	return join_plan;
 }

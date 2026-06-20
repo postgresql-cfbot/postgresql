@@ -244,6 +244,9 @@ typedef struct PlannerGlobal
 	/* highest plan node ID assigned */
 	int			lastPlanNodeId;
 
+	/* highest bloom-filter-producer ID assigned (see plannodes.h) */
+	int			lastBloomFilterId;
+
 	/* redo plan when TransactionXmin changes? */
 	bool		transientPlan;
 

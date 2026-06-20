@@ -15,19 +15,21 @@ VACUUM ANALYZE join_fact;
 -- We expect a hash join by default.
 EXPLAIN (COSTS OFF, PLAN_ADVICE)
 	SELECT * FROM join_fact f JOIN join_dim d ON f.dim_id = d.id;
-             QUERY PLAN             
-------------------------------------
+              QUERY PLAN               
+---------------------------------------
  Hash Join
    Hash Cond: (f.dim_id = d.id)
    ->  Seq Scan on join_fact f
+         Bloom Filter 1: keys=(dim_id)
    ->  Hash
+         Bloom Filter 1
          ->  Seq Scan on join_dim d
  Generated Plan Advice:
    JOIN_ORDER(f d)
    HASH_JOIN(d)
    SEQ_SCAN(f d)
    NO_GATHER(f d)
-(10 rows)
+(12 rows)
 
 -- Try forcing each join method in turn with join_dim as the inner table.
 -- All of these should work except for MERGE_JOIN_MATERIALIZE; that will
@@ -37,12 +39,14 @@ BEGIN;
 SET LOCAL pg_plan_advice.advice = 'HASH_JOIN(d)';
 EXPLAIN (COSTS OFF, PLAN_ADVICE)
 	SELECT * FROM join_fact f JOIN join_dim d ON f.dim_id = d.id;
-             QUERY PLAN             
-------------------------------------
+              QUERY PLAN               
+---------------------------------------
  Hash Join
    Hash Cond: (f.dim_id = d.id)
    ->  Seq Scan on join_fact f
+         Bloom Filter 1: keys=(dim_id)
    ->  Hash
+         Bloom Filter 1
          ->  Seq Scan on join_dim d
  Supplied Plan Advice:
    HASH_JOIN(d) /* matched */
@@ -51,7 +55,7 @@ EXPLAIN (COSTS OFF, PLAN_ADVICE)
    HASH_JOIN(d)
    SEQ_SCAN(f d)
    NO_GATHER(f d)
-(12 rows)
+(14 rows)
 
 SET LOCAL pg_plan_advice.advice = 'MERGE_JOIN_MATERIALIZE(d)';
 EXPLAIN (COSTS OFF, PLAN_ADVICE)
@@ -162,7 +166,9 @@ EXPLAIN (COSTS OFF, PLAN_ADVICE)
  Hash Join
    Hash Cond: (d.id = f.dim_id)
    ->  Seq Scan on join_dim d
+         Bloom Filter 1: keys=(id)
    ->  Hash
+         Bloom Filter 1
          ->  Seq Scan on join_fact f
  Supplied Plan Advice:
    HASH_JOIN(f) /* matched */
@@ -171,7 +177,7 @@ EXPLAIN (COSTS OFF, PLAN_ADVICE)
    HASH_JOIN(f)
    SEQ_SCAN(d f)
    NO_GATHER(f d)
-(12 rows)
+(14 rows)
 
 SET LOCAL pg_plan_advice.advice = 'MERGE_JOIN_MATERIALIZE(f)';
 EXPLAIN (COSTS OFF, PLAN_ADVICE)

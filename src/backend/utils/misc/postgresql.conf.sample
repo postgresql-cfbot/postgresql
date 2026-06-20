@@ -448,6 +448,7 @@
 #enable_distinct_reordering = on
 #enable_self_join_elimination = on
 #enable_eager_aggregate = on
+#enable_hashjoin_bloom = on
 
 # - Planner Cost Constants -
 

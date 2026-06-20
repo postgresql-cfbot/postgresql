@@ -36,22 +36,28 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b =
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -77,22 +83,28 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.a AND t1.a =
          ->  Hash Join
                Hash Cond: (t1_1.a = t2_1.a)
                ->  Seq Scan on prt1_p1 t1_1
+                     Bloom Filter 1: keys=(a)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt2_p1 t2_1
                            Filter: (a = b)
          ->  Hash Join
                Hash Cond: (t1_2.a = t2_2.a)
                ->  Seq Scan on prt1_p2 t1_2
+                     Bloom Filter 2: keys=(a)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt2_p2 t2_2
                            Filter: (a = b)
          ->  Hash Join
                Hash Cond: (t1_3.a = t2_3.a)
                ->  Seq Scan on prt1_p3 t1_3
+                     Bloom Filter 3: keys=(a)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt2_p3 t2_3
                            Filter: (a = b)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.a AND t1.a = t2.b ORDER BY t1.a, t2.b;
  a  |  c   | b  |  c   
@@ -202,13 +214,17 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON t1.a = t2.b WHE
          ->  Hash Right Join
                Hash Cond: (t1_1.a = t2_1.b)
                ->  Seq Scan on prt1_p1 t1_1
+                     Bloom Filter 1: keys=(a)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt2_p1 t2_1
                            Filter: (a = 0)
          ->  Hash Right Join
                Hash Cond: (t1_2.a = t2_2.b)
                ->  Seq Scan on prt1_p2 t1_2
+                     Bloom Filter 2: keys=(a)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt2_p2 t2_2
                            Filter: (a = 0)
          ->  Nested Loop Left Join
@@ -216,7 +232,7 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON t1.a = t2.b WHE
                      Filter: (a = 0)
                ->  Index Scan using iprt1_p3_a on prt1_p3 t1_3
                      Index Cond: (a = t2_3.b)
-(20 rows)
+(24 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1 RIGHT JOIN prt2 t2 ON t1.a = t2.b WHERE t2.a = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -283,10 +299,12 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.a <
          Hash Cond: (t2.b = t1.a)
          ->  Seq Scan on prt2_p2 t2
                Filter: (b > 250)
+               Bloom Filter 1: keys=(b)
          ->  Hash
+               Bloom Filter 1
                ->  Seq Scan on prt1_p2 t1
                      Filter: ((a < 450) AND (b = 0))
-(9 rows)
+(11 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.a < 450 AND t2.b > 250 AND t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -382,14 +400,18 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t2.b FROM prt2 t2 WHERE t2.a = 0)
                Hash Cond: (t1_1.a = t2_1.b)
                ->  Seq Scan on prt1_p1 t1_1
                      Filter: (b = 0)
+                     Bloom Filter 1: keys=(a)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt2_p1 t2_1
                            Filter: (a = 0)
          ->  Hash Semi Join
                Hash Cond: (t1_2.a = t2_2.b)
                ->  Seq Scan on prt1_p2 t1_2
                      Filter: (b = 0)
+                     Bloom Filter 2: keys=(a)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt2_p2 t2_2
                            Filter: (a = 0)
          ->  Nested Loop Semi Join
@@ -399,7 +421,7 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t2.b FROM prt2 t2 WHERE t2.a = 0)
                ->  Materialize
                      ->  Seq Scan on prt2_p3 t2_3
                            Filter: (a = 0)
-(24 rows)
+(28 rows)
 
 SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t2.b FROM prt2 t2 WHERE t2.a = 0) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -515,19 +537,25 @@ SELECT t1.a, ss.t2a, ss.t2c FROM prt1 t1 LEFT JOIN LATERAL
                      ->  Hash Join
                            Hash Cond: (t2_1.a = t3_1.b)
                            ->  Seq Scan on prt1_p1 t2_1
+                                 Bloom Filter 1: keys=(a)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on prt2_p1 t3_1
                      ->  Hash Join
                            Hash Cond: (t2_2.a = t3_2.b)
                            ->  Seq Scan on prt1_p2 t2_2
+                                 Bloom Filter 2: keys=(a)
                            ->  Hash
+                                 Bloom Filter 2
                                  ->  Seq Scan on prt2_p2 t3_2
                      ->  Hash Join
                            Hash Cond: (t2_3.a = t3_3.b)
                            ->  Seq Scan on prt1_p3 t2_3
+                                 Bloom Filter 3: keys=(a)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on prt2_p3 t3_3
-(26 rows)
+(32 rows)
 
 SELECT t1.a, ss.t2a, ss.t2c FROM prt1 t1 LEFT JOIN LATERAL
 			  (SELECT t2.a AS t2a, t3.a AS t3a, t2.b t2b, t2.c t2c, least(t1.a,t2.a,t3.a) FROM prt1 t2 JOIN prt2 t3 ON (t2.a = t3.b)) ss
@@ -728,29 +756,41 @@ SELECT * FROM prt1 t1 JOIN prt1 t2 ON t1.a = t2.a WHERE t1.a IN (SELECT a FROM p
          ->  Hash Join
                Hash Cond: (t1_1.a = t2_1.a)
                ->  Seq Scan on prt1_p1 t1_1
+                     Bloom Filter 1: keys=(a)
+                     Bloom Filter 2: keys=(a)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_p1 t2_1
          ->  Hash
+               Bloom Filter 2
                ->  Seq Scan on prt1_p1 t3_1
    ->  Hash Semi Join
          Hash Cond: (t1_2.a = t3_2.a)
          ->  Hash Join
                Hash Cond: (t1_2.a = t2_2.a)
                ->  Seq Scan on prt1_p2 t1_2
+                     Bloom Filter 3: keys=(a)
+                     Bloom Filter 4: keys=(a)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_p2 t2_2
          ->  Hash
+               Bloom Filter 4
                ->  Seq Scan on prt1_p2 t3_2
    ->  Hash Semi Join
          Hash Cond: (t1_3.a = t3_3.a)
          ->  Hash Join
                Hash Cond: (t1_3.a = t2_3.a)
                ->  Seq Scan on prt1_p3 t1_3
+                     Bloom Filter 5: keys=(a)
+                     Bloom Filter 6: keys=(a)
                ->  Hash
+                     Bloom Filter 5
                      ->  Seq Scan on prt1_p3 t2_3
          ->  Hash
+               Bloom Filter 6
                ->  Seq Scan on prt1_p3 t3_3
-(28 rows)
+(40 rows)
 
 --
 -- partitioned by expression
@@ -821,7 +861,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t
                ->  Hash Join
                      Hash Cond: (t2_1.b = t1_1.a)
                      ->  Seq Scan on prt2_p1 t2_1
+                           Bloom Filter 1: keys=(b)
                      ->  Hash
+                           Bloom Filter 1
                            ->  Seq Scan on prt1_p1 t1_1
                                  Filter: (b = 0)
                ->  Index Scan using iprt1_e_p1_ab2 on prt1_e_p1 t3_1
@@ -831,7 +873,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t
                ->  Hash Join
                      Hash Cond: (t2_2.b = t1_2.a)
                      ->  Seq Scan on prt2_p2 t2_2
+                           Bloom Filter 2: keys=(b)
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on prt1_p2 t1_2
                                  Filter: (b = 0)
                ->  Index Scan using iprt1_e_p2_ab2 on prt1_e_p2 t3_2
@@ -841,12 +885,14 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t
                ->  Hash Join
                      Hash Cond: (t2_3.b = t1_3.a)
                      ->  Seq Scan on prt2_p3 t2_3
+                           Bloom Filter 3: keys=(b)
                      ->  Hash
+                           Bloom Filter 3
                            ->  Seq Scan on prt1_p3 t1_3
                                  Filter: (b = 0)
                ->  Index Scan using iprt1_e_p3_ab2 on prt1_e_p3 t3_3
                      Index Cond: (((a + b) / 2) = t2_3.b)
-(33 rows)
+(39 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM prt1 t1, prt2 t2, prt1_e t3 WHERE t1.a = t2.b AND t1.a = (t3.a + t3.b)/2 AND t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   | ?column? | c 
@@ -871,7 +917,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                      ->  Hash Right Join
                            Hash Cond: (t2_1.b = t1_1.a)
                            ->  Seq Scan on prt2_p1 t2_1
+                                 Bloom Filter 1: keys=(b)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on prt1_p1 t1_1
                                        Filter: (b = 0)
          ->  Hash Right Join
@@ -881,7 +929,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                      ->  Hash Right Join
                            Hash Cond: (t2_2.b = t1_2.a)
                            ->  Seq Scan on prt2_p2 t2_2
+                                 Bloom Filter 2: keys=(b)
                            ->  Hash
+                                 Bloom Filter 2
                                  ->  Seq Scan on prt1_p2 t1_2
                                        Filter: (b = 0)
          ->  Hash Right Join
@@ -891,10 +941,12 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                      ->  Hash Right Join
                            Hash Cond: (t2_3.b = t1_3.a)
                            ->  Seq Scan on prt2_p3 t2_3
+                                 Bloom Filter 3: keys=(b)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on prt1_p3 t1_3
                                        Filter: (b = 0)
-(33 rows)
+(39 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b) LEFT JOIN prt1_e t3 ON (t1.a = (t3.a + t3.b)/2) WHERE t1.b = 0 ORDER BY t1.a, t2.b, t3.a + t3.b;
   a  |  c   |  b  |  c   | ?column? | c 
@@ -924,7 +976,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                ->  Hash Right Join
                      Hash Cond: (t1_1.a = ((t3_1.a + t3_1.b) / 2))
                      ->  Seq Scan on prt1_p1 t1_1
+                           Bloom Filter 1: keys=(a)
                      ->  Hash
+                           Bloom Filter 1
                            ->  Seq Scan on prt1_e_p1 t3_1
                                  Filter: (c = 0)
                ->  Index Scan using iprt2_p1_b on prt2_p1 t2_1
@@ -933,7 +987,9 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                ->  Hash Right Join
                      Hash Cond: (t1_2.a = ((t3_2.a + t3_2.b) / 2))
                      ->  Seq Scan on prt1_p2 t1_2
+                           Bloom Filter 2: keys=(a)
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on prt1_e_p2 t3_2
                                  Filter: (c = 0)
                ->  Index Scan using iprt2_p2_b on prt2_p2 t2_2
@@ -942,12 +998,14 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2
                ->  Hash Right Join
                      Hash Cond: (t1_3.a = ((t3_3.a + t3_3.b) / 2))
                      ->  Seq Scan on prt1_p3 t1_3
+                           Bloom Filter 3: keys=(a)
                      ->  Hash
+                           Bloom Filter 3
                            ->  Seq Scan on prt1_e_p3 t3_3
                                  Filter: (c = 0)
                ->  Index Scan using iprt2_p3_b on prt2_p3 t2_3
                      Index Cond: (b = t1_3.a)
-(30 rows)
+(36 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a + t3.b, t3.c FROM (prt1 t1 LEFT JOIN prt2 t2 ON t1.a = t2.b) RIGHT JOIN prt1_e t3 ON (t1.a = (t3.a + t3.b)/2) WHERE t3.c = 0 ORDER BY t1.a, t2.b, t3.a + t3.b;
   a  |  c   |  b  |  c   | ?column? | c 
@@ -1205,7 +1263,9 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (
                      ->  Hash Semi Join
                            Hash Cond: (t1_6.b = ((t1_9.a + t1_9.b) / 2))
                            ->  Seq Scan on prt2_p1 t1_6
+                                 Bloom Filter 1: keys=(b)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on prt1_e_p1 t1_9
                                        Filter: (c = 0)
          ->  Index Scan using iprt1_p1_a on prt1_p1 t1_3
@@ -1218,7 +1278,9 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (
                      ->  Hash Semi Join
                            Hash Cond: (t1_7.b = ((t1_10.a + t1_10.b) / 2))
                            ->  Seq Scan on prt2_p2 t1_7
+                                 Bloom Filter 2: keys=(b)
                            ->  Hash
+                                 Bloom Filter 2
                                  ->  Seq Scan on prt1_e_p2 t1_10
                                        Filter: (c = 0)
          ->  Index Scan using iprt1_p2_a on prt1_p2 t1_4
@@ -1231,13 +1293,15 @@ SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (
                      ->  Hash Semi Join
                            Hash Cond: (t1_8.b = ((t1_11.a + t1_11.b) / 2))
                            ->  Seq Scan on prt2_p3 t1_8
+                                 Bloom Filter 3: keys=(b)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on prt1_e_p3 t1_11
                                        Filter: (c = 0)
          ->  Index Scan using iprt1_p3_a on prt1_p3 t1_5
                Index Cond: (a = t1_8.b)
                Filter: (b = 0)
-(41 rows)
+(47 rows)
 
 SELECT t1.* FROM prt1 t1 WHERE t1.a IN (SELECT t1.b FROM prt2 t1 WHERE t1.b IN (SELECT (t1.a + t1.b)/2 FROM prt1_e t1 WHERE t1.c = 0)) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -1567,29 +1631,41 @@ SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM plt1 t1, pl
                      ->  Hash Join
                            Hash Cond: ((t1_1.b = t2_1.b) AND (t1_1.c = t2_1.c))
                            ->  Seq Scan on plt1_p1 t1_1
+                                 Bloom Filter 1: keys=(b, c)
+                                 Bloom Filter 2: keys=(c)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on plt2_p1 t2_1
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on plt1_e_p1 t3_1
                ->  Hash Join
                      Hash Cond: (t1_2.c = ltrim(t3_2.c, 'A'::text))
                      ->  Hash Join
                            Hash Cond: ((t1_2.b = t2_2.b) AND (t1_2.c = t2_2.c))
                            ->  Seq Scan on plt1_p2 t1_2
+                                 Bloom Filter 3: keys=(b, c)
+                                 Bloom Filter 4: keys=(c)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on plt2_p2 t2_2
                      ->  Hash
+                           Bloom Filter 4
                            ->  Seq Scan on plt1_e_p2 t3_2
                ->  Hash Join
                      Hash Cond: (t1_3.c = ltrim(t3_3.c, 'A'::text))
                      ->  Hash Join
                            Hash Cond: ((t1_3.b = t2_3.b) AND (t1_3.c = t2_3.c))
                            ->  Seq Scan on plt1_p3 t1_3
+                                 Bloom Filter 5: keys=(b, c)
+                                 Bloom Filter 6: keys=(c)
                            ->  Hash
+                                 Bloom Filter 5
                                  ->  Seq Scan on plt2_p3 t2_3
                      ->  Hash
+                           Bloom Filter 6
                            ->  Seq Scan on plt1_e_p3 t3_3
-(32 rows)
+(44 rows)
 
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM plt1 t1, plt2 t2, plt1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
          avg          |         avg          |          avg          |  c   |  c   |   c   
@@ -1637,23 +1713,29 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1 WHERE a = 1 AND a = 2) t1
          ->  Hash Join
                Hash Cond: (t3_1.a = t2_1.b)
                ->  Seq Scan on prt1_p1 t3_1
+                     Bloom Filter 1: keys=(a)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt2_p1 t2_1
          ->  Hash Join
                Hash Cond: (t3_2.a = t2_2.b)
                ->  Seq Scan on prt1_p2 t3_2
+                     Bloom Filter 2: keys=(a)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt2_p2 t2_2
          ->  Hash Join
                Hash Cond: (t3_3.a = t2_3.b)
                ->  Seq Scan on prt1_p3 t3_3
+                     Bloom Filter 3: keys=(a)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt2_p3 t2_3
    ->  Hash
          ->  Result
                Replaces: Scan on prt1
                One-Time Filter: false
-(22 rows)
+(28 rows)
 
 EXPLAIN (COSTS OFF)
 SELECT t1.a, t1.c, t2.b, t2.c FROM (SELECT * FROM prt1 WHERE a = 1 AND a = 2) t1 FULL JOIN prt2 t2 ON t1.a = t2.b WHERE t2.a = 0 ORDER BY t1.a, t2.b;
@@ -1715,29 +1797,41 @@ SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM pht1 t1, ph
                      ->  Hash Join
                            Hash Cond: ((t1_1.b = t2_1.b) AND (t1_1.c = t2_1.c))
                            ->  Seq Scan on pht1_p1 t1_1
+                                 Bloom Filter 1: keys=(b, c)
+                                 Bloom Filter 2: keys=(c)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on pht2_p1 t2_1
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on pht1_e_p1 t3_1
                ->  Hash Join
                      Hash Cond: (t1_2.c = ltrim(t3_2.c, 'A'::text))
                      ->  Hash Join
                            Hash Cond: ((t1_2.b = t2_2.b) AND (t1_2.c = t2_2.c))
                            ->  Seq Scan on pht1_p2 t1_2
+                                 Bloom Filter 3: keys=(b, c)
+                                 Bloom Filter 4: keys=(c)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on pht2_p2 t2_2
                      ->  Hash
+                           Bloom Filter 4
                            ->  Seq Scan on pht1_e_p2 t3_2
                ->  Hash Join
                      Hash Cond: (t1_3.c = ltrim(t3_3.c, 'A'::text))
                      ->  Hash Join
                            Hash Cond: ((t1_3.b = t2_3.b) AND (t1_3.c = t2_3.c))
                            ->  Seq Scan on pht1_p3 t1_3
+                                 Bloom Filter 5: keys=(b, c)
+                                 Bloom Filter 6: keys=(c)
                            ->  Hash
+                                 Bloom Filter 5
                                  ->  Seq Scan on pht2_p3 t2_3
                      ->  Hash
+                           Bloom Filter 6
                            ->  Seq Scan on pht1_e_p3 t3_3
-(32 rows)
+(44 rows)
 
 SELECT avg(t1.a), avg(t2.b), avg(t3.a + t3.b), t1.c, t2.c, t3.c FROM pht1 t1, pht2 t2, pht1_e t3 WHERE t1.b = t2.b AND t1.c = t2.c AND ltrim(t3.c, 'A') = t1.c GROUP BY t1.c, t2.c, t3.c ORDER BY t1.c, t2.c, t3.c;
          avg          |         avg          |         avg          |  c   |  c   |   c   
@@ -1767,22 +1861,28 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt2 t2 WHERE t1.a = t2.b AND t1.b =
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 -- test default partition behavior for list
 ALTER TABLE plt1 DETACH PARTITION plt1_p3;
@@ -1803,22 +1903,28 @@ SELECT avg(t1.a), avg(t2.b), t1.c, t2.c FROM plt1 t1 RIGHT JOIN plt2 t2 ON t1.c 
                ->  Hash Join
                      Hash Cond: (t2_1.c = t1_1.c)
                      ->  Seq Scan on plt2_p1 t2_1
+                           Bloom Filter 1: keys=(c)
                      ->  Hash
+                           Bloom Filter 1
                            ->  Seq Scan on plt1_p1 t1_1
                                  Filter: ((a % 25) = 0)
                ->  Hash Join
                      Hash Cond: (t2_2.c = t1_2.c)
                      ->  Seq Scan on plt2_p2 t2_2
+                           Bloom Filter 2: keys=(c)
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on plt1_p2 t1_2
                                  Filter: ((a % 25) = 0)
                ->  Hash Join
                      Hash Cond: (t2_3.c = t1_3.c)
                      ->  Seq Scan on plt2_p3 t2_3
+                           Bloom Filter 3: keys=(c)
                      ->  Hash
+                           Bloom Filter 3
                            ->  Seq Scan on plt1_p3 t1_3
                                  Filter: ((a % 25) = 0)
-(23 rows)
+(29 rows)
 
 --
 -- multiple levels of partitioning
@@ -1854,7 +1960,9 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_l t1, prt2_l t2 WHERE t1.a = t2.b AND t1
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_l_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_l_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Join
@@ -1876,7 +1984,7 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_l t1, prt2_l t2 WHERE t1.a = t2.b AND t1
                ->  Hash
                      ->  Seq Scan on prt1_l_p3_p1 t1_5
                            Filter: (b = 0)
-(28 rows)
+(30 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_l t1, prt2_l t2 WHERE t1.a = t2.b AND t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -2355,19 +2463,25 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1 t1, prt4_n t2, prt2 t3 WHERE t1.a = t2.a
                ->  Hash Join
                      Hash Cond: (t1_1.a = t3_1.b)
                      ->  Seq Scan on prt1_p1 t1_1
+                           Bloom Filter 1: keys=(a)
                      ->  Hash
+                           Bloom Filter 1
                            ->  Seq Scan on prt2_p1 t3_1
                ->  Hash Join
                      Hash Cond: (t1_2.a = t3_2.b)
                      ->  Seq Scan on prt1_p2 t1_2
+                           Bloom Filter 2: keys=(a)
                      ->  Hash
+                           Bloom Filter 2
                            ->  Seq Scan on prt2_p2 t3_2
                ->  Hash Join
                      Hash Cond: (t1_3.a = t3_3.b)
                      ->  Seq Scan on prt1_p3 t1_3
+                           Bloom Filter 3: keys=(a)
                      ->  Hash
+                           Bloom Filter 3
                            ->  Seq Scan on prt2_p3 t3_3
-(23 rows)
+(29 rows)
 
 -- partitionwise join can not be applied if there are no equi-join conditions
 -- between partition keys
@@ -2639,22 +2753,28 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -2680,22 +2800,28 @@ SELECT t1.* FROM prt1_adv t1 WHERE EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a 
          ->  Hash Right Semi Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Right Semi Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Right Semi Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM prt1_adv t1 WHERE EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -2721,22 +2847,28 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 LEFT JOIN prt2_adv t2 ON (t1.a = 
          ->  Hash Right Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Right Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Right Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 LEFT JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -2766,22 +2898,28 @@ SELECT t1.* FROM prt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t
          ->  Hash Right Anti Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Right Anti Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Right Anti Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM prt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -2848,22 +2986,28 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -2889,22 +3033,28 @@ SELECT t1.* FROM prt1_adv t1 WHERE EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a 
          ->  Hash Right Semi Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Right Semi Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Right Semi Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM prt1_adv t1 WHERE EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -2930,22 +3080,28 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 LEFT JOIN prt2_adv t2 ON (t1.a = 
          ->  Hash Right Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Right Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Right Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 LEFT JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -3001,22 +3157,28 @@ SELECT t1.* FROM prt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t
          ->  Hash Right Anti Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: (b = 0)
          ->  Hash Right Anti Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: (b = 0)
          ->  Hash Right Anti Join
                Hash Cond: (t2_3.b = t1_3.a)
                ->  Seq Scan on prt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(b)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on prt1_adv_p3 t1_3
                            Filter: (b = 0)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM prt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM prt2_adv t2 WHERE t1.a = t2.b) AND t1.b = 0 ORDER BY t1.a;
   a  | b |  c   
@@ -3102,24 +3264,32 @@ SELECT t1.b, t1.c, t2.a, t2.c, t3.a, t3.c FROM prt2_adv t1 LEFT JOIN prt1_adv t2
          ->  Hash Right Join
                Hash Cond: (t2_2.a = t1_2.b)
                ->  Seq Scan on prt1_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a)
                ->  Hash
+                     Bloom Filter 2
                      ->  Hash Join
                            Hash Cond: (t3_2.a = t1_2.b)
                            ->  Seq Scan on prt1_adv_p2 t3_2
+                                 Bloom Filter 1: keys=(a)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on prt2_adv_p2 t1_2
                                        Filter: (a = 0)
          ->  Hash Right Join
                Hash Cond: (t2_3.a = t1_3.b)
                ->  Seq Scan on prt1_adv_p3 t2_3
+                     Bloom Filter 4: keys=(a)
                ->  Hash
+                     Bloom Filter 4
                      ->  Hash Join
                            Hash Cond: (t3_3.a = t1_3.b)
                            ->  Seq Scan on prt1_adv_p3 t3_3
+                                 Bloom Filter 3: keys=(a)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on prt2_adv_p3 t1_3
                                        Filter: (a = 0)
-(31 rows)
+(39 rows)
 
 SELECT t1.b, t1.c, t2.a, t2.c, t3.a, t3.c FROM prt2_adv t1 LEFT JOIN prt1_adv t2 ON (t1.b = t2.a) INNER JOIN prt1_adv t3 ON (t1.b = t3.a) WHERE t1.a = 0 ORDER BY t1.b, t2.a, t3.a;
   b  |  c   |  a  |  c   |  a  |  c   
@@ -3289,16 +3459,20 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_2
                            Filter: (b = 0)
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_1
                            Filter: (b = 0)
-(15 rows)
+(19 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -3390,24 +3564,32 @@ SELECT t1.a, t1.c, t2.b, t2.c, t3.a, t3.c FROM prt1_adv t1 LEFT JOIN prt2_adv t2
          ->  Hash Right Join
                Hash Cond: (t3_1.a = t1_1.a)
                ->  Seq Scan on prt3_adv_p1 t3_1
+                     Bloom Filter 2: keys=(a)
                ->  Hash
+                     Bloom Filter 2
                      ->  Hash Right Join
                            Hash Cond: (t2_2.b = t1_1.a)
                            ->  Seq Scan on prt2_adv_p2 t2_2
+                                 Bloom Filter 1: keys=(b)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on prt1_adv_p2 t1_1
                                        Filter: (b = 0)
          ->  Hash Right Join
                Hash Cond: (t3_2.a = t1_2.a)
                ->  Seq Scan on prt3_adv_p2 t3_2
+                     Bloom Filter 4: keys=(a)
                ->  Hash
+                     Bloom Filter 4
                      ->  Hash Right Join
                            Hash Cond: (t2_1.b = t1_2.a)
                            ->  Seq Scan on prt2_adv_p1 t2_1
+                                 Bloom Filter 3: keys=(b)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on prt1_adv_p1 t1_2
                                        Filter: (b = 0)
-(23 rows)
+(31 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c, t3.a, t3.c FROM prt1_adv t1 LEFT JOIN prt2_adv t2 ON (t1.a = t2.b) LEFT JOIN prt3_adv t3 ON (t1.a = t3.a) WHERE t1.b = 0 ORDER BY t1.a, t2.b, t3.a;
   a  |  c   |  b  |  c   |  a  |  c   
@@ -3449,16 +3631,20 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: ((a < 300) AND (b = 0))
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: ((a < 300) AND (b = 0))
-(15 rows)
+(19 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.a < 300 AND t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -3488,16 +3674,20 @@ SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: (t2_1.b = t1_1.a)
                ->  Seq Scan on prt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on prt1_adv_p1 t1_1
                            Filter: ((a >= 100) AND (a < 300) AND (b = 0))
          ->  Hash Join
                Hash Cond: (t2_2.b = t1_2.a)
                ->  Seq Scan on prt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on prt1_adv_p2 t1_2
                            Filter: ((a >= 100) AND (a < 300) AND (b = 0))
-(15 rows)
+(19 rows)
 
 SELECT t1.a, t1.c, t2.b, t2.c FROM prt1_adv t1 INNER JOIN prt2_adv t2 ON (t1.a = t2.b) WHERE t1.a >= 100 AND t1.a < 300 AND t1.b = 0 ORDER BY t1.a, t2.b;
   a  |  c   |  b  |  c   
@@ -3538,22 +3728,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -3575,22 +3771,28 @@ SELECT t1.* FROM plt1_adv t1 WHERE EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a 
          ->  Hash Right Semi Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Right Semi Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Semi Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM plt1_adv t1 WHERE EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
  a | b |  c   
@@ -3612,22 +3814,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
          ->  Hash Right Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -3651,22 +3859,28 @@ SELECT t1.* FROM plt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t
          ->  Hash Right Anti Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Right Anti Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Anti Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM plt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
  a | b |  c   
@@ -3731,22 +3945,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -3768,22 +3988,28 @@ SELECT t1.* FROM plt1_adv t1 WHERE EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a 
          ->  Hash Right Semi Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Right Semi Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Semi Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM plt1_adv t1 WHERE EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
  a | b |  c   
@@ -3805,22 +4031,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
          ->  Hash Right Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -3870,22 +4102,28 @@ SELECT t1.* FROM plt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t
          ->  Hash Right Anti Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Right Anti Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Anti Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM plt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
  a | b |  c   
@@ -4098,22 +4336,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1_null t1_1
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3_null t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4135,22 +4379,28 @@ SELECT t1.* FROM plt1_adv t1 WHERE EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a 
          ->  Hash Right Semi Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1_null t1_1
                            Filter: (b < 10)
          ->  Hash Right Semi Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Semi Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3_null t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM plt1_adv t1 WHERE EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
  a | b |  c   
@@ -4172,22 +4422,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
          ->  Hash Right Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1_null t1_1
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3_null t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a  |  c   | a |  c   
@@ -4212,22 +4468,28 @@ SELECT t1.* FROM plt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t
          ->  Hash Right Anti Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1_null t1_1
                            Filter: (b < 10)
          ->  Hash Right Anti Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Anti Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3_null t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.* FROM plt1_adv t1 WHERE NOT EXISTS (SELECT 1 FROM plt2_adv t2 WHERE t1.a = t2.a AND t1.c = t2.c) AND t1.b < 10 ORDER BY t1.a;
  a  | b  |  c   
@@ -4303,22 +4565,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4394,22 +4662,28 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
-(21 rows)
+(27 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4431,19 +4705,25 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
          ->  Hash Right Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_1
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_2
                            Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                ->  Seq Scan on plt2_adv_p3 t2_3
+                     Bloom Filter 3: keys=(a, c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on plt1_adv_p3 t1_3
                            Filter: (b < 10)
          ->  Nested Loop Left Join
@@ -4451,7 +4731,7 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
                ->  Seq Scan on plt1_adv_extra t1_4
                      Filter: (b < 10)
                ->  Seq Scan on plt2_adv_extra t2_4
-(26 rows)
+(32 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a  |  c   | a |  c   
@@ -4525,31 +4805,43 @@ SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2
          ->  Hash Right Join
                Hash Cond: ((t3_1.a = t1_1.a) AND (t3_1.c = t1_1.c))
                ->  Seq Scan on plt1_adv_p1 t3_1
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Hash Right Join
                            Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                            ->  Seq Scan on plt2_adv_p1 t2_1
+                                 Bloom Filter 1: keys=(a, c)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on plt1_adv_p1 t1_1
                                        Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t3_2.a = t1_2.a) AND (t3_2.c = t1_2.c))
                ->  Seq Scan on plt1_adv_p2 t3_2
+                     Bloom Filter 4: keys=(a, c)
                ->  Hash
+                     Bloom Filter 4
                      ->  Hash Right Join
                            Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                            ->  Seq Scan on plt2_adv_p2 t2_2
+                                 Bloom Filter 3: keys=(a, c)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on plt1_adv_p2 t1_2
                                        Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t3_3.a = t1_3.a) AND (t3_3.c = t1_3.c))
                ->  Seq Scan on plt1_adv_p3 t3_3
+                     Bloom Filter 6: keys=(a, c)
                ->  Hash
+                     Bloom Filter 6
                      ->  Hash Right Join
                            Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.c = t1_3.c))
                            ->  Seq Scan on plt2_adv_p3 t2_3
+                                 Bloom Filter 5: keys=(a, c)
                            ->  Hash
+                                 Bloom Filter 5
                                  ->  Seq Scan on plt1_adv_p3 t1_3
                                        Filter: (b < 10)
          ->  Nested Loop Left Join
@@ -4560,7 +4852,7 @@ SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2
                            Filter: (b < 10)
                      ->  Seq Scan on plt2_adv_extra t2_4
                ->  Seq Scan on plt1_adv_extra t3_4
-(41 rows)
+(53 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) LEFT JOIN plt1_adv t3 ON (t1.a = t3.a AND t1.c = t3.c) WHERE t1.b < 10 ORDER BY t1.a;
  a  |  c   | a |  c   | a |  c   
@@ -4596,16 +4888,20 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_2.a) AND (t2_1.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p1 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_2
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_1.a) AND (t2_2.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_1
                            Filter: (b < 10)
-(15 rows)
+(19 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4687,24 +4983,32 @@ SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2
          ->  Hash Right Join
                Hash Cond: ((t3_1.a = t1_1.a) AND (t3_1.c = t1_1.c))
                ->  Seq Scan on plt3_adv_p1 t3_1
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Hash Right Join
                            Hash Cond: ((t2_2.a = t1_1.a) AND (t2_2.c = t1_1.c))
                            ->  Seq Scan on plt2_adv_p2 t2_2
+                                 Bloom Filter 1: keys=(a, c)
                            ->  Hash
+                                 Bloom Filter 1
                                  ->  Seq Scan on plt1_adv_p2 t1_1
                                        Filter: (b < 10)
          ->  Hash Right Join
                Hash Cond: ((t3_2.a = t1_2.a) AND (t3_2.c = t1_2.c))
                ->  Seq Scan on plt3_adv_p2 t3_2
+                     Bloom Filter 4: keys=(a, c)
                ->  Hash
+                     Bloom Filter 4
                      ->  Hash Right Join
                            Hash Cond: ((t2_1.a = t1_2.a) AND (t2_1.c = t1_2.c))
                            ->  Seq Scan on plt2_adv_p1 t2_1
+                                 Bloom Filter 3: keys=(a, c)
                            ->  Hash
+                                 Bloom Filter 3
                                  ->  Seq Scan on plt1_adv_p1 t1_2
                                        Filter: (b < 10)
-(23 rows)
+(31 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c, t3.a, t3.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) LEFT JOIN plt3_adv t3 ON (t1.a = t3.a AND t1.c = t3.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   | a |  c   
@@ -4733,16 +5037,20 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_2.a) AND (t2_1.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p1_null t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p1 t1_2
                            Filter: (b < 10)
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_1.a) AND (t2_2.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p2 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p2 t1_1
                            Filter: (b < 10)
-(15 rows)
+(19 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4767,10 +5075,12 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
    ->  Hash Join
          Hash Cond: ((t2.a = t1.a) AND (t2.c = t1.c))
          ->  Seq Scan on plt2_adv_p2 t2
+               Bloom Filter 1: keys=(a, c)
          ->  Hash
+               Bloom Filter 1
                ->  Seq Scan on plt1_adv_p2 t1
                      Filter: (b < 10)
-(8 rows)
+(10 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4809,16 +5119,20 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p3 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p3 t1_1
                            Filter: ((b < 10) AND (c = ANY ('{0003,0004,0005}'::text[])))
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p4 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p4 t1_2
                            Filter: ((b < 10) AND (c = ANY ('{0003,0004,0005}'::text[])))
-(15 rows)
+(19 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IN ('0003', '0004', '0005') AND t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4837,10 +5151,12 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
    ->  Hash Right Join
          Hash Cond: ((t2.a = t1.a) AND (t2.c = t1.c))
          ->  Seq Scan on plt2_adv_p4 t2
+               Bloom Filter 1: keys=(a, c)
          ->  Hash
+               Bloom Filter 1
                ->  Seq Scan on plt1_adv_p4 t1
                      Filter: ((c IS NULL) AND (b < 10))
-(8 rows)
+(10 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IS NULL AND t1.b < 10 ORDER BY t1.a;
  a  | c | a | c 
@@ -4862,16 +5178,20 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a =
          ->  Hash Join
                Hash Cond: ((t2_1.a = t1_1.a) AND (t2_1.c = t1_1.c))
                ->  Seq Scan on plt2_adv_p3 t2_1
+                     Bloom Filter 1: keys=(a, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on plt1_adv_p3 t1_1
                            Filter: ((b < 10) AND (c = ANY ('{0003,0004,0005}'::text[])))
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.c = t1_2.c))
                ->  Seq Scan on plt2_adv_p4 t2_2
+                     Bloom Filter 2: keys=(a, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on plt1_adv_p4 t1_2
                            Filter: ((b < 10) AND (c = ANY ('{0003,0004,0005}'::text[])))
-(15 rows)
+(19 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 INNER JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IN ('0003', '0004', '0005') AND t1.b < 10 ORDER BY t1.a;
  a |  c   | a |  c   
@@ -4890,10 +5210,12 @@ SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = 
    ->  Hash Right Join
          Hash Cond: ((t2.a = t1.a) AND (t2.c = t1.c))
          ->  Seq Scan on plt2_adv_p4 t2
+               Bloom Filter 1: keys=(a, c)
          ->  Hash
+               Bloom Filter 1
                ->  Seq Scan on plt1_adv_p4 t1
                      Filter: ((c IS NULL) AND (b < 10))
-(8 rows)
+(10 rows)
 
 SELECT t1.a, t1.c, t2.a, t2.c FROM plt1_adv t1 LEFT JOIN plt2_adv t2 ON (t1.a = t2.a AND t1.c = t2.c) WHERE t1.c IS NULL AND t1.b < 10 ORDER BY t1.a;
  a  | c | a | c 
@@ -5015,12 +5337,16 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
                Hash Cond: ((t1_1.a = t2_1.a) AND (t1_1.b = t2_1.b))
                ->  Seq Scan on alpha_neg_p1 t1_1
                      Filter: ((b >= 125) AND (b < 225))
+                     Bloom Filter 1: keys=(a, b)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on beta_neg_p1 t2_1
          ->  Hash Join
                Hash Cond: ((t2_2.a = t1_2.a) AND (t2_2.b = t1_2.b))
                ->  Seq Scan on beta_neg_p2 t2_2
+                     Bloom Filter 2: keys=(a, b)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on alpha_neg_p2 t1_2
                            Filter: ((b >= 125) AND (b < 225))
          ->  Hash Join
@@ -5037,7 +5363,7 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
                                  Filter: ((b >= 125) AND (b < 225))
                            ->  Seq Scan on alpha_pos_p3 t1_6
                                  Filter: ((b >= 125) AND (b < 225))
-(29 rows)
+(33 rows)
 
 SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2.b) WHERE t1.b >= 125 AND t1.b < 225 ORDER BY t1.a, t1.b;
  a  |  b  |  c   | a  |  b  |  c   
@@ -5150,14 +5476,18 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
                Hash Cond: ((t1_1.a = t2_1.a) AND (t1_1.b = t2_1.b) AND (t1_1.c = t2_1.c))
                ->  Seq Scan on alpha_neg_p1 t1_1
                      Filter: ((c = ANY ('{0004,0009}'::text[])) AND (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210))))
+                     Bloom Filter 1: keys=(a, b, c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on beta_neg_p1 t2_1
                            Filter: (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210)))
          ->  Hash Join
                Hash Cond: ((t1_2.a = t2_2.a) AND (t1_2.b = t2_2.b) AND (t1_2.c = t2_2.c))
                ->  Seq Scan on alpha_neg_p2 t1_2
                      Filter: ((c = ANY ('{0004,0009}'::text[])) AND (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210))))
+                     Bloom Filter 2: keys=(a, b, c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on beta_neg_p2 t2_2
                            Filter: (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210)))
          ->  Nested Loop
@@ -5172,7 +5502,7 @@ SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2
                      Filter: ((c = ANY ('{0004,0009}'::text[])) AND (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210))))
                ->  Seq Scan on beta_pos_p3 t2_4
                      Filter: (((b >= 100) AND (b < 110)) OR ((b >= 200) AND (b < 210)))
-(29 rows)
+(33 rows)
 
 SELECT t1.*, t2.* FROM alpha t1 INNER JOIN beta t2 ON (t1.a = t2.a AND t1.b = t2.b AND t1.c = t2.c) WHERE ((t1.b >= 100 AND t1.b < 110) OR (t1.b >= 200 AND t1.b < 210)) AND ((t2.b >= 100 AND t2.b < 110) OR (t2.b >= 200 AND t2.b < 210)) AND t1.c IN ('0004', '0009') ORDER BY t1.a, t1.b;
  a  |  b  |  c   | a  |  b  |  c   
@@ -5316,19 +5646,25 @@ EXPLAIN (COSTS OFF) SELECT * FROM pht1 p1 JOIN pht1 p2 USING (c) LIMIT 1000;
          ->  Hash Join
                Hash Cond: (p1_1.c = p2_1.c)
                ->  Seq Scan on pht1_p1 p1_1
+                     Bloom Filter 1: keys=(c)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on pht1_p1 p2_1
          ->  Hash Join
                Hash Cond: (p1_2.c = p2_2.c)
                ->  Seq Scan on pht1_p2 p1_2
+                     Bloom Filter 2: keys=(c)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on pht1_p2 p2_2
          ->  Hash Join
                Hash Cond: (p1_3.c = p2_3.c)
                ->  Seq Scan on pht1_p3 p1_3
+                     Bloom Filter 3: keys=(c)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on pht1_p3 p2_3
-(17 rows)
+(23 rows)
 
 RESET enable_mergejoin;
 SET max_parallel_workers_per_gather = 1;

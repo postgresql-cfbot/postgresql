@@ -323,15 +323,17 @@ USING source AS s
 ON t.tid = s.sid
 WHEN MATCHED THEN
 	UPDATE SET balance = 0;
-               QUERY PLAN               
-----------------------------------------
+                QUERY PLAN                
+------------------------------------------
  Merge on target t
    ->  Hash Join
          Hash Cond: (s.sid = t.tid)
          ->  Seq Scan on source s
+               Bloom Filter 1: keys=(sid)
          ->  Hash
+               Bloom Filter 1
                ->  Seq Scan on target t
-(6 rows)
+(8 rows)
 
 EXPLAIN (COSTS OFF)
 MERGE INTO target t
@@ -339,15 +341,17 @@ USING source AS s
 ON t.tid = s.sid
 WHEN MATCHED THEN
 	DELETE;
-               QUERY PLAN               
-----------------------------------------
+                QUERY PLAN                
+------------------------------------------
  Merge on target t
    ->  Hash Join
          Hash Cond: (s.sid = t.tid)
          ->  Seq Scan on source s
+               Bloom Filter 1: keys=(sid)
          ->  Hash
+               Bloom Filter 1
                ->  Seq Scan on target t
-(6 rows)
+(8 rows)
 
 EXPLAIN (COSTS OFF)
 MERGE INTO target t
@@ -1831,8 +1835,10 @@ WHEN MATCHED AND t.c > s.cnt THEN
          Join Filter: (t.b < (SubPlan expr_1))
          ->  Seq Scan on public.tgt t
                Output: t.ctid, t.a, t.b
+               Bloom Filter 1: keys=(t.a)
          ->  Hash
                Output: s.a, s.b, s.c, s.d, s.ctid
+               Bloom Filter 1
                ->  Seq Scan on public.src s
                      Output: s.a, s.b, s.c, s.d, s.ctid
          SubPlan expr_1
@@ -1856,7 +1862,7 @@ WHEN MATCHED AND t.c > s.cnt THEN
                    ->  Seq Scan on public.ref r_1
                          Output: r_1.ab, r_1.cd
                          Filter: ((r_1.ab = (s.a + s.b)) AND (r_1.cd = (s.c - s.d)))
-(32 rows)
+(34 rows)
 
 DROP TABLE src, tgt, ref;
 -- Subqueries

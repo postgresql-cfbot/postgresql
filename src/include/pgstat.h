@@ -15,6 +15,7 @@
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
+#include "storage/lockdefs.h"
 #include "storage/locktag.h"
 #include "utils/backend_progress.h" /* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/backend_status.h"	/* for backward compatibility */	/* IWYU pragma: export */
@@ -353,15 +354,20 @@ typedef struct PgStat_LockEntry
 	PgStat_Counter fastpath_exceeded;
 } PgStat_LockEntry;
 
+/*
+ * Lock statistics are tracked per (locktag type, lock mode) pair.
+ * The interpretation of "mode" depends on the caller (see
+ * pgstat_count_lock_waits() and pgstat_count_lock_fastpath_exceeded()).
+ */
 typedef struct PgStat_PendingLock
 {
-	PgStat_LockEntry stats[LOCKTAG_LAST_TYPE + 1];
+	PgStat_LockEntry stats[LOCKTAG_LAST_TYPE + 1][MaxLockMode + 1];
 } PgStat_PendingLock;
 
 typedef struct PgStat_Lock
 {
 	TimestampTz stat_reset_timestamp;
-	PgStat_LockEntry stats[LOCKTAG_LAST_TYPE + 1];
+	PgStat_LockEntry stats[LOCKTAG_LAST_TYPE + 1][MaxLockMode + 1];
 } PgStat_Lock;
 
 typedef struct PgStat_StatDBEntry
@@ -637,8 +643,8 @@ extern bool pgstat_tracks_io_op(BackendType bktype, IOObject io_object,
  */
 
 extern void pgstat_lock_flush(bool nowait);
-extern void pgstat_count_lock_fastpath_exceeded(uint8 locktag_type);
-extern void pgstat_count_lock_waits(uint8 locktag_type, long msecs);
+extern void pgstat_count_lock_fastpath_exceeded(uint8 locktag_type, LOCKMODE lockmode);
+extern void pgstat_count_lock_waits(uint8 locktag_type, LOCKMODE lockmode, long msecs);
 extern PgStat_Lock *pgstat_fetch_stat_lock(void);
 
 /*

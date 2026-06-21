@@ -996,7 +996,8 @@ BEGIN
 END;
 $$;
 
-SELECT fastpath_exceeded AS fastpath_exceeded_before FROM pg_stat_lock WHERE locktype = 'relation' \gset
+SELECT COALESCE(sum(fastpath_exceeded), 0) AS fastpath_exceeded_before
+  FROM pg_stat_lock WHERE locktype = 'relation' \gset
 
 -- Needs a lock on each partition
 SELECT count(*) FROM part_test;
@@ -1004,7 +1005,8 @@ SELECT count(*) FROM part_test;
 -- Ensure pending stats are flushed
 SELECT pg_stat_force_next_flush();
 
-SELECT fastpath_exceeded > :fastpath_exceeded_before FROM pg_stat_lock WHERE locktype = 'relation';
+SELECT COALESCE(sum(fastpath_exceeded), 0) > :fastpath_exceeded_before
+  FROM pg_stat_lock WHERE locktype = 'relation';
 
 DROP TABLE part_test;
 

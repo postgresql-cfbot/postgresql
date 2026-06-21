@@ -1006,6 +1006,7 @@ CREATE VIEW pg_stat_slru AS
 CREATE VIEW pg_stat_lock AS
     SELECT
             l.locktype,
+            l.mode,
             l.waits,
             l.wait_time,
             l.fastpath_exceeded,

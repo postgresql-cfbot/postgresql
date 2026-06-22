@@ -2820,7 +2820,6 @@ create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path)
 	Oid		   *ordOperators;
 	Oid		   *ordCollations;
 	ListCell   *lc;
-	List	   *defineVariableList = NIL;
 	RPRPattern *compiledPattern = NULL;
 	Bitmapset  *matchStartDependent = NULL;
 	RPRNavOffsetKind navMaxOffsetKind = RPR_NAV_OFFSET_FIXED;
@@ -2879,18 +2878,9 @@ create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path)
 		ordNumCols++;
 	}
 
-	/* Build RPR pattern and defineVariableList */
+	/* Build RPR pattern */
 	if (wc->rpPattern)
 	{
-		/*
-		 * Build defineVariableList from defineClause.  The parser already
-		 * rejects DEFINE variables not used in PATTERN, so no filtering is
-		 * needed.
-		 */
-		foreach_node(TargetEntry, te, wc->defineClause)
-			defineVariableList = lappend(defineVariableList,
-										 makeString(pstrdup(te->resname)));
-
 		/*
 		 * Walk DEFINE once: collect nav offsets (for tuplestore trim) and the
 		 * bitmapset of match_start-dependent variables (for absorption
@@ -2903,11 +2893,7 @@ create_windowagg_plan(PlannerInfo *root, WindowAggPath *best_path)
 								&matchStartDependent);
 
 		/* Compile and optimize RPR patterns */
-		compiledPattern = buildRPRPattern(wc->rpPattern,
-										  defineVariableList,
-										  wc->rpSkipTo,
-										  wc->frameOptions,
-										  !bms_is_empty(matchStartDependent));
+		compiledPattern = buildRPRPattern(wc, !bms_is_empty(matchStartDependent));
 	}
 
 	/* And finally we can make the WindowAgg node */

@@ -231,7 +231,7 @@ struct ParseState
 	ParseNamespaceItem *p_grouping_nsitem;	/* NSItem for grouping, or NULL */
 	List	   *p_windowdefs;	/* raw representations of window clauses */
 	ParseExprKind p_expr_kind;	/* what kind of expression we're parsing */
-	List	   *p_rpr_pattern_vars; /* RPR variable names for DEFINE clause */
+	List	   *p_rpr_pattern_vars; /* Row pattern variable names */
 	int			p_next_resno;	/* next targetlist resno to assign */
 	List	   *p_multiassign_exprs;	/* junk tlist entries for multiassign */
 	List	   *p_locking_clause;	/* raw FOR UPDATE/FOR SHARE info */

@@ -48,9 +48,6 @@
 /* Forward declarations */
 static bool rprPatternEqual(RPRPatternNode *a, RPRPatternNode *b);
 static bool rprPatternChildrenEqual(List *a, List *b);
-
-static RPRPatternNode *tryUnwrapSingleChild(RPRPatternNode *pattern);
-
 static List *flattenSeqChildren(List *children);
 static List *mergeConsecutiveVars(List *children);
 static List *mergeConsecutiveGroups(List *children);
@@ -67,8 +64,6 @@ static RPRPatternNode *tryUnwrapGroup(RPRPatternNode *pattern);
 static RPRPatternNode *optimizeGroupPattern(RPRPatternNode *pattern);
 
 static RPRPatternNode *optimizeRPRPattern(RPRPatternNode *pattern);
-
-static int	collectDefineVariables(List *defineVariableList, char **varNames);
 static void scanRPRPatternRecursive(RPRPatternNode *node, char **varNames,
 									int *numVars, int *numElements,
 									RPRDepth depth, RPRDepth *maxDepth);
@@ -153,27 +148,6 @@ rprPatternChildrenEqual(List *a, List *b)
 	}
 
 	return true;
-}
-
-/*
- * tryUnwrapSingleChild
- *		Try to unwrap pattern node with single child.
- *
- * Examples (internal node representation):
- *   SEQ[A] -> A    (single-element sequence becomes the element)
- *   ALT[A] -> A    (single-alternative becomes the alternative)
- *
- * If pattern has exactly one child, return the child directly.
- * Otherwise returns the pattern unchanged.
- * Used by both SEQ and ALT optimization.
- */
-static RPRPatternNode *
-tryUnwrapSingleChild(RPRPatternNode *pattern)
-{
-	if (list_length(pattern->children) == 1)
-		return (RPRPatternNode *) linitial(pattern->children);
-
-	return pattern;
 }
 
 /*
@@ -669,8 +643,11 @@ optimizeSeqPattern(RPRPatternNode *pattern)
 	/* Merge prefix/suffix into GROUP with matching children */
 	pattern->children = mergeGroupPrefixSuffix(pattern->children);
 
-	/* Unwrap single-item SEQ */
-	return tryUnwrapSingleChild(pattern);
+	/* Unwrap single-item SEQ: SEQ[A] -> A */
+	if (list_length(pattern->children) == 1)
+		return (RPRPatternNode *) linitial(pattern->children);
+
+	return pattern;
 }
 
 /*
@@ -754,8 +731,11 @@ optimizeAltPattern(RPRPatternNode *pattern)
 	/* Remove duplicate alternatives */
 	pattern->children = removeDuplicateAlternatives(pattern->children);
 
-	/* Unwrap single-item ALT */
-	return tryUnwrapSingleChild(pattern);
+	/* Unwrap single-item ALT: ALT[A] -> A */
+	if (list_length(pattern->children) == 1)
+		return (RPRPatternNode *) linitial(pattern->children);
+
+	return pattern;
 }
 
 /*
@@ -967,30 +947,6 @@ optimizeRPRPattern(RPRPatternNode *pattern)
 
 	pg_unreachable();
 	return pattern;
-}
-
-/*
- * collectDefineVariables
- *		Collect variable names from DEFINE clause.
- *
- * Populates varNames array with variable names in DEFINE order.
- * This ensures varId == defineIdx, eliminating runtime mapping.
- * Returns the number of variables collected.
- */
-static int
-collectDefineVariables(List *defineVariableList, char **varNames)
-{
-	int			numVars = 0;
-
-	foreach_node(String, varname, defineVariableList)
-	{
-		/* Parser already checked this limit in transformDefineClause */
-		Assert(numVars <= RPR_VARID_MAX);
-
-		varNames[numVars++] = strVal(varname);
-	}
-
-	return numVars;
 }
 
 /*
@@ -1904,9 +1860,7 @@ validate_rpr_define_volatility(List *defineClause)
  * Called from createplan.c during plan creation.
  */
 RPRPattern *
-buildRPRPattern(RPRPatternNode *pattern, List *defineVariableList,
-				RPSkipTo rpSkipTo, int frameOptions,
-				bool hasMatchStartDependent)
+buildRPRPattern(WindowClause *wc, bool hasMatchStartDependent)
 {
 	RPRPattern *result;
 	RPRPatternNode *optimized;
@@ -1915,6 +1869,9 @@ buildRPRPattern(RPRPatternNode *pattern, List *defineVariableList,
 	int			numElements;
 	RPRDepth	maxDepth;
 	int			idx;
+	RPRPatternNode *pattern = wc->rpPattern;
+	RPSkipTo	rpSkipTo = wc->rpSkipTo;
+	int			frameOptions = wc->frameOptions;
 
 	/* Caller must check for NULL pattern before calling */
 	Assert(pattern != NULL);
@@ -1924,11 +1881,28 @@ buildRPRPattern(RPRPatternNode *pattern, List *defineVariableList,
 	/* Optimize the pattern tree */
 	optimized = optimizeRPRPattern(copyObject(pattern));
 
-	/* Collect variable names from DEFINE clause */
-	numVars = collectDefineVariables(defineVariableList, varNamesStack);
+	numVars = 0;
+
+	/*
+	 * Populate varNamesStack with the DEFINE variable names in DEFINE order.
+	 * This ensures varId == defineClause index, eliminating runtime mapping.
+	 */
+	foreach_node(TargetEntry, te, wc->defineClause)
+	{
+		/* Parser always assigns a name to each DEFINE entry */
+		Assert(te->resname != NULL);
+
+		varNamesStack[numVars++] = pstrdup(te->resname);
+	}
 
 	/* Scan pattern: collect variables, count elements, validate limits */
 	scanRPRPattern(optimized, varNamesStack, &numVars, &numElements, &maxDepth);
+
+	/*
+	 * numVars may reach RPR_VARID_MAX + 1 (valid varIds are 0 ..
+	 * RPR_VARID_MAX)
+	 */
+	Assert(numVars <= RPR_VARID_MAX + 1);
 
 	/* Allocate result structure */
 	result = makeRPRPattern(numVars, numElements, maxDepth, varNamesStack);

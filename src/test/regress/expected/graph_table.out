@@ -471,6 +471,11 @@ SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.* IS NOT NULL)-[
 ERROR:  "*" not allowed here
 LINE 1: ...M GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.* IS NOT...
                                                              ^
+-- aggregate and window functions are not supported in COLUMNS
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (count(*) AS num));
+ERROR:  aggregate functions within GRAPH_TABLE COLUMNS are not supported
+SELECT * FROM GRAPH_TABLE (myshop MATCH (c IS customers) COLUMNS (row_number() OVER () AS rn));
+ERROR:  window functions within GRAPH_TABLE COLUMNS are not supported
 -- consecutive element patterns with same kind
 SELECT * FROM GRAPH_TABLE (g1 MATCH ()() COLUMNS (1 as one));
 ERROR:  adjacent vertex patterns are not supported

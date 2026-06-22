@@ -93,6 +93,9 @@ SELECT pg_log_backend_memory_contexts(pg_backend_pid());
 SELECT pg_log_backend_memory_contexts(pid) FROM pg_stat_activity
   WHERE backend_type = 'checkpointer';
 
+-- First line of postmaster.pid is the PID.
+SELECT pg_log_backend_memory_contexts(split_part(pg_read_file('postmaster.pid'), E'\n', 1)::int);
+
 CREATE ROLE regress_log_memory;
 
 SELECT has_function_privilege('regress_log_memory',

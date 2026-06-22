@@ -40,6 +40,8 @@ extern PGDLLIMPORT int min_wal_size_mb;
 extern PGDLLIMPORT int max_wal_size_mb;
 extern PGDLLIMPORT int wal_keep_size_mb;
 extern PGDLLIMPORT int max_slot_wal_keep_size_mb;
+extern PGDLLIMPORT int wal_pipeline_mq_size_mb;
+extern PGDLLIMPORT bool wal_pipeline_enabled;
 extern PGDLLIMPORT int XLOGbuffers;
 extern PGDLLIMPORT int XLogArchiveTimeout;
 extern PGDLLIMPORT int wal_retrieve_retry_interval;

@@ -27,6 +27,7 @@
 
 #include "postgres.h"
 
+#include "access/xlogpipeline.h"
 #include "access/xlogprefetcher.h"
 #include "access/xlogreader.h"
 #include "catalog/pg_control.h"
@@ -355,7 +356,7 @@ XLogPrefetchReconfigure(void)
 static inline void
 XLogPrefetchIncrement(pg_atomic_uint64 *counter)
 {
-	Assert(AmStartupProcess() || !IsUnderPostmaster);
+	Assert(AmStartupProcess() || AmWalPipeline() || !IsUnderPostmaster);
 	pg_atomic_write_u64(counter, pg_atomic_read_u64(counter) + 1);
 }
 

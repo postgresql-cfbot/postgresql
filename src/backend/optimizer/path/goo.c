@@ -55,6 +55,7 @@
  * Configuration defaults.  These are exposed as GUCs in guc_tables.c.
  */
 bool		enable_goo_join_search = false;
+int			goo_greedy_strategy = GOO_GREEDY_STRATEGY_COMBINED;
 
 /*
  * Working state for a single GOO search invocation.
@@ -73,6 +74,7 @@ typedef struct GooState
 	MemoryContext cand_cxt;		/* per-iteration candidate storage */
 	MemoryContext scratch_cxt;	/* per-candidate speculative evaluation */
 	List	   *clumps;			/* remaining join components (RelOptInfo *) */
+	GooGreedyStrategy strategy; /* candidate comparison heuristic */
 
 	/*
 	 * "clumps" are similar to GEQO's concept (see geqo_eval.c): join
@@ -94,11 +96,22 @@ typedef struct GooCandidate
 {
 	RelOptInfo *left;			/* left input clump */
 	RelOptInfo *right;			/* right input clump */
+	double		result_size;	/* estimated result size in bytes */
 	Cost		total_cost;		/* total cost of cheapest path */
+	double		selectivity;	/* join selectivity (output/input rows) */
 	Relids		joinrelids;		/* relids covered by this join */
 }			GooCandidate;
 
-static GooState * goo_init_state(PlannerInfo *root, List *initial_rels);
+typedef struct GooStrategyResult
+{
+	RelOptInfo *result;
+	Cost		total_cost;
+	List	   *join_rel_list;
+	struct HTAB *join_rel_hash;
+}			GooStrategyResult;
+
+static GooState * goo_init_state(PlannerInfo *root, List *initial_rels,
+								 GooGreedyStrategy strategy);
 static void goo_destroy_state(GooState * state);
 static RelOptInfo *goo_search_internal(GooState * state);
 static void goo_reset_probe_state(GooState * state, int saved_rel_len,
@@ -106,9 +119,15 @@ static void goo_reset_probe_state(GooState * state, int saved_rel_len,
 static GooCandidate * goo_build_candidate(GooState * state, RelOptInfo *left,
 										  RelOptInfo *right);
 static RelOptInfo *goo_commit_join(GooState * state, GooCandidate * cand);
-static bool goo_candidate_better(GooCandidate * a, GooCandidate * b);
+static bool goo_candidate_better(GooGreedyStrategy strategy,
+								 GooCandidate * a, GooCandidate * b);
 static bool goo_candidate_prunable(GooState * state, RelOptInfo *left,
 								   RelOptInfo *right);
+static const char *goo_strategy_name(GooGreedyStrategy strategy);
+static GooStrategyResult goo_run_strategy(PlannerInfo *root, List *initial_rels,
+										  List *base_join_rel_list,
+										  struct HTAB *base_hash,
+										  GooGreedyStrategy strategy);
 
 /*
  * goo_join_search
@@ -130,8 +149,63 @@ goo_join_search(PlannerInfo *root, int levels_needed,
 	int			base_rel_count;
 	struct HTAB *base_hash;
 
+	/* If COMBINED mode, try all strategies and return the better one */
+	if (goo_greedy_strategy == GOO_GREEDY_STRATEGY_COMBINED)
+	{
+		static const GooGreedyStrategy combined_strategies[] = {
+			GOO_GREEDY_STRATEGY_RESULT_SIZE,
+			GOO_GREEDY_STRATEGY_COST,
+			GOO_GREEDY_STRATEGY_SELECTIVITY
+		};
+		GooStrategyResult best_result = {0};
+		GooGreedyStrategy best_strategy = GOO_GREEDY_STRATEGY_COST;
+		List	   *base_join_rel_list;
+		bool		have_best = false;
+
+		base_join_rel_list = root->join_rel_list;
+		base_hash = root->join_rel_hash;
+
+		for (int i = 0; i < lengthof(combined_strategies); i++)
+		{
+			GooGreedyStrategy strategy = combined_strategies[i];
+			GooStrategyResult result;
+
+			result = goo_run_strategy(root, initial_rels,
+									  base_join_rel_list, base_hash,
+									  strategy);
+
+			if (result.result == NULL)
+				continue;
+
+			if (!have_best || result.total_cost < best_result.total_cost)
+			{
+				best_result = result;
+				best_strategy = strategy;
+				have_best = true;
+			}
+		}
+
+		/*
+		 * During development/testing, fail fast when every strategy fails.
+		 */
+		if (!have_best)
+			elog(ERROR, "GOO join search failed: all strategies exhausted without a valid join order");
+
+		/*
+		 * Pick the lowest-cost result across strategies.
+		 */
+		root->join_rel_list = best_result.join_rel_list;
+		root->join_rel_hash = best_result.join_rel_hash;
+
+		elog(DEBUG1, "GOO COMBINED mode: %s strategy chosen (cost: %.2f)",
+			 goo_strategy_name(best_strategy), best_result.total_cost);
+
+		return best_result.result;
+	}
+
+	/* Normal single-strategy mode */
 	/* Initialize search state and memory contexts */
-	state = goo_init_state(root, initial_rels);
+	state = goo_init_state(root, initial_rels, goo_greedy_strategy);
 
 	/*
 	 * Save initial state of join_rel_list and join_rel_hash so we can restore
@@ -172,7 +246,8 @@ goo_join_search(PlannerInfo *root, int levels_needed,
  * where we may evaluate hundreds or thousands of candidate joins.
  */
 static GooState *
-goo_init_state(PlannerInfo *root, List *initial_rels)
+goo_init_state(PlannerInfo *root, List *initial_rels,
+			   GooGreedyStrategy strategy)
 {
 	MemoryContext oldcxt;
 	GooState   *state;
@@ -183,6 +258,7 @@ goo_init_state(PlannerInfo *root, List *initial_rels)
 	state->root = root;
 	state->clumps = NIL;
 	state->prune_cartesian = false;
+	state->strategy = strategy;
 
 	/* Create the three-level memory context hierarchy */
 	state->goo_cxt = AllocSetContextCreate(root->planner_cxt, "GOOStateContext",
@@ -217,6 +293,42 @@ goo_destroy_state(GooState * state)
 {
 	MemoryContextDelete(state->goo_cxt);
 	pfree(state);
+}
+
+static GooStrategyResult
+goo_run_strategy(PlannerInfo *root, List *initial_rels,
+				 List *base_join_rel_list, struct HTAB *base_hash,
+				 GooGreedyStrategy strategy)
+{
+	GooStrategyResult result;
+	GooState   *state;
+	MemoryContext oldcxt;
+
+	result.result = NULL;
+	result.total_cost = 0;
+	result.join_rel_list = NIL;
+	result.join_rel_hash = NULL;
+
+	oldcxt = MemoryContextSwitchTo(root->planner_cxt);
+	root->join_rel_list = list_copy(base_join_rel_list);
+	root->join_rel_hash = NULL;
+	MemoryContextSwitchTo(oldcxt);
+
+	state = goo_init_state(root, initial_rels, strategy);
+	result.result = goo_search_internal(state);
+
+	if (result.result != NULL)
+		result.total_cost = result.result->cheapest_total_path->total_cost;
+
+	result.join_rel_list = root->join_rel_list;
+	result.join_rel_hash = root->join_rel_hash;
+
+	goo_destroy_state(state);
+
+	root->join_rel_list = base_join_rel_list;
+	root->join_rel_hash = base_hash;
+
+	return result;
 }
 
 /*
@@ -300,7 +412,8 @@ goo_search_internal(GooState * state)
 
 					/* Track the best candidate seen so far */
 					if (best_candidate == NULL ||
-						goo_candidate_better(cand, best_candidate))
+						goo_candidate_better(state->strategy,
+											 cand, best_candidate))
 						best_candidate = cand;
 				}
 			}
@@ -393,6 +506,8 @@ static GooCandidate * goo_build_candidate(GooState * state, RelOptInfo *left,
 	int			saved_rel_len;
 	struct HTAB *saved_hash;
 	RelOptInfo *joinrel;
+	double		join_rows;
+	double		result_size;
 	Cost		total_cost;
 	GooCandidate *cand;
 	bool		is_top_rel;
@@ -448,6 +563,9 @@ static GooCandidate * goo_build_candidate(GooState * state, RelOptInfo *left,
 		set_cheapest(grouped_rel);
 	}
 
+	join_rows = joinrel->rows;
+
+	result_size = join_rows * joinrel->reltarget->width;
 	total_cost = joinrel->cheapest_total_path->total_cost;
 
 	/*
@@ -466,7 +584,9 @@ static GooCandidate * goo_build_candidate(GooState * state, RelOptInfo *left,
 	cand = palloc(sizeof(GooCandidate));
 	cand->left = left;
 	cand->right = right;
+	cand->result_size = result_size;
 	cand->total_cost = total_cost;
+	cand->selectivity = join_rows / (left->rows * right->rows);
 	cand->joinrelids = bms_union(left->relids, right->relids);
 	MemoryContextSwitchTo(oldcxt);
 
@@ -597,12 +717,56 @@ goo_commit_join(GooState * state, GooCandidate * cand)
  * Returns true if candidate 'a' should be preferred over candidate 'b'.
  */
 static bool
-goo_candidate_better(GooCandidate * a, GooCandidate * b)
+goo_candidate_better(GooGreedyStrategy strategy,
+					 GooCandidate * a, GooCandidate * b)
 {
-	if (a->total_cost < b->total_cost)
-		return true;
-	if (a->total_cost > b->total_cost)
-		return false;
+	switch (strategy)
+	{
+		case GOO_GREEDY_STRATEGY_COMBINED:
+			/* Should not be called in COMBINED mode */
+			elog(ERROR, "goo_candidate_better should not be called in COMBINED mode");
+			return false;
+
+		case GOO_GREEDY_STRATEGY_RESULT_SIZE:
+			if (a->result_size < b->result_size)
+				return true;
+			if (a->result_size > b->result_size)
+				return false;
+			break;
+
+		case GOO_GREEDY_STRATEGY_COST:
+			if (a->total_cost < b->total_cost)
+				return true;
+			if (a->total_cost > b->total_cost)
+				return false;
+			break;
+
+		case GOO_GREEDY_STRATEGY_SELECTIVITY:
+		default:
+			if (a->selectivity < b->selectivity)
+				return true;
+			if (a->selectivity > b->selectivity)
+				return false;
+			break;
+	}
 
 	return bms_compare(a->joinrelids, b->joinrelids) < 0;
+}
+
+static const char *
+goo_strategy_name(GooGreedyStrategy strategy)
+{
+	switch (strategy)
+	{
+		case GOO_GREEDY_STRATEGY_RESULT_SIZE:
+			return "RESULT_SIZE";
+		case GOO_GREEDY_STRATEGY_COST:
+			return "COST";
+		case GOO_GREEDY_STRATEGY_SELECTIVITY:
+			return "SELECTIVITY";
+		case GOO_GREEDY_STRATEGY_COMBINED:
+			return "COMBINED";
+	}
+
+	return "UNKNOWN";
 }

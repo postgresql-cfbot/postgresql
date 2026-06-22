@@ -1187,10 +1187,9 @@ fillRPRPatternVar(RPRPatternNode *node, RPRPattern *pat, int *idx, RPRDepth dept
 	elem->varId = getVarIdFromPattern(pat, node->varName);
 	elem->depth = depth;
 	elem->min = node->min;
-	elem->max = (node->max == PG_INT32_MAX) ? RPR_QUANTITY_INF : node->max;
+	elem->max = node->max;
 	Assert(elem->min >= 0 && elem->min < RPR_QUANTITY_INF &&
-		   elem->max >= 1 &&
-		   (elem->max == RPR_QUANTITY_INF || elem->min <= elem->max));
+		   elem->max >= 1 && elem->min <= elem->max);
 	elem->next = RPR_ELEMIDX_INVALID;
 	elem->jump = RPR_ELEMIDX_INVALID;
 	if (node->reluctant)
@@ -1239,10 +1238,9 @@ fillRPRPatternGroup(RPRPatternNode *node, RPRPattern *pat, int *idx, RPRDepth de
 		elem->varId = RPR_VARID_BEGIN;
 		elem->depth = depth;
 		elem->min = node->min;
-		elem->max = (node->max == PG_INT32_MAX) ? RPR_QUANTITY_INF : node->max;
+		elem->max = node->max;
 		Assert(elem->min >= 0 && elem->min < RPR_QUANTITY_INF &&
-			   elem->max >= 1 &&
-			   (elem->max == RPR_QUANTITY_INF || elem->min <= elem->max));
+			   elem->max >= 1 && elem->min <= elem->max);
 		elem->next = RPR_ELEMIDX_INVALID;	/* set by finalize */
 		elem->jump = RPR_ELEMIDX_INVALID;	/* set after END */
 		if (node->reluctant)
@@ -1267,19 +1265,18 @@ fillRPRPatternGroup(RPRPatternNode *node, RPRPattern *pat, int *idx, RPRDepth de
 		endElem->varId = RPR_VARID_END;
 		endElem->depth = depth;
 		endElem->min = node->min;
-		endElem->max = (node->max == PG_INT32_MAX) ? RPR_QUANTITY_INF : node->max;
+		endElem->max = node->max;
 		Assert(endElem->min >= 0 && endElem->min < RPR_QUANTITY_INF &&
-			   endElem->max >= 1 &&
-			   (endElem->max == RPR_QUANTITY_INF || endElem->min <= endElem->max));
+			   endElem->max >= 1 && endElem->min <= endElem->max);
 		endElem->next = RPR_ELEMIDX_INVALID;
 		endElem->jump = groupStartIdx;	/* loop to first child */
 		if (node->reluctant)
 			endElem->flags |= RPR_ELEM_RELUCTANT;
 
 		/*
-		 * If the group body is nullable (all paths can match empty), mark the
-		 * END element so that nfa_advance_end can fast-forward the iteration
-		 * count to min when reached via empty-match skip paths.
+		 * If the group body is nullable, mark the END element so that
+		 * nfa_advance_end can fast-forward the iteration count to min when
+		 * reached via empty-match skip paths.
 		 */
 		if (bodyNullable)
 			endElem->flags |= RPR_ELEM_EMPTY_LOOP;
@@ -1455,8 +1452,7 @@ finalizeRPRPattern(RPRPattern *result)
 
 		/* Verify quantifier range is valid */
 		Assert(elem->min >= 0 && elem->min < RPR_QUANTITY_INF &&
-			   elem->max >= 1 &&
-			   (elem->max == RPR_QUANTITY_INF || elem->min <= elem->max));
+			   elem->max >= 1 && elem->min <= elem->max);
 	}
 
 	/* Add FIN marker at the end */

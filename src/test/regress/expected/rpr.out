@@ -20,31 +20,18 @@ CREATE TABLE rpr_stock (
 \set filename :abs_srcdir '/data/stock.data'
 COPY rpr_stock FROM :'filename';
 ANALYZE rpr_stock;
-CREATE TEMP TABLE stock (
-       company TEXT,
-       tdate DATE,
-       price INTEGER
-);
-INSERT INTO stock VALUES ('company1', '2023-07-01', 100);
-INSERT INTO stock VALUES ('company1', '2023-07-02', 200);
-INSERT INTO stock VALUES ('company1', '2023-07-03', 150);
-INSERT INTO stock VALUES ('company1', '2023-07-04', 140);
-INSERT INTO stock VALUES ('company1', '2023-07-05', 150);
-INSERT INTO stock VALUES ('company1', '2023-07-06', 90);
-INSERT INTO stock VALUES ('company1', '2023-07-07', 110);
-INSERT INTO stock VALUES ('company1', '2023-07-08', 130);
-INSERT INTO stock VALUES ('company1', '2023-07-09', 120);
-INSERT INTO stock VALUES ('company1', '2023-07-10', 130);
-INSERT INTO stock VALUES ('company2', '2023-07-01', 50);
-INSERT INTO stock VALUES ('company2', '2023-07-02', 2000);
-INSERT INTO stock VALUES ('company2', '2023-07-03', 1500);
-INSERT INTO stock VALUES ('company2', '2023-07-04', 1400);
-INSERT INTO stock VALUES ('company2', '2023-07-05', 1500);
-INSERT INTO stock VALUES ('company2', '2023-07-06', 60);
-INSERT INTO stock VALUES ('company2', '2023-07-07', 1100);
-INSERT INTO stock VALUES ('company2', '2023-07-08', 1300);
-INSERT INTO stock VALUES ('company2', '2023-07-09', 1200);
-INSERT INTO stock VALUES ('company2', '2023-07-10', 1300);
+CREATE TEMP TABLE stock (company TEXT, tdate DATE, price INTEGER);
+INSERT INTO stock VALUES
+('company1', '2023-07-01', 100), ('company1', '2023-07-02', 200),
+('company1', '2023-07-03', 150), ('company1', '2023-07-04', 140),
+('company1', '2023-07-05', 150), ('company1', '2023-07-06', 90),
+('company1', '2023-07-07', 110), ('company1', '2023-07-08', 130),
+('company1', '2023-07-09', 120), ('company1', '2023-07-10', 130),
+('company2', '2023-07-01', 50), ('company2', '2023-07-02', 2000),
+('company2', '2023-07-03', 1500), ('company2', '2023-07-04', 1400),
+('company2', '2023-07-05', 1500), ('company2', '2023-07-06', 60),
+('company2', '2023-07-07', 1100), ('company2', '2023-07-08', 1300),
+('company2', '2023-07-09', 1200), ('company2', '2023-07-10', 1300);
 SELECT * FROM stock;
  company  |   tdate    | price 
 ----------+------------+-------

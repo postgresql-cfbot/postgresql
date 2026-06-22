@@ -10,6 +10,10 @@
 #
 #----------------------------------------------------------------------
 
+/*
+ * When adding a new one, ensure it does not conflict with
+ * PSEUDO_PARTITION_TABLE_SPCOID.
+ */
 [
 
 { oid => '1663', oid_symbol => 'DEFAULTTABLESPACE_OID',

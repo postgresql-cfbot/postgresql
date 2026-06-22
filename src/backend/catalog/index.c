@@ -1813,7 +1813,7 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 	changeDependenciesOn(RelationRelationId, oldIndexId, newIndexId);
 
 	/* copy over statistics from old to new index */
-	pgstat_copy_relation_stats(newClassRel, oldClassRel);
+	pgstat_copy_relation_stats(newClassRel->rd_locator, oldClassRel->rd_locator, false);
 
 	/* Copy data of pg_statistic from the old index to the new one */
 	CopyStatistics(oldIndexId, newIndexId);

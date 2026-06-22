@@ -17113,6 +17113,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	Oid			reltoastrelid;
 	RelFileNumber newrelfilenumber;
 	RelFileLocator newrlocator;
+	RelFileLocator oldrlocator;
 	List	   *reltoastidxids = NIL;
 	ListCell   *lc;
 
@@ -17151,6 +17152,7 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 	newrlocator = rel->rd_locator;
 	newrlocator.relNumber = newrelfilenumber;
 	newrlocator.spcOid = newTableSpace;
+	oldrlocator = rel->rd_locator;
 
 	/* hand off to AM to actually create new rel storage and copy the data */
 	if (rel->rd_rel->relkind == RELKIND_INDEX)
@@ -17162,6 +17164,10 @@ ATExecSetTableSpace(Oid tableOid, Oid newTableSpace, LOCKMODE lockmode)
 		Assert(RELKIND_HAS_TABLE_AM(rel->rd_rel->relkind));
 		table_relation_copy_data(rel, &newrlocator);
 	}
+
+	/* mark that a rewrite happened */
+	if (RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
+		pgstat_mark_rewrite(oldrlocator, newrlocator);
 
 	/*
 	 * Update the pg_class row.

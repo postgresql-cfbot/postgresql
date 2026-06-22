@@ -16,6 +16,7 @@
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
 #include "storage/locktag.h"
+#include "storage/relfilelocator.h"
 #include "utils/backend_progress.h" /* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/backend_status.h"	/* for backward compatibility */	/* IWYU pragma: export */
 #include "utils/pgstat_kind.h"
@@ -38,6 +39,12 @@ typedef struct RelationData *Relation;
 
 /* Default directory to store temporary statistics data in */
 #define PG_STAT_TMP_DIR		"pg_stat_tmp"
+
+/*
+ * Build a pgstat key Objid based on a RelFileLocator.
+ */
+#define RelFileLocatorToPgStatObjid(locator) \
+	(((uint64) (locator).spcOid << 32) | (locator).relNumber)
 
 /* Values for track_functions GUC variable --- order is significant! */
 typedef enum TrackFunctionsLevel
@@ -179,11 +186,11 @@ typedef struct PgStat_TableCounts
  */
 typedef struct PgStat_TableStatus
 {
-	Oid			id;				/* table's OID */
-	bool		shared;			/* is it a shared catalog? */
+	uint64		id;				/* hash of relfilelocator for stats key */
 	struct PgStat_TableXactStatus *trans;	/* lowest subxact's counts */
 	PgStat_TableCounts counts;	/* event counts to be sent */
 	Relation	relation;		/* rel that is using this entry */
+	RelFileLocator locator;		/* table's relfilelocator */
 } PgStat_TableStatus;
 
 /* ----------
@@ -690,7 +697,7 @@ extern PgStat_FunctionCounts *find_funcstat_entry(Oid func_id);
 
 extern void pgstat_create_relation(Relation rel);
 extern void pgstat_drop_relation(Relation rel);
-extern void pgstat_copy_relation_stats(Relation dst, Relation src);
+extern void pgstat_copy_relation_stats(RelFileLocator dst, RelFileLocator src, bool increment);
 
 extern void pgstat_init_relation(Relation rel);
 extern void pgstat_assoc_relation(Relation rel);
@@ -702,6 +709,9 @@ extern void pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter, TimestampTz starttime);
+extern void pgstat_mark_rewrite(RelFileLocator old_locator,
+								RelFileLocator new_locator);
+extern void pgstat_clear_rewrite(void);
 
 /*
  * If stats are enabled, but pending data hasn't been prepared yet, call
@@ -762,9 +772,9 @@ extern void pgstat_twophase_postabort(FullTransactionId fxid, uint16 info,
 									  void *recdata, uint32 len);
 
 extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry(Oid relid);
-extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(bool shared,
-														   Oid reloid,
-														   bool *may_free);
+extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_by_locator(RelFileLocator locator,
+																  bool *may_free);
+extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(Oid reloid, bool *may_free);
 extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
 
 

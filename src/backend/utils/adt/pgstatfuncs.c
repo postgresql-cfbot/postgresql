@@ -30,6 +30,7 @@
 #include "storage/procarray.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
+#include "utils/pgstat_internal.h"
 #include "utils/timestamp.h"
 #include "utils/tuplestore.h"
 #include "utils/wait_event.h"
@@ -2000,9 +2001,14 @@ Datum
 pg_stat_reset_single_table_counters(PG_FUNCTION_ARGS)
 {
 	Oid			taboid = PG_GETARG_OID(0);
-	Oid			dboid = (IsSharedRelation(taboid) ? InvalidOid : MyDatabaseId);
+	RelFileLocator locator;
 
-	pgstat_reset(PGSTAT_KIND_RELATION, dboid, taboid);
+	/* Get the stats locator from the relation OID */
+	if (!pgstat_reloid_to_relfilelocator(taboid, &locator))
+		PG_RETURN_VOID();
+
+	pgstat_reset(PGSTAT_KIND_RELATION, locator.dbOid,
+				 RelFileLocatorToPgStatObjid(locator));
 
 	PG_RETURN_VOID();
 }
@@ -2358,6 +2364,17 @@ pg_stat_have_stats(PG_FUNCTION_ARGS)
 	Oid			dboid = PG_GETARG_OID(1);
 	uint64		objid = PG_GETARG_INT64(2);
 	PgStat_Kind kind = pgstat_get_kind_from_str(stats_type);
+
+	/* Convert relation OID to relfilenode objid */
+	if (kind == PGSTAT_KIND_RELATION)
+	{
+		RelFileLocator locator;
+
+		if (!pgstat_reloid_to_relfilelocator(objid, &locator))
+			PG_RETURN_BOOL(false);
+
+		objid = RelFileLocatorToPgStatObjid(locator);
+	}
 
 	PG_RETURN_BOOL(pgstat_have_entry(kind, dboid, objid));
 }

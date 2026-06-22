@@ -2041,12 +2041,17 @@ do_autovacuum(void)
 		bool		doanalyze;
 		bool		wraparound;
 		AutoVacuumScores scores;
+		RelFileLocator locator;
 
 		if (classForm->relkind != RELKIND_RELATION &&
 			classForm->relkind != RELKIND_MATVIEW)
 			continue;
 
 		relid = classForm->oid;
+
+		locator.dbOid = classForm->relisshared ? InvalidOid : MyDatabaseId;
+		locator.spcOid = classForm->reltablespace;
+		locator.relNumber = classForm->relfilenode;
 
 		/*
 		 * Check if it is a temp table (presumably, of some other backend's).
@@ -2145,6 +2150,7 @@ do_autovacuum(void)
 		bool		doanalyze;
 		bool		wraparound;
 		AutoVacuumScores scores;
+		RelFileLocator locator;
 
 		/*
 		 * We cannot safely process other backends' temp tables, so skip 'em.
@@ -2153,6 +2159,9 @@ do_autovacuum(void)
 			continue;
 
 		relid = classForm->oid;
+		locator.dbOid = classForm->relisshared ? InvalidOid : MyDatabaseId;
+		locator.spcOid = classForm->reltablespace;
+		locator.relNumber = classForm->relfilenode;
 
 		/*
 		 * fetch reloptions -- if this toast table does not have them, try the
@@ -3251,8 +3260,7 @@ relation_needs_vacanalyze(Oid relid,
 	 * vacuuming only, so don't vacuum (or analyze) anything that's not being
 	 * forced.
 	 */
-	tabentry = pgstat_fetch_stat_tabentry_ext(classForm->relisshared,
-											  relid, &may_free);
+	tabentry = pgstat_fetch_stat_tabentry_ext(relid, &may_free);
 	if (!tabentry)
 		return;
 

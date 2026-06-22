@@ -87,6 +87,7 @@
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
+#include "utils/pgstat_internal.h"
 #include "utils/relmapper.h"
 #include "utils/resowner.h"
 #include "utils/snapmgr.h"
@@ -3782,6 +3783,7 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	MultiXactId minmulti = InvalidMultiXactId;
 	TransactionId freezeXid = InvalidTransactionId;
 	RelFileLocator newrlocator;
+	RelFileLocator oldrlocator = relation->rd_locator;
 
 	if (!IsBinaryUpgrade)
 	{
@@ -3952,6 +3954,10 @@ RelationSetNewRelfilenumber(Relation relation, char persistence)
 	heap_freetuple(tuple);
 
 	table_close(pg_class, RowExclusiveLock);
+
+	/* Mark that a rewrite happened */
+	if (RELKIND_HAS_STORAGE(relation->rd_rel->relkind))
+		pgstat_mark_rewrite(oldrlocator, newrlocator);
 
 	/*
 	 * Make the pg_class row change or relation map change visible.  This will

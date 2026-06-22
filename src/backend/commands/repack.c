@@ -1662,6 +1662,11 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 
 		rel1 = relation_open(r1, NoLock);
 		rel2 = relation_open(r2, NoLock);
+
+		/* Mark that a rewrite happened */
+		if (RELKIND_HAS_STORAGE(rel1->rd_rel->relkind))
+			pgstat_mark_rewrite(rel1->rd_locator, rel2->rd_locator);
+
 		rel2->rd_createSubid = rel1->rd_createSubid;
 		rel2->rd_newRelfilelocatorSubid = rel1->rd_newRelfilelocatorSubid;
 		rel2->rd_firstRelfilelocatorSubid = rel1->rd_firstRelfilelocatorSubid;

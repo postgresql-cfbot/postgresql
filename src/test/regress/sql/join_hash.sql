@@ -625,3 +625,157 @@ lateral (select t1.fivethous, i4.f1 from tenk1 t1 join int4_tbl i4
          on t1.fivethous = i4.f1+i8.q2 order by 1,2) ss;
 
 rollback;
+
+--
+-- enable_hashjoin_prefilter: drop non-matching outer tuples before they are
+-- spilled to a batch file.  Valid only for inner and semi joins; outer and
+-- anti joins must still emit unmatched outer rows, so the pre-filter must not
+-- run for them.
+--
+begin;
+
+set local enable_hashjoin = on;
+set local enable_mergejoin = off;
+set local enable_nestloop = off;
+set local max_parallel_workers_per_gather = 0;
+set local work_mem = '128kB';
+set local hash_mem_multiplier = 1.0;
+
+-- Locate the Hash node in an EXPLAIN (FORMAT json) plan.
+create or replace function find_hash(node json)
+returns json language plpgsql
+as
+$$
+declare
+  x json;
+  child json;
+begin
+  if node->>'Node Type' = 'Hash' then
+    return node;
+  else
+    for child in select json_array_elements(node->'Plans')
+    loop
+      x := find_hash(child);
+      if x is not null then
+        return x;
+      end if;
+    end loop;
+    return null;
+  end if;
+end;
+$$;
+
+-- original/final batch counts, as in the tests above.
+create or replace function hash_join_batches(query text)
+returns table (original int, final int) language plpgsql
+as
+$$
+declare
+  whole_plan json;
+  hash_node json;
+begin
+  for whole_plan in
+    execute 'explain (analyze, format ''json'') ' || query
+  loop
+    hash_node := find_hash(json_extract_path(whole_plan, '0', 'Plan'));
+    original := hash_node->>'Original Hash Batches';
+    final := hash_node->>'Hash Batches';
+    return next;
+  end loop;
+end;
+$$;
+
+-- Number of outer tuples removed by the pre-filter, or NULL when it did not
+-- run (e.g. for outer/anti joins, or a single-batch join).
+create or replace function hash_join_prefiltered(query text)
+returns bigint language plpgsql
+as
+$$
+declare
+  whole_plan json;
+  hash_node json;
+  result bigint;
+begin
+  for whole_plan in
+    execute 'explain (analyze, format ''json'') ' || query
+  loop
+    hash_node := find_hash(json_extract_path(whole_plan, '0', 'Plan'));
+    result := (hash_node->>'Outer Tuples Prefiltered')::bigint;
+  end loop;
+  return result;
+end;
+$$;
+
+-- Build side: 20000 distinct keys, large enough to need multiple batches at
+-- the work_mem above and correctly estimated so nbatch stays put (the regime
+-- where the pre-filter bitmaps survive).
+create table pf_build as
+  select g as id, repeat('x', 30) as t from generate_series(1, 20000) g;
+analyze pf_build;
+
+-- Probe side: 100000 rows, ~10% matching (keys 1..10000) and ~90% with no
+-- match (keys far above the build range), interleaved.  The interleaving
+-- matters: the pre-filter samples its drop rate over a window of routed probe
+-- tuples and switches itself off if that window is unrepresentative, so the
+-- matching and non-matching rows must be mixed rather than segregated.  Larger
+-- than the build side so the planner hashes pf_build and probes this.
+create table pf_probe as
+  select case when g % 10 = 0 then g / 10
+              else 1000000 + g end as id
+  from generate_series(1, 100000) g;
+analyze pf_probe;
+
+-- Premise: the join is multi-batch and planned that way (no runtime growth).
+select original > 1 as initially_multibatch, final > original as increased_batches
+  from hash_join_batches(
+$$
+  select count(*) from pf_probe p join pf_build b using (id)
+$$);
+
+-- (1) INNER join: identical results with the pre-filter off and on.
+set local enable_hashjoin_prefilter = off;
+select count(*), coalesce(sum(p.id), 0) as checksum
+  from pf_probe p join pf_build b using (id);
+set local enable_hashjoin_prefilter = on;
+select count(*), coalesce(sum(p.id), 0) as checksum
+  from pf_probe p join pf_build b using (id);
+
+-- (2) the pre-filter actually dropped non-matching outer tuples.
+select hash_join_prefiltered(
+$$
+  select count(*) from pf_probe p join pf_build b using (id)
+$$) > 0 as inner_prefilter_fired;
+
+-- (3) SEMI join: identical results off vs on, and the pre-filter may fire.
+set local enable_hashjoin_prefilter = off;
+select count(*) from pf_probe p
+  where exists (select 1 from pf_build b where b.id = p.id);
+set local enable_hashjoin_prefilter = on;
+select count(*) from pf_probe p
+  where exists (select 1 from pf_build b where b.id = p.id);
+select hash_join_prefiltered(
+$$
+  select count(*) from pf_probe p
+    where exists (select 1 from pf_build b where b.id = p.id)
+$$) > 0 as semi_prefilter_fired;
+
+-- (4) LEFT join: unmatched outer rows must survive, so the pre-filter must
+-- not run.  (A wrong pre-filter would make this count drop below 100000.)
+set local enable_hashjoin_prefilter = on;
+select count(*) from pf_probe p left join pf_build b using (id);
+select hash_join_prefiltered(
+$$
+  select count(*) from pf_probe p left join pf_build b using (id)
+$$) is null as left_prefilter_disabled;
+
+-- (5) ANTI join: the non-matching outer rows are exactly the result, so the
+-- pre-filter must not run.
+select count(*) from pf_probe p
+  where not exists (select 1 from pf_build b where b.id = p.id);
+select hash_join_prefiltered(
+$$
+  select count(*) from pf_probe p
+    where not exists (select 1 from pf_build b where b.id = p.id)
+$$) is null as anti_prefilter_disabled;
+
+rollback;

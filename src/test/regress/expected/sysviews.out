@@ -164,6 +164,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_groupagg                | on
  enable_hashagg                 | on
  enable_hashjoin                | on
+ enable_hashjoin_prefilter      | off
  enable_incremental_sort        | on
  enable_indexonlyscan           | on
  enable_indexscan               | on

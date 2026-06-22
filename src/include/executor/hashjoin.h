@@ -359,6 +359,23 @@ typedef struct HashJoinTableData
 	BufFile   **innerBatchFile; /* buffered virtual temp file per batch */
 	BufFile   **outerBatchFile; /* buffered virtual temp file per batch */
 
+	/*
+	 * Per-batch pre-filter bitmaps, one bit per bucket, populated as inner
+	 * tuples are written to their batch file during the inner build.
+	 * During outer partitioning, an outer tuple whose bucket is empty
+	 * cannot match. So for inner and semi joins it can be dropped before
+	 * being spilled, saving the outerBatchFile write and the later read.
+	 *
+	 * prefilter_active is an adaptive runtime guard: it starts true and is
+	 * cleared if the sampled eviction rate over a window of routed probe tuples
+	 * is below break-even.
+	 */
+	uint8	  **batch_bitmap;	/* per-batch occupancy bitmaps, or NULL */
+	bool		prefilter_active;	/* adaptive: still consulting the bitmap? */
+	uint64		prefilter_win_checks;	/* routed probes seen in current window */
+	uint64		prefilter_win_drops;	/* drops in current window */
+	uint64		outer_prefiltered;	/* outer tuples dropped before spilling */
+
 	Size		spaceUsed;		/* memory space currently used by tuples */
 	Size		spaceAllowed;	/* upper limit for space used */
 	Size		spacePeak;		/* peak space used */

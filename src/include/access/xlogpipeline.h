@@ -55,6 +55,52 @@ typedef struct WalRecordMsgHeader
 } WalRecordMsgHeader;
 
 /*
+ * Parameters passed from StartupXLOG (consumer side)
+ * to the WAL pipeline producer background worker.
+ */
+typedef struct WalPipelineParams
+{
+	bool		StandbyMode;
+	bool		StandbyModeRequested;
+	bool		ArchiveRecoveryRequested;
+	bool		InArchiveRecovery;
+	bool		InRedo;
+	bool 		lastSourceFailed;
+	bool 		pendingWalRcvRestart;
+	bool 		backupEndRequired;
+	bool 		promotedBeforeLaunch;
+
+	TimeLineID  RedoStartTLI;
+	TimeLineID  CheckPointTLI;
+	TimeLineID  recoveryTargetTLI;
+	TimeLineID	minRecoveryPointTLI;
+	TimeLineID  ReplayTLI;
+	TimeLineID	receiveTLI;
+
+	XLogRecPtr 	backupStartPoint;
+	XLogRecPtr 	backupEndPoint;
+	XLogRecPtr  CheckPointLoc;
+	XLogRecPtr  RedoStartLSN;
+	XLogRecPtr  NextRecPtr;
+	XLogRecPtr	minRecoveryPoint;
+	XLogRecPtr 	flushedUpto;
+	XLogRecPtr 	abortedRecPtr;
+	XLogRecPtr 	missingContrecPtr;
+
+	int	readFile;
+	XLogSegNo readSegNo;
+	uint32 readOff;
+	uint32 readLen;
+	XLogSource readSource;
+	TimeLineID curFileTLI;
+
+
+	HotStandbyState standbyState;
+	XLogSource 	currentSource;
+
+} WalPipelineParams;
+
+/*
  * Shared memory control structure for the WAL pipeline
  */
 typedef struct WalPipelineShmCtl

@@ -630,6 +630,29 @@ OPTIONS (ADD password_required 'false');
      </listitem>
     </varlistentry>
 
+    <varlistentry>
+     <term><literal>remotely_inherited</literal> (<type>boolean</type>)</term>
+     <listitem>
+      <para>
+       This option, which can be specified for a foreign table, determines if
+       the remote table is an inherited/partitioned table on the remote server
+       or a foreign table on it referencing such a table on another remote
+       server.
+       The default is <literal>false</literal>.
+      </para>
+
+      <para>
+       If the <literal>updatable</literal> option is set for a foreign table
+       whose remote table is any of the above,
+       <filename>postgres_fdw</filename> currently cannot properly
+       update/delete it, causing unexpected results, except in cases where the
+       whole <command>UPDATE/DELETE</command> processing is pushed down to the
+       remote server.  Such unsafe modifications can be prevented by setting
+       this option.  This might be improved in future releases.
+      </para>
+     </listitem>
+    </varlistentry>
+
    </variablelist>
   </sect3>
 

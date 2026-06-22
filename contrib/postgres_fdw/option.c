@@ -116,6 +116,7 @@ postgres_fdw_validator(PG_FUNCTION_ARGS)
 		 */
 		if (strcmp(def->defname, "use_remote_estimate") == 0 ||
 			strcmp(def->defname, "updatable") == 0 ||
+			strcmp(def->defname, "remotely_inherited") == 0 ||
 			strcmp(def->defname, "truncatable") == 0 ||
 			strcmp(def->defname, "async_capable") == 0 ||
 			strcmp(def->defname, "parallel_commit") == 0 ||
@@ -256,6 +257,7 @@ InitPgFdwOptions(void)
 		/* updatable is available on both server and table */
 		{"updatable", ForeignServerRelationId, false},
 		{"updatable", ForeignTableRelationId, false},
+		{"remotely_inherited", ForeignTableRelationId, false},
 		/* truncatable is available on both server and table */
 		{"truncatable", ForeignServerRelationId, false},
 		{"truncatable", ForeignTableRelationId, false},

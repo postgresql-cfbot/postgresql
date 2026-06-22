@@ -207,6 +207,9 @@ typedef struct PgFdwModifyState
 	int			p_nums;			/* number of parameters to transmit */
 	FmgrInfo   *p_flinfo;		/* output conversion functions for them */
 
+	/* update/delete operation stuff */
+	bool		resultRelValid;	/* have we checked the result relation? */
+
 	/* batch operation stuff */
 	int			num_slots;		/* number of slots to insert */
 
@@ -654,6 +657,7 @@ static TupleTableSlot **execute_foreign_modify(EState *estate,
 											   TupleTableSlot **planSlots,
 											   int *numSlots);
 static void prepare_foreign_modify(PgFdwModifyState *fmstate);
+static void check_result_rel(PgFdwModifyState *fmstate, CmdType operation);
 static const char **convert_prep_stmt_params(PgFdwModifyState *fmstate,
 											 ItemPointer tupleid,
 											 TupleTableSlot **slots,
@@ -722,6 +726,9 @@ static bool import_fetched_statistics(const char *schemaname,
 static void map_field_to_arg(PGresult *res, int row, int field,
 							 int arg, Datum *values, char *nulls);
 static bool import_spi_query_ok(void);
+static void append_import_schema_restrictions(StringInfo buf,
+											  ImportForeignSchemaStmt *stmt,
+											  PGconn *conn);
 static void produce_tuple_asynchronously(AsyncRequest *areq, bool fetch);
 static void fetch_more_data_begin(AsyncRequest *areq);
 static void complete_pending_request(AsyncRequest *areq);
@@ -4237,6 +4244,9 @@ create_foreign_modify(EState *estate,
 	{
 		Assert(subplan != NULL);
 
+		/* Initialize valid flag for the result relation */
+		fmstate->resultRelValid = false;
+
 		/* Find the ctid resjunk column in the subplan's result */
 		fmstate->ctidAttno = ExecFindJunkAttributeInTlist(subplan->targetlist,
 														  "ctid");
@@ -4308,6 +4318,11 @@ execute_foreign_modify(EState *estate,
 	Assert(operation == CMD_INSERT ||
 		   operation == CMD_UPDATE ||
 		   operation == CMD_DELETE);
+
+	/* For UPDATE/DELETE, check the result relation if not yet done. */
+	if ((operation == CMD_UPDATE || operation == CMD_DELETE) &&
+		!fmstate->resultRelValid)
+		check_result_rel(fmstate, operation);
 
 	/* First, process a pending asynchronous request, if any. */
 	if (fmstate->conn_state->pendingAreq)
@@ -4447,6 +4462,52 @@ prepare_foreign_modify(PgFdwModifyState *fmstate)
 
 	/* This action shows that the prepare has been done. */
 	fmstate->p_name = p_name;
+}
+
+/*
+ * check_result_rel
+ *		Check if the target foreign table is safe to update/delete via
+ *		ExecForeignUpdate/ExecForeignDelete.
+ */
+static void
+check_result_rel(PgFdwModifyState *fmstate, CmdType operation)
+{
+	bool		remotely_inherited;
+	ForeignTable *table;
+	ListCell   *lc;
+
+	Assert(!fmstate->resultRelValid);
+	Assert(operation == CMD_UPDATE || operation == CMD_DELETE);
+
+	/*
+	 * By default, any postgres_fdw foreign table isn't assumed
+	 * remotely-inherited.
+	 */
+	remotely_inherited = false;
+
+	table = GetForeignTable(RelationGetRelid(fmstate->rel));
+
+	foreach(lc, table->options)
+	{
+		DefElem    *def = (DefElem *) lfirst(lc);
+
+		if (strcmp(def->defname, "remotely_inherited") == 0)
+			remotely_inherited = defGetBoolean(def);
+	}
+
+	/*
+	 * It's unsafe to update/delete remotely-inherited foreign tables via
+	 * ExecForeignUpdate/ExecForeignDelete.
+	 */
+	if (remotely_inherited)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg((operation == CMD_UPDATE) ?
+						"cannot update remotely-inherited foreign table \"%s\"" :
+						"cannot delete from remotely-inherited foreign table \"%s\"",
+						RelationGetRelationName(fmstate->rel))));
+
+	fmstate->resultRelValid = true;
 }
 
 /*
@@ -6331,7 +6392,10 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 	PGconn	   *conn;
 	StringInfoData buf;
 	PGresult   *res;
-	int			numrows,
+	char	  **inherited = NULL;
+	int			numinherited,
+				inherited_idx,
+				numrows,
 				i;
 	ListCell   *lc;
 
@@ -6382,6 +6446,60 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 				(errcode(ERRCODE_FDW_SCHEMA_NOT_FOUND),
 				 errmsg("schema \"%s\" is not present on foreign server \"%s\"",
 						stmt->remote_schema, server->servername)));
+
+	PQclear(res);
+	resetStringInfo(&buf);
+
+	/*
+	 * First, fetch/save all remotely-inherited table names from this schema,
+	 * possibly restricted by EXCEPT or LIMIT TO.
+	 */
+	appendStringInfoString(&buf,
+						   "SELECT relname "
+						   "FROM pg_class c "
+						   "  JOIN pg_namespace n ON "
+						   "    relnamespace = n.oid "
+						   "  LEFT JOIN (pg_foreign_table t "
+						   "    JOIN pg_foreign_server s ON "
+						   "      s.oid = t.ftserver "
+						   "    JOIN pg_foreign_data_wrapper w ON "
+						   "      w.oid = s.srvfdw) ON "
+						   "    t.ftrelid = c.oid "
+						   "WHERE (c.relkind = "
+						   CppAsString2(RELKIND_PARTITIONED_TABLE) " "
+						   "  OR (c.relkind IN ("
+						   CppAsString2(RELKIND_RELATION) ","
+						   CppAsString2(RELKIND_FOREIGN_TABLE) ") "
+						   "    AND c.relhassubclass "
+						   "    AND EXISTS (SELECT 1 FROM pg_inherits "
+						   "      WHERE inhparent = c.oid)) "
+						   "  OR (c.relkind = "
+						   CppAsString2(RELKIND_FOREIGN_TABLE) " "
+						   "    AND w.fdwname = \'postgres_fdw\' "
+						   "    AND t.ftoptions @> "
+						   "      ARRAY[\'remotely_inherited=true\'])) "
+						   "  AND n.nspname = ");
+	deparseStringLiteral(&buf, stmt->remote_schema);
+
+	/* Append EXCEPT/LIMIT TO restrictions */
+	append_import_schema_restrictions(&buf, stmt, conn);
+
+	/* Append ORDER BY at the end of query to ensure output ordering */
+	appendStringInfoString(&buf, " ORDER BY c.relname");
+
+	/* Fetch the data */
+	res = pgfdw_exec_query(conn, buf.data, NULL);
+	if (PQresultStatus(res) != PGRES_TUPLES_OK)
+		pgfdw_report_error(res, conn, buf.data);
+
+	/* Save the data */
+	numinherited = PQntuples(res);
+	if (numinherited > 0)
+	{
+		inherited = (char **) palloc0(numinherited * sizeof(char *));
+		for (i = 0; i < numinherited; i++)
+			inherited[i] = pstrdup(PQgetvalue(res, i, 0));
+	}
 
 	PQclear(res);
 	resetStringInfo(&buf);
@@ -6453,35 +6571,8 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 						   "  AND n.nspname = ");
 	deparseStringLiteral(&buf, stmt->remote_schema);
 
-	/* Partitions are supported since Postgres 10 */
-	if (PQserverVersion(conn) >= 100000 &&
-		stmt->list_type != FDW_IMPORT_SCHEMA_LIMIT_TO)
-		appendStringInfoString(&buf, " AND NOT c.relispartition ");
-
-	/* Apply restrictions for LIMIT TO and EXCEPT */
-	if (stmt->list_type == FDW_IMPORT_SCHEMA_LIMIT_TO ||
-		stmt->list_type == FDW_IMPORT_SCHEMA_EXCEPT)
-	{
-		bool		first_item = true;
-
-		appendStringInfoString(&buf, " AND c.relname ");
-		if (stmt->list_type == FDW_IMPORT_SCHEMA_EXCEPT)
-			appendStringInfoString(&buf, "NOT ");
-		appendStringInfoString(&buf, "IN (");
-
-		/* Append list of table names within IN clause */
-		foreach(lc, stmt->table_list)
-		{
-			RangeVar   *rv = (RangeVar *) lfirst(lc);
-
-			if (first_item)
-				first_item = false;
-			else
-				appendStringInfoString(&buf, ", ");
-			deparseStringLiteral(&buf, rv->relname);
-		}
-		appendStringInfoChar(&buf, ')');
-	}
+	/* Append EXCEPT/LIMIT TO restrictions */
+	append_import_schema_restrictions(&buf, stmt, conn);
 
 	/* Append ORDER BY at the end of query to ensure output ordering */
 	appendStringInfoString(&buf, " ORDER BY c.relname, a.attnum");
@@ -6493,6 +6584,7 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 
 	/* Process results */
 	numrows = PQntuples(res);
+	inherited_idx = 0;
 	/* note: incrementation of i happens in inner loop's while() test */
 	for (i = 0; i < numrows;)
 	{
@@ -6589,15 +6681,83 @@ postgresImportForeignSchema(ImportForeignSchemaStmt *stmt, Oid serverOid)
 		appendStringInfoString(&buf, ", table_name ");
 		deparseStringLiteral(&buf, tablename);
 
+		/*
+		 * Also add the remotely_inherited option if needed, to prevent unsafe
+		 * modifications to the foreign table (see check_result_rel()).
+		 *
+		 * By the definitions of the fetch queries using the same snapshot on
+		 * the remote server, the inherited is guaranteed to be a strictly
+		 * proper subset of the data processed here with the same order as it,
+		 * so we determine whether the foreign table is remotely-inherited or
+		 * not, by doing a merge join to it.
+		 */
+		if (numinherited > 0 && inherited_idx < numinherited &&
+			strcmp(tablename, inherited[inherited_idx]) == 0)
+		{
+			appendStringInfoString(&buf, ", remotely_inherited \'true\'");
+			inherited_idx++;
+		}
+
 		appendStringInfoString(&buf, ");");
 
 		commands = lappend(commands, pstrdup(buf.data));
 	}
 	PQclear(res);
 
+	if (numinherited > 0)
+	{
+		Assert(inherited != NULL);
+		for (i = 0; i < numinherited; i++)
+		{
+			Assert(inherited[i] != NULL);
+			pfree(inherited[i]);
+		}
+		pfree(inherited);
+	}
+
 	ReleaseConnection(conn);
 
 	return commands;
+}
+
+/*
+ * Append EXCEPT/LIMIT TO restrictions to a query.
+ */
+static void
+append_import_schema_restrictions(StringInfo buf,
+								  ImportForeignSchemaStmt *stmt,
+								  PGconn *conn)
+{
+	/* Partitions are supported since Postgres 10 */
+	if (PQserverVersion(conn) >= 100000 &&
+		stmt->list_type != FDW_IMPORT_SCHEMA_LIMIT_TO)
+		appendStringInfoString(buf, " AND NOT c.relispartition ");
+
+	/* Apply restrictions for LIMIT TO and EXCEPT */
+	if (stmt->list_type == FDW_IMPORT_SCHEMA_LIMIT_TO ||
+		stmt->list_type == FDW_IMPORT_SCHEMA_EXCEPT)
+	{
+		bool		first_item = true;
+		ListCell   *lc;
+
+		appendStringInfoString(buf, " AND c.relname ");
+		if (stmt->list_type == FDW_IMPORT_SCHEMA_EXCEPT)
+			appendStringInfoString(buf, "NOT ");
+		appendStringInfoString(buf, "IN (");
+
+		/* Append list of table names within IN clause */
+		foreach(lc, stmt->table_list)
+		{
+			RangeVar   *rv = (RangeVar *) lfirst(lc);
+
+			if (first_item)
+				first_item = false;
+			else
+				appendStringInfoString(buf, ", ");
+			deparseStringLiteral(buf, rv->relname);
+		}
+		appendStringInfoChar(buf, ')');
+	}
 }
 
 /*

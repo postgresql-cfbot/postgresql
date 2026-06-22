@@ -1778,6 +1778,34 @@ DROP FOREIGN TABLE remt2;
 DROP TABLE loct1;
 DROP TABLE loct2;
 
+-- Test UPDATE/DELETE on remotely-inherited foreign tables
+CREATE TABLE ritest_pt (a int, b int) PARTITION BY LIST(a);
+CREATE TABLE ritest_pt_p1 PARTITION OF ritest_pt FOR VALUES IN (1);
+CREATE TABLE ritest_pt_p2 PARTITION OF ritest_pt FOR VALUES IN (2);
+CREATE FOREIGN TABLE ritest_ft (a int, b int) SERVER loopback OPTIONS (table_name 'ritest_pt', remotely_inherited 'true');
+INSERT INTO ritest_ft VALUES (1, 10), (2, 20);
+
+-- Use random() so that UPDATE/DELETE is not pushed down to the remote
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ritest_ft SET b = 100 WHERE a = 1 AND random() < 1.0;
+UPDATE ritest_ft SET b = 100 WHERE a = 1 AND random() < 1.0;   -- should fail
+
+EXPLAIN (VERBOSE, COSTS OFF)
+UPDATE ritest_ft SET b = 300 WHERE b = 30 AND random() < 1.0;
+UPDATE ritest_ft SET b = 300 WHERE b = 30 AND random() < 1.0;  -- should work
+
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM ritest_ft WHERE a = 1 AND random() < 1.0;
+DELETE FROM ritest_ft WHERE a = 1 AND random() < 1.0;          -- should fail
+
+EXPLAIN (VERBOSE, COSTS OFF)
+DELETE FROM ritest_ft WHERE b = 30 AND random() < 1.0;
+DELETE FROM ritest_ft WHERE b = 30 AND random() < 1.0;         -- should work
+
+-- Cleanup
+DROP FOREIGN TABLE ritest_ft;
+DROP TABLE ritest_pt;
+
 -- ===================================================================
 -- test check constraints
 -- ===================================================================
@@ -3247,8 +3275,23 @@ IMPORT FOREIGN SCHEMA import_source LIMIT TO (t5)
 
 ROLLBACK;
 
-BEGIN;
+-- Check that the remotely_inherited option is set when needed.
+CREATE TABLE import_source.inhchild (c1 int);
+CREATE TABLE import_source.t6 (c1 int);
+ALTER TABLE import_source.inhchild INHERIT import_source.t6;
+CREATE TABLE import_source.t7 (c1 int);
+ALTER TABLE import_source.inhchild INHERIT import_source.t7;
+ALTER TABLE import_source.inhchild NO INHERIT import_source.t7;
+CREATE FOREIGN TABLE import_source.t8 (c1 int) SERVER loopback
+  OPTIONS (remotely_inherited 'true');
 
+CREATE SCHEMA import_dest6;
+IMPORT FOREIGN SCHEMA import_source LIMIT TO (t6, t7, t8)
+  FROM SERVER loopback INTO import_dest6;
+\det+ import_dest6.*
+\d import_dest6.*
+
+BEGIN;
 
 CREATE SERVER fetch101 FOREIGN DATA WRAPPER postgres_fdw OPTIONS( fetch_size '101' );
 

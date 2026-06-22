@@ -3488,6 +3488,21 @@ show_hash_info(HashState *hashstate, ExplainState *es)
 								 hinstrument.outer_prefiltered);
 			}
 		}
+
+		/* Show probe-time empty-bucket skips if any */
+		if (hinstrument.probe_filter_skips > 0)
+		{
+			if (es->format != EXPLAIN_FORMAT_TEXT)
+				ExplainPropertyInteger("Probe Filter Skips", NULL,
+									   hinstrument.probe_filter_skips, es);
+			else
+			{
+				ExplainIndentText(es);
+				appendStringInfo(es->str,
+								 "Probe Filter: " UINT64_FORMAT " empty buckets skipped\n",
+								 hinstrument.probe_filter_skips);
+			}
+		}
 	}
 }
 

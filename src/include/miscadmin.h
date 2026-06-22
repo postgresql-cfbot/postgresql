@@ -274,6 +274,7 @@ extern PGDLLIMPORT int maintenance_work_mem;
 extern PGDLLIMPORT int max_parallel_maintenance_workers;
 
 extern PGDLLIMPORT bool enable_hashjoin_prefilter;
+extern PGDLLIMPORT bool enable_hashjoin_probe_filter;
 
 /*
  * Upper and lower hard limits for the buffer access strategy ring size

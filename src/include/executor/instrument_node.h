@@ -228,6 +228,7 @@ typedef struct HashInstrumentation
 	int			nbatch_original;	/* planned number of batches */
 	Size		space_peak;		/* peak memory usage in bytes */
 	uint64		outer_prefiltered;	/* outer tuples dropped before spilling */
+	uint64		probe_filter_skips; /* empty buckets skipped at probe time */
 } HashInstrumentation;
 
 /*

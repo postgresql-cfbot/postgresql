@@ -706,6 +706,27 @@ begin
 end;
 $$;
 
+-- Number of empty buckets the single-batch probe filter skipped, or NULL when
+-- it did not run.
+create or replace function hash_join_probe_skips(query text)
+returns bigint language plpgsql
+as
+$$
+declare
+  whole_plan json;
+  hash_node json;
+  result bigint;
+begin
+  for whole_plan in
+    execute 'explain (analyze, format ''json'') ' || query
+  loop
+    hash_node := find_hash(json_extract_path(whole_plan, '0', 'Plan'));
+    result := (hash_node->>'Probe Filter Skips')::bigint;
+  end loop;
+  return result;
+end;
+$$;
+
 -- Build side: 20000 distinct keys, large enough to need multiple batches at
 -- the work_mem above and correctly estimated so nbatch stays put (the regime
 -- where the pre-filter bitmaps survive).
@@ -777,5 +798,37 @@ $$
   select count(*) from pf_probe p
     where not exists (select 1 from pf_build b where b.id = p.id)
 $$) is null as anti_prefilter_disabled;
+
+-- (6) Probe filter must stay inert in a multi-batch join.  With the drop
+-- filter on, batch_bitmap[1..n] is allocated but index 0 is left NULL; the
+-- probe filter is single-batch only and must not consult it.  A correct count
+-- (and no crash) guards against the nbatch==1 gate being removed.
+set local enable_hashjoin_prefilter = on;
+set local enable_hashjoin_probe_filter = on;
+select count(*) from pf_probe p join pf_build b using (id);
+
+-- (7) Single-batch probe filter: with the inner in one batch and a sparsely
+-- occupied bucket array, non-matching probe tuples land in empty buckets and
+-- are skipped at probe time.  Matching and non-matching keys are interleaved
+-- so the adaptive sampling window sees a representative skip rate.
+set local work_mem = '4MB';
+set local enable_hashjoin_prefilter = off;
+set local enable_hashjoin_probe_filter = off;
+create table pf_sb_build as
+  select g as id from generate_series(1, 5000) g;
+analyze pf_sb_build;
+create table pf_sb_probe as
+  select case when g % 50 = 0 then g / 50 else 1000000 + g end as id
+  from generate_series(1, 50000) g;
+analyze pf_sb_probe;
+-- identical result with the probe filter off and on
+select count(*) from pf_sb_probe p join pf_sb_build b using (id);
+set local enable_hashjoin_probe_filter = on;
+select count(*) from pf_sb_probe p join pf_sb_build b using (id);
+-- the probe filter actually skipped empty buckets
+select hash_join_probe_skips(
+$$
+  select count(*) from pf_sb_probe p join pf_sb_build b using (id)
+$$) > 0 as single_batch_probe_fired;
 
 rollback;

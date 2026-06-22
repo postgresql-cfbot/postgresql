@@ -3909,6 +3909,12 @@ process_pm_pmsignal(void)
 		request_state_update = true;
 	}
 
+	/* Log the postmaster's memory contexts if requested. */
+	if (CheckPostmasterSignal(PMSIGNAL_LOG_MEMORY_CONTEXT))
+	{
+		ProcessLogMemoryContextInterrupt();
+	}
+
 	/*
 	 * Try to advance postmaster's state machine, if a child requests it.
 	 */

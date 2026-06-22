@@ -3473,6 +3473,21 @@ show_hash_info(HashState *hashstate, ExplainState *es)
 							 hinstrument.nbuckets, hinstrument.nbatch,
 							 spacePeakKb);
 		}
+
+		/* Show outer pre-storage filter stats if it dropped anything */
+		if (hinstrument.outer_prefiltered > 0)
+		{
+			if (es->format != EXPLAIN_FORMAT_TEXT)
+				ExplainPropertyInteger("Outer Tuples Prefiltered", NULL,
+									   hinstrument.outer_prefiltered, es);
+			else
+			{
+				ExplainIndentText(es);
+				appendStringInfo(es->str,
+								 "Outer Prefilter: " UINT64_FORMAT " tuples dropped before spill\n",
+								 hinstrument.outer_prefiltered);
+			}
+		}
 	}
 }
 

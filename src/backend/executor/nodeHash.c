@@ -537,6 +537,11 @@ ExecHashTableCreate(HashState *state)
 	hashtable->skewTuples = 0;
 	hashtable->innerBatchFile = NULL;
 	hashtable->outerBatchFile = NULL;
+	hashtable->batch_bitmap = NULL;
+	hashtable->prefilter_active = false;
+	hashtable->prefilter_win_checks = 0;
+	hashtable->prefilter_win_drops = 0;
+	hashtable->outer_prefiltered = 0;
 	hashtable->spaceUsed = 0;
 	hashtable->spacePeak = 0;
 	hashtable->spaceAllowed = space_allowed;
@@ -586,6 +591,21 @@ ExecHashTableCreate(HashState *state)
 
 		hashtable->innerBatchFile = palloc0_array(BufFile *, nbatch);
 		hashtable->outerBatchFile = palloc0_array(BufFile *, nbatch);
+
+		/*
+		 * Allocate per-batch pre-filter bitmaps.
+		 * Index 0 is left NULL, as batch 0 is never spilled.
+		 */
+		if (enable_hashjoin_prefilter)
+		{
+			size_t		bitmap_bytes = (hashtable->nbuckets + 7) / 8;
+			int			b;
+
+			hashtable->batch_bitmap = palloc0_array(uint8 *, nbatch);
+			for (b = 1; b < nbatch; b++)
+				hashtable->batch_bitmap[b] = palloc0(bitmap_bytes);
+			hashtable->prefilter_active = true;
+		}
 
 		MemoryContextSwitchTo(oldctx);
 
@@ -1102,6 +1122,16 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	}
 
 	hashtable->nbatch = nbatch;
+
+	/* Batch doubling invalidates the outer pre-storage filter. */
+	if (hashtable->batch_bitmap != NULL)
+	{
+		for (int b = 1; b < oldnbatch; b++)
+			if (hashtable->batch_bitmap[b])
+				pfree(hashtable->batch_bitmap[b]);
+		pfree(hashtable->batch_bitmap);
+		hashtable->batch_bitmap = NULL;
+	}
 
 	/*
 	 * Scan through the existing hash table entries and dump out any that are
@@ -1851,6 +1881,10 @@ ExecHashTableInsert(HashJoinTable hashtable,
 							  hashvalue,
 							  &hashtable->innerBatchFile[batchno],
 							  hashtable);
+
+		/* Set bit in pre-filter to record this bucket as occupied */
+		if (hashtable->batch_bitmap != NULL)
+			hashtable->batch_bitmap[batchno][bucketno >> 3] |= (1 << (bucketno & 7));
 	}
 
 	if (shouldFree)
@@ -2945,6 +2979,7 @@ ExecHashAccumInstrumentation(HashInstrumentation *instrument,
 									  hashtable->nbatch_original);
 	instrument->space_peak = Max(instrument->space_peak,
 								 hashtable->spacePeak);
+	instrument->outer_prefiltered += hashtable->outer_prefiltered;
 }
 
 /*

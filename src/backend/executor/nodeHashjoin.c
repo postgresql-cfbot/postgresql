@@ -193,6 +193,15 @@
 /* Returns true if doing null-fill on inner relation */
 #define HJ_FILL_INNER(hjstate)	((hjstate)->hj_NullOuterTupleSlot != NULL)
 
+/*
+ * Adaptive guard for the pre-filter.  Sample the eviction rate
+ * over a window of routed probe tuples; if it falls below the threshold, stop
+ * consulting the bitmap for the rest of the outer-partitioning pass so dense
+ * (FK-like) joins do not pay the per-probe check for no benefit.
+ */
+#define PREFILTER_WINDOW		4096
+#define PREFILTER_MIN_DROP_PCT	5
+
 static TupleTableSlot *ExecHashJoinOuterGetTuple(PlanState *outerNode,
 												 HashJoinState *hjstate,
 												 uint32 *hashvalue);
@@ -508,8 +517,48 @@ ExecHashJoinImpl(PlanState *pstate, bool parallel)
 					node->hj_CurSkewBucketNo == INVALID_SKEW_BUCKET_NO)
 				{
 					bool		shouldFree;
-					MinimalTuple mintuple = ExecFetchSlotMinimalTuple(outerTupleSlot,
-																	  &shouldFree);
+					MinimalTuple mintuple;
+
+					/*
+					 * Pre-filter: if inner table has nothing in this bucket, the
+					 * outer tuple cannot match, so drop it. Not valid for outer/anti
+					 * joins, which must still emit unmatched outer rows.
+					 */
+					if (hashtable->batch_bitmap != NULL && hashtable->prefilter_active &&
+						(node->js.jointype == JOIN_INNER ||
+						 node->js.jointype == JOIN_SEMI))
+					{
+						int			bucketno = node->hj_CurBucketNo;
+						uint8	   *bitmap = hashtable->batch_bitmap[batchno];
+						bool		empty;
+
+						empty = ((bitmap[bucketno >> 3] & (1 << (bucketno & 7))) == 0);
+
+						/* Window accounting: count this probe, and the drop if empty. */
+						hashtable->prefilter_win_checks++;
+						if (empty)
+						{
+							hashtable->prefilter_win_drops++;
+							hashtable->outer_prefiltered++;
+						}
+
+						/* End of window: stop filtering if it is no longer paying off. */
+						if (hashtable->prefilter_win_checks >= PREFILTER_WINDOW)
+						{
+							if (hashtable->prefilter_win_drops * 100 <
+								hashtable->prefilter_win_checks * PREFILTER_MIN_DROP_PCT)
+								hashtable->prefilter_active = false;
+							hashtable->prefilter_win_checks = 0;
+							hashtable->prefilter_win_drops = 0;
+						}
+
+						/* empty bucket: no inner match possible, drop without spilling */
+						if (empty)
+							continue;
+					}
+
+					mintuple = ExecFetchSlotMinimalTuple(outerTupleSlot,
+														 &shouldFree);
 
 					/*
 					 * Need to postpone this outer tuple to a later batch.

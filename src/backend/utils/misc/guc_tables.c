@@ -532,6 +532,7 @@ extern const struct config_enum_entry dynamic_shared_memory_options[];
  * GUC option variables that are exported from this module
  */
 bool		AllowAlterSystem = true;
+bool		enable_hashjoin_prefilter = false;
 bool		log_duration = false;
 bool		Debug_print_plan = false;
 bool		Debug_print_parse = false;

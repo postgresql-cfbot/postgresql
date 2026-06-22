@@ -18,6 +18,8 @@
 #include "catalog/pg_type_d.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
+#include "miscadmin.h"
+#include "storage/pmsignal.h"
 #include "storage/proc.h"
 #include "storage/procarray.h"
 #include "storage/procsignal.h"
@@ -252,7 +254,8 @@ pg_get_backend_memory_contexts(PG_FUNCTION_ARGS)
 
 /*
  * pg_log_backend_memory_contexts
- *		Signal a backend or an auxiliary process to log its memory contexts.
+ *		Signal a backend, an auxiliary process, or the postmaster to log its
+ *		memory contexts.
  *
  * By default, only superusers are allowed to signal to log the memory
  * contexts because allowing any users to issue this request at an unbounded
@@ -261,7 +264,9 @@ pg_get_backend_memory_contexts(PG_FUNCTION_ARGS)
  *
  * On receipt of this signal, a backend or an auxiliary process sets the flag
  * in the signal handler, which causes the next CHECK_FOR_INTERRUPTS()
- * or process-specific interrupt handler to log the memory contexts.
+ * or process-specific interrupt handler to log the memory contexts.  The
+ * postmaster doesn't participate in ProcSignal signaling so it is handled
+ * separately.
  */
 Datum
 pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
@@ -269,6 +274,18 @@ pg_log_backend_memory_contexts(PG_FUNCTION_ARGS)
 	int			pid = PG_GETARG_INT32(0);
 	PGPROC	   *proc;
 	ProcNumber	procNumber = INVALID_PROC_NUMBER;
+
+	/*
+	 * The postmaster does not participate in ProcSignal signaling, so
+	 * SendProcSignal() won't work for it.  Instead, ask it to log its memory
+	 * contexts through the postmaster signaling, which it checks in its main
+	 * loop.
+	 */
+	if (pid == PostmasterPid)
+	{
+		SendPostmasterSignal(PMSIGNAL_LOG_MEMORY_CONTEXT);
+		PG_RETURN_BOOL(true);
+	}
 
 	/*
 	 * See if the process with given pid is a backend or an auxiliary process.

@@ -238,8 +238,8 @@ validateRPRPatternVarCount(ParseState *pstate, RPRPatternNode *node,
 					if (list_length(*varNames) > RPR_VARID_MAX)
 						ereport(ERROR,
 								errcode(ERRCODE_PROGRAM_LIMIT_EXCEEDED),
-								errmsg("too many pattern variables"),
-								errdetail("Maximum is %d.", RPR_VARID_MAX + 1),
+								errmsg("too many row pattern variables"),
+								errdetail("The maximum number of row pattern variables is %d.", RPR_VARID_MAX + 1),
 								parser_errposition(pstate,
 												   exprLocation((Node *) node)));
 

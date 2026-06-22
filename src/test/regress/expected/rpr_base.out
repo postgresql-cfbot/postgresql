@@ -7394,10 +7394,10 @@ WINDOW w AS (
     V221 AS val > 0, V222 AS val > 0, V223 AS val > 0, V224 AS val > 0, V225 AS val > 0, V226 AS val > 0, V227 AS val > 0, V228 AS val > 0, V229 AS val > 0, V230 AS val > 0,
     V231 AS val > 0, V232 AS val > 0, V233 AS val > 0, V234 AS val > 0, V235 AS val > 0, V236 AS val > 0, V237 AS val > 0, V238 AS val > 0, V239 AS val > 0, V240 AS val > 0
 );
-ERROR:  too many pattern variables
+ERROR:  too many row pattern variables
 LINE 5: ...V230 V231 V232 V233 V234 V235 V236 V237 V238 V239 V240 V241)
                                                                   ^
-DETAIL:  Maximum is 240.
+DETAIL:  The maximum number of row pattern variables is 240.
 -- Test: Pattern nesting at maximum depth (depth 253)
 -- Note: 253 nested GROUP{3,7}? quantifiers; reluctant quantifiers are not
 -- subject to quantifier multiplication, so the nesting (and depth 253) is

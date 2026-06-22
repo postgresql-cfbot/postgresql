@@ -376,6 +376,17 @@ typedef struct HashJoinTableData
 	uint64		prefilter_win_drops;	/* drops in current window */
 	uint64		outer_prefiltered;	/* outer tuples dropped before spilling */
 
+	/*
+	 * Probe-time empty-bucket skip (single-batch joins only).  After the build,
+	 * MultiExecHash records every occupied bucket in batch_bitmap[0]; while
+	 * probing, an empty bucket cannot match, so the chain walk is skipped.  A
+	 * one-shot adaptive guard disables it if the skip rate is below break-even.
+	 */
+	bool		probe_filter_active;	/* still consulting at probe time? */
+	uint64		probe_filter_win_checks;	/* probes seen in current window */
+	uint64		probe_filter_win_skips; /* skips in current window */
+	uint64		probe_filter_skips; /* total empty buckets skipped at probe */
+
 	Size		spaceUsed;		/* memory space currently used by tuples */
 	Size		spaceAllowed;	/* upper limit for space used */
 	Size		spacePeak;		/* peak space used */

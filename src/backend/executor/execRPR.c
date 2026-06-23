@@ -243,8 +243,13 @@ static void
 nfa_state_free(WindowAggState *winstate, RPRNFAState *state)
 {
 	winstate->nfaStatesActive--;
+#ifdef USE_VALGRIND
+	/* real free so Valgrind catches use-after-free instead of recycling */
+	pfree(state);
+#else
 	state->next = winstate->nfaStateFree;
 	winstate->nfaStateFree = state;
+#endif
 }
 
 /*

@@ -491,6 +491,12 @@ check_agglevels_and_constraints(ParseState *pstate, Node *expr)
 				err = _("grouping operations are not allowed in check constraints");
 
 			break;
+		case EXPR_KIND_CAST_DEFAULT:
+			if (isAgg)
+				err = _("aggregate functions are not allowed in CAST DEFAULT expressions");
+			else
+				err = _("grouping operations are not allowed in CAST DEFAULT expressions");
+			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:
 
@@ -998,6 +1004,9 @@ transformWindowFuncCall(ParseState *pstate, WindowFunc *wfunc,
 		case EXPR_KIND_CHECK_CONSTRAINT:
 		case EXPR_KIND_DOMAIN_CHECK:
 			err = _("window functions are not allowed in check constraints");
+			break;
+		case EXPR_KIND_CAST_DEFAULT:
+			err = _("window functions are not allowed in CAST DEFAULT expressions");
 			break;
 		case EXPR_KIND_COLUMN_DEFAULT:
 		case EXPR_KIND_FUNCTION_DEFAULT:

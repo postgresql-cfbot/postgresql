@@ -689,6 +689,11 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 
 	/* Convert a TimestampTz value back to an UNIX epoch timestamp */
 	us = ts + (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
+	if (us < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range for UUID version 7"),
+				 errdetail("UUID version 7 does not support timestamps before the Unix epoch (1970-01-01 00:00:00 UTC).")));
 
 	/* Generate an UUIDv7 */
 	uuid = generate_uuidv7(us / US_PER_MS, (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US);

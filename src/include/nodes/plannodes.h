@@ -1169,6 +1169,8 @@ typedef struct IncrementalSort
 	Sort		sort;
 	/* number of presorted columns */
 	int			nPresortedCols;
+	/* estimated number of groups (groups with equal presorted keys) */
+	Cardinality numGroups;
 } IncrementalSort;
 
 /* ---------------

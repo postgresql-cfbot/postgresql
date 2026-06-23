@@ -7471,11 +7471,18 @@ genericcostestimate(PlannerInfo *root,
 		}
 	}
 
-	/* Estimate the fraction of main-table tuples that will be visited */
-	indexSelectivity = clauselist_selectivity(root, selectivityQuals,
-											  index->rel->relid,
-											  JOIN_INNER,
-											  NULL);
+	if (path->unique_path && index->rel->tuples >= 1.0)
+	{
+		indexSelectivity = 1.0 / index->rel->tuples;
+	}
+	else
+	{
+		/* Estimate the fraction of main-table tuples that will be visited */
+		indexSelectivity = clauselist_selectivity(root, selectivityQuals,
+												  index->rel->relid,
+												  JOIN_INNER,
+												  NULL);
+	}
 
 	/*
 	 * If caller didn't give us an estimate, estimate the number of index
@@ -7725,8 +7732,6 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	int			indexcol;
 	bool		eqQualHere;
 	bool		found_row_compare;
-	bool		found_array;
-	bool		found_is_null_op;
 	bool		have_correlation = false;
 	double		num_sa_scans;
 	double		correlation = 0.0;
@@ -7757,8 +7762,6 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	indexcol = 0;
 	eqQualHere = false;
 	found_row_compare = false;
-	found_array = false;
-	found_is_null_op = false;
 	num_sa_scans = 1;
 	foreach(lc, path->indexclauses)
 	{
@@ -7816,8 +7819,6 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 			{
 				double		ndistinct;
 				bool		isdefault = true;
-
-				found_array = true;
 
 				/*
 				 * A skipped attribute's ndistinct forms the basis of our
@@ -7990,7 +7991,6 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 				double		alength = estimate_array_length(root, other_operand);
 
 				clause_op = saop->opno;
-				found_array = true;
 				/* estimate SA descents by indexBoundQuals only */
 				if (alength > 1)
 					num_sa_scans *= alength;
@@ -8001,7 +8001,6 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 
 				if (nt->nulltesttype == IS_NULL)
 				{
-					found_is_null_op = true;
 					/* IS NULL is like = for selectivity/skip scan purposes */
 					eqQualHere = true;
 				}
@@ -8034,16 +8033,10 @@ btcostestimate(PlannerInfo *root, IndexPath *path, double loop_count,
 	}
 
 	/*
-	 * If index is unique and we found an '=' clause for each column, we can
-	 * just assume numIndexTuples = 1 and skip the expensive
-	 * clauselist_selectivity calculations.  However, an array or NullTest
-	 * always invalidates that theory (even when eqQualHere has been set).
+	 * If path is unique, we can just assume numIndexTuples = 1 and skip the
+	 * expensive clauselist_selectivity calculations.
 	 */
-	if (index->unique &&
-		indexcol == index->nkeycolumns - 1 &&
-		eqQualHere &&
-		!found_array &&
-		!found_is_null_op)
+	if (path->unique_path)
 		numIndexTuples = 1.0;
 	else
 	{

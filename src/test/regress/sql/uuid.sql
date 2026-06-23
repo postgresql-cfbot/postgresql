@@ -140,6 +140,10 @@ WITH uuidts AS (
 )
 SELECT y, ts, prev_ts FROM uuidts WHERE ts < prev_ts;
 
+-- Check that we don't underflow when an interval pointing to before the Unix
+-- epoch is used to create a UUIDv7 value
+SELECT uuidv7('1969-12-31 23:59:59+00'::timestamptz - (now() AT TIME ZONE 'UTC'));
+
 -- extract functions
 
 -- version

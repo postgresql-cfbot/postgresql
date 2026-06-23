@@ -753,27 +753,23 @@ _outRPRPattern(StringInfo str, const RPRPattern *node)
 	else
 		appendStringInfoString(str, " <>");
 
-	/* Write elements array */
+	/* Write elements array (makeRPRPattern guarantees numElements >= 2) */
 	appendStringInfoString(str, " :elements");
-	if (node->numElements > 0 && node->elements != NULL)
+	Assert(node->numElements > 0 && node->elements != NULL);
+	appendStringInfoChar(str, ' ');
+	for (int i = 0; i < node->numElements; i++)
 	{
-		appendStringInfoChar(str, ' ');
-		for (int i = 0; i < node->numElements; i++)
-		{
-			const RPRPatternElement *elem = &node->elements[i];
+		const RPRPatternElement *elem = &node->elements[i];
 
-			appendStringInfo(str, "(%d %d %u %d %d %d %d)",
-							 (int) elem->varId,
-							 (int) elem->depth,
-							 (unsigned) elem->flags,
-							 (int) elem->min,
-							 (int) elem->max,
-							 (int) elem->next,
-							 (int) elem->jump);
-		}
+		appendStringInfo(str, "(%d %d %u %d %d %d %d)",
+						 (int) elem->varId,
+						 (int) elem->depth,
+						 (unsigned) elem->flags,
+						 (int) elem->min,
+						 (int) elem->max,
+						 (int) elem->next,
+						 (int) elem->jump);
 	}
-	else
-		appendStringInfoString(str, " <>");
 
 	WRITE_BOOL_FIELD(isAbsorbable);
 }

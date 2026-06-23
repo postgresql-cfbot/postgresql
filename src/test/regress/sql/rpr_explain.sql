@@ -3406,6 +3406,22 @@ EXPLAIN (COSTS OFF, ANALYZE, TIMING OFF, SUMMARY OFF)
 RESET plan_cache_mode;
 DEALLOCATE test_overflow_lookahead;
 
+-- Runtime (non-overflow) lookahead: a small parameter offset under a generic
+-- plan keeps the FIRST offset unresolved at plan time, so EXPLAIN reports
+-- "Nav Mark Lookahead: runtime" rather than a concrete value.
+PREPARE p_first_runtime(int8, int8) AS
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS NEXT(FIRST(v, $1), $2) IS NOT NULL
+);
+SET plan_cache_mode = force_generic_plan;
+EXPLAIN (COSTS OFF) EXECUTE p_first_runtime(1, 1);
+RESET plan_cache_mode;
+DEALLOCATE p_first_runtime;
+
 -- PREV(v) + PREV(v, $1): NEEDS_EVAL path must account for implicit lookback=1
 -- Previously, eval_nav_max_offset_walker skipped PREV(v) when offset_arg was
 -- NULL, causing maxOffset=0 when $1=0, which would trim the row needed by
@@ -3420,6 +3436,67 @@ WINDOW w AS (
 );
 EXECUTE test_prev_implicit_offset(0);
 DEALLOCATE test_prev_implicit_offset;
+
+-- NEEDS_EVAL executor offset paths: a Param nav offset stays non-Const under a
+-- generic plan, so the planner marks the offset NEEDS_EVAL and the executor
+-- resolves it at init via eval_define_offsets -> visit_nav_exec.  Each query
+-- below exercises a different navigation arm of that walker.
+
+-- Simple FIRST(v, $1): forward-reach FIRST arm.
+PREPARE test_eval_first(int8) AS
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS FIRST(v, $1) IS NOT NULL
+);
+SET plan_cache_mode = force_generic_plan;
+EXECUTE test_eval_first(1);
+RESET plan_cache_mode;
+DEALLOCATE test_eval_first;
+
+-- Bare LAST(v, $1): backward-reach LAST-with-offset arm.
+PREPARE test_eval_last(int8) AS
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS LAST(v, $1) >= 0
+);
+SET plan_cache_mode = force_generic_plan;
+EXECUTE test_eval_last(1);
+RESET plan_cache_mode;
+DEALLOCATE test_eval_last;
+
+-- Compound NEXT(LAST(v, $1), $2): backward-reach NEXT_LAST arm.
+PREPARE test_eval_nextlast(int8, int8) AS
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS NEXT(LAST(v, $1), $2) > 0
+);
+SET plan_cache_mode = force_generic_plan;
+EXECUTE test_eval_nextlast(1, 1);
+RESET plan_cache_mode;
+DEALLOCATE test_eval_nextlast;
+
+-- Compound PREV(FIRST(v, $1), $2): forward-reach PREV_FIRST arm.
+PREPARE test_eval_prevfirst(int8, int8) AS
+SELECT count(*) OVER w
+FROM generate_series(1,10) s(v)
+WINDOW w AS (
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS PREV(FIRST(v, $1), $2) IS NOT NULL
+);
+SET plan_cache_mode = force_generic_plan;
+EXECUTE test_eval_prevfirst(1, 1);
+RESET plan_cache_mode;
+DEALLOCATE test_eval_prevfirst;
 
 -- Runtime error: negative offset at execution time
 PREPARE test_runtime_neg_offset(int8) AS

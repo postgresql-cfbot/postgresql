@@ -1852,6 +1852,27 @@ WINDOW w AS (
  company2 | 07-10-2023 |   1300 |             |            |     0
 (20 rows)
 
+-- Typmod coercion over a navigation result: casting PREV(p) (a numeric(10,3)
+-- column) to a narrower numeric(8,2) inside DEFINE forces coerce_type_typmod,
+-- which calls exprTypmod() on the RPRNavExpr.
+CREATE TEMP TABLE rpr_typmod (id int, p numeric(10,3));
+INSERT INTO rpr_typmod VALUES (1, 1.5), (2, 2.5), (3, 3.5);
+SELECT id, count(*) OVER w AS cnt
+FROM rpr_typmod
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A B+)
+    DEFINE A AS TRUE, B AS CAST(PREV(p) AS numeric(8,2)) > 0
+);
+ id | cnt 
+----+-----
+  1 |   3
+  2 |   0
+  3 |   0
+(3 rows)
+
+DROP TABLE rpr_typmod;
 --
 -- FIRST/LAST navigation
 --
@@ -2283,6 +2304,59 @@ SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
     DEFINE A AS NEXT(LAST(val), -1) IS NULL
 );
 ERROR:  row pattern navigation offset must not be negative
+-- Outer offset overflows int64: target position out of range -> NULL.
+-- Plain NEXT(val, INT64_MAX): currentpos + INT64_MAX overflows.
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS NEXT(val, 9223372036854775807) IS NULL
+);
+ id | val | count 
+----+-----+-------
+  1 |  10 |     6
+  2 |  20 |     0
+  3 |  30 |     0
+  4 |  10 |     0
+  5 |  50 |     0
+  6 |  10 |     0
+(6 rows)
+
+-- Compound NEXT(FIRST()): outer offset overflow.  Inner offset 1 forces
+-- inner_pos >= 1, so inner_pos + INT64_MAX overflows at every match.
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A B+)
+    DEFINE A AS TRUE, B AS NEXT(FIRST(val, 1), 9223372036854775807) IS NULL
+);
+ id | val | count 
+----+-----+-------
+  1 |  10 |     6
+  2 |  20 |     0
+  3 |  30 |     0
+  4 |  10 |     0
+  5 |  50 |     0
+  6 |  10 |     0
+(6 rows)
+
+-- Compound NEXT(LAST()): outer offset overflow.
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS NEXT(LAST(val), 9223372036854775807) IS NULL
+);
+ id | val | count 
+----+-----+-------
+  1 |  10 |     6
+  2 |  20 |     0
+  3 |  30 |     0
+  4 |  10 |     0
+  5 |  50 |     0
+  6 |  10 |     0
+(6 rows)
+
 -- Compound: default offsets on both sides
 -- PREV(FIRST(val)): inner=0 (match_start), outer=1 -> target = match_start - 1
 SELECT id, val, first_value(id) OVER w AS mf, count(*) OVER w AS cnt
@@ -2338,6 +2412,16 @@ SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
     DEFINE A AS NEXT(LAST(val, -1), 1) IS NULL
 );
 ERROR:  row pattern navigation offset must not be negative
+-- Offset argument whose type has no implicit cast to bigint (parse error)
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A B+)
+    DEFINE A AS TRUE, B AS val > PREV(val, 1.5)
+);
+ERROR:  offset argument of PREV must be type bigint, not type numeric
+LINE 5:     DEFINE A AS TRUE, B AS val > PREV(val, 1.5)
+                                                   ^
 -- Compound + host variable offsets
 PREPARE test_compound_offset(int8, int8) AS
 SELECT id, val, first_value(id) OVER w AS mf, count(*) OVER w AS cnt

@@ -670,6 +670,10 @@ SET plan_cache_mode = force_generic_plan;
 EXPLAIN (COSTS OFF) EXECUTE rpr_prev(1);
 EXECUTE rpr_prev(1);
 
+-- Negative runtime nav offset under the generic plan: init clamps it to 0 for
+-- trim sizing, but the per-row navigation rejects the negative offset.
+EXECUTE rpr_prev(-1);
+
 RESET plan_cache_mode;
 DEALLOCATE rpr_prev;
 

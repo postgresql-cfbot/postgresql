@@ -6098,8 +6098,14 @@ ExecEvalRPRNavSet(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 	switch (op->d.rpr_nav.kind)
 	{
 		case RPR_NAV_PREV:
-			if (pg_sub_s64_overflow(winstate->currentpos, offset, &target_pos))
-				target_pos = -1;
+
+			/*
+			 * currentpos and offset are both non-negative, so the subtraction
+			 * cannot underflow; assert the invariant rather than guarding an
+			 * unreachable overflow.
+			 */
+			Assert(!pg_sub_s64_overflow(winstate->currentpos, offset, &target_pos));
+			target_pos = winstate->currentpos - offset;
 			break;
 		case RPR_NAV_NEXT:
 			if (pg_add_s64_overflow(winstate->currentpos, offset, &target_pos))
@@ -6144,8 +6150,12 @@ ExecEvalRPRNavSet(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 				/* Apply outer: PREV subtracts, NEXT adds */
 				if (op->d.rpr_nav.kind == RPR_NAV_PREV_FIRST)
 				{
-					if (pg_sub_s64_overflow(inner_pos, compound_offset, &target_pos))
-						target_pos = -1;
+					/*
+					 * inner_pos is in [0, currentpos] and compound_offset is
+					 * non-negative, so this cannot underflow.
+					 */
+					Assert(!pg_sub_s64_overflow(inner_pos, compound_offset, &target_pos));
+					target_pos = inner_pos - compound_offset;
 				}
 				else
 				{
@@ -6179,8 +6189,13 @@ ExecEvalRPRNavSet(ExprState *state, ExprEvalStep *op, ExprContext *econtext)
 				/* Apply outer: PREV subtracts, NEXT adds */
 				if (op->d.rpr_nav.kind == RPR_NAV_PREV_LAST)
 				{
-					if (pg_sub_s64_overflow(inner_pos, compound_offset, &target_pos))
-						target_pos = -1;
+					/*
+					 * inner_pos is in [nav_match_start, currentpos] (>= 0)
+					 * and compound_offset is non-negative, so this cannot
+					 * underflow.
+					 */
+					Assert(!pg_sub_s64_overflow(inner_pos, compound_offset, &target_pos));
+					target_pos = inner_pos - compound_offset;
 				}
 				else
 				{

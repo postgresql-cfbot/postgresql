@@ -912,6 +912,21 @@ WINDOW gg  AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING PATT
        cs  AS (ORDER BY id ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING PATTERN (A*?)        DEFINE A AS isa)
 ORDER BY id;
 
+-- Doubly-nested reluctant nullable group: (((A??){2,}?){2,}?).  Reluctant
+-- quantifiers disable optimizer flattening, so both levels survive and the
+-- inner group's END->next lands on the outer END.  This exercises the
+-- END->END count increment in the EMPTY_LOOP fast-forward (count < min).
+WITH t(id, isa) AS (VALUES (1, true), (2, true), (3, false))
+SELECT id, count(*) OVER w AS c
+FROM t
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (((A??){2,}?){2,}?)
+    DEFINE A AS isa
+)
+ORDER BY id;
+
 -- Non-leading reluctant optional GROUP with a follower: (B (A X)?? C)
 -- Like the VAR case above but a multi-element group; it goes through the
 -- begin path, which already honors reluctant ordering.
@@ -939,6 +954,33 @@ WINDOW w AS (
         X AS 'X' = ANY(flags),
         B AS 'B' = ANY(flags),
         C AS 'C' = ANY(flags)
+);
+
+-- Reluctant nullable group with a required follower: ((A??){2,}? B).
+-- min=2 forces the reluctant fast-forward to loop back (it cannot exit to
+-- FIN until B matches), exercising the loop-back route_to_elem second call
+-- site in nfa_advance_end.  B fails at the group's exit row, so only the
+-- first match survives.
+WITH test_reluctant_nullable_follower AS (
+    SELECT * FROM (VALUES
+        (1, ARRAY['A']),
+        (2, ARRAY['A']),
+        (3, ARRAY['B']),
+        (4, ARRAY['X'])
+    ) AS t(id, flags)
+)
+SELECT id, flags,
+       first_value(id) OVER w AS match_start,
+       last_value(id) OVER w AS match_end
+FROM test_reluctant_nullable_follower
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    AFTER MATCH SKIP PAST LAST ROW
+    PATTERN ((A??){2,}? B)
+    DEFINE
+        A AS 'A' = ANY(flags),
+        B AS 'B' = ANY(flags)
 );
 
 -- Greedy/reluctant sequence: A+ B+? (greedy A, reluctant B at end)

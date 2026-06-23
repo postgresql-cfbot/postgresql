@@ -1098,6 +1098,10 @@ EXECUTE rpr_prev(1);
  10 |  45 |   0
 (10 rows)
 
+-- Negative runtime nav offset under the generic plan: init clamps it to 0 for
+-- trim sizing, but the per-row navigation rejects the negative offset.
+EXECUTE rpr_prev(-1);
+ERROR:  row pattern navigation offset must not be negative
 RESET plan_cache_mode;
 DEALLOCATE rpr_prev;
 -- ============================================================

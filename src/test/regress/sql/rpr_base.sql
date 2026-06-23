@@ -1247,6 +1247,24 @@ WINDOW w AS (
 
 DROP TABLE rpr_bounds;
 
+-- Pattern element-count boundary at RPR_ELEMIDX_MAX (32767).  Alternating
+-- distinct variables stop the optimizer from merging consecutive elements, so
+-- each "A B" pair contributes two elements; scanRPRPattern adds one FIN marker.
+-- ECHO is silenced so the generated multi-thousand-token patterns do not flood
+-- the expected output.
+--   16383 pairs         -> 32766 + 1 FIN = 32767 = maximum, accepted.
+--   16383 pairs + one A -> 32767 + 1 FIN = 32768 > maximum, rejected.
+\set ECHO none
+SELECT format($$SELECT count(*) OVER w FROM (SELECT 1 i) t
+  WINDOW w AS (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+  INITIAL PATTERN (%s) DEFINE A AS TRUE, B AS TRUE)$$,
+  repeat('A B ', 16383)) \gexec
+SELECT format($$SELECT count(*) OVER w FROM (SELECT 1 i) t
+  WINDOW w AS (ORDER BY i ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+  INITIAL PATTERN (%s A) DEFINE A AS TRUE, B AS TRUE)$$,
+  repeat('A B ', 16383)) \gexec
+\set ECHO all
+
 -- ============================================================
 -- Navigation Functions Tests (PREV / NEXT / FIRST / LAST)
 -- ============================================================
@@ -1530,6 +1548,18 @@ CREATE VIEW navns_fn AS
 SELECT pg_get_viewdef('navns_nav');
 SELECT pg_get_viewdef('navns_fn');
 DROP VIEW navns_nav, navns_fn;
+
+-- A qualified last() in DEFINE must stay schema-qualified on deparse so that
+-- it does not reparse as the LAST navigation function (force-qualify path)
+CREATE FUNCTION rpr_navns.last(integer) RETURNS integer AS 'SELECT -999' LANGUAGE sql IMMUTABLE;
+CREATE VIEW navns_fn_last AS
+  SELECT id, count(*) OVER w AS cnt FROM nt
+  WINDOW w AS (PARTITION BY g ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING INITIAL
+    PATTERN (A+) DEFINE A AS rpr_navns.last(val) = -999);
+SELECT pg_get_viewdef('navns_fn_last');
+DROP VIEW navns_fn_last;
+DROP FUNCTION rpr_navns.last(integer);
 
 -- Attribute notation is field selection only, never a function fallback
 CREATE TYPE rpr_navns_pair AS (first int, last int);

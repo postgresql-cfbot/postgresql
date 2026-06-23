@@ -597,54 +597,49 @@ _readRPRPattern(void)
 
 	/* Read elements array */
 	token = pg_strtok(&length); /* skip :elements */
-	token = pg_strtok(&length); /* get '(' or '<>' */
-	if (local_node->numElements > 0 && token[0] == '(')
+	token = pg_strtok(&length); /* get '(' */
+	/* out always emits the array (makeRPRPattern guarantees numElements >= 2) */
+	Assert(local_node->numElements > 0 && token[0] == '(');
+	local_node->elements = palloc0_array(RPRPatternElement, local_node->numElements);
+	for (int i = 0; i < local_node->numElements; i++)
 	{
-		local_node->elements = palloc0_array(RPRPatternElement, local_node->numElements);
-		for (int i = 0; i < local_node->numElements; i++)
-		{
-			RPRPatternElement *elem = &local_node->elements[i];
-			int			varId,
-						flags,
-						depth,
-						min,
-						max,
-						next,
-						jump;
+		RPRPatternElement *elem = &local_node->elements[i];
+		int			varId,
+					flags,
+					depth,
+					min,
+					max,
+					next,
+					jump;
 
-			/* Parse "(varId depth flags min max next jump)" */
-			token = pg_strtok(&length);
-			varId = atoi(token);
-			token = pg_strtok(&length);
-			depth = atoi(token);
-			token = pg_strtok(&length);
-			flags = atoi(token);
-			token = pg_strtok(&length);
-			min = atoi(token);
-			token = pg_strtok(&length);
-			max = atoi(token);
-			token = pg_strtok(&length);
-			next = atoi(token);
-			token = pg_strtok(&length);
-			jump = atoi(token);
-			token = pg_strtok(&length); /* skip ')' */
+		/* Parse "(varId depth flags min max next jump)" */
+		token = pg_strtok(&length);
+		varId = atoi(token);
+		token = pg_strtok(&length);
+		depth = atoi(token);
+		token = pg_strtok(&length);
+		flags = atoi(token);
+		token = pg_strtok(&length);
+		min = atoi(token);
+		token = pg_strtok(&length);
+		max = atoi(token);
+		token = pg_strtok(&length);
+		next = atoi(token);
+		token = pg_strtok(&length);
+		jump = atoi(token);
+		token = pg_strtok(&length); /* skip ')' */
 
-			elem->varId = (RPRVarId) varId;
-			elem->flags = (RPRElemFlags) flags;
-			elem->depth = (RPRDepth) depth;
-			elem->min = (RPRQuantity) min;
-			elem->max = (RPRQuantity) max;
-			elem->next = (RPRElemIdx) next;
-			elem->jump = (RPRElemIdx) jump;
+		elem->varId = (RPRVarId) varId;
+		elem->flags = (RPRElemFlags) flags;
+		elem->depth = (RPRDepth) depth;
+		elem->min = (RPRQuantity) min;
+		elem->max = (RPRQuantity) max;
+		elem->next = (RPRElemIdx) next;
+		elem->jump = (RPRElemIdx) jump;
 
-			/* Read next element's '(' or end */
-			if (i < local_node->numElements - 1)
-				token = pg_strtok(&length); /* get '(' */
-		}
-	}
-	else
-	{
-		local_node->elements = NULL;
+		/* Read next element's '(' or end */
+		if (i < local_node->numElements - 1)
+			token = pg_strtok(&length); /* get '(' */
 	}
 
 	READ_BOOL_FIELD(isAbsorbable);

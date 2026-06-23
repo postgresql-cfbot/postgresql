@@ -1282,7 +1282,13 @@ typedef struct RPRPatternElement
  */
 typedef struct RPRPattern
 {
-	pg_node_attr(custom_copy_equal, custom_read_write)
+	/*
+	 * RPRPattern is a plan/exec-only node with arrays that need a
+	 * hand-written copy (custom_copy_equal), but it is never compared by
+	 * equal() -- it does not appear in parse/rewrite trees, and equal() has
+	 * no Plan-node routines -- so equal support is suppressed with no_equal.
+	 */
+	pg_node_attr(custom_copy_equal, custom_read_write, no_equal)
 
 	NodeTag		type;			/* T_RPRPattern */
 	int			numVars;		/* number of pattern variables */

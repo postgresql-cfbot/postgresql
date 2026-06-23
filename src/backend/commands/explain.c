@@ -3069,8 +3069,8 @@ deparse_rpr_node(RPRPattern *pattern, int idx, int limit, StringInfo buf)
 		int			b;
 		bool		first = true;
 
-		if (altEnd > limit)
-			altEnd = limit;
+		/* an alternation's depth-derived scope end never exceeds the limit */
+		Assert(altEnd <= limit);
 
 		appendStringInfoChar(buf, '(');
 		b = idx + 1;
@@ -3262,10 +3262,6 @@ show_window_def(WindowAggState *planstate, List *ancestors, ExplainState *es)
 					ExplainPropertyText("Nav Mark Lookahead", "runtime",
 										es);
 					break;
-				case RPR_NAV_OFFSET_RETAIN_ALL:
-					ExplainPropertyText("Nav Mark Lookahead", "retain all",
-										es);
-					break;
 				case RPR_NAV_OFFSET_FIXED:
 					if (firstOffset == PG_INT64_MAX)
 						ExplainPropertyText("Nav Mark Lookahead", "infinite",
@@ -3275,6 +3271,7 @@ show_window_def(WindowAggState *planstate, List *ancestors, ExplainState *es)
 											   firstOffset, es);
 					break;
 				default:
+					/* RPR_NAV_OFFSET_RETAIN_ALL is lookback-only, never here */
 					elog(ERROR, "unrecognized RPR nav offset kind: %d",
 						 firstKind);
 					break;

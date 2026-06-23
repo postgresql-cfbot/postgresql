@@ -948,6 +948,21 @@ WINDOW w AS (
         B AS PREV(price::numeric, 1) > PREV(price::numeric, 2)
 );
 
+-- Typmod coercion over a navigation result: casting PREV(p) (a numeric(10,3)
+-- column) to a narrower numeric(8,2) inside DEFINE forces coerce_type_typmod,
+-- which calls exprTypmod() on the RPRNavExpr.
+CREATE TEMP TABLE rpr_typmod (id int, p numeric(10,3));
+INSERT INTO rpr_typmod VALUES (1, 1.5), (2, 2.5), (3, 3.5);
+SELECT id, count(*) OVER w AS cnt
+FROM rpr_typmod
+WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A B+)
+    DEFINE A AS TRUE, B AS CAST(PREV(p) AS numeric(8,2)) > 0
+);
+DROP TABLE rpr_typmod;
+
 --
 -- FIRST/LAST navigation
 --
@@ -1206,6 +1221,32 @@ SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
     DEFINE A AS NEXT(LAST(val), -1) IS NULL
 );
 
+-- Outer offset overflows int64: target position out of range -> NULL.
+-- Plain NEXT(val, INT64_MAX): currentpos + INT64_MAX overflows.
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS NEXT(val, 9223372036854775807) IS NULL
+);
+
+-- Compound NEXT(FIRST()): outer offset overflow.  Inner offset 1 forces
+-- inner_pos >= 1, so inner_pos + INT64_MAX overflows at every match.
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A B+)
+    DEFINE A AS TRUE, B AS NEXT(FIRST(val, 1), 9223372036854775807) IS NULL
+);
+
+-- Compound NEXT(LAST()): outer offset overflow.
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A+)
+    DEFINE A AS NEXT(LAST(val), 9223372036854775807) IS NULL
+);
+
 -- Compound: default offsets on both sides
 -- PREV(FIRST(val)): inner=0 (match_start), outer=1 -> target = match_start - 1
 SELECT id, val, first_value(id) OVER w AS mf, count(*) OVER w AS cnt
@@ -1241,6 +1282,14 @@ SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
     ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
     PATTERN (A+)
     DEFINE A AS NEXT(LAST(val, -1), 1) IS NULL
+);
+
+-- Offset argument whose type has no implicit cast to bigint (parse error)
+SELECT id, val, count(*) OVER w FROM rpr_nav WINDOW w AS (
+    ORDER BY id
+    ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING
+    PATTERN (A B+)
+    DEFINE A AS TRUE, B AS val > PREV(val, 1.5)
 );
 
 -- Compound + host variable offsets

@@ -3992,6 +3992,30 @@ DROP TABLE ltable;
 DROP TABLE parent;
 DROP FUNCTION ftable_rowcount_trigf;
 
+-- Verify that DEBUG1 is emitted when batch_size is reduced to stay within
+-- the libpq 65535-parameter limit.
+SET client_min_messages = DEBUG1;
+CREATE TABLE batch_table ( x int, y int );
+CREATE FOREIGN TABLE ftable ( x int, y int )
+	SERVER loopback
+	OPTIONS (table_name 'batch_table', batch_size '33000');
+INSERT INTO ftable(x) VALUES (1);
+RESET client_min_messages;
+-- Clean up
+DROP FOREIGN TABLE ftable;
+DROP TABLE batch_table;
+
+-- Verify that a WARNING is emitted when batch_size is set to or above the
+-- libpq 65535-parameter limit.
+CREATE TABLE batch_warn_table ( x int );
+CREATE FOREIGN TABLE ftable_warn ( x int )
+  SERVER loopback
+  OPTIONS (table_name 'batch_warn_table', batch_size '65536');
+INSERT INTO ftable_warn VALUES (1);
+-- Clean up
+DROP FOREIGN TABLE ftable_warn;
+DROP TABLE batch_warn_table;
+
 -- ===================================================================
 -- test asynchronous execution
 -- ===================================================================

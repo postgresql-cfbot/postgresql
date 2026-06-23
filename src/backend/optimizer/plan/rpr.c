@@ -1583,6 +1583,9 @@ isFixedLengthChildren(RPRPattern *pattern, RPRElemIdx idx, RPRDepth scopeDepth)
  *      This is equivalent to unrolling to {1,1} VARs, e.g., (A B B)+ C.
  *      All elements within the group get ABSORBABLE_BRANCH.
  *      Only the unbounded END gets ABSORBABLE (comparison point).
+ *
+ *      In the examples below, "step" is the number of VARs in one fully
+ *      unrolled iteration of the group (its fixed per-iteration length).
  *      Examples:
  *        (A B{2})+ C          - B{2} has min==max, step=3
  *        (A (B C){2} D)+ E    - nested {2} subgroup, step=6

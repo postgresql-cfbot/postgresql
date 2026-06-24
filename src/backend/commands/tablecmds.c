@@ -20162,7 +20162,7 @@ ComputePartitionAttrs(ParseState *pstate, Relation rel, List *partParams, AttrNu
 				 * SET EXPRESSION would need to check whether the column is
 				 * used in partition keys).  Seems safer to prohibit for now.
 				 */
-				if (TupleDescAttr(RelationGetDescr(rel), attno - 1)->attgenerated)
+				if (TupleDescCompactAttr(RelationGetDescr(rel), attno - 1)->attgenerated)
 					ereport(ERROR,
 							(errcode(ERRCODE_INVALID_OBJECT_DEFINITION),
 							 errmsg("cannot use generated column in partition key"),

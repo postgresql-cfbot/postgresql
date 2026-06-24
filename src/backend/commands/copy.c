@@ -989,16 +989,18 @@ ProcessCopyOptions(ParseState *pstate,
 				 errmsg("COPY %s cannot be used with %s", "FREEZE",
 						"COPY TO")));
 
-	/* Check json format */
-	if (opts_out->format == COPY_FORMAT_JSON && is_from)
-		ereport(ERROR,
-				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				errmsg("COPY %s is not supported for %s", "FORMAT JSON", "COPY FROM"));
-
 	if (opts_out->format != COPY_FORMAT_JSON && opts_out->force_array)
 		ereport(ERROR,
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("COPY %s can only be used with JSON mode", "FORCE_ARRAY"));
+
+	if (is_from && opts_out->format == COPY_FORMAT_JSON && opts_out->force_array)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+		/*- translator: first %s is the name of a COPY option, e.g. ON_ERROR,
+		 second %s is a COPY with direction, e.g. COPY TO */
+				 errmsg("COPY %s cannot be used with %s", "FORCE_ARRAY",
+						"COPY FROM")));
 
 	if (opts_out->default_print)
 	{

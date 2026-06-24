@@ -2743,6 +2743,19 @@ transformTypeCast(ParseState *pstate, TypeCast *tc)
 	int32		targetTypmod;
 	int			location;
 
+	/*
+	 * Formatted casts (CAST(expr AS type FORMAT format_expr)) are parsed and
+	 * represented in the parse tree, but format cast resolution is not yet
+	 * implemented.  Reject such casts here rather than silently ignoring the
+	 * FORMAT clause.
+	 */
+	if (tc->format != NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("formatted casts are not implemented yet"),
+				 errdetail("No format cast resolution mechanism is available."),
+				 parser_errposition(pstate, exprLocation(tc->format))));
+
 	/* Look up the type name first */
 	typenameTypeIdAndMod(pstate, tc->typeName, &targetType, &targetTypmod);
 

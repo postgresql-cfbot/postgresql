@@ -4581,6 +4581,8 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(tc->typeName))
 					return true;
+				if (WALK(tc->format))
+					return true;
 			}
 			break;
 		case T_CollateClause:

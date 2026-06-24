@@ -16787,6 +16787,13 @@ func_expr_common_subexpr:
 				}
 			| CAST '(' a_expr AS Typename ')'
 				{ $$ = makeTypeCast($3, $5, @1); }
+			| CAST '(' a_expr AS Typename FORMAT a_expr ')'
+				{
+					TypeCast   *n = (TypeCast *) makeTypeCast($3, $5, @1);
+
+					n->format = $7;
+					$$ = (Node *) n;
+				}
 			| EXTRACT '(' extract_list ')'
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("extract"),

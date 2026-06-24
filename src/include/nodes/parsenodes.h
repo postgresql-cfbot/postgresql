@@ -402,6 +402,7 @@ typedef struct TypeCast
 	NodeTag		type;
 	Node	   *arg;			/* the expression being casted */
 	TypeName   *typeName;		/* the target type */
+	Node	   *format;			/* FORMAT expression, or NULL if none */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } TypeCast;
 

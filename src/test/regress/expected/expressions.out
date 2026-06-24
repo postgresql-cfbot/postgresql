@@ -561,3 +561,26 @@ from inttest;
 (3 rows)
 
 rollback;
+--
+-- CAST(expr AS type FORMAT format_expr)
+--
+-- The FORMAT clause is parsed and stored, but format cast resolution is not
+-- implemented yet, so parse analysis must reject it (not ignore it).
+-- basic form
+SELECT CAST('2026-06-24' AS date FORMAT 'YYYY-MM-DD');
+ERROR:  formatted casts are not implemented yet
+LINE 1: SELECT CAST('2026-06-24' AS date FORMAT 'YYYY-MM-DD');
+                                                ^
+DETAIL:  No format cast resolution mechanism is available.
+-- the format may be a general expression, not just a string literal
+SELECT CAST('2026-06-24' AS date FORMAT 'YYYY' || '-MM-DD');
+ERROR:  formatted casts are not implemented yet
+LINE 1: SELECT CAST('2026-06-24' AS date FORMAT 'YYYY' || '-MM-DD');
+                                                ^
+DETAIL:  No format cast resolution mechanism is available.
+-- a no-op-looking cast must still be rejected, not relabeled away
+SELECT CAST('abc'::text AS text FORMAT 'whatever');
+ERROR:  formatted casts are not implemented yet
+LINE 1: SELECT CAST('abc'::text AS text FORMAT 'whatever');
+                                               ^
+DETAIL:  No format cast resolution mechanism is available.

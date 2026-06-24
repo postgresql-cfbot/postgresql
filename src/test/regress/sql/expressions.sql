@@ -301,3 +301,18 @@ select
 from inttest;
 
 rollback;
+
+--
+-- CAST(expr AS type FORMAT format_expr)
+--
+-- The FORMAT clause is parsed and stored, but format cast resolution is not
+-- implemented yet, so parse analysis must reject it (not ignore it).
+
+-- basic form
+SELECT CAST('2026-06-24' AS date FORMAT 'YYYY-MM-DD');
+
+-- the format may be a general expression, not just a string literal
+SELECT CAST('2026-06-24' AS date FORMAT 'YYYY' || '-MM-DD');
+
+-- a no-op-looking cast must still be rejected, not relabeled away
+SELECT CAST('abc'::text AS text FORMAT 'whatever');

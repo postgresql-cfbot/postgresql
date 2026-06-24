@@ -5,34 +5,61 @@
  *		usage across a whole database cluster.
  *
  * Execution costs are totaled for each distinct source query, and kept in
- * a shared hashtable.  (We track only as many distinct queries as will fit
- * in the designated amount of shared memory.)
+ * shared memory as a custom pgstat kind (own_hash=true), giving this module
+ * its own dedicated dshash table.  Query text is stored in a separate DSA
+ * area (via DSM registry).
  *
- * Starting in Postgres 9.2, this module normalized query entries.  As of
- * Postgres 14, the normalization is done by the core if compute_query_id is
- * enabled, or optionally by third-party modules.
+ * Normalization of query constants is performed by the core query jumble
+ * machinery (compute_query_id).  This module stores a "representative"
+ * query string with constants replaced by parameter symbols ($n).
  *
- * To facilitate presenting entries to users, we create "representative" query
- * strings in which constants are replaced with parameter symbols ($n), to
- * make it clearer what a normalized entry can represent.  To save on shared
- * memory, and to avoid having to truncate oversized query strings, we store
- * these strings in a temporary external query-texts file.  Offsets into this
- * file are kept in shared memory.
+ * Entry metadata (key, query text pointer, usage counter, timestamps) and
+ * counters live together in the PgStatShared_Pgss body.  Backends accumulate
+ * stats locally via the pending/flush infrastructure, flushing to shared
+ * memory without contending on entry-level locks on the hot path.  All
+ * locking (per-entry LWLock, dshash partition locks) is provided by the
+ * core pgstat infrastructure.
  *
- * Note about locking issues: to create or delete an entry in the shared
- * hashtable, one must hold pgss->lock exclusively.  Modifying any field
- * in an entry except the counters requires the same.  To look up an entry,
- * one must hold the lock shared.  To read or update the counters within
- * an entry, one must hold the lock shared or exclusive (so the entry doesn't
- * disappear!) and also take the entry's mutex spinlock.
- * The shared state variable pgss->extent (the next free spot in the external
- * query-text file) should be accessed only while holding either the
- * pgss->mutex spinlock, or exclusive lock on pgss->lock.  We use the mutex to
- * allow reserving file space while holding only shared lock on pgss->lock.
- * Rewriting the entire external query-text file, eg for garbage collection,
- * requires holding pgss->lock exclusively; this allows individual entries
- * in the file to be read or written while holding only shared lock.
+ * Locking strategy for entry creation:
  *
+ * The hot path (existing entries) is lock-free: the backend holds a
+ * cached local reference to the entry (or acquires one via a dshash
+ * lookup on first access), then pending stats are accumulated in
+ * backend-local memory without any external lock.
+ *
+ * New entries require an exclusive LWLock (pgss_shared->lock) to serialize
+ * creation against concurrent eviction.  This lock is only taken when the
+ * entry does not already exist (cache miss), which is rare in steady state.
+ *
+ * Eviction:
+ *
+ * When the live entry count reaches pgss_max, eviction is triggered
+ * under the exclusive lock.  At most one eviction pass runs per
+ * PGSS_EVICT_INTERVAL_MS (globally across all backends) to prevent
+ * lock convoy effects under
+ * high-churn workloads.  Between passes, backends that would need to
+ * create a new entry simply skip recording.
+ *
+ * Each eviction pass scans all entries, sorts by last_access timestamp
+ * (LRU, least recently used first), and drops the bottom 1/N (where
+ * N = PGSS_EVICT_RATIO).  A grace period (PGSS_EVICT_GRACE_MS)
+ * protects entries accessed recently from eviction, even if they rank among
+ * the coldest.  This prevents a churn cycle where the same active
+ * entries are evicted and immediately re-created, consuming eviction
+ * capacity without admitting genuinely new queries.  Only entries that
+ * are truly stale (not accessed recently) are evicted, which means they
+ * are unlikely to be pinned by backends and can be freed immediately.
+ *
+ * Eviction decisions use a live entry count (incremented on creation,
+ * decremented on eviction) rather than the physical dshash size, which
+ * includes dropped-but-pinned entries awaiting GC.  This ensures
+ * headroom is available immediately after eviction without waiting for
+ * backends to release their refs.
+ *
+ * To avoid runaway growth of the dshash when long-running transactions
+ * hold refs and prevent GC from freeing evicted entries, creation is
+ * skipped unconditionally once the physical entry count reaches 2x
+ * pgss_max.
  *
  * Copyright (c) 2008-2026, PostgreSQL Global Development Group
  *
@@ -44,30 +71,30 @@
 #include "postgres.h"
 
 #include <math.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include "access/htup_details.h"
 #include "access/parallel.h"
 #include "catalog/pg_authid.h"
+#include "common/hashfn.h"
 #include "executor/instrument.h"
 #include "funcapi.h"
 #include "jit/jit.h"
+#include "lib/dshash.h"
 #include "mb/pg_wchar.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "nodes/queryjumble.h"
 #include "optimizer/planner.h"
 #include "parser/analyze.h"
-#include "pgstat.h"
-#include "storage/fd.h"
-#include "storage/ipc.h"
-#include "storage/lwlock.h"
-#include "storage/shmem.h"
-#include "storage/spin.h"
+#include "storage/dsm_registry.h"
 #include "tcop/utility.h"
+#include "access/xact.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
-#include "utils/memutils.h"
+#include "utils/dsa.h"
+#include "utils/guc.h"
+#include "utils/numeric.h"
+#include "utils/pgstat_internal.h"
 #include "utils/timestamp.h"
 #include "utils/tuplestore.h"
 
@@ -76,29 +103,26 @@ PG_MODULE_MAGIC_EXT(
 					.version = PG_VERSION
 );
 
-/* Location of permanent stats file (valid when database is shut down) */
-#define PGSS_DUMP_FILE	PGSTAT_STAT_PERMANENT_DIRECTORY "/pg_stat_statements.stat"
+/* Custom pgstat kind ID */
+#define PGSTAT_KIND_PGSS	25
+
+/* Fraction of pgss_max to evict per pass (1/N) */
+#define PGSS_EVICT_RATIO		10
 
 /*
- * Location of external query text file.
+ * Minimum interval (ms) between eviction passes.  Limits lock hold time
+ * under high-churn workloads to at most one scan+sort per this interval.
  */
-#define PGSS_TEXT_FILE	PG_STAT_TMP_DIR "/pgss_query_texts.stat"
+#define PGSS_EVICT_INTERVAL_MS	1000
 
-/* Magic number identifying the stats file format */
-static const uint32 PGSS_FILE_HEADER = 0x20250731;
-
-/* PostgreSQL major version number, changes in which invalidate all entries */
-static const uint32 PGSS_PG_MAJOR_VERSION = PG_VERSION_NUM / 100;
-
-/* XXX: Should USAGE_EXEC reflect execution time and/or buffer usage? */
-#define USAGE_EXEC(duration)	(1.0)
-#define USAGE_INIT				(1.0)	/* including initial planning */
-#define ASSUMED_MEDIAN_INIT		(10.0)	/* initial assumed median usage */
-#define ASSUMED_LENGTH_INIT		1024	/* initial assumed mean query length */
-#define USAGE_DECREASE_FACTOR	(0.99)	/* decreased every entry_dealloc */
-#define STICKY_DECREASE_FACTOR	(0.50)	/* factor for sticky entries */
-#define USAGE_DEALLOC_PERCENT	5	/* free this % of entries at once */
-#define IS_STICKY(c)	((c.calls[PGSS_PLAN] + c.calls[PGSS_EXEC]) == 0)
+/*
+ * Grace period (ms) protecting recently-accessed entries from eviction.
+ * Entries whose last_access is within this window are skipped even if they
+ * rank among the coldest.  Without this, entries that are still being
+ * executed get evicted and immediately re-created, wasting eviction
+ * capacity without making room for genuinely new queries.
+ */
+#define PGSS_EVICT_GRACE_MS		10000
 
 /*
  * Extension version number, for supporting older extension versions' objects
@@ -116,7 +140,6 @@ typedef enum pgssVersion
 	PGSS_V1_12,
 	PGSS_V1_13,
 } pgssVersion;
-
 typedef enum pgssStoreKind
 {
 	PGSS_INVALID = -1,
@@ -133,12 +156,9 @@ typedef enum pgssStoreKind
 #define PGSS_NUMKIND (PGSS_EXEC + 1)
 
 /*
- * Hashtable key that defines the identity of a hashtable entry.  We separate
- * queries by user and by database even if they are otherwise identical.
- *
- * If you add a new key to this struct, make sure to teach pgss_store() to
- * zero the padding bytes.  Otherwise, things will break, because pgss_hash is
- * created using HASH_BLOBS, and thus tag_hash is used to hash this.
+ * Hashtable key that defines the identity of a tracked statement.
+ * We separate queries by user and by database even if they are otherwise
+ * identical.
  */
 typedef struct pgssHashKey
 {
@@ -149,9 +169,9 @@ typedef struct pgssHashKey
 } pgssHashKey;
 
 /*
- * The actual stats counters kept within pgssEntry.
+ * The actual stats counters kept within the custom pgstat kind.
  */
-typedef struct Counters
+typedef struct pgssCounters
 {
 	int64		calls[PGSS_NUMKIND];	/* # of times planned/executed */
 	double		total_time[PGSS_NUMKIND];	/* total planning/execution time,
@@ -212,64 +232,70 @@ typedef struct Counters
 											 * launched */
 	int64		generic_plan_calls; /* number of calls using a generic plan */
 	int64		custom_plan_calls;	/* number of calls using a custom plan */
-} Counters;
+} pgssCounters;
 
 /*
- * Global statistics for pg_stat_statements
+ * Shared pgstat entry  - stored in the per-kind dshash (own_hash).
+ * Contains both the stats counters and the entry metadata that was
+ * previously stored in a separate dshash registry.
  */
-typedef struct pgssGlobalStats
+typedef struct PgStatShared_Pgss
 {
-	int64		dealloc;		/* # of times entries were deallocated */
-	TimestampTz stats_reset;	/* timestamp with all stats reset */
-} pgssGlobalStats;
-
-/*
- * Statistics per statement
- *
- * Note: in event of a failure in garbage collection of the query text file,
- * we reset query_offset to zero and query_len to -1.  This will be seen as
- * an invalid state by qtext_fetch().
- */
-typedef struct pgssEntry
-{
-	pgssHashKey key;			/* hash key of entry - MUST BE FIRST */
-	Counters	counters;		/* the statistics for this query */
-	Size		query_offset;	/* query text offset in external file */
+	PgStatShared_Common header;
+	pgssHashKey key;
+	dsa_pointer query_text;		/* DSA pointer to query text */
 	int			query_len;		/* # of valid bytes in query string, or -1 */
 	int			encoding;		/* query text encoding */
 	TimestampTz stats_since;	/* timestamp of entry allocation */
 	TimestampTz minmax_stats_since; /* timestamp of last min/max values reset */
-	slock_t		mutex;			/* protects the counters only */
-} pgssEntry;
+	pg_atomic_uint32 usage;		/* hotness: decremented by sweep, incremented
+								 * on access */
+	pg_atomic_uint64 last_access;	/* statement start timestamp of last
+									 * access, for LRU eviction */
+	pgssCounters counters;
+} PgStatShared_Pgss;
 
 /*
- * Global shared state
+ * Global shared state stored in DSM segment
  */
 typedef struct pgssSharedState
 {
-	LWLockPadded lock;			/* protects hashtable search/modification */
-	double		cur_median_usage;	/* current median usage in hashtable */
-	Size		mean_query_len; /* current mean entry text length */
-	slock_t		mutex;			/* protects following fields only: */
-	Size		extent;			/* current extent of query file */
-	int			n_writers;		/* number of active writers to query file */
-	int			gc_count;		/* query file garbage collection cycle count */
-	pgssGlobalStats stats;		/* global statistics for pgss */
+	LWLock		lock;			/* protects entry creation and eviction */
+	pg_atomic_uint64 dealloc;	/* total # of entries evicted */
+	pg_atomic_uint64 skipped_entries;	/* # of entries skipped due to
+										 * throttle */
+	pg_atomic_uint64 stats_reset;	/* timestamp with all stats reset */
+
+	/*
+	 * Live entry count: tracks non-dropped entries.  We need this separate
+	 * from pgstat_get_entry_count() because the core counter includes
+	 * dropped-but-pinned entries still held by backend references.
+	 */
+	pg_atomic_uint64 live_entries;
+
+	/* Timestamp of last eviction pass; limits to once per second globally */
+	pg_atomic_uint64 last_eviction;
 } pgssSharedState;
 
-/* Links to shared memory state */
-static pgssSharedState *pgss;
-static HTAB *pgss_hash;
+/* Backend-local pending entry */
+typedef struct PgStat_PgssPending
+{
+	pgssHashKey key;
+	bool		last_access_updated;
+	pgssCounters counters;
+} PgStat_PgssPending;
 
-static void pgss_shmem_request(void *arg);
-static void pgss_shmem_init(void *arg);
-
-static const ShmemCallbacks pgss_shmem_callbacks = {
-	.request_fn = pgss_shmem_request,
-	.init_fn = pgss_shmem_init,
-};
 
 /*---- Local variables ----*/
+
+/* Global shared state */
+static pgssSharedState *pgss_shared = NULL;
+
+/* Query text dsa area */
+static dsa_area *pgss_qtext_dsa = NULL;
+
+/* Per-kind pgstat dshash for this kind */
+static dshash_table *pgss_hash = NULL;
 
 /* Current nesting depth of planner/ExecutorRun/ProcessUtility calls */
 static int	nesting_level = 0;
@@ -305,19 +331,16 @@ static int	pgss_track = PGSS_TRACK_TOP;	/* tracking level */
 static bool pgss_track_utility = true;	/* whether to track utility commands */
 static bool pgss_track_planning = false;	/* whether to track planning
 											 * duration */
-static bool pgss_save = true;	/* whether to save stats across shutdown */
+static bool pgss_save = true;	/* whether to save stats across shutdown XXX:
+								 * this does not prevent stats being saved to
+								 * the core stats file, should it? */
+static int	pgss_query_text_memory = 4096;	/* in KB XXX: Should default be
+											 * lower? */
 
 #define pgss_enabled(level) \
 	(!IsParallelWorker() && \
 	(pgss_track == PGSS_TRACK_ALL || \
 	(pgss_track == PGSS_TRACK_TOP && (level) == 0)))
-
-#define record_gc_qtexts() \
-	do { \
-		SpinLockAcquire(&pgss->mutex); \
-		pgss->gc_count++; \
-		SpinLockRelease(&pgss->mutex); \
-	} while(0)
 
 /*---- Function declarations ----*/
 
@@ -335,7 +358,6 @@ PG_FUNCTION_INFO_V1(pg_stat_statements_1_13);
 PG_FUNCTION_INFO_V1(pg_stat_statements);
 PG_FUNCTION_INFO_V1(pg_stat_statements_info);
 
-static void pgss_shmem_shutdown(int code, Datum arg);
 static void pgss_post_parse_analyze(ParseState *pstate, Query *query,
 									const JumbleState *jstate);
 static PlannedStmt *pgss_planner(Query *parse,
@@ -365,23 +387,101 @@ static void pgss_store(const char *query, int64 queryId,
 					   int parallel_workers_to_launch,
 					   int parallel_workers_launched,
 					   PlannedStmtOrigin planOrigin);
-static void pg_stat_statements_internal(FunctionCallInfo fcinfo,
-										pgssVersion api_version,
-										bool showtext);
-static pgssEntry *entry_alloc(pgssHashKey *key, Size query_offset, int query_len,
-							  int encoding, bool sticky);
-static void entry_dealloc(void);
-static bool qtext_store(const char *query, int query_len,
-						Size *query_offset, int *gc_count);
-static char *qtext_load_file(Size *buffer_size);
-static char *qtext_fetch(Size query_offset, int query_len,
-						 char *buffer, Size buffer_size);
-static bool need_gc_qtexts(void);
-static void gc_qtexts(void);
+static void pgss_assign_query_text_memory(int newval, void *extra);
+static void pgss_attach_shmem(void);
 static TimestampTz entry_reset(Oid userid, Oid dbid, int64 queryid, bool minmax_only);
+static inline uint64 pgss_hash_key(pgssHashKey *key);
 static char *generate_normalized_query(const JumbleState *jstate,
 									   const char *query,
 									   int query_loc, int *query_len_p);
+
+static void pg_stat_statements_internal(FunctionCallInfo fcinfo,
+										pgssVersion api_version,
+										bool showtext);
+
+static bool pgss_flush_pending_cb(PgStat_EntryRef *entry_ref, bool nowait);
+static void pgss_to_serialized_data(const PgStat_HashKey *key,
+									const PgStatShared_Common *header,
+									FILE *statfile);
+static bool pgss_from_serialized_data(const PgStat_HashKey *key,
+									  PgStatShared_Common *header,
+									  FILE *statfile);
+
+/*--------------------------------------------------------------------------
+ * Custom pgstat kind definition
+ *--------------------------------------------------------------------------
+ */
+
+static const PgStat_KindInfo pgss_kind_info = {
+	.name = "pg_stat_statements",
+	.fixed_amount = false,
+	.write_to_file = true,
+	.track_entry_count = true,
+	.accessed_across_databases = true,
+	.own_hash = true,
+	.shared_size = sizeof(PgStatShared_Pgss),
+	.shared_data_off = offsetof(PgStatShared_Pgss, counters),
+	.shared_data_len = sizeof(pgssCounters),
+	.pending_size = sizeof(PgStat_PgssPending),
+	.init_backend_cb = pgss_attach_shmem,
+	.flush_pending_cb = pgss_flush_pending_cb,
+	.to_serialized_data = pgss_to_serialized_data,
+	.from_serialized_data = pgss_from_serialized_data,
+};
+
+static inline uint64
+pgss_hash_key(pgssHashKey *key)
+{
+	return hash_bytes_extended((const unsigned char *) key,
+							   sizeof(pgssHashKey), 0);
+}
+
+static void
+pgss_init_shmem(void *ptr, void *arg)
+{
+	pgssSharedState *state = (pgssSharedState *) ptr;
+
+	LWLockInitialize(&state->lock, LWLockNewTrancheId("pg_stat_statements"));
+	pg_atomic_init_u64(&state->dealloc, 0);
+	pg_atomic_init_u64(&state->skipped_entries, 0);
+	pg_atomic_init_u64(&state->stats_reset, (uint64) GetCurrentTimestamp());
+	pg_atomic_init_u64(&state->live_entries, 0);
+	pg_atomic_init_u64(&state->last_eviction, 0);
+}
+
+static void
+pgss_assign_query_text_memory(int newval, void *extra)
+{
+	if (pgss_qtext_dsa)
+		dsa_set_size_limit(pgss_qtext_dsa, (size_t) newval * 1024);
+}
+
+static void
+pgss_attach_shmem(void)
+{
+	bool		found;
+
+	if (pgss_shared != NULL)
+		return;
+	if (!pgstat_get_kind_info(PGSTAT_KIND_PGSS))
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("pg_stat_statements must be loaded via shared_preload_libraries")));
+
+	pgss_shared = GetNamedDSMSegment("pg_stat_statements_state",
+									 sizeof(pgssSharedState),
+									 pgss_init_shmem,
+									 &found, NULL);
+
+	if (pgss_qtext_dsa == NULL)
+	{
+		pgss_qtext_dsa = GetNamedDSA("pg_stat_statements_qtext", &found);
+		dsa_set_size_limit(pgss_qtext_dsa, (size_t) pgss_query_text_memory * 1024);
+	}
+
+	if (pgss_hash == NULL)
+		pgss_hash = pgstat_get_hash_for_kind(PGSTAT_KIND_PGSS);
+}
 
 /*
  * Module load callback
@@ -390,7 +490,7 @@ void
 _PG_init(void)
 {
 	/*
-	 * In order to create our shared memory area, we have to be loaded via
+	 * In order to register our custom pgstat kind, we have to be loaded via
 	 * shared_preload_libraries.  If not, fall out without hooking into any of
 	 * the main system.  (We don't throw error here because it seems useful to
 	 * allow the pg_stat_statements functions to be created even when the
@@ -406,9 +506,10 @@ _PG_init(void)
 	 */
 	EnableQueryId();
 
-	/*
-	 * Define (or redefine) custom GUC variables.
-	 */
+	/* Register custom pgstat kind */
+	pgstat_register_kind(PGSTAT_KIND_PGSS, &pgss_kind_info);
+
+	/* Define GUCs */
 	DefineCustomIntVariable("pg_stat_statements.max",
 							"Sets the maximum number of statements tracked by pg_stat_statements.",
 							NULL,
@@ -416,7 +517,7 @@ _PG_init(void)
 							5000,
 							100,
 							INT_MAX / 2,
-							PGC_POSTMASTER,
+							PGC_SIGHUP,
 							0,
 							NULL,
 							NULL,
@@ -467,12 +568,20 @@ _PG_init(void)
 							 NULL,
 							 NULL);
 
-	MarkGUCPrefixReserved("pg_stat_statements");
+	DefineCustomIntVariable("pg_stat_statements.query_text_memory",
+							"Sets the memory limit for query text storage.",
+							NULL,
+							&pgss_query_text_memory,
+							4096,
+							256,
+							MAX_KILOBYTES,
+							PGC_SIGHUP,
+							GUC_UNIT_KB,
+							NULL,
+							pgss_assign_query_text_memory,
+							NULL);
 
-	/*
-	 * Register our shared memory needs.
-	 */
-	RegisterShmemCallbacks(&pgss_shmem_callbacks);
+	MarkGUCPrefixReserved("pg_stat_statements");
 
 	/*
 	 * Install hooks.
@@ -493,358 +602,652 @@ _PG_init(void)
 	ProcessUtility_hook = pgss_ProcessUtility;
 }
 
-/*
- * shmem request callback: Request shared memory resources.
- *
- * This is called at postmaster startup.  Note that the shared memory isn't
- * allocated here yet, this merely register our needs.
- *
- * In EXEC_BACKEND mode, this is also called in each backend, to re-attach to
- * the shared memory area that was already initialized.
+/*--------------------------------------------------------------------------
+ * pgstat flush helpers: merge per-kind timing counters into shared memory
+ *--------------------------------------------------------------------------
  */
 static void
-pgss_shmem_request(void *arg)
+pgss_flush_kind(pgssCounters *shared, pgssCounters *pending, pgssStoreKind kind)
 {
-	ShmemRequestHash(.name = "pg_stat_statements hash",
-					 .nelems = pgss_max,
-					 .hash_info.keysize = sizeof(pgssHashKey),
-					 .hash_info.entrysize = sizeof(pgssEntry),
-					 .hash_flags = HASH_ELEM | HASH_BLOBS,
-					 .ptr = &pgss_hash,
-		);
-	ShmemRequestStruct(.name = "pg_stat_statements",
-					   .size = sizeof(pgssSharedState),
-					   .ptr = (void **) &pgss,
-		);
+	int64		n_a,
+				n_b;
+	double		delta;
+
+	n_a = shared->calls[kind];
+	n_b = pending->calls[kind];
+
+	shared->calls[kind] += n_b;
+	shared->total_time[kind] += pending->total_time[kind];
+
+	if (n_a == 0)
+	{
+		shared->min_time[kind] = pending->min_time[kind];
+		shared->max_time[kind] = pending->max_time[kind];
+		shared->mean_time[kind] = pending->mean_time[kind];
+		shared->sum_var_time[kind] = pending->sum_var_time[kind];
+	}
+	else
+	{
+		if (pending->min_time[kind] < shared->min_time[kind])
+			shared->min_time[kind] = pending->min_time[kind];
+		if (pending->max_time[kind] > shared->max_time[kind])
+			shared->max_time[kind] = pending->max_time[kind];
+
+		/*
+		 * Chan's parallel variance algorithm: combine two sets of (count,
+		 * mean, sum_of_squared_deviations). See
+		 * <http://www.johndcook.com/blog/standard_deviation/>
+		 */
+		delta = pending->mean_time[kind] - shared->mean_time[kind];
+		shared->sum_var_time[kind] +=
+			pending->sum_var_time[kind] +
+			delta * delta * (double) n_a * (double) n_b / (double) (n_a + n_b);
+		shared->mean_time[kind] =
+			shared->total_time[kind] / shared->calls[kind];
+	}
+}
+
+static bool
+pgss_flush_pending_cb(PgStat_EntryRef *entry_ref, bool nowait)
+{
+	PgStat_PgssPending *pending;
+	PgStatShared_Pgss *shared;
+
+	pending = (PgStat_PgssPending *) entry_ref->pending;
+	shared = (PgStatShared_Pgss *) entry_ref->shared_stats;
+
+	if (!pgstat_lock_entry(entry_ref, nowait))
+		return false;
+
+	shared->key = pending->key;
+
+	pgss_flush_kind(&shared->counters, &pending->counters, PGSS_EXEC);
+
+	if (pgss_track_planning && pending->counters.calls[PGSS_PLAN] > 0)
+		pgss_flush_kind(&shared->counters, &pending->counters, PGSS_PLAN);
+
+	shared->counters.rows += pending->counters.rows;
+	shared->counters.shared_blks_hit += pending->counters.shared_blks_hit;
+	shared->counters.shared_blks_read += pending->counters.shared_blks_read;
+	shared->counters.shared_blks_dirtied += pending->counters.shared_blks_dirtied;
+	shared->counters.shared_blks_written += pending->counters.shared_blks_written;
+	shared->counters.local_blks_hit += pending->counters.local_blks_hit;
+	shared->counters.local_blks_read += pending->counters.local_blks_read;
+	shared->counters.local_blks_dirtied += pending->counters.local_blks_dirtied;
+	shared->counters.local_blks_written += pending->counters.local_blks_written;
+	shared->counters.temp_blks_read += pending->counters.temp_blks_read;
+	shared->counters.temp_blks_written += pending->counters.temp_blks_written;
+	shared->counters.shared_blk_read_time += pending->counters.shared_blk_read_time;
+	shared->counters.shared_blk_write_time += pending->counters.shared_blk_write_time;
+	shared->counters.local_blk_read_time += pending->counters.local_blk_read_time;
+	shared->counters.local_blk_write_time += pending->counters.local_blk_write_time;
+	shared->counters.temp_blk_read_time += pending->counters.temp_blk_read_time;
+	shared->counters.temp_blk_write_time += pending->counters.temp_blk_write_time;
+	shared->counters.wal_records += pending->counters.wal_records;
+	shared->counters.wal_fpi += pending->counters.wal_fpi;
+	shared->counters.wal_bytes += pending->counters.wal_bytes;
+	shared->counters.wal_buffers_full += pending->counters.wal_buffers_full;
+	shared->counters.jit_functions += pending->counters.jit_functions;
+	shared->counters.jit_generation_time += pending->counters.jit_generation_time;
+	shared->counters.jit_inlining_count += pending->counters.jit_inlining_count;
+	shared->counters.jit_inlining_time += pending->counters.jit_inlining_time;
+	shared->counters.jit_optimization_count += pending->counters.jit_optimization_count;
+	shared->counters.jit_optimization_time += pending->counters.jit_optimization_time;
+	shared->counters.jit_emission_count += pending->counters.jit_emission_count;
+	shared->counters.jit_emission_time += pending->counters.jit_emission_time;
+	shared->counters.jit_deform_count += pending->counters.jit_deform_count;
+	shared->counters.jit_deform_time += pending->counters.jit_deform_time;
+	shared->counters.parallel_workers_to_launch += pending->counters.parallel_workers_to_launch;
+	shared->counters.parallel_workers_launched += pending->counters.parallel_workers_launched;
+	shared->counters.generic_plan_calls += pending->counters.generic_plan_calls;
+	shared->counters.custom_plan_calls += pending->counters.custom_plan_calls;
+
+	if (pending->last_access_updated)
+		pg_atomic_write_u64(&shared->last_access,
+							(uint64) GetCurrentStatementStartTimestamp());
+
+	pgstat_unlock_entry(entry_ref);
+
+	return true;
 }
 
 /*
- * shmem init callback: Initialize our shared memory data structures at
- * postmaster startup.
- *
- * Load any pre-existing statistics from file.  Also create and load the
- * query-texts file, which is expected to exist (even if empty) while the
- * module is enabled.
+ * Serialize entry metadata + query text alongside each pgstat entry.
+ * On restart, from_serialized_data reconstructs both.
  */
 static void
-pgss_shmem_init(void *arg)
+pgss_to_serialized_data(const PgStat_HashKey *key,
+						const PgStatShared_Common *header,
+						FILE *statfile)
 {
-	int			tranche_id;
-	FILE	   *file = NULL;
-	FILE	   *qfile = NULL;
-	uint32		header;
-	int32		num;
-	int32		pgver;
-	int32		i;
-	int			buffer_size;
-	char	   *buffer = NULL;
+	PgStatShared_Pgss *shpgss = (PgStatShared_Pgss *) header;
+	bool		found = pgss_save;
+	char	   *qtext = NULL;
+	int			qtext_len = 0;
 
-	/*
-	 * We already checked that we're loaded from shared_preload_libraries in
-	 * _PG_init(), so we should not get here after postmaster startup.
-	 */
-	Assert(!IsUnderPostmaster);
+	pgstat_write_chunk_s(statfile, &found);
 
-	/*
-	 * Initialize the shmem area with no statistics.
-	 */
-	tranche_id = LWLockNewTrancheId("pg_stat_statements");
-	LWLockInitialize(&pgss->lock.lock, tranche_id);
-	pgss->cur_median_usage = ASSUMED_MEDIAN_INIT;
-	pgss->mean_query_len = ASSUMED_LENGTH_INIT;
-	SpinLockInit(&pgss->mutex);
-	pgss->extent = 0;
-	pgss->n_writers = 0;
-	pgss->gc_count = 0;
-	pgss->stats.dealloc = 0;
-	pgss->stats.stats_reset = GetCurrentTimestamp();
-
-	/* The hash table must've also been initialized by now */
-	Assert(pgss_hash != NULL);
-
-	/*
-	 * Set up a shmem exit hook to dump the statistics to disk on postmaster
-	 * (or standalone backend) exit.
-	 */
-	on_shmem_exit(pgss_shmem_shutdown, (Datum) 0);
-
-	/*
-	 * Load any pre-existing statistics from file.
-	 *
-	 * Note: we don't bother with locks here, because there should be no other
-	 * processes running when this code is reached.
-	 */
-
-	/* Unlink query text file possibly left over from crash */
-	unlink(PGSS_TEXT_FILE);
-
-	/* Allocate new query text temp file */
-	qfile = AllocateFile(PGSS_TEXT_FILE, PG_BINARY_W);
-	if (qfile == NULL)
-		goto write_error;
-
-	/*
-	 * If we were told not to load old statistics, we're done.  (Note we do
-	 * not try to unlink any old dump file in this case.  This seems a bit
-	 * questionable but it's the historical behavior.)
-	 */
 	if (!pgss_save)
-	{
-		FreeFile(qfile);
 		return;
+
+	pgss_attach_shmem();
+
+	pgstat_write_chunk_s(statfile, &shpgss->encoding);
+	pgstat_write_chunk_s(statfile, &shpgss->stats_since);
+	pgstat_write_chunk_s(statfile, &shpgss->minmax_stats_since);
+
+	/* Write query text */
+	if (DsaPointerIsValid(shpgss->query_text) && shpgss->query_len >= 0)
+		qtext = dsa_get_address(pgss_qtext_dsa, shpgss->query_text);
+
+	if (qtext)
+	{
+		qtext_len = shpgss->query_len;
+		pgstat_write_chunk_s(statfile, &qtext_len);
+		pgstat_write_chunk(statfile, qtext, qtext_len + 1);
+	}
+	else
+	{
+		qtext_len = -1;
+		pgstat_write_chunk_s(statfile, &qtext_len);
+	}
+}
+
+/*
+ * Deserialize auxiliary data: restore metadata fields and query text.
+ */
+static bool
+pgss_from_serialized_data(const PgStat_HashKey *key,
+						  PgStatShared_Common *header,
+						  FILE *statfile)
+{
+	PgStatShared_Pgss *shpgss = (PgStatShared_Pgss *) header;
+	bool		had_entry;
+	int			qtext_len;
+
+	if (!pgstat_read_chunk_s(statfile, &had_entry))
+		return false;
+
+	if (!had_entry)
+	{
+		pgstat_drop_entry(PGSTAT_KIND_PGSS, key->dboid, key->objid, false);
+		pg_atomic_sub_fetch_u64(&pgss_shared->live_entries, 1);
+		return true;
 	}
 
-	/*
-	 * Attempt to load old statistics from the dump file.
-	 */
-	file = AllocateFile(PGSS_DUMP_FILE, PG_BINARY_R);
-	if (file == NULL)
+	if (!pgstat_read_chunk_s(statfile, &shpgss->encoding))
+		return false;
+	if (!pgstat_read_chunk_s(statfile, &shpgss->stats_since))
+		return false;
+	if (!pgstat_read_chunk_s(statfile, &shpgss->minmax_stats_since))
+		return false;
+	if (!pgstat_read_chunk_s(statfile, &qtext_len))
+		return false;
+
+	pgss_attach_shmem();
+
+	if (qtext_len >= 0)
 	{
-		if (errno != ENOENT)
-			goto read_error;
-		/* No existing persisted stats file, so we're done */
-		FreeFile(qfile);
-		return;
-	}
+		char	   *qtext;
+		dsa_pointer dp;
 
-	buffer_size = 2048;
-	buffer = (char *) palloc(buffer_size);
-
-	if (fread(&header, sizeof(uint32), 1, file) != 1 ||
-		fread(&pgver, sizeof(uint32), 1, file) != 1 ||
-		fread(&num, sizeof(int32), 1, file) != 1)
-		goto read_error;
-
-	if (header != PGSS_FILE_HEADER ||
-		pgver != PGSS_PG_MAJOR_VERSION)
-		goto data_error;
-
-	for (i = 0; i < num; i++)
-	{
-		pgssEntry	temp;
-		pgssEntry  *entry;
-		Size		query_offset;
-
-		if (fread(&temp, sizeof(pgssEntry), 1, file) != 1)
-			goto read_error;
-
-		/* Encoding is the only field we can easily sanity-check */
-		if (!PG_VALID_BE_ENCODING(temp.encoding))
-			goto data_error;
-
-		/* Resize buffer as needed */
-		if (temp.query_len >= buffer_size)
+		qtext = palloc(qtext_len + 1);
+		if (!pgstat_read_chunk(statfile, qtext, qtext_len + 1))
 		{
-			buffer_size = Max(buffer_size * 2, temp.query_len + 1);
-			buffer = repalloc(buffer, buffer_size);
+			pfree(qtext);
+			return false;
 		}
 
-		if (fread(buffer, 1, temp.query_len + 1, file) != temp.query_len + 1)
-			goto read_error;
+		dp = dsa_allocate_extended(pgss_qtext_dsa, qtext_len + 1, DSA_ALLOC_NO_OOM);
+		if (DsaPointerIsValid(dp))
+		{
+			memcpy(dsa_get_address(pgss_qtext_dsa, dp), qtext, qtext_len + 1);
+			shpgss->query_text = dp;
+			shpgss->query_len = qtext_len;
+		}
+		else
+		{
+			shpgss->query_text = InvalidDsaPointer;
+			shpgss->query_len = -1;
+		}
 
-		/* Should have a trailing null, but let's make sure */
-		buffer[temp.query_len] = '\0';
+		pfree(qtext);
+	}
+	else
+	{
+		shpgss->query_text = InvalidDsaPointer;
+		shpgss->query_len = -1;
+	}
 
-		/* Skip loading "sticky" entries */
-		if (IS_STICKY(temp.counters))
+	return true;
+}
+
+
+/*
+ * Store query text in the DSA area and update the entry's text pointer.
+ * On allocation failure, sets query_text to InvalidDsaPointer.
+ */
+static void
+pgss_store_query_text(PgStatShared_Pgss *entry, const char *query, int query_len,
+					  int encoding)
+{
+	dsa_pointer dp;
+
+	dp = dsa_allocate_extended(pgss_qtext_dsa, query_len + 1, DSA_ALLOC_NO_OOM);
+	if (DsaPointerIsValid(dp))
+	{
+		char	   *dst = dsa_get_address(pgss_qtext_dsa, dp);
+
+		memcpy(dst, query, query_len);
+		dst[query_len] = '\0';
+		entry->query_text = dp;
+		entry->query_len = query_len;
+		entry->encoding = encoding;
+	}
+	else
+	{
+		entry->query_text = InvalidDsaPointer;
+		entry->query_len = -1;
+		entry->encoding = encoding;
+	}
+}
+
+/*--------------------------------------------------------------------------
+ * pgss_evict: Evict the least-recently-used entries.
+ *
+ * Called with pgss_shared->lock held exclusively.  Scans all entries,
+ * sorts by last_access timestamp (oldest first), and drops the bottom 5%.
+ *--------------------------------------------------------------------------
+ */
+typedef struct pgssEvictEntry
+{
+	Oid			dbid;
+	uint64		objid;
+	TimestampTz last_access;
+	dsa_pointer text_ptr;
+}			pgssEvictEntry;
+
+static int
+pgss_evict_entry_cmp(const void *a, const void *b)
+{
+	TimestampTz ta = ((const pgssEvictEntry *) a)->last_access;
+	TimestampTz tb = ((const pgssEvictEntry *) b)->last_access;
+
+	if (ta < tb)
+		return -1;
+	if (ta > tb)
+		return 1;
+	return 0;
+}
+
+static void
+pgss_evict(void)
+{
+	dshash_seq_status hstat;
+	PgStatShared_HashEntry *p;
+	pgssEvictEntry *entries;
+	int			nentries = 0;
+	int			live = (int) pg_atomic_read_u64(&pgss_shared->live_entries);
+	int			nevict;
+	int			not_freed = 0;
+	instr_time	start,
+				duration;
+
+	INSTR_TIME_SET_CURRENT(start);
+
+	entries = palloc(live * sizeof(pgssEvictEntry));
+
+	dshash_seq_init(&hstat, pgss_hash, false);
+	while ((p = dshash_seq_next(&hstat)) != NULL)
+	{
+		PgStatShared_Pgss *shared;
+
+		if (p->dropped)
 			continue;
 
-		/* Store the query text */
-		query_offset = pgss->extent;
-		if (fwrite(buffer, 1, temp.query_len + 1, qfile) != temp.query_len + 1)
-			goto write_error;
-		pgss->extent += temp.query_len + 1;
+		shared = (PgStatShared_Pgss *) dsa_get_address(pgStatLocal.dsa, p->body);
 
-		/* make the hashtable entry (discards old entries if too many) */
-		entry = entry_alloc(&temp.key, query_offset, temp.query_len,
-							temp.encoding,
-							false);
+		entries[nentries].dbid = p->key.dboid;
+		entries[nentries].objid = p->key.objid;
+		entries[nentries].last_access = (TimestampTz) pg_atomic_read_u64(&shared->last_access);
+		entries[nentries].text_ptr = shared->query_text;
+		nentries++;
+	}
+	dshash_seq_term(&hstat);
 
-		/* copy in the actual stats */
-		entry->counters = temp.counters;
-		entry->stats_since = temp.stats_since;
-		entry->minmax_stats_since = temp.minmax_stats_since;
+	if (nentries == 0)
+	{
+		pfree(entries);
+		return;
 	}
 
-	/* Read global statistics for pg_stat_statements */
-	if (fread(&pgss->stats, sizeof(pgssGlobalStats), 1, file) != 1)
-		goto read_error;
+	qsort(entries, nentries, sizeof(pgssEvictEntry), pgss_evict_entry_cmp);
 
-	pfree(buffer);
-	FreeFile(file);
-	FreeFile(qfile);
+	nevict = Max(nentries / PGSS_EVICT_RATIO, 1);
 
-	/*
-	 * Remove the persisted stats file so it's not included in
-	 * backups/replication standbys, etc.  A new file will be written on next
-	 * shutdown.
-	 *
-	 * Note: it's okay if the PGSS_TEXT_FILE is included in a basebackup,
-	 * because we remove that file on startup; it acts inversely to
-	 * PGSS_DUMP_FILE, in that it is only supposed to be around when the
-	 * server is running, whereas PGSS_DUMP_FILE is only supposed to be around
-	 * when the server is not running.  Leaving the file creates no danger of
-	 * a newly restored database having a spurious record of execution costs,
-	 * which is what we're really concerned about here.
-	 */
-	unlink(PGSS_DUMP_FILE);
-
-	return;
-
-read_error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not read file \"%s\": %m",
-					PGSS_DUMP_FILE)));
-	goto fail;
-data_error:
-	ereport(LOG,
-			(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-			 errmsg("ignoring invalid data in file \"%s\"",
-					PGSS_DUMP_FILE)));
-	goto fail;
-write_error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not write file \"%s\": %m",
-					PGSS_TEXT_FILE)));
-fail:
-	if (buffer)
-		pfree(buffer);
-	if (file)
-		FreeFile(file);
-	if (qfile)
-		FreeFile(qfile);
-	/* If possible, throw away the bogus file; ignore any error */
-	unlink(PGSS_DUMP_FILE);
-
-	/*
-	 * Don't unlink PGSS_TEXT_FILE here; it should always be around while the
-	 * server is running with pg_stat_statements enabled
-	 */
-}
-
-/*
- * shmem_shutdown hook: Dump statistics into file.
- *
- * Note: we don't bother with acquiring lock, because there should be no
- * other processes running when this is called.
- */
-static void
-pgss_shmem_shutdown(int code, Datum arg)
-{
-	FILE	   *file;
-	char	   *qbuffer = NULL;
-	Size		qbuffer_size = 0;
-	HASH_SEQ_STATUS hash_seq;
-	int32		num_entries;
-	pgssEntry  *entry;
-
-	/* Don't try to dump during a crash. */
-	if (code)
-		return;
-
-	/* Safety check ... shouldn't get here unless shmem is set up. */
-	if (!pgss || !pgss_hash)
-		return;
-
-	/* Don't dump if told not to. */
-	if (!pgss_save)
-		return;
-
-	file = AllocateFile(PGSS_DUMP_FILE ".tmp", PG_BINARY_W);
-	if (file == NULL)
-		goto error;
-
-	if (fwrite(&PGSS_FILE_HEADER, sizeof(uint32), 1, file) != 1)
-		goto error;
-	if (fwrite(&PGSS_PG_MAJOR_VERSION, sizeof(uint32), 1, file) != 1)
-		goto error;
-	num_entries = hash_get_num_entries(pgss_hash);
-	if (fwrite(&num_entries, sizeof(int32), 1, file) != 1)
-		goto error;
-
-	qbuffer = qtext_load_file(&qbuffer_size);
-	if (qbuffer == NULL)
-		goto error;
-
-	/*
-	 * When serializing to disk, we store query texts immediately after their
-	 * entry data.  Any orphaned query texts are thereby excluded.
-	 */
-	hash_seq_init(&hash_seq, pgss_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	/* Don't evict entries accessed within the grace period */
+	for (int i = 0; i < nevict; i++)
 	{
-		int			len = entry->query_len;
-		char	   *qstr = qtext_fetch(entry->query_offset, len,
-									   qbuffer, qbuffer_size);
-
-		if (qstr == NULL)
-			continue;			/* Ignore any entries with bogus texts */
-
-		if (fwrite(entry, sizeof(pgssEntry), 1, file) != 1 ||
-			fwrite(qstr, 1, len + 1, file) != len + 1)
+		if (!TimestampDifferenceExceeds(entries[i].last_access,
+										GetCurrentTimestamp(),
+										PGSS_EVICT_GRACE_MS))
 		{
-			/* note: we assume hash_seq_term won't change errno */
-			hash_seq_term(&hash_seq);
-			goto error;
+			nevict = i;
+			break;
 		}
 	}
 
-	/* Dump global statistics for pg_stat_statements */
-	if (fwrite(&pgss->stats, sizeof(pgssGlobalStats), 1, file) != 1)
-		goto error;
-
-	pfree(qbuffer);
-	qbuffer = NULL;
-
-	if (FreeFile(file))
+	for (int i = 0; i < nevict; i++)
 	{
-		file = NULL;
-		goto error;
+		PgStat_EntryRef *victim_ref;
+		dsa_pointer text_ptr = InvalidDsaPointer;
+		bool		freed;
+
+		/*
+		 * Look up the entry to safely clear its query_text pointer under the
+		 * entry-level lock before freeing.  This prevents concurrent readers
+		 * from following a dangling DSA pointer.
+		 */
+		victim_ref = pgstat_get_entry_ref(PGSTAT_KIND_PGSS, entries[i].dbid,
+										  entries[i].objid, false, NULL);
+		if (victim_ref != NULL)
+		{
+			PgStatShared_Pgss *shared;
+
+			shared = (PgStatShared_Pgss *) victim_ref->shared_stats;
+			pgstat_lock_entry(victim_ref, false);
+			text_ptr = shared->query_text;
+			shared->query_text = InvalidDsaPointer;
+			pgstat_unlock_entry(victim_ref);
+		}
+
+		freed = pgstat_drop_entry(PGSTAT_KIND_PGSS, entries[i].dbid,
+								  entries[i].objid, true);
+
+		if (DsaPointerIsValid(text_ptr))
+			dsa_free(pgss_qtext_dsa, text_ptr);
+
+		if (!freed)
+			not_freed++;
+		pg_atomic_sub_fetch_u64(&pgss_shared->live_entries, 1);
 	}
 
-	/*
-	 * Rename file into place, so we atomically replace any old one.
-	 */
-	(void) durable_rename(PGSS_DUMP_FILE ".tmp", PGSS_DUMP_FILE, LOG);
+	pg_atomic_fetch_add_u64(&pgss_shared->dealloc, 1);
 
-	/* Unlink query-texts file; it's not needed while shutdown */
-	unlink(PGSS_TEXT_FILE);
+	if (not_freed > 0)
+		pgstat_request_entry_refs_gc();
 
-	return;
+	pfree(entries);
 
-error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not write file \"%s\": %m",
-					PGSS_DUMP_FILE ".tmp")));
-	if (qbuffer)
-		pfree(qbuffer);
-	if (file)
-		FreeFile(file);
-	unlink(PGSS_DUMP_FILE ".tmp");
-	unlink(PGSS_TEXT_FILE);
+	INSTR_TIME_SET_CURRENT(duration);
+	INSTR_TIME_SUBTRACT(duration, start);
 }
 
 /*
- * Post-parse-analysis hook: mark query with a queryId
+ * pgss_maybe_evict: Run eviction if needed.  Returns true if creation
+ * can proceed, false if the caller should skip recording.
+ *
+ * Must be called with pgss_shared->lock held exclusively.
+ */
+static bool
+pgss_maybe_evict(void)
+{
+	int64		live = (int64) pg_atomic_read_u64(&pgss_shared->live_entries);
+
+	/* Safety valve: dshash overflow from pinned entries (see above) */
+	if (pgstat_get_entry_count(PGSTAT_KIND_PGSS) >= pgss_max * 2)
+	{
+		pg_atomic_fetch_add_u64(&pgss_shared->skipped_entries, 1);
+		return false;
+	}
+
+	if (live >= pgss_max)
+	{
+		TimestampTz now = GetCurrentStatementStartTimestamp();
+		TimestampTz last = (TimestampTz) pg_atomic_read_u64(&pgss_shared->last_eviction);
+
+		if (last == 0 || TimestampDifferenceExceeds(last, now,
+													PGSS_EVICT_INTERVAL_MS))
+		{
+			pg_atomic_write_u64(&pgss_shared->last_eviction, (uint64) now);
+			pgss_evict();
+		}
+		else
+		{
+			pg_atomic_fetch_add_u64(&pgss_shared->skipped_entries, 1);
+			return false;
+		}
+	}
+
+	return true;
+}
+
+/*--------------------------------------------------------------------------
+ * pgss_store: Record statistics for one statement execution.
+ *
+ * Lock-free lookup for existing entries.  If the entry is new, takes an
+ * exclusive lock to serialize creation, evicting if at capacity.
+ *--------------------------------------------------------------------------
  */
 static void
-pgss_post_parse_analyze(ParseState *pstate, Query *query, const JumbleState *jstate)
+pgss_store(const char *query, int64 queryId,
+		   int query_location, int query_len,
+		   pgssStoreKind kind,
+		   double total_time, uint64 rows,
+		   const BufferUsage *bufusage,
+		   const WalUsage *walusage,
+		   const struct JitInstrumentation *jitusage,
+		   const JumbleState *jstate,
+		   int parallel_workers_to_launch,
+		   int parallel_workers_launched,
+		   PlannedStmtOrigin planOrigin)
+{
+	pgssHashKey key;
+
+	uint64		objid;
+	PgStat_EntryRef *entry_ref;
+	PgStat_PgssPending *pending;
+	PgStatShared_Pgss *shared;
+	char	   *norm_query = NULL;
+	int			encoding = GetDatabaseEncoding();
+	bool		created_entry = false;
+
+	Assert(query != NULL);
+
+	if (queryId == INT64CONST(0))
+		return;
+
+	memset(&key, 0, sizeof(pgssHashKey));
+	key.userid = GetUserId();
+	key.dbid = MyDatabaseId;
+	key.queryid = queryId;
+	key.toplevel = (nesting_level == 0);
+
+	pgss_attach_shmem();
+
+	objid = pgss_hash_key(&key);
+
+	/* Fast path: check if the entry already exists (lock-free lookup) */
+	entry_ref = pgstat_get_entry_ref(PGSTAT_KIND_PGSS, key.dbid, objid,
+									 false, NULL);
+
+	if (entry_ref == NULL)
+	{
+		/*
+		 * Entry doesn't exist.  Serialize creation under exclusive lock,
+		 * evicting if needed.
+		 */
+		LWLockAcquire(&pgss_shared->lock, LW_EXCLUSIVE);
+
+		if (!pgss_maybe_evict())
+		{
+			LWLockRelease(&pgss_shared->lock);
+			return;
+		}
+
+		entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_PGSS, key.dbid,
+											  objid, &created_entry);
+
+		LWLockRelease(&pgss_shared->lock);
+	}
+	else
+		entry_ref = pgstat_prep_pending_entry(PGSTAT_KIND_PGSS, key.dbid,
+											  objid, &created_entry);
+
+	shared = (PgStatShared_Pgss *) entry_ref->shared_stats;
+
+	/* New entry, or existing entry whose text was freed during eviction */
+	if (created_entry || !DsaPointerIsValid(shared->query_text))
+	{
+		pgstat_lock_entry(entry_ref, false);
+
+		if (created_entry)
+		{
+			pg_atomic_fetch_add_u64(&pgss_shared->live_entries, 1);
+			shared->key = key;
+			shared->stats_since = GetCurrentTimestamp();
+			pg_atomic_init_u32(&shared->usage, 1);
+			pg_atomic_init_u64(&shared->last_access,
+							   (uint64) GetCurrentStatementStartTimestamp());
+			shared->minmax_stats_since = shared->stats_since;
+			shared->encoding = encoding;
+		}
+
+		if (!DsaPointerIsValid(shared->query_text))
+		{
+			query = CleanQuerytext(query, &query_location, &query_len);
+			if (jstate && jstate->clocations_count > 0)
+				norm_query = generate_normalized_query(jstate, query,
+													   query_location,
+													   &query_len);
+
+			pgss_store_query_text(shared, norm_query ? norm_query : query,
+								  query_len, encoding);
+		}
+		pgstat_unlock_entry(entry_ref);
+	}
+
+	if (norm_query)
+		pfree(norm_query);
+
+	if (!jstate)
+	{
+		Assert(kind == PGSS_PLAN || kind == PGSS_EXEC);
+
+		pending = (PgStat_PgssPending *) entry_ref->pending;
+		pending->key = key;
+
+		pending->counters.calls[kind]++;
+		pending->last_access_updated = true;
+		pending->counters.total_time[kind] += total_time;
+
+		if (pending->counters.calls[kind] == 1)
+		{
+			pending->counters.min_time[kind] = total_time;
+			pending->counters.max_time[kind] = total_time;
+			pending->counters.mean_time[kind] = total_time;
+		}
+		else
+		{
+			/*
+			 * Welford's online algorithm for accumulating mean and sum of
+			 * squared deviations. See
+			 * <http://www.johndcook.com/blog/standard_deviation/>
+			 */
+			double		old_mean = pending->counters.mean_time[kind];
+
+			pending->counters.mean_time[kind] +=
+				(total_time - old_mean) / pending->counters.calls[kind];
+			pending->counters.sum_var_time[kind] +=
+				(total_time - old_mean) * (total_time - pending->counters.mean_time[kind]);
+
+			if (pending->counters.min_time[kind] > total_time)
+				pending->counters.min_time[kind] = total_time;
+			if (pending->counters.max_time[kind] < total_time)
+				pending->counters.max_time[kind] = total_time;
+		}
+
+		pending->counters.rows += rows;
+
+		if (bufusage)
+		{
+			pending->counters.shared_blks_hit += bufusage->shared_blks_hit;
+			pending->counters.shared_blks_read += bufusage->shared_blks_read;
+			pending->counters.shared_blks_dirtied += bufusage->shared_blks_dirtied;
+			pending->counters.shared_blks_written += bufusage->shared_blks_written;
+			pending->counters.local_blks_hit += bufusage->local_blks_hit;
+			pending->counters.local_blks_read += bufusage->local_blks_read;
+			pending->counters.local_blks_dirtied += bufusage->local_blks_dirtied;
+			pending->counters.local_blks_written += bufusage->local_blks_written;
+			pending->counters.temp_blks_read += bufusage->temp_blks_read;
+			pending->counters.temp_blks_written += bufusage->temp_blks_written;
+			pending->counters.shared_blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage->shared_blk_read_time);
+			pending->counters.shared_blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage->shared_blk_write_time);
+			pending->counters.local_blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage->local_blk_read_time);
+			pending->counters.local_blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage->local_blk_write_time);
+			pending->counters.temp_blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage->temp_blk_read_time);
+			pending->counters.temp_blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage->temp_blk_write_time);
+		}
+
+		if (walusage)
+		{
+			pending->counters.wal_records += walusage->wal_records;
+			pending->counters.wal_fpi += walusage->wal_fpi;
+			pending->counters.wal_bytes += walusage->wal_bytes;
+			pending->counters.wal_buffers_full += walusage->wal_buffers_full;
+		}
+
+		if (jitusage)
+		{
+			pending->counters.jit_functions += jitusage->created_functions;
+			pending->counters.jit_generation_time += INSTR_TIME_GET_MILLISEC(jitusage->generation_counter);
+
+			if (INSTR_TIME_GET_MILLISEC(jitusage->deform_counter))
+				pending->counters.jit_deform_count++;
+			pending->counters.jit_deform_time += INSTR_TIME_GET_MILLISEC(jitusage->deform_counter);
+
+			if (INSTR_TIME_GET_MILLISEC(jitusage->inlining_counter))
+				pending->counters.jit_inlining_count++;
+			pending->counters.jit_inlining_time += INSTR_TIME_GET_MILLISEC(jitusage->inlining_counter);
+
+			if (INSTR_TIME_GET_MILLISEC(jitusage->optimization_counter))
+				pending->counters.jit_optimization_count++;
+			pending->counters.jit_optimization_time += INSTR_TIME_GET_MILLISEC(jitusage->optimization_counter);
+
+			if (INSTR_TIME_GET_MILLISEC(jitusage->emission_counter))
+				pending->counters.jit_emission_count++;
+			pending->counters.jit_emission_time += INSTR_TIME_GET_MILLISEC(jitusage->emission_counter);
+		}
+
+		pending->counters.parallel_workers_to_launch += parallel_workers_to_launch;
+		pending->counters.parallel_workers_launched += parallel_workers_launched;
+
+		if (planOrigin == PLAN_STMT_CACHE_GENERIC)
+			pending->counters.generic_plan_calls++;
+		else if (planOrigin == PLAN_STMT_CACHE_CUSTOM)
+			pending->counters.custom_plan_calls++;
+	}
+
+}
+
+/*--------------------------------------------------------------------------
+ * Hook implementations
+ *--------------------------------------------------------------------------
+ */
+
+static void
+pgss_post_parse_analyze(ParseState *pstate, Query *query,
+						const JumbleState *jstate)
 {
 	if (prev_post_parse_analyze_hook)
 		prev_post_parse_analyze_hook(pstate, query, jstate);
 
-	/* Safety check... */
-	if (!pgss || !pgss_hash || !pgss_enabled(nesting_level))
+	if (!pgss_enabled(nesting_level))
 		return;
 
 	/*
-	 * If it's EXECUTE, clear the queryId so that stats will accumulate for
-	 * the underlying PREPARE.  But don't do this if we're not tracking
-	 * utility statements, to avoid messing up another extension that might be
-	 * tracking them.
+	 * Clear queryId for EXECUTE so stats accumulate under the PREPARE's
+	 * queryId instead.
 	 */
 	if (query->utilityStmt)
 	{
@@ -879,10 +1282,6 @@ pgss_post_parse_analyze(ParseState *pstate, Query *query, const JumbleState *jst
 				   PLAN_STMT_UNKNOWN);
 }
 
-/*
- * Planner hook: forward to regular planner, but measure planning time
- * if needed.
- */
 static PlannedStmt *
 pgss_planner(Query *parse,
 			 const char *query_string,
@@ -908,13 +1307,7 @@ pgss_planner(Query *parse,
 		WalUsage	walusage_start,
 					walusage;
 
-		/* We need to track buffer usage as the planner can access them. */
 		bufusage_start = pgBufferUsage;
-
-		/*
-		 * Similarly the planner could write some WAL records in some cases
-		 * (e.g. setting a hint bit with those being WAL-logged)
-		 */
 		walusage_start = pgWalUsage;
 		INSTR_TIME_SET_CURRENT(start);
 
@@ -937,11 +1330,9 @@ pgss_planner(Query *parse,
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
 
-		/* calc differences of buffer counters. */
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 
-		/* calc differences of WAL counters. */
 		memset(&walusage, 0, sizeof(WalUsage));
 		WalUsageAccumDiff(&walusage, &pgWalUsage, &walusage_start);
 
@@ -956,17 +1347,11 @@ pgss_planner(Query *parse,
 				   &walusage,
 				   NULL,
 				   NULL,
-				   0,
-				   0,
+				   0, 0,
 				   result->planOrigin);
 	}
 	else
 	{
-		/*
-		 * Even though we're not tracking plan time for this statement, we
-		 * must still increment the nesting level, to ensure that functions
-		 * evaluated during planning are not seen as top-level calls.
-		 */
 		nesting_level++;
 		PG_TRY();
 		{
@@ -987,20 +1372,12 @@ pgss_planner(Query *parse,
 	return result;
 }
 
-/*
- * ExecutorStart hook: start up tracking if needed
- */
 static void
 pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
 {
-	/*
-	 * If query has queryId zero, don't track it.  This prevents double
-	 * counting of optimizable statements that are directly contained in
-	 * utility statements.
-	 */
-	if (pgss_enabled(nesting_level) && queryDesc->plannedstmt->queryId != INT64CONST(0))
+	if (pgss_enabled(nesting_level) &&
+		queryDesc->plannedstmt->queryId != INT64CONST(0))
 	{
-		/* Request all summary instrumentation, i.e. timing, buffers and WAL */
 		queryDesc->query_instr_options |= INSTRUMENT_ALL;
 	}
 
@@ -1010,9 +1387,6 @@ pgss_ExecutorStart(QueryDesc *queryDesc, int eflags)
 		standard_ExecutorStart(queryDesc, eflags);
 }
 
-/*
- * ExecutorRun hook: all we need do is track nesting depth
- */
 static void
 pgss_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count)
 {
@@ -1031,9 +1405,6 @@ pgss_ExecutorRun(QueryDesc *queryDesc, ScanDirection direction, uint64 count)
 	PG_END_TRY();
 }
 
-/*
- * ExecutorFinish hook: all we need do is track nesting depth
- */
 static void
 pgss_ExecutorFinish(QueryDesc *queryDesc)
 {
@@ -1052,9 +1423,6 @@ pgss_ExecutorFinish(QueryDesc *queryDesc)
 	PG_END_TRY();
 }
 
-/*
- * ExecutorEnd hook: store results if needed
- */
 static void
 pgss_ExecutorEnd(QueryDesc *queryDesc)
 {
@@ -1085,9 +1453,6 @@ pgss_ExecutorEnd(QueryDesc *queryDesc)
 		standard_ExecutorEnd(queryDesc);
 }
 
-/*
- * ProcessUtility hook
- */
 static void
 pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 					bool readOnlyTree,
@@ -1102,36 +1467,9 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	PlannedStmtOrigin saved_planOrigin = pstmt->planOrigin;
 	bool		enabled = pgss_track_utility && pgss_enabled(nesting_level);
 
-	/*
-	 * Force utility statements to get queryId zero.  We do this even in cases
-	 * where the statement contains an optimizable statement for which a
-	 * queryId could be derived (such as EXPLAIN or DECLARE CURSOR).  For such
-	 * cases, runtime control will first go through ProcessUtility and then
-	 * the executor, and we don't want the executor hooks to do anything,
-	 * since we are already measuring the statement's costs at the utility
-	 * level.
-	 *
-	 * Note that this is only done if pg_stat_statements is enabled and
-	 * configured to track utility statements, in the unlikely possibility
-	 * that user configured another extension to handle utility statements
-	 * only.
-	 */
 	if (enabled)
 		pstmt->queryId = INT64CONST(0);
 
-	/*
-	 * If it's an EXECUTE statement, we don't track it and don't increment the
-	 * nesting level.  This allows the cycles to be charged to the underlying
-	 * PREPARE instead (by the Executor hooks), which is much more useful.
-	 *
-	 * We also don't track execution of PREPARE.  If we did, we would get one
-	 * hash table entry for the PREPARE (with hash calculated from the query
-	 * string), and then a different one with the same query string (but hash
-	 * calculated from the query tree) would be used to accumulate costs of
-	 * ensuing EXECUTEs.  This would be confusing.  Since PREPARE doesn't
-	 * actually run the planner (only parse+rewrite), its costs are generally
-	 * pretty negligible and it seems okay to just ignore it.
-	 */
 	if (enabled &&
 		!IsA(parsetree, ExecuteStmt) &&
 		!IsA(parsetree, PrepareStmt))
@@ -1166,36 +1504,20 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 		}
 		PG_END_TRY();
 
-		/*
-		 * CAUTION: do not access the *pstmt data structure again below here.
-		 * If it was a ROLLBACK or similar, that data structure may have been
-		 * freed.  We must copy everything we still need into local variables,
-		 * which we did above.
-		 *
-		 * For the same reason, we can't risk restoring pstmt->queryId to its
-		 * former value, which'd otherwise be a good idea.
-		 */
 		pstmt = NULL;
 
 		INSTR_TIME_SET_CURRENT(duration);
 		INSTR_TIME_SUBTRACT(duration, start);
 
-		/*
-		 * Track the total number of rows retrieved or affected by the utility
-		 * statements of COPY, FETCH, CREATE TABLE AS, CREATE MATERIALIZED
-		 * VIEW, REFRESH MATERIALIZED VIEW and SELECT INTO.
-		 */
 		rows = (qc && (qc->commandTag == CMDTAG_COPY ||
 					   qc->commandTag == CMDTAG_FETCH ||
 					   qc->commandTag == CMDTAG_SELECT ||
 					   qc->commandTag == CMDTAG_REFRESH_MATERIALIZED_VIEW)) ?
 			qc->nprocessed : 0;
 
-		/* calc differences of buffer counters. */
 		memset(&bufusage, 0, sizeof(BufferUsage));
 		BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &bufusage_start);
 
-		/* calc differences of WAL counters. */
 		memset(&walusage, 0, sizeof(WalUsage));
 		WalUsageAccumDiff(&walusage, &pgWalUsage, &walusage_start);
 
@@ -1210,24 +1532,11 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 				   &walusage,
 				   NULL,
 				   NULL,
-				   0,
-				   0,
+				   0, 0,
 				   saved_planOrigin);
 	}
 	else
 	{
-		/*
-		 * Even though we're not tracking execution time for this statement,
-		 * we must still increment the nesting level, to ensure that functions
-		 * evaluated within it are not seen as top-level calls.  But don't do
-		 * so for EXECUTE; that way, when control reaches pgss_planner or
-		 * pgss_ExecutorStart, we will treat the costs as top-level if
-		 * appropriate.  Likewise, don't bump for PREPARE, so that parse
-		 * analysis will treat the statement as top-level if appropriate.
-		 *
-		 * To be absolutely certain we don't mess up the nesting level,
-		 * evaluate the bump_level condition just once.
-		 */
 		bool		bump_level =
 			!IsA(parsetree, ExecuteStmt) &&
 			!IsA(parsetree, PrepareStmt);
@@ -1254,251 +1563,33 @@ pgss_ProcessUtility(PlannedStmt *pstmt, const char *queryString,
 	}
 }
 
-/*
- * Store some statistics for a statement.
- *
- * If jstate is not NULL then we're trying to create an entry for which
- * we have no statistics as yet; we just want to record the normalized
- * query string.  total_time, rows, bufusage and walusage are ignored in this
- * case.
- *
- * If kind is PGSS_PLAN or PGSS_EXEC, its value is used as the array position
- * for the arrays in the Counters field.
+/*--------------------------------------------------------------------------
+ * SQL-callable functions
+ *--------------------------------------------------------------------------
  */
-static void
-pgss_store(const char *query, int64 queryId,
-		   int query_location, int query_len,
-		   pgssStoreKind kind,
-		   double total_time, uint64 rows,
-		   const BufferUsage *bufusage,
-		   const WalUsage *walusage,
-		   const struct JitInstrumentation *jitusage,
-		   const JumbleState *jstate,
-		   int parallel_workers_to_launch,
-		   int parallel_workers_launched,
-		   PlannedStmtOrigin planOrigin)
+
+/* Number of output arguments (columns) for various API versions */
+#define PG_STAT_STATEMENTS_COLS_V1_0	14
+#define PG_STAT_STATEMENTS_COLS_V1_1	18
+#define PG_STAT_STATEMENTS_COLS_V1_2	19
+#define PG_STAT_STATEMENTS_COLS_V1_3	23
+#define PG_STAT_STATEMENTS_COLS_V1_8	32
+#define PG_STAT_STATEMENTS_COLS_V1_9	33
+#define PG_STAT_STATEMENTS_COLS_V1_10	43
+#define PG_STAT_STATEMENTS_COLS_V1_11	49
+#define PG_STAT_STATEMENTS_COLS_V1_12	52
+#define PG_STAT_STATEMENTS_COLS_V1_13	54
+#define PG_STAT_STATEMENTS_COLS			54	/* maximum of above */
+
+/*
+ * Reset statement statistics.
+ */
+Datum
+pg_stat_statements_reset(PG_FUNCTION_ARGS)
 {
-	pgssHashKey key;
-	pgssEntry  *entry;
-	char	   *norm_query = NULL;
-	int			encoding = GetDatabaseEncoding();
+	entry_reset(0, 0, 0, false);
 
-	Assert(query != NULL);
-
-	/* Safety check... */
-	if (!pgss || !pgss_hash)
-		return;
-
-	/*
-	 * Nothing to do if compute_query_id isn't enabled and no other module
-	 * computed a query identifier.
-	 */
-	if (queryId == INT64CONST(0))
-		return;
-
-	/*
-	 * Confine our attention to the relevant part of the string, if the query
-	 * is a portion of a multi-statement source string, and update query
-	 * location and length if needed.
-	 */
-	query = CleanQuerytext(query, &query_location, &query_len);
-
-	/* Set up key for hashtable search */
-
-	/* clear padding */
-	memset(&key, 0, sizeof(pgssHashKey));
-
-	key.userid = GetUserId();
-	key.dbid = MyDatabaseId;
-	key.queryid = queryId;
-	key.toplevel = (nesting_level == 0);
-
-	/* Lookup the hash table entry with shared lock. */
-	LWLockAcquire(&pgss->lock.lock, LW_SHARED);
-
-	entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
-
-	/* Create new entry, if not present */
-	if (!entry)
-	{
-		Size		query_offset;
-		int			gc_count;
-		bool		stored;
-		bool		do_gc;
-
-		/*
-		 * Create a new, normalized query string if caller asked.  We don't
-		 * need to hold the lock while doing this work.  (Note: in any case,
-		 * it's possible that someone else creates a duplicate hashtable entry
-		 * in the interval where we don't hold the lock below.  That case is
-		 * handled by entry_alloc.)
-		 */
-		if (jstate)
-		{
-			LWLockRelease(&pgss->lock.lock);
-			norm_query = generate_normalized_query(jstate, query,
-												   query_location,
-												   &query_len);
-			LWLockAcquire(&pgss->lock.lock, LW_SHARED);
-		}
-
-		/* Append new query text to file with only shared lock held */
-		stored = qtext_store(norm_query ? norm_query : query, query_len,
-							 &query_offset, &gc_count);
-
-		/*
-		 * Determine whether we need to garbage collect external query texts
-		 * while the shared lock is still held.  This micro-optimization
-		 * avoids taking the time to decide this while holding exclusive lock.
-		 */
-		do_gc = need_gc_qtexts();
-
-		/* Need exclusive lock to make a new hashtable entry - promote */
-		LWLockRelease(&pgss->lock.lock);
-		LWLockAcquire(&pgss->lock.lock, LW_EXCLUSIVE);
-
-		/*
-		 * A garbage collection may have occurred while we weren't holding the
-		 * lock.  In the unlikely event that this happens, the query text we
-		 * stored above will have been garbage collected, so write it again.
-		 * This should be infrequent enough that doing it while holding
-		 * exclusive lock isn't a performance problem.
-		 */
-		if (!stored || pgss->gc_count != gc_count)
-			stored = qtext_store(norm_query ? norm_query : query, query_len,
-								 &query_offset, NULL);
-
-		/* If we failed to write to the text file, give up */
-		if (!stored)
-			goto done;
-
-		/* OK to create a new hashtable entry */
-		entry = entry_alloc(&key, query_offset, query_len, encoding,
-							jstate != NULL);
-
-		/* If needed, perform garbage collection while exclusive lock held */
-		if (do_gc)
-			gc_qtexts();
-	}
-
-	/* Increment the counts, except when jstate is not NULL */
-	if (!jstate)
-	{
-		Assert(kind == PGSS_PLAN || kind == PGSS_EXEC);
-
-		/*
-		 * Grab the spinlock while updating the counters (see comment about
-		 * locking rules at the head of the file)
-		 */
-		SpinLockAcquire(&entry->mutex);
-
-		/* "Unstick" entry if it was previously sticky */
-		if (IS_STICKY(entry->counters))
-			entry->counters.usage = USAGE_INIT;
-
-		entry->counters.calls[kind] += 1;
-		entry->counters.total_time[kind] += total_time;
-
-		if (entry->counters.calls[kind] == 1)
-		{
-			entry->counters.min_time[kind] = total_time;
-			entry->counters.max_time[kind] = total_time;
-			entry->counters.mean_time[kind] = total_time;
-		}
-		else
-		{
-			/*
-			 * Welford's method for accurately computing variance. See
-			 * <http://www.johndcook.com/blog/standard_deviation/>
-			 */
-			double		old_mean = entry->counters.mean_time[kind];
-
-			entry->counters.mean_time[kind] +=
-				(total_time - old_mean) / entry->counters.calls[kind];
-			entry->counters.sum_var_time[kind] +=
-				(total_time - old_mean) * (total_time - entry->counters.mean_time[kind]);
-
-			/*
-			 * Calculate min and max time. min = 0 and max = 0 means that the
-			 * min/max statistics were reset
-			 */
-			if (entry->counters.min_time[kind] == 0
-				&& entry->counters.max_time[kind] == 0)
-			{
-				entry->counters.min_time[kind] = total_time;
-				entry->counters.max_time[kind] = total_time;
-			}
-			else
-			{
-				if (entry->counters.min_time[kind] > total_time)
-					entry->counters.min_time[kind] = total_time;
-				if (entry->counters.max_time[kind] < total_time)
-					entry->counters.max_time[kind] = total_time;
-			}
-		}
-		entry->counters.rows += rows;
-		entry->counters.shared_blks_hit += bufusage->shared_blks_hit;
-		entry->counters.shared_blks_read += bufusage->shared_blks_read;
-		entry->counters.shared_blks_dirtied += bufusage->shared_blks_dirtied;
-		entry->counters.shared_blks_written += bufusage->shared_blks_written;
-		entry->counters.local_blks_hit += bufusage->local_blks_hit;
-		entry->counters.local_blks_read += bufusage->local_blks_read;
-		entry->counters.local_blks_dirtied += bufusage->local_blks_dirtied;
-		entry->counters.local_blks_written += bufusage->local_blks_written;
-		entry->counters.temp_blks_read += bufusage->temp_blks_read;
-		entry->counters.temp_blks_written += bufusage->temp_blks_written;
-		entry->counters.shared_blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage->shared_blk_read_time);
-		entry->counters.shared_blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage->shared_blk_write_time);
-		entry->counters.local_blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage->local_blk_read_time);
-		entry->counters.local_blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage->local_blk_write_time);
-		entry->counters.temp_blk_read_time += INSTR_TIME_GET_MILLISEC(bufusage->temp_blk_read_time);
-		entry->counters.temp_blk_write_time += INSTR_TIME_GET_MILLISEC(bufusage->temp_blk_write_time);
-		entry->counters.usage += USAGE_EXEC(total_time);
-		entry->counters.wal_records += walusage->wal_records;
-		entry->counters.wal_fpi += walusage->wal_fpi;
-		entry->counters.wal_bytes += walusage->wal_bytes;
-		entry->counters.wal_buffers_full += walusage->wal_buffers_full;
-		if (jitusage)
-		{
-			entry->counters.jit_functions += jitusage->created_functions;
-			entry->counters.jit_generation_time += INSTR_TIME_GET_MILLISEC(jitusage->generation_counter);
-
-			if (INSTR_TIME_GET_MILLISEC(jitusage->deform_counter))
-				entry->counters.jit_deform_count++;
-			entry->counters.jit_deform_time += INSTR_TIME_GET_MILLISEC(jitusage->deform_counter);
-
-			if (INSTR_TIME_GET_MILLISEC(jitusage->inlining_counter))
-				entry->counters.jit_inlining_count++;
-			entry->counters.jit_inlining_time += INSTR_TIME_GET_MILLISEC(jitusage->inlining_counter);
-
-			if (INSTR_TIME_GET_MILLISEC(jitusage->optimization_counter))
-				entry->counters.jit_optimization_count++;
-			entry->counters.jit_optimization_time += INSTR_TIME_GET_MILLISEC(jitusage->optimization_counter);
-
-			if (INSTR_TIME_GET_MILLISEC(jitusage->emission_counter))
-				entry->counters.jit_emission_count++;
-			entry->counters.jit_emission_time += INSTR_TIME_GET_MILLISEC(jitusage->emission_counter);
-		}
-
-		/* parallel worker counters */
-		entry->counters.parallel_workers_to_launch += parallel_workers_to_launch;
-		entry->counters.parallel_workers_launched += parallel_workers_launched;
-
-		/* plan cache counters */
-		if (planOrigin == PLAN_STMT_CACHE_GENERIC)
-			entry->counters.generic_plan_calls++;
-		else if (planOrigin == PLAN_STMT_CACHE_CUSTOM)
-			entry->counters.custom_plan_calls++;
-
-		SpinLockRelease(&entry->mutex);
-	}
-
-done:
-	LWLockRelease(&pgss->lock.lock);
-
-	/* We postpone this clean-up until we're out of the lock */
-	if (norm_query)
-		pfree(norm_query);
+	PG_RETURN_VOID();
 }
 
 /*
@@ -1536,97 +1627,12 @@ pg_stat_statements_reset_1_11(PG_FUNCTION_ARGS)
 	PG_RETURN_TIMESTAMPTZ(entry_reset(userid, dbid, queryid, minmax_only));
 }
 
-/*
- * Reset statement statistics.
- */
 Datum
-pg_stat_statements_reset(PG_FUNCTION_ARGS)
-{
-	entry_reset(0, 0, 0, false);
-
-	PG_RETURN_VOID();
-}
-
-/* Number of output arguments (columns) for various API versions */
-#define PG_STAT_STATEMENTS_COLS_V1_0	14
-#define PG_STAT_STATEMENTS_COLS_V1_1	18
-#define PG_STAT_STATEMENTS_COLS_V1_2	19
-#define PG_STAT_STATEMENTS_COLS_V1_3	23
-#define PG_STAT_STATEMENTS_COLS_V1_8	32
-#define PG_STAT_STATEMENTS_COLS_V1_9	33
-#define PG_STAT_STATEMENTS_COLS_V1_10	43
-#define PG_STAT_STATEMENTS_COLS_V1_11	49
-#define PG_STAT_STATEMENTS_COLS_V1_12	52
-#define PG_STAT_STATEMENTS_COLS_V1_13	54
-#define PG_STAT_STATEMENTS_COLS			54	/* maximum of above */
-
-/*
- * Retrieve statement statistics.
- *
- * The SQL API of this function has changed multiple times, and will likely
- * do so again in future.  To support the case where a newer version of this
- * loadable module is being used with an old SQL declaration of the function,
- * we continue to support the older API versions.  For 1.2 and later, the
- * expected API version is identified by embedding it in the C name of the
- * function.  Unfortunately we weren't bright enough to do that for 1.1.
- */
-Datum
-pg_stat_statements_1_13(PG_FUNCTION_ARGS)
+pg_stat_statements_1_2(PG_FUNCTION_ARGS)
 {
 	bool		showtext = PG_GETARG_BOOL(0);
 
-	pg_stat_statements_internal(fcinfo, PGSS_V1_13, showtext);
-
-	return (Datum) 0;
-}
-
-Datum
-pg_stat_statements_1_12(PG_FUNCTION_ARGS)
-{
-	bool		showtext = PG_GETARG_BOOL(0);
-
-	pg_stat_statements_internal(fcinfo, PGSS_V1_12, showtext);
-
-	return (Datum) 0;
-}
-
-Datum
-pg_stat_statements_1_11(PG_FUNCTION_ARGS)
-{
-	bool		showtext = PG_GETARG_BOOL(0);
-
-	pg_stat_statements_internal(fcinfo, PGSS_V1_11, showtext);
-
-	return (Datum) 0;
-}
-
-Datum
-pg_stat_statements_1_10(PG_FUNCTION_ARGS)
-{
-	bool		showtext = PG_GETARG_BOOL(0);
-
-	pg_stat_statements_internal(fcinfo, PGSS_V1_10, showtext);
-
-	return (Datum) 0;
-}
-
-Datum
-pg_stat_statements_1_9(PG_FUNCTION_ARGS)
-{
-	bool		showtext = PG_GETARG_BOOL(0);
-
-	pg_stat_statements_internal(fcinfo, PGSS_V1_9, showtext);
-
-	return (Datum) 0;
-}
-
-Datum
-pg_stat_statements_1_8(PG_FUNCTION_ARGS)
-{
-	bool		showtext = PG_GETARG_BOOL(0);
-
-	pg_stat_statements_internal(fcinfo, PGSS_V1_8, showtext);
-
+	pg_stat_statements_internal(fcinfo, PGSS_V1_2, showtext);
 	return (Datum) 0;
 }
 
@@ -1636,23 +1642,65 @@ pg_stat_statements_1_3(PG_FUNCTION_ARGS)
 	bool		showtext = PG_GETARG_BOOL(0);
 
 	pg_stat_statements_internal(fcinfo, PGSS_V1_3, showtext);
-
 	return (Datum) 0;
 }
 
 Datum
-pg_stat_statements_1_2(PG_FUNCTION_ARGS)
+pg_stat_statements_1_8(PG_FUNCTION_ARGS)
 {
 	bool		showtext = PG_GETARG_BOOL(0);
 
-	pg_stat_statements_internal(fcinfo, PGSS_V1_2, showtext);
+	pg_stat_statements_internal(fcinfo, PGSS_V1_8, showtext);
+	return (Datum) 0;
+}
 
+Datum
+pg_stat_statements_1_9(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_9, showtext);
+	return (Datum) 0;
+}
+
+Datum
+pg_stat_statements_1_10(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_10, showtext);
+	return (Datum) 0;
+}
+
+Datum
+pg_stat_statements_1_11(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_11, showtext);
+	return (Datum) 0;
+}
+
+Datum
+pg_stat_statements_1_12(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_12, showtext);
+	return (Datum) 0;
+}
+
+Datum
+pg_stat_statements_1_13(PG_FUNCTION_ARGS)
+{
+	bool		showtext = PG_GETARG_BOOL(0);
+
+	pg_stat_statements_internal(fcinfo, PGSS_V1_13, showtext);
 	return (Datum) 0;
 }
 
 /*
  * Legacy entry point for pg_stat_statements() API versions 1.0 and 1.1.
- * This can be removed someday, perhaps.
  */
 Datum
 pg_stat_statements(PG_FUNCTION_ARGS)
@@ -1663,40 +1711,34 @@ pg_stat_statements(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
-/* Common code for all versions of pg_stat_statements() */
+/*
+ * pg_stat_statements_internal
+ *
+ * Scan the per-kind pgstat dshash for all entries, reading counters and
+ * metadata directly from the shared body.
+ */
 static void
 pg_stat_statements_internal(FunctionCallInfo fcinfo,
 							pgssVersion api_version,
 							bool showtext)
 {
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	dshash_seq_status hstat;
+	PgStatShared_HashEntry *p;
 	Oid			userid = GetUserId();
-	bool		is_allowed_role = false;
-	char	   *qbuffer = NULL;
-	Size		qbuffer_size = 0;
-	Size		extent = 0;
-	int			gc_count = 0;
-	HASH_SEQ_STATUS hash_seq;
-	pgssEntry  *entry;
+	bool		is_allowed_role;
 
-	/*
-	 * Superusers or roles with the privileges of pg_read_all_stats members
-	 * are allowed
-	 */
 	is_allowed_role = has_privs_of_role(userid, ROLE_PG_READ_ALL_STATS);
 
-	/* hash table must exist already */
-	if (!pgss || !pgss_hash)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("pg_stat_statements must be loaded via \"shared_preload_libraries\"")));
+	pgss_attach_shmem();
+
+	/* Flush pending stats so we can read up-to-date counters */
+	pgstat_report_stat(true);
 
 	InitMaterializedSRF(fcinfo, 0);
 
 	/*
-	 * Check we have the expected number of output arguments.  Aside from
-	 * being a good safety check, we need a kluge here to detect API version
-	 * 1.1, which was wedged into the code in an ill-considered way.
+	 * Check we have the expected number of output arguments.
 	 */
 	switch (rsinfo->setDesc->natts)
 	{
@@ -1746,157 +1788,70 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			elog(ERROR, "incorrect number of output arguments");
 	}
 
-	/*
-	 * We'd like to load the query text file (if needed) while not holding any
-	 * lock on pgss->lock.  In the worst case we'll have to do this again
-	 * after we have the lock, but it's unlikely enough to make this a win
-	 * despite occasional duplicated work.  We need to reload if anybody
-	 * writes to the file (either a retail qtext_store(), or a garbage
-	 * collection) between this point and where we've gotten shared lock.  If
-	 * a qtext_store is actually in progress when we look, we might as well
-	 * skip the speculative load entirely.
-	 */
-	if (showtext)
-	{
-		int			n_writers;
-
-		/* Take the mutex so we can examine variables */
-		SpinLockAcquire(&pgss->mutex);
-		extent = pgss->extent;
-		n_writers = pgss->n_writers;
-		gc_count = pgss->gc_count;
-		SpinLockRelease(&pgss->mutex);
-
-		/* No point in loading file now if there are active writers */
-		if (n_writers == 0)
-			qbuffer = qtext_load_file(&qbuffer_size);
-	}
-
-	/*
-	 * Get shared lock, load or reload the query text file if we must, and
-	 * iterate over the hashtable entries.
-	 *
-	 * With a large hash table, we might be holding the lock rather longer
-	 * than one could wish.  However, this only blocks creation of new hash
-	 * table entries, and the larger the hash table the less likely that is to
-	 * be needed.  So we can hope this is okay.  Perhaps someday we'll decide
-	 * we need to partition the hash table to limit the time spent holding any
-	 * one lock.
-	 */
-	LWLockAcquire(&pgss->lock.lock, LW_SHARED);
-
-	if (showtext)
-	{
-		/*
-		 * Here it is safe to examine extent and gc_count without taking the
-		 * mutex.  Note that although other processes might change
-		 * pgss->extent just after we look at it, the strings they then write
-		 * into the file cannot yet be referenced in the hashtable, so we
-		 * don't care whether we see them or not.
-		 *
-		 * If qtext_load_file fails, we just press on; we'll return NULL for
-		 * every query text.
-		 */
-		if (qbuffer == NULL ||
-			pgss->extent != extent ||
-			pgss->gc_count != gc_count)
-		{
-			if (qbuffer)
-				pfree(qbuffer);
-			qbuffer = qtext_load_file(&qbuffer_size);
-		}
-	}
-
-	hash_seq_init(&hash_seq, pgss_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
+	dshash_seq_init(&hstat, pgss_hash, false);
+	while ((p = dshash_seq_next(&hstat)) != NULL)
 	{
 		Datum		values[PG_STAT_STATEMENTS_COLS];
 		bool		nulls[PG_STAT_STATEMENTS_COLS];
 		int			i = 0;
-		Counters	tmp;
+		PgStatShared_Pgss *shared;
+		pgssCounters tmp;
 		double		stddev;
-		int64		queryid = entry->key.queryid;
-		TimestampTz stats_since;
-		TimestampTz minmax_stats_since;
+
+		if (p->dropped)
+			continue;
 
 		memset(values, 0, sizeof(values));
 		memset(nulls, 0, sizeof(nulls));
 
-		values[i++] = ObjectIdGetDatum(entry->key.userid);
-		values[i++] = ObjectIdGetDatum(entry->key.dbid);
-		if (api_version >= PGSS_V1_9)
-			values[i++] = BoolGetDatum(entry->key.toplevel);
+		shared = (PgStatShared_Pgss *) dsa_get_address(pgStatLocal.dsa, p->body);
 
-		if (is_allowed_role || entry->key.userid == userid)
+		LWLockAcquire(&shared->header.lock, LW_SHARED);
+		tmp = shared->counters;
+		LWLockRelease(&shared->header.lock);
+
+		if (tmp.calls[PGSS_EXEC] == 0 && tmp.calls[PGSS_PLAN] == 0)
+			continue;
+
+		values[i++] = ObjectIdGetDatum(shared->key.userid);
+		values[i++] = ObjectIdGetDatum(shared->key.dbid);
+		if (api_version >= PGSS_V1_9)
+			values[i++] = BoolGetDatum(shared->key.toplevel);
+
+		if (is_allowed_role || shared->key.userid == userid)
 		{
 			if (api_version >= PGSS_V1_2)
-				values[i++] = Int64GetDatumFast(queryid);
+				values[i++] = Int64GetDatumFast(shared->key.queryid);
 
 			if (showtext)
 			{
-				char	   *qstr = qtext_fetch(entry->query_offset,
-											   entry->query_len,
-											   qbuffer,
-											   qbuffer_size);
-
-				if (qstr)
+				if (DsaPointerIsValid(shared->query_text) && shared->query_len >= 0)
 				{
-					char	   *enc;
-
-					enc = pg_any_to_server(qstr,
-										   entry->query_len,
-										   entry->encoding);
+					char	   *qstr = dsa_get_address(pgss_qtext_dsa, shared->query_text);
+					char	   *enc = pg_any_to_server(qstr, shared->query_len, shared->encoding);
 
 					values[i++] = CStringGetTextDatum(enc);
-
 					if (enc != qstr)
 						pfree(enc);
 				}
 				else
-				{
-					/* Just return a null if we fail to find the text */
 					nulls[i++] = true;
-				}
 			}
 			else
-			{
-				/* Query text not requested */
 				nulls[i++] = true;
-			}
 		}
 		else
 		{
-			/* Don't show queryid */
 			if (api_version >= PGSS_V1_2)
 				nulls[i++] = true;
 
-			/*
-			 * Don't show query text, but hint as to the reason for not doing
-			 * so if it was requested
-			 */
 			if (showtext)
 				values[i++] = CStringGetTextDatum("<insufficient privilege>");
 			else
 				nulls[i++] = true;
 		}
 
-		/* copy counters to a local variable to keep locking time short */
-		SpinLockAcquire(&entry->mutex);
-		tmp = entry->counters;
-		SpinLockRelease(&entry->mutex);
-
-		/*
-		 * The spinlock is not required when reading these two as they are
-		 * always updated when holding pgss->lock exclusively.
-		 */
-		stats_since = entry->stats_since;
-		minmax_stats_since = entry->minmax_stats_since;
-
-		/* Skip entry if unexecuted (ie, it's a pending "sticky" entry) */
-		if (IS_STICKY(tmp))
-			continue;
-
-		/* Note that we rely on PGSS_PLAN being 0 and PGSS_EXEC being 1. */
+		/* Note: PGSS_PLAN is 0, PGSS_EXEC is 1 */
 		for (int kind = 0; kind < PGSS_NUMKIND; kind++)
 		{
 			if (kind == PGSS_EXEC || api_version >= PGSS_V1_8)
@@ -1912,12 +1867,6 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 				values[i++] = Float8GetDatumFast(tmp.max_time[kind]);
 				values[i++] = Float8GetDatumFast(tmp.mean_time[kind]);
 
-				/*
-				 * Note we are calculating the population variance here, not
-				 * the sample variance, as we have data for the whole
-				 * population, so Bessel's correction is not used, and we
-				 * don't divide by tmp.calls - 1.
-				 */
 				if (tmp.calls[kind] > 1)
 					stddev = sqrt(tmp.sum_var_time[kind] / tmp.calls[kind]);
 				else
@@ -1925,6 +1874,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 				values[i++] = Float8GetDatumFast(stddev);
 			}
 		}
+
 		values[i++] = Int64GetDatumFast(tmp.rows);
 		values[i++] = Int64GetDatumFast(tmp.shared_blks_hit);
 		values[i++] = Int64GetDatumFast(tmp.shared_blks_read);
@@ -1962,8 +1912,6 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			values[i++] = Int64GetDatumFast(tmp.wal_fpi);
 
 			snprintf(buf, sizeof buf, UINT64_FORMAT, tmp.wal_bytes);
-
-			/* Convert to numeric. */
 			wal_bytes = DirectFunctionCall3(numeric_in,
 											CStringGetDatum(buf),
 											ObjectIdGetDatum(0),
@@ -1971,9 +1919,7 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 			values[i++] = wal_bytes;
 		}
 		if (api_version >= PGSS_V1_12)
-		{
 			values[i++] = Int64GetDatumFast(tmp.wal_buffers_full);
-		}
 		if (api_version >= PGSS_V1_10)
 		{
 			values[i++] = Int64GetDatumFast(tmp.jit_functions);
@@ -2002,8 +1948,8 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 		}
 		if (api_version >= PGSS_V1_11)
 		{
-			values[i++] = TimestampTzGetDatum(stats_since);
-			values[i++] = TimestampTzGetDatum(minmax_stats_since);
+			values[i++] = TimestampTzGetDatum(shared->stats_since);
+			values[i++] = TimestampTzGetDatum(shared->minmax_stats_since);
 		}
 
 		Assert(i == (api_version == PGSS_V1_0 ? PG_STAT_STATEMENTS_COLS_V1_0 :
@@ -2020,15 +1966,11 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 
 		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
 	}
-
-	LWLockRelease(&pgss->lock.lock);
-
-	if (qbuffer)
-		pfree(qbuffer);
+	dshash_seq_term(&hstat);
 }
 
 /* Number of output arguments (columns) for pg_stat_statements_info */
-#define PG_STAT_STATEMENTS_INFO_COLS	2
+#define PG_STAT_STATEMENTS_INFO_COLS	5
 
 /*
  * Return statistics of pg_stat_statements.
@@ -2036,756 +1978,129 @@ pg_stat_statements_internal(FunctionCallInfo fcinfo,
 Datum
 pg_stat_statements_info(PG_FUNCTION_ARGS)
 {
-	pgssGlobalStats stats;
 	TupleDesc	tupdesc;
 	Datum		values[PG_STAT_STATEMENTS_INFO_COLS] = {0};
 	bool		nulls[PG_STAT_STATEMENTS_INFO_COLS] = {0};
 
-	if (!pgss || !pgss_hash)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("pg_stat_statements must be loaded via \"shared_preload_libraries\"")));
-
-	/* Build a tuple descriptor for our result type */
 	if (get_call_result_type(fcinfo, NULL, &tupdesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
 
-	/* Read global statistics for pg_stat_statements */
-	SpinLockAcquire(&pgss->mutex);
-	stats = pgss->stats;
-	SpinLockRelease(&pgss->mutex);
+	pgss_attach_shmem();
 
-	values[0] = Int64GetDatum(stats.dealloc);
-	values[1] = TimestampTzGetDatum(stats.stats_reset);
+	values[0] = Int64GetDatum((int64) pg_atomic_read_u64(&pgss_shared->dealloc));
+	values[1] = TimestampTzGetDatum((TimestampTz) pg_atomic_read_u64(&pgss_shared->stats_reset));
+	values[2] = Int64GetDatum((int64) pg_atomic_read_u64(&pgss_shared->skipped_entries));
+	values[3] = Int64GetDatum((int64) dsa_get_total_size(pgss_qtext_dsa));
+	values[4] = Int64GetDatum((int64) pgstat_get_entry_count(PGSTAT_KIND_PGSS));
 
 	PG_RETURN_DATUM(HeapTupleGetDatum(heap_form_tuple(tupdesc, values, nulls)));
 }
 
-/*
- * Allocate a new hashtable entry.
- * caller must hold an exclusive lock on pgss->lock
- *
- * "query" need not be null-terminated; we rely on query_len instead
- *
- * If "sticky" is true, make the new entry artificially sticky so that it will
- * probably still be there when the query finishes execution.  We do this by
- * giving it a median usage value rather than the normal value.  (Strictly
- * speaking, query strings are normalized on a best effort basis, though it
- * would be difficult to demonstrate this even under artificial conditions.)
- *
- * Note: despite needing exclusive lock, it's not an error for the target
- * entry to already exist.  This is because pgss_store releases and
- * reacquires lock after failing to find a match; so someone else could
- * have made the entry while we waited to get exclusive lock.
- */
-static pgssEntry *
-entry_alloc(pgssHashKey *key, Size query_offset, int query_len, int encoding,
-			bool sticky)
-{
-	pgssEntry  *entry;
-	bool		found;
-
-	/* Make space if needed */
-	while (hash_get_num_entries(pgss_hash) >= pgss_max)
-		entry_dealloc();
-
-	/* Find or create an entry with desired hash code */
-	entry = (pgssEntry *) hash_search(pgss_hash, key, HASH_ENTER, &found);
-
-	if (!found)
-	{
-		/* New entry, initialize it */
-
-		/* reset the statistics */
-		memset(&entry->counters, 0, sizeof(Counters));
-		/* set the appropriate initial usage count */
-		entry->counters.usage = sticky ? pgss->cur_median_usage : USAGE_INIT;
-		/* re-initialize the mutex each time ... we assume no one using it */
-		SpinLockInit(&entry->mutex);
-		/* ... and don't forget the query text metadata */
-		Assert(query_len >= 0);
-		entry->query_offset = query_offset;
-		entry->query_len = query_len;
-		entry->encoding = encoding;
-		entry->stats_since = GetCurrentTimestamp();
-		entry->minmax_stats_since = entry->stats_since;
-	}
-
-	return entry;
-}
-
-/*
- * qsort comparator for sorting into increasing usage order
- */
-static int
-entry_cmp(const void *lhs, const void *rhs)
-{
-	double		l_usage = (*(pgssEntry *const *) lhs)->counters.usage;
-	double		r_usage = (*(pgssEntry *const *) rhs)->counters.usage;
-
-	if (l_usage < r_usage)
-		return -1;
-	else if (l_usage > r_usage)
-		return +1;
-	else
-		return 0;
-}
-
-/*
- * Deallocate least-used entries.
- *
- * Caller must hold an exclusive lock on pgss->lock.
- */
-static void
-entry_dealloc(void)
-{
-	HASH_SEQ_STATUS hash_seq;
-	pgssEntry **entries;
-	pgssEntry  *entry;
-	int			nvictims;
-	int			i;
-	Size		tottextlen;
-	int			nvalidtexts;
-
-	/*
-	 * Sort entries by usage and deallocate USAGE_DEALLOC_PERCENT of them.
-	 * While we're scanning the table, apply the decay factor to the usage
-	 * values, and update the mean query length.
-	 *
-	 * Note that the mean query length is almost immediately obsolete, since
-	 * we compute it before not after discarding the least-used entries.
-	 * Hopefully, that doesn't affect the mean too much; it doesn't seem worth
-	 * making two passes to get a more current result.  Likewise, the new
-	 * cur_median_usage includes the entries we're about to zap.
-	 */
-
-	entries = palloc(hash_get_num_entries(pgss_hash) * sizeof(pgssEntry *));
-
-	i = 0;
-	tottextlen = 0;
-	nvalidtexts = 0;
-
-	hash_seq_init(&hash_seq, pgss_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		entries[i++] = entry;
-		/* "Sticky" entries get a different usage decay rate. */
-		if (IS_STICKY(entry->counters))
-			entry->counters.usage *= STICKY_DECREASE_FACTOR;
-		else
-			entry->counters.usage *= USAGE_DECREASE_FACTOR;
-		/* In the mean length computation, ignore dropped texts. */
-		if (entry->query_len >= 0)
-		{
-			tottextlen += entry->query_len + 1;
-			nvalidtexts++;
-		}
-	}
-
-	/* Sort into increasing order by usage */
-	qsort(entries, i, sizeof(pgssEntry *), entry_cmp);
-
-	/* Record the (approximate) median usage */
-	if (i > 0)
-		pgss->cur_median_usage = entries[i / 2]->counters.usage;
-	/* Record the mean query length */
-	if (nvalidtexts > 0)
-		pgss->mean_query_len = tottextlen / nvalidtexts;
-	else
-		pgss->mean_query_len = ASSUMED_LENGTH_INIT;
-
-	/* Now zap an appropriate fraction of lowest-usage entries */
-	nvictims = Max(10, i * USAGE_DEALLOC_PERCENT / 100);
-	nvictims = Min(nvictims, i);
-
-	for (i = 0; i < nvictims; i++)
-	{
-		hash_search(pgss_hash, &entries[i]->key, HASH_REMOVE, NULL);
-	}
-
-	pfree(entries);
-
-	/* Increment the number of times entries are deallocated */
-	SpinLockAcquire(&pgss->mutex);
-	pgss->stats.dealloc += 1;
-	SpinLockRelease(&pgss->mutex);
-}
-
-/*
- * Given a query string (not necessarily null-terminated), allocate a new
- * entry in the external query text file and store the string there.
- *
- * If successful, returns true, and stores the new entry's offset in the file
- * into *query_offset.  Also, if gc_count isn't NULL, *gc_count is set to the
- * number of garbage collections that have occurred so far.
- *
- * On failure, returns false.
- *
- * At least a shared lock on pgss->lock must be held by the caller, so as
- * to prevent a concurrent garbage collection.  Share-lock-holding callers
- * should pass a gc_count pointer to obtain the number of garbage collections,
- * so that they can recheck the count after obtaining exclusive lock to
- * detect whether a garbage collection occurred (and removed this entry).
- */
-static bool
-qtext_store(const char *query, int query_len,
-			Size *query_offset, int *gc_count)
-{
-	Size		off;
-	int			fd;
-
-	/*
-	 * We use a spinlock to protect extent/n_writers/gc_count, so that
-	 * multiple processes may execute this function concurrently.
-	 */
-	SpinLockAcquire(&pgss->mutex);
-	off = pgss->extent;
-	pgss->extent += query_len + 1;
-	pgss->n_writers++;
-	if (gc_count)
-		*gc_count = pgss->gc_count;
-	SpinLockRelease(&pgss->mutex);
-
-	*query_offset = off;
-
-	/*
-	 * Don't allow the file to grow larger than what qtext_load_file can
-	 * (theoretically) handle.  This has been seen to be reachable on 32-bit
-	 * platforms.
-	 */
-	if (unlikely(query_len >= MaxAllocHugeSize - off))
-	{
-		errno = EFBIG;			/* not quite right, but it'll do */
-		fd = -1;
-		goto error;
-	}
-
-	/* Now write the data into the successfully-reserved part of the file */
-	fd = OpenTransientFile(PGSS_TEXT_FILE, O_RDWR | O_CREAT | PG_BINARY);
-	if (fd < 0)
-		goto error;
-
-	if (pg_pwrite(fd, query, query_len, off) != query_len)
-		goto error;
-	if (pg_pwrite(fd, "\0", 1, off + query_len) != 1)
-		goto error;
-
-	CloseTransientFile(fd);
-
-	/* Mark our write complete */
-	SpinLockAcquire(&pgss->mutex);
-	pgss->n_writers--;
-	SpinLockRelease(&pgss->mutex);
-
-	return true;
-
-error:
-	ereport(LOG,
-			(errcode_for_file_access(),
-			 errmsg("could not write file \"%s\": %m",
-					PGSS_TEXT_FILE)));
-
-	if (fd >= 0)
-		CloseTransientFile(fd);
-
-	/* Mark our write complete */
-	SpinLockAcquire(&pgss->mutex);
-	pgss->n_writers--;
-	SpinLockRelease(&pgss->mutex);
-
-	return false;
-}
-
-/*
- * Read the external query text file into a palloc'd buffer.
- *
- * Returns NULL (without throwing an error) if unable to read, eg
- * file not there or insufficient memory.
- *
- * On success, the buffer size is also returned into *buffer_size.
- *
- * This can be called without any lock on pgss->lock, but in that case
- * the caller is responsible for verifying that the result is sane.
- */
-static char *
-qtext_load_file(Size *buffer_size)
-{
-	char	   *buf;
-	int			fd;
-	struct stat stat;
-	Size		nread;
-
-	fd = OpenTransientFile(PGSS_TEXT_FILE, O_RDONLY | PG_BINARY);
-	if (fd < 0)
-	{
-		if (errno != ENOENT)
-			ereport(LOG,
-					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": %m",
-							PGSS_TEXT_FILE)));
-		return NULL;
-	}
-
-	/* Get file length */
-	if (fstat(fd, &stat))
-	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not stat file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-		CloseTransientFile(fd);
-		return NULL;
-	}
-
-	/* Allocate buffer; beware that off_t might be wider than size_t */
-	if (stat.st_size <= MaxAllocHugeSize)
-		buf = (char *) palloc_extended(stat.st_size, MCXT_ALLOC_HUGE | MCXT_ALLOC_NO_OOM);
-	else
-		buf = NULL;
-	if (buf == NULL)
-	{
-		ereport(LOG,
-				(errcode(ERRCODE_OUT_OF_MEMORY),
-				 errmsg("out of memory"),
-				 errdetail("Could not allocate enough memory to read file \"%s\".",
-						   PGSS_TEXT_FILE)));
-		CloseTransientFile(fd);
-		return NULL;
-	}
-
-	/*
-	 * OK, slurp in the file.  Windows fails if we try to read more than
-	 * INT_MAX bytes at once, and other platforms might not like that either,
-	 * so read a very large file in 1GB segments.
-	 */
-	nread = 0;
-	while (nread < stat.st_size)
-	{
-		int			toread = Min(1024 * 1024 * 1024, stat.st_size - nread);
-
-		/*
-		 * If we get a short read and errno doesn't get set, the reason is
-		 * probably that garbage collection truncated the file since we did
-		 * the fstat(), so we don't log a complaint --- but we don't return
-		 * the data, either, since it's most likely corrupt due to concurrent
-		 * writes from garbage collection.
-		 */
-		errno = 0;
-		if (read(fd, buf + nread, toread) != toread)
-		{
-			if (errno)
-				ereport(LOG,
-						(errcode_for_file_access(),
-						 errmsg("could not read file \"%s\": %m",
-								PGSS_TEXT_FILE)));
-			pfree(buf);
-			CloseTransientFile(fd);
-			return NULL;
-		}
-		nread += toread;
-	}
-
-	if (CloseTransientFile(fd) != 0)
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not close file \"%s\": %m", PGSS_TEXT_FILE)));
-
-	*buffer_size = nread;
-	return buf;
-}
-
-/*
- * Locate a query text in the file image previously read by qtext_load_file().
- *
- * We validate the given offset/length, and return NULL if bogus.  Otherwise,
- * the result points to a null-terminated string within the buffer.
- */
-static char *
-qtext_fetch(Size query_offset, int query_len,
-			char *buffer, Size buffer_size)
-{
-	/* File read failed? */
-	if (buffer == NULL)
-		return NULL;
-	/* Bogus offset/length? */
-	if (query_len < 0 ||
-		query_offset + query_len >= buffer_size)
-		return NULL;
-	/* As a further sanity check, make sure there's a trailing null */
-	if (buffer[query_offset + query_len] != '\0')
-		return NULL;
-	/* Looks OK */
-	return buffer + query_offset;
-}
-
-/*
- * Do we need to garbage-collect the external query text file?
- *
- * Caller should hold at least a shared lock on pgss->lock.
- */
-static bool
-need_gc_qtexts(void)
-{
-	Size		extent;
-
-	/* Read shared extent pointer */
-	SpinLockAcquire(&pgss->mutex);
-	extent = pgss->extent;
-	SpinLockRelease(&pgss->mutex);
-
-	/*
-	 * Don't proceed if file does not exceed 512 bytes per possible entry.
-	 *
-	 * Here and in the next test, 32-bit machines have overflow hazards if
-	 * pgss_max and/or mean_query_len are large.  Force the multiplications
-	 * and comparisons to be done in uint64 arithmetic to forestall trouble.
-	 */
-	if ((uint64) extent < (uint64) 512 * pgss_max)
-		return false;
-
-	/*
-	 * Don't proceed if file is less than about 50% bloat.  Nothing can or
-	 * should be done in the event of unusually large query texts accounting
-	 * for file's large size.  We go to the trouble of maintaining the mean
-	 * query length in order to prevent garbage collection from thrashing
-	 * uselessly.
-	 */
-	if ((uint64) extent < (uint64) pgss->mean_query_len * pgss_max * 2)
-		return false;
-
-	return true;
-}
-
-/*
- * Garbage-collect orphaned query texts in external file.
- *
- * This won't be called often in the typical case, since it's likely that
- * there won't be too much churn, and besides, a similar compaction process
- * occurs when serializing to disk at shutdown or as part of resetting.
- * Despite this, it seems prudent to plan for the edge case where the file
- * becomes unreasonably large, with no other method of compaction likely to
- * occur in the foreseeable future.
- *
- * The caller must hold an exclusive lock on pgss->lock.
- *
- * At the first sign of trouble we unlink the query text file to get a clean
- * slate (although existing statistics are retained), rather than risk
- * thrashing by allowing the same problem case to recur indefinitely.
- */
-static void
-gc_qtexts(void)
-{
-	char	   *qbuffer;
-	Size		qbuffer_size;
-	FILE	   *qfile = NULL;
-	HASH_SEQ_STATUS hash_seq;
-	pgssEntry  *entry;
-	Size		extent;
-	int			nentries;
-
-	/*
-	 * When called from pgss_store, some other session might have proceeded
-	 * with garbage collection in the no-lock-held interim of lock strength
-	 * escalation.  Check once more that this is actually necessary.
-	 */
-	if (!need_gc_qtexts())
-		return;
-
-	/*
-	 * Load the old texts file.  If we fail (out of memory, for instance),
-	 * invalidate query texts.  Hopefully this is rare.  It might seem better
-	 * to leave things alone on an OOM failure, but the problem is that the
-	 * file is only going to get bigger; hoping for a future non-OOM result is
-	 * risky and can easily lead to complete denial of service.
-	 */
-	qbuffer = qtext_load_file(&qbuffer_size);
-	if (qbuffer == NULL)
-		goto gc_fail;
-
-	/*
-	 * We overwrite the query texts file in place, so as to reduce the risk of
-	 * an out-of-disk-space failure.  Since the file is guaranteed not to get
-	 * larger, this should always work on traditional filesystems; though we
-	 * could still lose on copy-on-write filesystems.
-	 */
-	qfile = AllocateFile(PGSS_TEXT_FILE, PG_BINARY_W);
-	if (qfile == NULL)
-	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-		goto gc_fail;
-	}
-
-	extent = 0;
-	nentries = 0;
-
-	hash_seq_init(&hash_seq, pgss_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		int			query_len = entry->query_len;
-		char	   *qry = qtext_fetch(entry->query_offset,
-									  query_len,
-									  qbuffer,
-									  qbuffer_size);
-
-		if (qry == NULL)
-		{
-			/* Trouble ... drop the text */
-			entry->query_offset = 0;
-			entry->query_len = -1;
-			/* entry will not be counted in mean query length computation */
-			continue;
-		}
-
-		if (fwrite(qry, 1, query_len + 1, qfile) != query_len + 1)
-		{
-			ereport(LOG,
-					(errcode_for_file_access(),
-					 errmsg("could not write file \"%s\": %m",
-							PGSS_TEXT_FILE)));
-			hash_seq_term(&hash_seq);
-			goto gc_fail;
-		}
-
-		entry->query_offset = extent;
-		extent += query_len + 1;
-		nentries++;
-	}
-
-	/*
-	 * Truncate away any now-unused space.  If this fails for some odd reason,
-	 * we log it, but there's no need to fail.
-	 */
-	if (ftruncate(fileno(qfile), extent) != 0)
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not truncate file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-
-	if (FreeFile(qfile))
-	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not write file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-		qfile = NULL;
-		goto gc_fail;
-	}
-
-	elog(DEBUG1, "pgss gc of queries file shrunk size from %zu to %zu",
-		 pgss->extent, extent);
-
-	/* Reset the shared extent pointer */
-	pgss->extent = extent;
-
-	/*
-	 * Also update the mean query length, to be sure that need_gc_qtexts()
-	 * won't still think we have a problem.
-	 */
-	if (nentries > 0)
-		pgss->mean_query_len = extent / nentries;
-	else
-		pgss->mean_query_len = ASSUMED_LENGTH_INIT;
-
-	pfree(qbuffer);
-
-	/*
-	 * OK, count a garbage collection cycle.  (Note: even though we have
-	 * exclusive lock on pgss->lock, we must take pgss->mutex for this, since
-	 * other processes may examine gc_count while holding only the mutex.
-	 * Also, we have to advance the count *after* we've rewritten the file,
-	 * else other processes might not realize they read a stale file.)
-	 */
-	record_gc_qtexts();
-
-	return;
-
-gc_fail:
-	/* clean up resources */
-	if (qfile)
-		FreeFile(qfile);
-	if (qbuffer)
-		pfree(qbuffer);
-
-	/*
-	 * Since the contents of the external file are now uncertain, mark all
-	 * hashtable entries as having invalid texts.
-	 */
-	hash_seq_init(&hash_seq, pgss_hash);
-	while ((entry = hash_seq_search(&hash_seq)) != NULL)
-	{
-		entry->query_offset = 0;
-		entry->query_len = -1;
-	}
-
-	/*
-	 * Destroy the query text file and create a new, empty one
-	 */
-	(void) unlink(PGSS_TEXT_FILE);
-	qfile = AllocateFile(PGSS_TEXT_FILE, PG_BINARY_W);
-	if (qfile == NULL)
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not recreate file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-	else
-		FreeFile(qfile);
-
-	/* Reset the shared extent pointer */
-	pgss->extent = 0;
-
-	/* Reset mean_query_len to match the new state */
-	pgss->mean_query_len = ASSUMED_LENGTH_INIT;
-
-	/*
-	 * Bump the GC count even though we failed.
-	 *
-	 * This is needed to make concurrent readers of file without any lock on
-	 * pgss->lock notice existence of new version of file.  Once readers
-	 * subsequently observe a change in GC count with pgss->lock held, that
-	 * forces a safe reopen of file.  Writers also require that we bump here,
-	 * of course.  (As required by locking protocol, readers and writers don't
-	 * trust earlier file contents until gc_count is found unchanged after
-	 * pgss->lock acquired in shared or exclusive mode respectively.)
-	 */
-	record_gc_qtexts();
-}
-
-#define SINGLE_ENTRY_RESET(e) \
-if (e) { \
-	if (minmax_only) { \
-		/* When requested reset only min/max statistics of an entry */ \
-		for (int kind = 0; kind < PGSS_NUMKIND; kind++) \
-		{ \
-			e->counters.max_time[kind] = 0; \
-			e->counters.min_time[kind] = 0; \
-		} \
-		e->minmax_stats_since = stats_reset; \
-	} \
-	else \
-	{ \
-		/* Remove the key otherwise  */ \
-		hash_search(pgss_hash, &e->key, HASH_REMOVE, NULL); \
-		num_remove++; \
-	} \
-}
-
-/*
- * Reset entries corresponding to parameters passed.
- */
 static TimestampTz
 entry_reset(Oid userid, Oid dbid, int64 queryid, bool minmax_only)
 {
-	HASH_SEQ_STATUS hash_seq;
-	pgssEntry  *entry;
-	FILE	   *qfile;
-	int64		num_entries;
-	int64		num_remove = 0;
-	pgssHashKey key;
+	dshash_seq_status hstat;
+	PgStatShared_HashEntry *p;
 	TimestampTz stats_reset;
 
-	if (!pgss || !pgss_hash)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("pg_stat_statements must be loaded via \"shared_preload_libraries\"")));
-
-	LWLockAcquire(&pgss->lock.lock, LW_EXCLUSIVE);
-	num_entries = hash_get_num_entries(pgss_hash);
+	pgss_attach_shmem();
 
 	stats_reset = GetCurrentTimestamp();
 
+	if (minmax_only)
+	{
+		dshash_seq_init(&hstat, pgss_hash, false);
+		while ((p = dshash_seq_next(&hstat)) != NULL)
+		{
+			PgStatShared_Pgss *shared;
+
+			if (p->dropped)
+				continue;
+
+			shared = (PgStatShared_Pgss *) dsa_get_address(pgStatLocal.dsa, p->body);
+
+			if ((!userid || shared->key.userid == userid) &&
+				(!dbid || shared->key.dbid == dbid) &&
+				(!queryid || shared->key.queryid == queryid))
+			{
+				LWLockAcquire(&shared->header.lock, LW_EXCLUSIVE);
+
+				shared->minmax_stats_since = stats_reset;
+
+				for (int kind = 0; kind < PGSS_NUMKIND; kind++)
+				{
+					shared->counters.min_time[kind] = 0;
+					shared->counters.max_time[kind] = 0;
+					shared->counters.mean_time[kind] = 0;
+					shared->counters.sum_var_time[kind] = 0;
+				}
+
+				LWLockRelease(&shared->header.lock);
+			}
+		}
+		dshash_seq_term(&hstat);
+
+		return stats_reset;
+	}
+
 	if (userid != 0 && dbid != 0 && queryid != INT64CONST(0))
 	{
-		/* If all the parameters are available, use the fast path. */
+		pgssHashKey key;
+		uint64		objid;
+
 		memset(&key, 0, sizeof(pgssHashKey));
 		key.userid = userid;
 		key.dbid = dbid;
 		key.queryid = queryid;
 
-		/*
-		 * Reset the entry if it exists, starting with the non-top-level
-		 * entry.
-		 */
 		key.toplevel = false;
-		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
+		objid = pgss_hash_key(&key);
+		pgstat_drop_entry(PGSTAT_KIND_PGSS, key.dbid, objid, true);
 
-		SINGLE_ENTRY_RESET(entry);
-
-		/* Also reset the top-level entry if it exists. */
 		key.toplevel = true;
-		entry = (pgssEntry *) hash_search(pgss_hash, &key, HASH_FIND, NULL);
+		objid = pgss_hash_key(&key);
+		pgstat_drop_entry(PGSTAT_KIND_PGSS, key.dbid, objid, true);
 
-		SINGLE_ENTRY_RESET(entry);
-	}
-	else if (userid != 0 || dbid != 0 || queryid != INT64CONST(0))
-	{
-		/* Reset entries corresponding to valid parameters. */
-		hash_seq_init(&hash_seq, pgss_hash);
-		while ((entry = hash_seq_search(&hash_seq)) != NULL)
-		{
-			if ((!userid || entry->key.userid == userid) &&
-				(!dbid || entry->key.dbid == dbid) &&
-				(!queryid || entry->key.queryid == queryid))
-			{
-				SINGLE_ENTRY_RESET(entry);
-			}
-		}
+		pgstat_request_entry_refs_gc();
 	}
 	else
 	{
-		/* Reset all entries. */
-		hash_seq_init(&hash_seq, pgss_hash);
-		while ((entry = hash_seq_search(&hash_seq)) != NULL)
+		dshash_seq_init(&hstat, pgss_hash, true);
+		while ((p = dshash_seq_next(&hstat)) != NULL)
 		{
-			SINGLE_ENTRY_RESET(entry);
+			PgStatShared_Pgss *shared;
+
+			if (p->dropped)
+				continue;
+
+			shared = (PgStatShared_Pgss *) dsa_get_address(pgStatLocal.dsa, p->body);
+
+			if ((!userid || shared->key.userid == userid) &&
+				(!dbid || shared->key.dbid == dbid) &&
+				(!queryid || shared->key.queryid == queryid))
+			{
+				if (DsaPointerIsValid(shared->query_text))
+				{
+					dsa_free(pgss_qtext_dsa, shared->query_text);
+					shared->query_text = InvalidDsaPointer;
+				}
+
+				pgstat_drop_current(p, &hstat);
+				pg_atomic_sub_fetch_u64(&pgss_shared->live_entries, 1);
+			}
 		}
+		dshash_seq_term(&hstat);
+
+		pgstat_request_entry_refs_gc();
 	}
-
-	/* All entries are removed? */
-	if (num_entries != num_remove)
-		goto release_lock;
-
-	/*
-	 * Reset global statistics for pg_stat_statements since all entries are
-	 * removed.
-	 */
-	SpinLockAcquire(&pgss->mutex);
-	pgss->stats.dealloc = 0;
-	pgss->stats.stats_reset = stats_reset;
-	SpinLockRelease(&pgss->mutex);
-
-	/*
-	 * Write new empty query file, perhaps even creating a new one to recover
-	 * if the file was missing.
-	 */
-	qfile = AllocateFile(PGSS_TEXT_FILE, PG_BINARY_W);
-	if (qfile == NULL)
+	/* If this was a full reset (no filters), reset global statistics */
+	if (!userid && !dbid && !queryid)
 	{
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not create file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-		goto done;
+		pg_atomic_write_u64(&pgss_shared->dealloc, 0);
+		pg_atomic_write_u64(&pgss_shared->skipped_entries, 0);
+		pg_atomic_write_u64(&pgss_shared->live_entries, 0);
+		pg_atomic_write_u64(&pgss_shared->stats_reset, (uint64) stats_reset);
 	}
-
-	/* If ftruncate fails, log it, but it's not a fatal problem */
-	if (ftruncate(fileno(qfile), 0) != 0)
-		ereport(LOG,
-				(errcode_for_file_access(),
-				 errmsg("could not truncate file \"%s\": %m",
-						PGSS_TEXT_FILE)));
-
-	FreeFile(qfile);
-
-done:
-	pgss->extent = 0;
-	/* This counts as a query text garbage collection for our purposes */
-	record_gc_qtexts();
-
-release_lock:
-	LWLockRelease(&pgss->lock.lock);
 
 	return stats_reset;
 }

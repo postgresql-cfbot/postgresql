@@ -251,6 +251,9 @@ ExecEndIndexOnlyScan(IndexOnlyScanState *node)
 		 */
 		winstrument->nsearches += node->ioss_Instrument->nsearches;
 		winstrument->ntabletuplefetches += node->ioss_Instrument->ntabletuplefetches;
+
+		/* Collect IO stats for this process into shared instrumentation */
+		AccumulateIOStats(&winstrument->io, &node->ioss_Instrument->io);
 	}
 
 	/*

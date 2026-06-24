@@ -37,6 +37,7 @@
 #include "commands/event_trigger.h"
 #include "commands/explain.h"
 #include "commands/extension.h"
+#include "commands/formatcast.h"
 #include "commands/lockcmds.h"
 #include "commands/matview.h"
 #include "commands/policy.h"
@@ -193,6 +194,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CreateTableAsStmt:
 		case T_CreateTableSpaceStmt:
 		case T_CreateTransformStmt:
+		case T_CreateFormatCastStmt:
 		case T_CreateTrigStmt:
 		case T_CreateUserMappingStmt:
 		case T_CreatedbStmt:
@@ -1755,6 +1757,10 @@ ProcessUtilitySlow(ParseState *pstate,
 				address = CreateTransform((CreateTransformStmt *) parsetree);
 				break;
 
+			case T_CreateFormatCastStmt:
+				address = CreateFormatCast((CreateFormatCastStmt *) parsetree);
+				break;
+
 			case T_AlterOpFamilyStmt:
 				AlterOpFamily((AlterOpFamilyStmt *) parsetree);
 				/* commands are stashed in AlterOpFamily */
@@ -2666,6 +2672,9 @@ CreateCommandTag(Node *parsetree)
 				case OBJECT_TRANSFORM:
 					tag = CMDTAG_DROP_TRANSFORM;
 					break;
+				case OBJECT_FORMAT_CAST:
+					tag = CMDTAG_DROP_FORMAT_CAST;
+					break;
 				case OBJECT_ACCESS_METHOD:
 					tag = CMDTAG_DROP_ACCESS_METHOD;
 					break;
@@ -2979,6 +2988,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_CreateTransformStmt:
 			tag = CMDTAG_CREATE_TRANSFORM;
+			break;
+
+		case T_CreateFormatCastStmt:
+			tag = CMDTAG_CREATE_FORMAT_CAST;
 			break;
 
 		case T_CreateTrigStmt:
@@ -3687,6 +3700,10 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_CreateTransformStmt:
+			lev = LOGSTMT_DDL;
+			break;
+
+		case T_CreateFormatCastStmt:
 			lev = LOGSTMT_DDL;
 			break;
 

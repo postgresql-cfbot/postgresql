@@ -38,6 +38,7 @@ OBJS = \
 	explain_state.o \
 	extension.o \
 	foreigncmds.o \
+	formatcastcmds.o \
 	functioncmds.o \
 	indexcmds.o \
 	lockcmds.o \

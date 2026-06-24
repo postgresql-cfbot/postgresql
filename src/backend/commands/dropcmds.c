@@ -25,6 +25,7 @@
 #include "miscadmin.h"
 #include "parser/parse_type.h"
 #include "utils/acl.h"
+#include "utils/builtins.h"
 #include "utils/lsyscache.h"
 
 
@@ -398,6 +399,27 @@ does_not_exist_skipping(ObjectType objtype, Node *object)
 					msg = gettext_noop("cast from type %s to type %s does not exist, skipping");
 					name = TypeNameToString(linitial_node(TypeName, castNode(List, object)));
 					args = TypeNameToString(lsecond_node(TypeName, castNode(List, object)));
+				}
+			}
+			break;
+		case OBJECT_FORMAT_CAST:
+			{
+				if (!type_in_list_does_not_exist_skipping(list_make1(linitial(castNode(List, object))), &msg, &name) &&
+					!type_in_list_does_not_exist_skipping(list_make1(lsecond(castNode(List, object))), &msg, &name))
+				{
+					/*
+					 * Both types exist (else the checks above would have
+					 * produced a message), so resolve them to OIDs and report
+					 * them with format_type_be().  This keeps the wording
+					 * consistent with the duplicate-object and undefined-object
+					 * errors, which also use format_type_be().
+					 */
+					Oid			sourcetypeid = typenameTypeId(NULL, linitial_node(TypeName, castNode(List, object)));
+					Oid			targettypeid = typenameTypeId(NULL, lsecond_node(TypeName, castNode(List, object)));
+
+					msg = gettext_noop("format cast from type %s to type %s does not exist, skipping");
+					name = format_type_be(sourcetypeid);
+					args = format_type_be(targettypeid);
 				}
 			}
 			break;

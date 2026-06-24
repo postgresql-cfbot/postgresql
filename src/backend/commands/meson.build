@@ -26,6 +26,7 @@ backend_sources += files(
   'explain_state.c',
   'extension.c',
   'foreigncmds.c',
+  'formatcastcmds.c',
   'functioncmds.c',
   'indexcmds.c',
   'lockcmds.c',

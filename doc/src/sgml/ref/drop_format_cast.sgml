@@ -1,0 +1,126 @@
+<!--
+doc/src/sgml/ref/drop_format_cast.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-dropformatcast">
+ <indexterm zone="sql-dropformatcast">
+  <primary>DROP FORMAT CAST</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>DROP FORMAT CAST</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>DROP FORMAT CAST</refname>
+  <refpurpose>remove a format cast</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+DROP FORMAT CAST [ IF EXISTS ] (<replaceable>source_type</replaceable> AS <replaceable>target_type</replaceable>) [ CASCADE | RESTRICT ]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1 id="sql-dropformatcast-description">
+  <title>Description</title>
+
+  <para>
+   <command>DROP FORMAT CAST</command> removes a previously defined format cast for
+   the given pair of source and target types.
+  </para>
+
+  <para>
+   Dropping a format cast requires ownership of either the source type or the
+   target type.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+   <variablelist>
+    <varlistentry>
+     <term><literal>IF EXISTS</literal></term>
+     <listitem>
+      <para>
+       Do not throw an error if the format cast does not exist.  A notice is
+       issued in this case.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><replaceable>source_type</replaceable></term>
+     <listitem>
+      <para>
+       The source data type of the format cast.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><replaceable>target_type</replaceable></term>
+     <listitem>
+      <para>
+       The target data type of the format cast.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>CASCADE</literal></term>
+     <listitem>
+      <para>
+       Automatically drop objects that depend on the format cast,
+       and in turn all objects that depend on those objects
+       (see <xref linkend="ddl-depend"/>).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>RESTRICT</literal></term>
+     <listitem>
+      <para>
+       Refuse to drop the format cast if any objects depend on it.  This is the
+       default.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+ </refsect1>
+
+ <refsect1 id="sql-dropformatcast-examples">
+  <title>Examples</title>
+
+  <para>
+   To drop the format cast for the cast from <type>integer</type> to
+   <type>text</type>:
+<programlisting>
+DROP FORMAT CAST (integer AS text);
+</programlisting></para>
+ </refsect1>
+
+ <refsect1 id="sql-dropformatcast-compat">
+  <title>Compatibility</title>
+
+  <para>
+   <command>DROP FORMAT CAST</command> is a
+   <productname>PostgreSQL</productname> extension.  See <xref
+   linkend="sql-createformatcast"/> for details.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-createformatcast"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

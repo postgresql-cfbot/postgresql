@@ -41,6 +41,7 @@
 #include "catalog/pg_extension.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
+#include "catalog/pg_format_cast.h"
 #include "catalog/pg_init_privs.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_largeobject.h"
@@ -1534,6 +1535,7 @@ doDeletion(const ObjectAddress *object, int flags)
 		case DefaultAclRelationId:
 		case EventTriggerRelationId:
 		case TransformRelationId:
+		case FormatCastRelationId:
 		case AuthMemRelationId:
 			DropObjectById(object);
 			break;

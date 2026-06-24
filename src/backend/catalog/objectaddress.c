@@ -37,6 +37,7 @@
 #include "catalog/pg_extension.h"
 #include "catalog/pg_foreign_data_wrapper.h"
 #include "catalog/pg_foreign_server.h"
+#include "catalog/pg_format_cast.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_largeobject.h"
 #include "catalog/pg_largeobject_metadata.h"
@@ -70,6 +71,7 @@
 #include "commands/defrem.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
+#include "commands/formatcast.h"
 #include "commands/policy.h"
 #include "commands/proclang.h"
 #include "commands/tablespace.h"
@@ -177,6 +179,20 @@ static const ObjectPropertyType ObjectProperty[] =
 		InvalidAttrNumber,
 		InvalidAttrNumber,
 		OBJECT_CAST,
+		false
+	},
+	{
+		"format cast",
+		FormatCastRelationId,
+		FormatCastOidIndexId,
+		FORMATCASTOID,
+		SYSCACHEID_INVALID,
+		Anum_pg_format_cast_oid,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		InvalidAttrNumber,
+		OBJECT_FORMAT_CAST,
 		false
 	},
 	{
@@ -797,6 +813,9 @@ static const struct object_type_map
 		"cast", OBJECT_CAST
 	},
 	{
+		"format cast", OBJECT_FORMAT_CAST
+	},
+	{
 		"collation", OBJECT_COLLATION
 	},
 	{
@@ -1162,6 +1181,21 @@ get_object_address(ObjectType objtype, Node *object,
 					address.classId = CastRelationId;
 					address.objectId =
 						get_cast_oid(sourcetypeid, targettypeid, missing_ok);
+					address.objectSubId = 0;
+				}
+				break;
+			case OBJECT_FORMAT_CAST:
+				{
+					TypeName   *sourcetype = linitial_node(TypeName, castNode(List, object));
+					TypeName   *targettype = lsecond_node(TypeName, castNode(List, object));
+					Oid			sourcetypeid;
+					Oid			targettypeid;
+
+					sourcetypeid = LookupTypeNameOid(NULL, sourcetype, missing_ok);
+					targettypeid = LookupTypeNameOid(NULL, targettype, missing_ok);
+					address.classId = FormatCastRelationId;
+					address.objectId =
+						get_format_cast_oid(sourcetypeid, targettypeid, missing_ok);
 					address.objectSubId = 0;
 				}
 				break;
@@ -2239,6 +2273,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 	 * exceptions.
 	 */
 	if (type == OBJECT_TYPE || type == OBJECT_DOMAIN || type == OBJECT_CAST ||
+		type == OBJECT_FORMAT_CAST ||
 		type == OBJECT_TRANSFORM || type == OBJECT_DOMCONSTRAINT)
 	{
 		Datum	   *elems;
@@ -2291,6 +2326,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 		type == OBJECT_ROUTINE ||
 		type == OBJECT_OPERATOR ||
 		type == OBJECT_CAST ||
+		type == OBJECT_FORMAT_CAST ||
 		type == OBJECT_AMOP ||
 		type == OBJECT_AMPROC)
 	{
@@ -2336,6 +2372,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			pg_fallthrough;
 		case OBJECT_DOMCONSTRAINT:
 		case OBJECT_CAST:
+		case OBJECT_FORMAT_CAST:
 		case OBJECT_PUBLICATION_REL:
 		case OBJECT_DEFACL:
 		case OBJECT_TRANSFORM:
@@ -2424,6 +2461,7 @@ pg_get_object_address(PG_FUNCTION_ARGS)
 			objnode = (Node *) typename;
 			break;
 		case OBJECT_CAST:
+		case OBJECT_FORMAT_CAST:
 		case OBJECT_DOMCONSTRAINT:
 		case OBJECT_TRANSFORM:
 			objnode = (Node *) list_make2(typename, linitial(args));
@@ -2583,6 +2621,7 @@ check_object_ownership(Oid roleid, ObjectType objtype, ObjectAddress address,
 								address.objectId)));
 			break;
 		case OBJECT_CAST:
+		case OBJECT_FORMAT_CAST:
 			{
 				/* We can only check permissions on the source/target types */
 				TypeName   *sourcetype = linitial_node(TypeName, castNode(List, object));
@@ -3108,6 +3147,31 @@ getObjectDescription(const ObjectAddress *object, bool missing_ok)
 
 				systable_endscan(rcscan);
 				table_close(castDesc, AccessShareLock);
+				break;
+			}
+
+		case FormatCastRelationId:
+			{
+				HeapTuple	fmtTup;
+				Form_pg_format_cast fmtForm;
+
+				fmtTup = SearchSysCache1(FORMATCASTOID,
+										 ObjectIdGetDatum(object->objectId));
+				if (!HeapTupleIsValid(fmtTup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "could not find tuple for format cast %u",
+							 object->objectId);
+					break;
+				}
+
+				fmtForm = (Form_pg_format_cast) GETSTRUCT(fmtTup);
+
+				appendStringInfo(&buffer, _("format cast from %s to %s"),
+								 format_type_be(fmtForm->fmtsource),
+								 format_type_be(fmtForm->fmttarget));
+
+				ReleaseSysCache(fmtTup);
 				break;
 			}
 
@@ -4762,6 +4826,10 @@ getObjectTypeDescription(const ObjectAddress *object, bool missing_ok)
 			appendStringInfoString(&buffer, "cast");
 			break;
 
+		case FormatCastRelationId:
+			appendStringInfoString(&buffer, "format cast");
+			break;
+
 		case CollationRelationId:
 			appendStringInfoString(&buffer, "collation");
 			break;
@@ -5222,6 +5290,43 @@ getObjectIdentityParts(const ObjectAddress *object,
 				}
 
 				table_close(castRel, AccessShareLock);
+				break;
+			}
+
+		case FormatCastRelationId:
+			{
+				Relation	fmtRel;
+				HeapTuple	tup;
+				Form_pg_format_cast fmtForm;
+
+				fmtRel = table_open(FormatCastRelationId, AccessShareLock);
+
+				tup = get_catalog_object_by_oid(fmtRel, Anum_pg_format_cast_oid,
+												object->objectId);
+
+				if (!HeapTupleIsValid(tup))
+				{
+					if (!missing_ok)
+						elog(ERROR, "could not find tuple for format cast %u",
+							 object->objectId);
+
+					table_close(fmtRel, AccessShareLock);
+					break;
+				}
+
+				fmtForm = (Form_pg_format_cast) GETSTRUCT(tup);
+
+				appendStringInfo(&buffer, "(%s AS %s)",
+								 format_type_be_qualified(fmtForm->fmtsource),
+								 format_type_be_qualified(fmtForm->fmttarget));
+
+				if (objname)
+				{
+					*objname = list_make1(format_type_be_qualified(fmtForm->fmtsource));
+					*objargs = list_make1(format_type_be_qualified(fmtForm->fmttarget));
+				}
+
+				table_close(fmtRel, AccessShareLock);
 				break;
 			}
 

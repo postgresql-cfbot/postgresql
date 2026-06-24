@@ -576,6 +576,7 @@ CreateExtensionStmt
 CreateFdwStmt
 CreateForeignServerStmt
 CreateForeignTableStmt
+CreateFormatCastStmt
 CreateFunctionStmt
 CreateOpClassItem
 CreateOpClassStmt
@@ -921,6 +922,7 @@ FormData_pg_extension
 FormData_pg_foreign_data_wrapper
 FormData_pg_foreign_server
 FormData_pg_foreign_table
+FormData_pg_format_cast
 FormData_pg_index
 FormData_pg_inherits
 FormData_pg_language
@@ -986,6 +988,7 @@ Form_pg_extension
 Form_pg_foreign_data_wrapper
 Form_pg_foreign_server
 Form_pg_foreign_table
+Form_pg_format_cast
 Form_pg_index
 Form_pg_inherits
 Form_pg_language
@@ -1027,6 +1030,7 @@ Form_pg_ts_parser
 Form_pg_ts_template
 Form_pg_type
 Form_pg_user_mapping
+FormatCastInfo
 FormatNode
 FreeBlockNumberArray
 FreeListData

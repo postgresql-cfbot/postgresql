@@ -300,6 +300,7 @@ static void dumpProcLang(Archive *fout, const ProcLangInfo *plang);
 static void dumpFunc(Archive *fout, const FuncInfo *finfo);
 static void dumpCast(Archive *fout, const CastInfo *cast);
 static void dumpTransform(Archive *fout, const TransformInfo *transform);
+static void dumpFormatCast(Archive *fout, const FormatCastInfo *formatcast);
 static void dumpOpr(Archive *fout, const OprInfo *oprinfo);
 static void dumpAccessMethod(Archive *fout, const AccessMethodInfo *aminfo);
 static void dumpOpclass(Archive *fout, const OpclassInfo *opcinfo);
@@ -9321,6 +9322,83 @@ getTransforms(Archive *fout)
 }
 
 /*
+ * getFormatCasts
+ *	  get basic information about every format cast in the system
+ */
+void
+getFormatCasts(Archive *fout)
+{
+	PGresult   *res;
+	int			ntups;
+	int			i;
+	PQExpBuffer query;
+	FormatCastInfo *formatcastinfo;
+	int			i_tableoid;
+	int			i_oid;
+	int			i_fmtsource;
+	int			i_fmttarget;
+	int			i_fmtfunc;
+
+	/* Format casts were introduced in v19 */
+	if (fout->remoteVersion < 190000)
+		return;
+
+	query = createPQExpBuffer();
+
+	appendPQExpBufferStr(query, "SELECT tableoid, oid, "
+						 "fmtsource, fmttarget, fmtfunc "
+						 "FROM pg_format_cast "
+						 "ORDER BY 3,4");
+
+	res = ExecuteSqlQuery(fout, query->data, PGRES_TUPLES_OK);
+
+	ntups = PQntuples(res);
+
+	formatcastinfo = pg_malloc_array(FormatCastInfo, ntups);
+
+	i_tableoid = PQfnumber(res, "tableoid");
+	i_oid = PQfnumber(res, "oid");
+	i_fmtsource = PQfnumber(res, "fmtsource");
+	i_fmttarget = PQfnumber(res, "fmttarget");
+	i_fmtfunc = PQfnumber(res, "fmtfunc");
+
+	for (i = 0; i < ntups; i++)
+	{
+		PQExpBufferData namebuf;
+		TypeInfo   *sTypeInfo;
+		TypeInfo   *tTypeInfo;
+
+		formatcastinfo[i].dobj.objType = DO_FORMAT_CAST;
+		formatcastinfo[i].dobj.catId.tableoid = atooid(PQgetvalue(res, i, i_tableoid));
+		formatcastinfo[i].dobj.catId.oid = atooid(PQgetvalue(res, i, i_oid));
+		AssignDumpId(&formatcastinfo[i].dobj);
+		formatcastinfo[i].fmtsource = atooid(PQgetvalue(res, i, i_fmtsource));
+		formatcastinfo[i].fmttarget = atooid(PQgetvalue(res, i, i_fmttarget));
+		formatcastinfo[i].fmtfunc = atooid(PQgetvalue(res, i, i_fmtfunc));
+
+		/*
+		 * Try to name the format cast as a concatenation of the type names.
+		 * This is only used for purposes of sorting.  If we fail to find
+		 * either type, the name will be an empty string.
+		 */
+		initPQExpBuffer(&namebuf);
+		sTypeInfo = findTypeByOid(formatcastinfo[i].fmtsource);
+		tTypeInfo = findTypeByOid(formatcastinfo[i].fmttarget);
+		if (sTypeInfo && tTypeInfo)
+			appendPQExpBuffer(&namebuf, "%s %s",
+							  sTypeInfo->dobj.name, tTypeInfo->dobj.name);
+		formatcastinfo[i].dobj.name = namebuf.data;
+
+		/* Decide whether we want to dump it */
+		selectDumpableObject(&(formatcastinfo[i].dobj), fout);
+	}
+
+	PQclear(res);
+
+	destroyPQExpBuffer(query);
+}
+
+/*
  * getTableAttrs -
  *	  for each interesting table, read info about its attributes
  *	  (names, types, default values, CHECK constraints, etc)
@@ -11913,6 +11991,9 @@ dumpDumpableObject(Archive *fout, DumpableObject *dobj)
 		case DO_TRANSFORM:
 			dumpTransform(fout, (const TransformInfo *) dobj);
 			break;
+		case DO_FORMAT_CAST:
+			dumpFormatCast(fout, (const FormatCastInfo *) dobj);
+			break;
 		case DO_SEQUENCE_SET:
 			dumpSequenceData(fout, (const TableDataInfo *) dobj);
 			break;
@@ -14253,6 +14334,90 @@ dumpTransform(Archive *fout, const TransformInfo *transform)
 	destroyPQExpBuffer(delqry);
 	destroyPQExpBuffer(labelq);
 	destroyPQExpBuffer(transformargs);
+}
+
+/*
+ * Dump a format cast
+ */
+static void
+dumpFormatCast(Archive *fout, const FormatCastInfo *formatcast)
+{
+	DumpOptions *dopt = fout->dopt;
+	PQExpBuffer defqry;
+	PQExpBuffer delqry;
+	PQExpBuffer labelq;
+	PQExpBuffer formatcastargs;
+	FuncInfo   *funcInfo;
+	const char *sourceType;
+	const char *targetType;
+
+	/* Do nothing if not dumping schema */
+	if (!dopt->dumpSchema)
+		return;
+
+	/* Cannot dump if we don't have the format cast function's info */
+	funcInfo = findFuncByOid(formatcast->fmtfunc);
+	if (funcInfo == NULL)
+		pg_fatal("could not find function definition for function with OID %u",
+				 formatcast->fmtfunc);
+
+	defqry = createPQExpBuffer();
+	delqry = createPQExpBuffer();
+	labelq = createPQExpBuffer();
+	formatcastargs = createPQExpBuffer();
+
+	sourceType = getFormattedTypeName(fout, formatcast->fmtsource, zeroAsNone);
+	targetType = getFormattedTypeName(fout, formatcast->fmttarget, zeroAsNone);
+
+	appendPQExpBuffer(delqry, "DROP FORMAT CAST (%s AS %s);\n",
+					  sourceType, targetType);
+
+	appendPQExpBuffer(defqry, "CREATE FORMAT CAST (%s AS %s) ",
+					  sourceType, targetType);
+
+	{
+		char	   *fsig = format_function_signature(fout, funcInfo, true);
+
+		/*
+		 * Always qualify the function name (format_function_signature won't
+		 * qualify it).
+		 */
+		appendPQExpBuffer(defqry, "WITH FUNCTION %s.%s",
+						  fmtId(funcInfo->dobj.namespace->dobj.name), fsig);
+		free(fsig);
+	}
+	appendPQExpBufferStr(defqry, ";\n");
+
+	appendPQExpBuffer(labelq, "FORMAT CAST (%s AS %s)",
+					  sourceType, targetType);
+
+	appendPQExpBuffer(formatcastargs, "(%s AS %s)",
+					  sourceType, targetType);
+
+	if (dopt->binary_upgrade)
+		binary_upgrade_extension_member(defqry, &formatcast->dobj,
+										"FORMAT CAST", formatcastargs->data, NULL);
+
+	if (formatcast->dobj.dump & DUMP_COMPONENT_DEFINITION)
+		ArchiveEntry(fout, formatcast->dobj.catId, formatcast->dobj.dumpId,
+					 ARCHIVE_OPTS(.tag = labelq->data,
+								  .description = "FORMAT CAST",
+								  .section = SECTION_PRE_DATA,
+								  .createStmt = defqry->data,
+								  .dropStmt = delqry->data,
+								  .deps = formatcast->dobj.dependencies,
+								  .nDeps = formatcast->dobj.nDeps));
+
+	/* Dump Format cast Comments */
+	if (formatcast->dobj.dump & DUMP_COMPONENT_COMMENT)
+		dumpComment(fout, "FORMAT CAST", formatcastargs->data,
+					NULL, "",
+					formatcast->dobj.catId, 0, formatcast->dobj.dumpId);
+
+	destroyPQExpBuffer(defqry);
+	destroyPQExpBuffer(delqry);
+	destroyPQExpBuffer(labelq);
+	destroyPQExpBuffer(formatcastargs);
 }
 
 
@@ -20696,6 +20861,7 @@ addBoundaryDependencies(DumpableObject **dobjs, int numObjs,
 			case DO_FDW:
 			case DO_FOREIGN_SERVER:
 			case DO_TRANSFORM:
+			case DO_FORMAT_CAST:
 				/* Pre-data objects: must come before the pre-data boundary */
 				addObjectDependency(preDataBound, dobj->dumpId);
 				break;

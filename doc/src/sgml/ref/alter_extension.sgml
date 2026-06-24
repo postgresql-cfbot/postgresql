@@ -39,6 +39,7 @@ ALTER EXTENSION <replaceable class="parameter">name</replaceable> DROP <replacea
   EVENT TRIGGER <replaceable class="parameter">object_name</replaceable> |
   FOREIGN DATA WRAPPER <replaceable class="parameter">object_name</replaceable> |
   FOREIGN TABLE <replaceable class="parameter">object_name</replaceable> |
+  FORMAT CAST (<replaceable>source_type</replaceable> AS <replaceable>target_type</replaceable>) |
   FUNCTION <replaceable class="parameter">function_name</replaceable> [ ( [ [ <replaceable class="parameter">argmode</replaceable> ] [ <replaceable class="parameter">argname</replaceable> ] <replaceable class="parameter">argtype</replaceable> [, ...] ] ) ] |
   MATERIALIZED VIEW <replaceable class="parameter">object_name</replaceable> |
   OPERATOR <replaceable class="parameter">operator_name</replaceable> (<replaceable class="parameter">left_type</replaceable>, <replaceable class="parameter">right_type</replaceable>) |

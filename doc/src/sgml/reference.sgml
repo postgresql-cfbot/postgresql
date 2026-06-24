@@ -98,6 +98,7 @@
    &createExtension;
    &createForeignDataWrapper;
    &createForeignTable;
+   &createFormatCast;
    &createFunction;
    &createGroup;
    &createIndex;
@@ -146,6 +147,7 @@
    &dropExtension;
    &dropForeignDataWrapper;
    &dropForeignTable;
+   &dropFormatCast;
    &dropFunction;
    &dropGroup;
    &dropIndex;

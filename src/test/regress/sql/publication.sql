@@ -418,6 +418,20 @@ CREATE TABLE testpub_rf_tbl7 (id int PRIMARY KEY, x int, y int GENERATED ALWAYS 
 CREATE PUBLICATION testpub8 FOR TABLE testpub_rf_tbl7 WHERE (y > 100);
 ALTER TABLE testpub_rf_tbl7 ALTER COLUMN y SET EXPRESSION AS (x * testpub_rf_func2());
 RESET client_min_messages;
+-- test that ALTER COLUMN ALTER [ SET DATA ] TYPE is rejected when the column is in a row filter
+CREATE TABLE testpub_rf_tbl8 (id int PRIMARY KEY, x int, y int, z int);
+CREATE PUBLICATION testpub9 FOR TABLE testpub_rf_tbl8 WHERE (x > 100 AND y < 200);
+SET client_min_messages = 'ERROR';
+-- fail
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN x TYPE bigint;
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN y TYPE bigint;
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN y TYPE bigint, ALTER COLUMN z TYPE bigint;
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN z TYPE bigint, ALTER COLUMN x TYPE bigint;
+\d testpub_rf_tbl8
+-- ok
+ALTER TABLE testpub_rf_tbl8 ALTER COLUMN z TYPE bigint;
+\d testpub_rf_tbl8
+RESET client_min_messages;
 
 DROP TABLE testpub_rf_tbl1;
 DROP TABLE testpub_rf_tbl2;
@@ -437,6 +451,8 @@ DROP OPERATOR =#>(integer, integer);
 DROP FUNCTION testpub_rf_func1(integer, integer);
 DROP FUNCTION testpub_rf_func2();
 DROP COLLATION user_collation;
+DROP PUBLICATION testpub9;
+DROP TABLE testpub_rf_tbl8;
 
 -- ======================================================
 -- More row filter tests for validating column references
@@ -805,6 +821,14 @@ ALTER TABLE testpub_tbl_both_filters REPLICA IDENTITY USING INDEX testpub_tbl_bo
 ALTER PUBLICATION testpub_both_filters ADD TABLE testpub_tbl_both_filters (a,c) WHERE (c != 1);
 \dRp+ testpub_both_filters
 \d+ testpub_tbl_both_filters
+
+SET client_min_messages = 'ERROR';
+-- fail - ALTER TABLE ALTER COLUMN [ SET DATA ] TYPE affecting column in row filter and column list
+ALTER TABLE testpub_tbl_both_filters ALTER COLUMN c TYPE bigint;
+-- ok - ALTER TABLE ALTER COLUMN ALTER [ SET DATA ] TYPE affecting column in column list and not in row filter
+ALTER TABLE testpub_tbl_both_filters ALTER COLUMN a TYPE text;
+\d testpub_tbl_both_filters
+RESET client_min_messages;
 
 DROP TABLE testpub_tbl_both_filters;
 DROP PUBLICATION testpub_both_filters;

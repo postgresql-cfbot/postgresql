@@ -723,6 +723,18 @@ uuid_extract_timestamp(PG_FUNCTION_ARGS)
 
 	if (version == 1)
 	{
+		/*
+		 * UUIDv1 splits the 60-bit Gregorian timestamp into three fields that
+		 * are *not* stored most-significant-first (see RFC 9562 sec. 5.1):
+		 *
+		 *  time_low  (bits 0-31)   octets 0-3, the least significant 32 bits
+		 *  time_mid  (bits 32-47)  octets 4-5, the middle 16 bits
+		 *  time_high (bits 48-59)  octet 6 low nibble + octet 7, the most
+		 *                          significant 12 bits (octet 6 high nibble
+		 *                          holds the version and is masked off)
+		 *
+		 * Reassemble the timestamp by shifting each field back to its place.
+		 */
 		tms = ((uint64) uuid->data[0] << 24)
 			+ ((uint64) uuid->data[1] << 16)
 			+ ((uint64) uuid->data[2] << 8)
@@ -740,6 +752,21 @@ uuid_extract_timestamp(PG_FUNCTION_ARGS)
 
 	if (version == 6)
 	{
+		/*
+		 * UUIDv6 is a field-compatible reordering of UUIDv1 that stores the
+		 * 60-bit Gregorian timestamp most-significant-first (see RFC 9562
+		 * sec. 5.6):
+		 *
+		 *  time_high (bits 28-59)  octets 0-3, the most significant 32 bits
+		 *  time_mid  (bits 12-27)  octets 4-5, the middle 16 bits
+		 *  time_low  (bits 0-11)   octet 6 low nibble + octet 7, the least
+		 *                          significant 12 bits (octet 6 high nibble
+		 *                          holds the version and is masked off)
+		 *
+		 * Note that time_mid is adjacent to time_low (shifted by 12, not 16):
+		 * the version nibble splits the field boundary, so time_low is only
+		 * 12 bits wide and the surrounding shifts must account for that.
+		 */
 		tms = ((uint64) uuid->data[0] << 52)
 			+ ((uint64) uuid->data[1] << 44)
 			+ ((uint64) uuid->data[2] << 36)
@@ -757,6 +784,12 @@ uuid_extract_timestamp(PG_FUNCTION_ARGS)
 
 	if (version == 7)
 	{
+		/*
+		 * UUIDv7 stores a 48-bit Unix timestamp in milliseconds (unix_ts_ms)
+		 * most-significant-first in octets 0-5 (see RFC 9562 sec. 5.7).  There
+		 * is no version nibble inside this field, so the bytes reassemble at
+		 * clean 8-bit boundaries.
+		 */
 		tms = (uuid->data[5])
 			+ (((uint64) uuid->data[4]) << 8)
 			+ (((uint64) uuid->data[3]) << 16)

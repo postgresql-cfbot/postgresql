@@ -177,5 +177,21 @@ SELECT '\x019a2f859ced7225b99d9c55044a2563'::bytea::uuid;
 SELECT '\x1234567890abcdef'::bytea::uuid; -- error
 SELECT v = v::bytea::uuid as matched FROM gen_random_uuid() v;
 
+-- Test UUID shapes that the parser uses the SIMD path.
+SELECT '5b35380a-7143-4912-9b55-f322699c6770'::uuid;
+SELECT '{5b35380a-7143-4912-9b55-f322699c6770}'::uuid;
+SELECT '5b35380a714349129b55f322699c6770'::uuid;
+SELECT '{5b35380a714349129b55f322699c6770}'::uuid;
+
+-- Test if the UUID parser using SIMD optimization correctly rejects invalid UUID
+-- string format.
+SELECT '5b35380a714349129b55f32  99c6770'::uuid;
+SELECT '5b35380a-7143-4912-9b55-f322699c67  '::uuid;
+SELECT '  35380a-7143-4912-9b55-f322699c6770'::uuid;
+SELECT 'AZ35380a-7143-4912-9b55-f322699c6770'::uuid;
+SELECT '{AZ35380a-7143-4912-9b55-f322699c6770}'::uuid;
+SELECT '{AZ35380a714349129b55f322699c6770}'::uuid;
+SELECT '{AZ35380a714349129b55f322699c67  }'::uuid;
+
 -- clean up
 DROP TABLE guid1, guid2, guid3 CASCADE;

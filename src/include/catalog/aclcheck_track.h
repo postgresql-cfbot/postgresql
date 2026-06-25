@@ -23,6 +23,7 @@
 #ifndef ACLCHECK_TRACK_H
 #define ACLCHECK_TRACK_H
 
+#include "access/xact.h"
 #include "storage/sinval.h"
 #include "utils/acl.h"
 
@@ -34,6 +35,7 @@ typedef struct AclCheckEntry
 	Oid			roleId;
 	AclMode		mode;
 	uint64		inval_count;
+	SubTransactionId subxid;
 } AclCheckEntry;
 
 typedef struct TrackAclTable
@@ -47,6 +49,7 @@ extern TrackAclTable *CurrentTrackAclTable;
 
 extern TrackAclTable *CreateTrackAclTable(void);
 extern void FreeTrackAclTable(TrackAclTable *acltable);
+extern void AtEOSubXact_AclTrack(bool isCommit, SubTransactionId mySubid);
 
 /*
  * Record an aclcheck for later revalidation.
@@ -79,6 +82,7 @@ aclcheck_track_record(Oid classId, Oid objectId, AttrNumber attnum,
 	entry->roleId = roleId;
 	entry->mode = mode;
 	entry->inval_count = SharedInvalidMessageCounter;
+	entry->subxid = GetCurrentSubTransactionId();
 }
 
 #endif							/* ACLCHECK_TRACK_H */

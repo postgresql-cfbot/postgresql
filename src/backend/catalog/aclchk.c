@@ -5097,3 +5097,27 @@ FreeTrackAclTable(TrackAclTable *acltable)
 	pfree(acltable->entries);
 	pfree(acltable);
 }
+
+/*
+ * AtEOSubXact_AclTrack
+ *
+ * At subtransaction abort, discard any ACL tracking entries that were added
+ * during the aborted subtransaction. This prevents stale entries from causing
+ * false permission-denied errors in recheckAcl().
+ *
+ * At subtransaction commit, do nothing, entries from committed subtransactions
+ * are valid and should be kept.
+ */
+void
+AtEOSubXact_AclTrack(bool isCommit, SubTransactionId mySubid)
+{
+	TrackAclTable *acltable = CurrentTrackAclTable;
+
+	if (acltable == NULL || isCommit)
+		return;
+
+	/* Discard entries from the aborting subtransaction and any nested ones */
+	while (acltable->count > 0 &&
+		   acltable->entries[acltable->count - 1].subxid >= mySubid)
+		acltable->count--;
+}

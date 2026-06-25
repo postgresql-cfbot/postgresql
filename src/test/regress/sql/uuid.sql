@@ -140,6 +140,10 @@ WITH uuidts AS (
 )
 SELECT y, ts, prev_ts FROM uuidts WHERE ts < prev_ts;
 
+-- uuidv7: infinite intervals are rejected
+SELECT uuidv7('infinity'::interval);
+SELECT uuidv7('-infinity'::interval);
+
 -- extract functions
 
 -- version

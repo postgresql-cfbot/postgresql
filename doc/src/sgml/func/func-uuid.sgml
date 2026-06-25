@@ -82,6 +82,7 @@
         sub-millisecond timestamp + random. The optional
         parameter <parameter>shift</parameter> will shift the computed
         timestamp by the given <type>interval</type>.
+        Infinite interval values are not accepted.
        </para>
        <para>
         <literal>uuidv7()</literal>

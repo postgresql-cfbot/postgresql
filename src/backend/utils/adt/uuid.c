@@ -672,6 +672,13 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 	int64		ns = get_real_time_ns_ascending();
 	int64		us;
 
+	/* Reject infinite intervals before any arithmetic */
+	if (INTERVAL_NOT_FINITE(shift))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("interval out of range for UUID version 7"),
+				 errdetail("UUID version 7 does not support infinite intervals.")));
+
 	/*
 	 * Shift the current timestamp by the given interval. To calculate time
 	 * shift correctly, we convert the UNIX epoch to TimestampTz and use

@@ -232,6 +232,18 @@ ProcSignalInit(const uint8 *cancel_key, int cancel_key_len)
 }
 
 /*
+ * IsProcSignalInitialized
+ *		Return true if this process has registered itself with the
+ *		ProcSignal subsystem (via ProcSignalInit) and not yet released its
+ *		slot in CleanupProcSignalState.
+ */
+bool
+IsProcSignalInitialized(void)
+{
+	return MyProcSignalSlot != NULL;
+}
+
+/*
  * CleanupProcSignalState
  *		Remove current process from ProcSignal mechanism
  *
@@ -597,6 +609,11 @@ ProcessProcSignalBarrier(void)
 					case PROCSIGNAL_BARRIER_CHECKSUM_INPROGRESS_OFF:
 					case PROCSIGNAL_BARRIER_CHECKSUM_OFF:
 						processed = AbsorbDataChecksumsBarrier(type);
+						break;
+					case PROCSIGNAL_BARRIER_SHBUF_RESIZE:
+						/* Just acknowledge; the resize coordinator only needs
+						 * confirmation that all backends have observed the
+						 * updated lowNBuffers. */
 						break;
 				}
 

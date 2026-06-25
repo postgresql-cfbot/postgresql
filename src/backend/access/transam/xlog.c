@@ -5025,7 +5025,10 @@ XLOGChooseNumBuffers(void)
 {
 	int			xbuffers;
 
-	xbuffers = NBuffers / 32;
+	/*
+	 * Use the maximum buffer pool size.
+	 */
+	xbuffers = GetMaxNBuffers() / 32;
 	if (xbuffers > (wal_segment_size / XLOG_BLCKSZ))
 		xbuffers = (wal_segment_size / XLOG_BLCKSZ);
 	if (xbuffers < 8)
@@ -7246,7 +7249,7 @@ LogCheckpointEnd(bool restartpoint, int flags)
 						"estimate=%d kB; lsn=%X/%08X, redo lsn=%X/%08X",
 						CheckpointFlagsString(flags),
 						CheckpointStats.ckpt_bufs_written,
-						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
+						(double) CheckpointStats.ckpt_bufs_written * 100 / GetHighNBuffers(),
 						CheckpointStats.ckpt_slru_written,
 						CheckpointStats.ckpt_segs_added,
 						CheckpointStats.ckpt_segs_removed,
@@ -7271,7 +7274,7 @@ LogCheckpointEnd(bool restartpoint, int flags)
 						"estimate=%d kB; lsn=%X/%08X, redo lsn=%X/%08X",
 						CheckpointFlagsString(flags),
 						CheckpointStats.ckpt_bufs_written,
-						(double) CheckpointStats.ckpt_bufs_written * 100 / NBuffers,
+						(double) CheckpointStats.ckpt_bufs_written * 100 / GetHighNBuffers(),
 						CheckpointStats.ckpt_slru_written,
 						CheckpointStats.ckpt_segs_added,
 						CheckpointStats.ckpt_segs_removed,
@@ -7889,7 +7892,7 @@ CreateCheckPoint(int flags)
 	update_checkpoint_display(flags, false, true);
 
 	TRACE_POSTGRESQL_CHECKPOINT_DONE(CheckpointStats.ckpt_bufs_written,
-									 NBuffers,
+									 GetHighNBuffers(),
 									 CheckpointStats.ckpt_segs_added,
 									 CheckpointStats.ckpt_segs_removed,
 									 CheckpointStats.ckpt_segs_recycled);

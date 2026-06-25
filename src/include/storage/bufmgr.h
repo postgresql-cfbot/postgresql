@@ -14,11 +14,13 @@
 #ifndef BUFMGR_H
 #define BUFMGR_H
 
+#include "miscadmin.h"
 #include "port/pg_iovec.h"
 #include "storage/aio_types.h"
 #include "storage/block.h"
 #include "storage/buf.h"
 #include "storage/bufpage.h"
+#include "storage/dynamic_shared_buffers.h"
 #include "storage/relfilelocator.h"
 #include "utils/relcache.h"
 #include "utils/snapmgr.h"
@@ -159,7 +161,7 @@ typedef struct ReadBuffersOperation ReadBuffersOperation;
 typedef struct WritebackContext WritebackContext;
 
 /* in globals.c ... this duplicates miscadmin.h */
-extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int NBuffersGUC;
 
 /* in bufmgr.c */
 extern PGDLLIMPORT bool zero_damaged_pages;
@@ -371,6 +373,13 @@ extern void MarkDirtyAllUnpinnedBuffers(int32 *buffers_dirtied,
 										int32 *buffers_already_dirty,
 										int32 *buffers_skipped);
 
+extern Size BufferManagerShmemExpand(int lowNBuffers, int highNBuffers, bool *success);
+extern void BufferManagerShmemInitBuffers(int lowNBuffers, int highNBuffers);
+extern Size BufferManagerShmemShrink(int lowNBuffers, int highNBuffers, bool *success);
+
+/* in bufmgr.c */
+extern bool EvictExtraBuffers(int lowNBuffers, int highNBuffers);
+
 /* in localbuf.c */
 extern void AtProcExit_LocalBuffers(void);
 
@@ -418,7 +427,7 @@ extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 static inline bool
 BufferIsValid(Buffer bufnum)
 {
-	Assert(bufnum <= NBuffers);
+	Assert(bufnum <= (Buffer) GetMaxNBuffers());
 	Assert(bufnum >= -NLocBuffer);
 
 	return bufnum != InvalidBuffer;

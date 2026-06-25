@@ -672,6 +672,7 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 	FILE	   *file;
 	char		transient_dump_file_path[MAXPGPATH];
 	pid_t		pid;
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
 
 	LWLockAcquire(&apw_state->lock, LW_EXCLUSIVE);
 	pid = apw_state->pid_using_dumpfile;
@@ -700,9 +701,9 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 	 * memory-efficient data structure.)
 	 */
 	block_info_array = (BlockInfoRecord *)
-		palloc_extended((sizeof(BlockInfoRecord) * NBuffers), MCXT_ALLOC_HUGE);
+		palloc_extended((sizeof(BlockInfoRecord) * localNBuffers), MCXT_ALLOC_HUGE);
 
-	for (num_blocks = 0, i = 0; i < NBuffers; i++)
+	for (num_blocks = 0, i = 0; i < localNBuffers; i++)
 	{
 		uint64		buf_state;
 
@@ -733,6 +734,7 @@ apw_dump_now(bool is_bgworker, bool dump_unlogged)
 
 		UnlockBufHdr(bufHdr);
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 
 	snprintf(transient_dump_file_path, MAXPGPATH, "%s.tmp", AUTOPREWARM_FILE);
 	file = AllocateFile(transient_dump_file_path, "w");

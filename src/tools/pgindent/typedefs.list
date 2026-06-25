@@ -715,6 +715,7 @@ DumpableObject
 DumpableObjectType
 DumpableObjectWithAcl
 DynamicFileList
+DynamicSharedBuffersControl
 DynamicZoneAbbrev
 ECDerivesEntry
 ECDerivesKey

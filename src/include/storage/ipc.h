@@ -64,6 +64,47 @@ typedef void (*shmem_startup_hook_type) (void);
 /* ipc.c */
 extern PGDLLIMPORT bool proc_exit_inprogress;
 extern PGDLLIMPORT bool shmem_exit_inprogress;
+extern int AcquireNBuffersLock(void);
+extern void ReleaseNBuffersLock(void);
+
+/*----------
+ * BEGIN_NBUFFERS_ACCESS / END_NBUFFERS_ACCESS
+ *
+ * The lock is released at scope exit via __attribute__((cleanup)), so:
+ *	- early `return`, `break`, or `goto` between BEGIN and END does NOT leak.
+ *	- END_NBUFFERS_ACCESS(name) is idempotent: it releases the lock and sets
+ *	  a sentinel so the cleanup at scope exit skips a second release. Use it
+ *	  when you want to drop the lock before the enclosing block ends.
+ *	- ereport(ERROR) bypasses the cleanup attribute, but LWLockReleaseAll()
+ *	  during transaction abort still releases AccessNBuffersLock, so no leak.
+ *
+ * Usage:
+ *		BEGIN_NBUFFERS_ACCESS(localNBuffers);
+ *		for (int i = 0; i < localNBuffers; i++)
+ *			... use buffer i ...
+ *		END_NBUFFERS_ACCESS(localNBuffers);
+ *
+ *----------
+ */
+static inline void
+nbuffers_lock_auto_release(const bool *released)
+{
+	if (!*released)
+		ReleaseNBuffersLock();
+}
+
+#define BEGIN_NBUFFERS_ACCESS(name) \
+	bool name##_released __attribute__((cleanup(nbuffers_lock_auto_release))) = false; \
+	int name = AcquireNBuffersLock()
+
+#define END_NBUFFERS_ACCESS(name) \
+	do { \
+		if (!name##_released) \
+		{ \
+			ReleaseNBuffersLock(); \
+			name##_released = true; \
+		} \
+	} while (0)
 
 pg_noreturn extern void proc_exit(int code);
 extern void shmem_exit(int code);

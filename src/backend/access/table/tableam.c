@@ -420,7 +420,7 @@ table_block_parallelscan_initialize(Relation rel, ParallelTableScanDesc pscan)
 	/* compare phs_syncscan initialization to similar logic in initscan */
 	bpscan->base.phs_syncscan = synchronize_seqscans &&
 		!RelationUsesLocalBuffers(rel) &&
-		bpscan->phs_nblocks > NBuffers / 4;
+		bpscan->phs_nblocks > GetHighNBuffers() / 4;
 	SpinLockInit(&bpscan->phs_mutex);
 	bpscan->phs_startblock = InvalidBlockNumber;
 	bpscan->phs_numblock = InvalidBlockNumber;

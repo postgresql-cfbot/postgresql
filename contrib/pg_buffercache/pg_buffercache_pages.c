@@ -15,6 +15,7 @@
 #include "port/pg_numa.h"
 #include "storage/buf_internals.h"
 #include "storage/bufmgr.h"
+#include "storage/ipc.h"
 #include "utils/rel.h"
 #include "utils/tuplestore.h"
 
@@ -92,16 +93,84 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 	MemoryContext oldcontext;
 	int			i;
 
-	/*
-	 * To smoothly support upgrades from version 1.0 of this extension
-	 * transparently handle the (non-)existence of the pinning_backends
-	 * column. We unfortunately have to get the result type for that... - we
-	 * can't use the result type determined by the function definition without
-	 * potentially crashing when somebody uses the old (or even wrong)
-	 * function definition though.
-	 */
-	if (get_call_result_type(fcinfo, NULL, &expected_tupledesc) != TYPEFUNC_COMPOSITE)
-		elog(ERROR, "return type must be a row type");
+	if (SRF_IS_FIRSTCALL())
+	{
+		int			i;
+		BEGIN_NBUFFERS_ACCESS(localNBuffers);
+
+		funcctx = SRF_FIRSTCALL_INIT();
+
+		/* Switch context when allocating stuff to be used in later calls */
+		oldcontext = MemoryContextSwitchTo(funcctx->multi_call_memory_ctx);
+
+		/* Create a user function context for cross-call persistence */
+		fctx = (BufferCachePagesContext *) palloc(sizeof(BufferCachePagesContext));
+
+		/*
+		 * To smoothly support upgrades from version 1.0 of this extension
+		 * transparently handle the (non-)existence of the pinning_backends
+		 * column. We unfortunately have to get the result type for that... -
+		 * we can't use the result type determined by the function definition
+		 * without potentially crashing when somebody uses the old (or even
+		 * wrong) function definition though.
+		 */
+		if (get_call_result_type(fcinfo, NULL, &expected_tupledesc) != TYPEFUNC_COMPOSITE)
+			elog(ERROR, "return type must be a row type");
+
+		if (expected_tupledesc->natts < NUM_BUFFERCACHE_PAGES_MIN_ELEM ||
+			expected_tupledesc->natts > NUM_BUFFERCACHE_PAGES_ELEM)
+			elog(ERROR, "incorrect number of output arguments");
+
+		/* Construct a tuple descriptor for the result rows. */
+		tupledesc = CreateTemplateTupleDesc(expected_tupledesc->natts);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 1, "bufferid",
+						   INT4OID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 2, "relfilenode",
+						   OIDOID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 3, "reltablespace",
+						   OIDOID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 4, "reldatabase",
+						   OIDOID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 5, "relforknumber",
+						   INT2OID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 6, "relblocknumber",
+						   INT8OID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 7, "isdirty",
+						   BOOLOID, -1, 0);
+		TupleDescInitEntry(tupledesc, (AttrNumber) 8, "usage_count",
+						   INT2OID, -1, 0);
+
+		if (expected_tupledesc->natts == NUM_BUFFERCACHE_PAGES_ELEM)
+			TupleDescInitEntry(tupledesc, (AttrNumber) 9, "pinning_backends",
+							   INT4OID, -1, 0);
+
+		fctx->tupdesc = BlessTupleDesc(tupledesc);
+
+
+		/* Allocate NBuffers worth of BufferCachePagesRec records. */
+		fctx->record = (BufferCachePagesRec *)
+			MemoryContextAllocHuge(CurrentMemoryContext,
+								   sizeof(BufferCachePagesRec) * localNBuffers);
+
+		/* Set max calls and remember the user function context. */
+		funcctx->max_calls = localNBuffers;
+		funcctx->user_fctx = fctx;
+
+		/* Return to original context when allocating transient memory */
+		MemoryContextSwitchTo(oldcontext);
+
+		/*
+		 * Scan through all the buffers, saving the relevant fields in the
+		 * fctx->record structure.
+		 *
+		 * We don't hold the partition locks, so we don't get a consistent
+		 * snapshot across all buffers, but we do grab the buffer header
+		 * locks, so the information of each buffer is self-consistent.
+		 */
+		for (i = 0; i < localNBuffers; i++)
+		{
+			BufferDesc *bufHdr;
+			uint32		buf_state;
 
 	if (expected_tupledesc->natts < NUM_BUFFERCACHE_PAGES_MIN_ELEM ||
 		expected_tupledesc->natts > NUM_BUFFERCACHE_PAGES_ELEM)
@@ -151,18 +220,10 @@ pg_buffercache_pages(PG_FUNCTION_ARGS)
 
 		CHECK_FOR_INTERRUPTS();
 
-		bufHdr = GetBufferDescriptor(i);
-		/* Lock each buffer header before inspecting. */
-		buf_state = LockBufHdr(bufHdr);
-
-		bufferid = BufferDescriptorGetBuffer(bufHdr);
-		relfilenumber = BufTagGetRelNumber(&bufHdr->tag);
-		reltablespace = bufHdr->tag.spcOid;
-		reldatabase = bufHdr->tag.dbOid;
-		forknum = BufTagGetForkNum(&bufHdr->tag);
-		blocknum = bufHdr->tag.blockNum;
-		usagecount = BUF_STATE_GET_USAGECOUNT(buf_state);
-		pinning_backends = BUF_STATE_GET_REFCOUNT(buf_state);
+			UnlockBufHdr(bufHdr, buf_state);
+		}
+		END_NBUFFERS_ACCESS(localNBuffers);
+	}
 
 		if (buf_state & BM_DIRTY)
 			isdirty = true;
@@ -299,6 +360,7 @@ pg_buffercache_os_pages_internal(FunctionCallInfo fcinfo, bool include_numa)
 		int			max_entries;
 		char	   *startptr,
 				   *endptr;
+		BEGIN_NBUFFERS_ACCESS(localNBuffers);
 
 		/* If NUMA information is requested, initialize NUMA support. */
 		if (include_numa && pg_numa_init() == -1)
@@ -329,7 +391,24 @@ pg_buffercache_os_pages_internal(FunctionCallInfo fcinfo, bool include_numa)
 		 */
 		Assert((os_page_size % BLCKSZ == 0) || (BLCKSZ % os_page_size == 0));
 
-		if (include_numa)
+		/*
+		 * How many addresses we are going to query? Simply get the page for
+		 * the first buffer, and first page after the last buffer, and count
+		 * the pages from that.
+		 */
+		startptr = (char *) TYPEALIGN_DOWN(os_page_size,
+										   BufferGetBlock(1));
+		endptr = (char *) TYPEALIGN(os_page_size,
+									(char *) BufferGetBlock(localNBuffers) + BLCKSZ);
+		os_page_count = (endptr - startptr) / os_page_size;
+
+		/* Used to determine the NUMA node for all OS pages at once */
+		os_page_ptrs = palloc0(sizeof(void *) * os_page_count);
+		os_page_status = palloc(sizeof(int) * os_page_count);
+
+		/* Fill pointers for all the memory pages. */
+		idx = 0;
+		for (char *ptr = startptr; ptr < endptr; ptr += os_page_size)
 		{
 			void	  **os_page_ptrs = NULL;
 
@@ -366,8 +445,8 @@ pg_buffercache_os_pages_internal(FunctionCallInfo fcinfo, bool include_numa)
 
 			Assert(idx == os_page_count);
 
-			elog(DEBUG1, "NUMA: NBuffers=%d os_page_count=" UINT64_FORMAT " "
-				 "os_page_size=%zu", NBuffers, os_page_count, os_page_size);
+		elog(DEBUG1, "NUMA: NBuffers=%d os_page_count=" UINT64_FORMAT " "
+			 "os_page_size=%zu", localNBuffers, os_page_count, os_page_size);
 
 			/*
 			 * If we ever get 0xff back from kernel inquiry, then we probably
@@ -417,7 +496,7 @@ pg_buffercache_os_pages_internal(FunctionCallInfo fcinfo, bool include_numa)
 		 * without reallocating memory.
 		 */
 		pages_per_buffer = Max(1, BLCKSZ / os_page_size) + 1;
-		max_entries = NBuffers * pages_per_buffer;
+		max_entries = localNBuffers * pages_per_buffer;
 
 		/* Allocate entries for BufferCacheOsPagesRec records. */
 		fctx->record = (BufferCacheOsPagesRec *)
@@ -437,10 +516,14 @@ pg_buffercache_os_pages_internal(FunctionCallInfo fcinfo, bool include_numa)
 		 * We don't hold the partition locks, so we don't get a consistent
 		 * snapshot across all buffers, but we do grab the buffer header
 		 * locks, so the information of each buffer is self-consistent.
+		 *
+		 * This loop touches and stores addresses into os_page_ptrs[] as input
+		 * to one big move_pages(2) inquiry system call. Basically we ask for
+		 * all memory pages for localNBuffers.
 		 */
 		startptr = (char *) TYPEALIGN_DOWN(os_page_size, (char *) BufferGetBlock(1));
 		idx = 0;
-		for (i = 0; i < NBuffers; i++)
+		for (i = 0; i < localNBuffers; i++)
 		{
 			char	   *buffptr = (char *) BufferGetBlock(i + 1);
 			BufferDesc *bufHdr;
@@ -491,9 +574,10 @@ pg_buffercache_os_pages_internal(FunctionCallInfo fcinfo, bool include_numa)
 		funcctx->max_calls = idx;
 		funcctx->user_fctx = fctx;
 
-		/* Remember this backend touched the pages (only relevant for NUMA) */
-		if (include_numa)
-			firstNumaTouch = false;
+		/* Remember this backend touched the pages */
+		firstNumaTouch = false;
+
+		END_NBUFFERS_ACCESS(localNBuffers);
 	}
 
 	funcctx = SRF_PERCALL_SETUP();
@@ -582,11 +666,12 @@ pg_buffercache_summary(PG_FUNCTION_ARGS)
 	int32		buffers_dirty = 0;
 	int32		buffers_pinned = 0;
 	int64		usagecount_total = 0;
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
 
 	if (get_call_result_type(fcinfo, NULL, &tupledesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
 
-	for (int i = 0; i < NBuffers; i++)
+	for (int i = 0; i < localNBuffers; i++)
 	{
 		BufferDesc *bufHdr;
 		uint64		buf_state;
@@ -616,6 +701,7 @@ pg_buffercache_summary(PG_FUNCTION_ARGS)
 		if (BUF_STATE_GET_REFCOUNT(buf_state) > 0)
 			buffers_pinned++;
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 
 	memset(nulls, 0, sizeof(nulls));
 	values[0] = Int32GetDatum(buffers_used);
@@ -644,10 +730,11 @@ pg_buffercache_usage_counts(PG_FUNCTION_ARGS)
 	int			pinned[BM_MAX_USAGE_COUNT + 1] = {0};
 	Datum		values[NUM_BUFFERCACHE_USAGE_COUNTS_ELEM];
 	bool		nulls[NUM_BUFFERCACHE_USAGE_COUNTS_ELEM] = {0};
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
 
 	InitMaterializedSRF(fcinfo, 0);
 
-	for (int i = 0; i < NBuffers; i++)
+	for (int i = 0; i < localNBuffers; i++)
 	{
 		BufferDesc *bufHdr = GetBufferDescriptor(i);
 		uint64		buf_state = pg_atomic_read_u64(&bufHdr->state);
@@ -664,6 +751,7 @@ pg_buffercache_usage_counts(PG_FUNCTION_ARGS)
 		if (BUF_STATE_GET_REFCOUNT(buf_state) > 0)
 			pinned[usage_count]++;
 	}
+	END_NBUFFERS_ACCESS(localNBuffers);
 
 	for (int i = 0; i < BM_MAX_USAGE_COUNT + 1; i++)
 	{
@@ -705,13 +793,15 @@ pg_buffercache_evict(PG_FUNCTION_ARGS)
 
 	Buffer		buf = PG_GETARG_INT32(0);
 	bool		buffer_flushed;
+	BEGIN_NBUFFERS_ACCESS(localNBuffers);
+	(void) localNBuffers;
 
 	if (get_call_result_type(fcinfo, NULL, &tupledesc) != TYPEFUNC_COMPOSITE)
 		elog(ERROR, "return type must be a row type");
 
 	pg_buffercache_superuser_check("pg_buffercache_evict");
 
-	if (buf < 1 || buf > NBuffers)
+	if (buf < 1 || buf > GetLowNBuffers())
 		elog(ERROR, "bad buffer ID: %d", buf);
 
 	values[0] = BoolGetDatum(EvictUnpinnedBuffer(buf, &buffer_flushed));
@@ -719,6 +809,8 @@ pg_buffercache_evict(PG_FUNCTION_ARGS)
 
 	tuple = heap_form_tuple(tupledesc, values, nulls);
 	result = HeapTupleGetDatum(tuple);
+
+	END_NBUFFERS_ACCESS(localNBuffers);
 
 	PG_RETURN_DATUM(result);
 }

@@ -175,12 +175,28 @@ extern PGDLLIMPORT bool ExitOnAnyError;
 extern PGDLLIMPORT char *DataDir;
 extern PGDLLIMPORT int data_directory_mode;
 
-extern PGDLLIMPORT int NBuffers;
+extern PGDLLIMPORT int NBuffersGUC;
+extern PGDLLIMPORT int MaxNBuffers;
 extern PGDLLIMPORT int MaxBackends;
 extern PGDLLIMPORT int MaxConnections;
 extern PGDLLIMPORT int max_worker_processes;
 extern PGDLLIMPORT int max_parallel_workers;
 extern PGDLLIMPORT int autovacuum_max_parallel_workers;
+extern PGDLLIMPORT bool enable_dynamic_shared_buffers;
+
+/*
+ * GetMaxNBuffers
+ *
+ * Before DSB is introduced, PG does not recognize max_shared_buffers GUC.
+ * When max_shared_buffers is not set, it is resolved to NBuffersGUC.
+ */
+static inline int
+GetMaxNBuffers(void)
+{
+	if (enable_dynamic_shared_buffers)
+		return MaxNBuffers;
+	return NBuffersGUC;
+}
 
 extern PGDLLIMPORT int commit_timestamp_buffers;
 extern PGDLLIMPORT int multixact_member_buffers;

@@ -37,7 +37,7 @@ typedef struct
 	/*
 	 * clock-sweep hand: index of next buffer to consider grabbing. Note that
 	 * this isn't a concrete buffer - we only ever increase the value. So, to
-	 * get an actual buffer, it needs to be used modulo NBuffers.
+	 * get an actual buffer, it needs to be used modulo lowNBuffers.
 	 */
 	pg_atomic_uint32 nextVictimBuffer;
 
@@ -110,6 +110,7 @@ static inline uint32
 ClockSweepTick(void)
 {
 	uint32		victim;
+	int			lowNBuffers;
 
 	/*
 	 * Atomically move hand ahead one buffer - if there's several processes
@@ -118,13 +119,14 @@ ClockSweepTick(void)
 	 */
 	victim =
 		pg_atomic_fetch_add_u32(&StrategyControl->nextVictimBuffer, 1);
+	lowNBuffers = GetLowNBuffers();
 
-	if (victim >= NBuffers)
+	if (victim >= lowNBuffers)
 	{
 		uint32		originalVictim = victim;
 
 		/* always wrap what we look up in BufferDescriptors */
-		victim = victim % NBuffers;
+		victim = victim % lowNBuffers;
 
 		/*
 		 * If we're the one that just caused a wraparound, force
@@ -152,7 +154,7 @@ ClockSweepTick(void)
 				 */
 				SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 
-				wrapped = expected % NBuffers;
+				wrapped = expected % GetLowNBuffers();
 
 				success = pg_atomic_compare_exchange_u32(&StrategyControl->nextVictimBuffer,
 														 &expected, wrapped);
@@ -237,7 +239,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 	pg_atomic_fetch_add_u32(&StrategyControl->numBufferAllocs, 1);
 
 	/* Use the "clock sweep" algorithm to find a free buffer */
-	trycounter = NBuffers;
+	trycounter = GetLowNBuffers();
 	for (;;)
 	{
 		uint64		old_buf_state;
@@ -290,7 +292,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 				if (pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state,
 												   local_buf_state))
 				{
-					trycounter = NBuffers;
+					trycounter = GetLowNBuffers();
 					break;
 				}
 			}
@@ -328,14 +330,17 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
  * being read.
  */
 int
-StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
+StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc,
+				  int *low_nbuffers)
 {
 	uint32		nextVictimBuffer;
 	int			result;
+	int			lowNBuffers;
 
 	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
 	nextVictimBuffer = pg_atomic_read_u32(&StrategyControl->nextVictimBuffer);
-	result = nextVictimBuffer % NBuffers;
+	lowNBuffers = GetLowNBuffers();
+	result = nextVictimBuffer % lowNBuffers;
 
 	if (complete_passes)
 	{
@@ -345,13 +350,15 @@ StrategySyncStart(uint32 *complete_passes, uint32 *num_buf_alloc)
 		 * Additionally add the number of wraparounds that happened before
 		 * completePasses could be incremented. C.f. ClockSweepTick().
 		 */
-		*complete_passes += nextVictimBuffer / NBuffers;
+		*complete_passes += nextVictimBuffer / lowNBuffers;
 	}
 
 	if (num_buf_alloc)
 	{
 		*num_buf_alloc = pg_atomic_exchange_u32(&StrategyControl->numBufferAllocs, 0);
 	}
+	if (low_nbuffers)
+		*low_nbuffers = lowNBuffers;
 	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 	return result;
 }
@@ -522,10 +529,15 @@ GetAccessStrategyWithSize(BufferAccessStrategyType btype, int ring_size_kb)
 	if (ring_buffers == 0)
 		return NULL;
 
-	/* Cap to 1/8th of shared_buffers */
-	ring_buffers = Min(NBuffers / 8, ring_buffers);
+	/*
+	 * Cap to 1/8th of shared_buffers. Using GetLowNBuffers() here is fine even
+	 * though it is a non-critical sizing decision: the strategy survives a
+	 * resize because the ring size is fixed once the strategy is created.
+	 */
+	ring_buffers = Min(GetLowNBuffers() / 8, ring_buffers);
 
-	/* NBuffers should never be less than 16, so this shouldn't happen */
+	/* shared_buffers should never be less than MIN_SHARED_BUFFERS,
+	 * so this shouldn't happen */
 	Assert(ring_buffers > 0);
 
 	/* Allocate the object and initialize all elements to zeroes */
@@ -574,7 +586,7 @@ int
 GetAccessStrategyPinLimit(BufferAccessStrategy strategy)
 {
 	if (strategy == NULL)
-		return NBuffers;
+		return GetLowNBuffers();
 
 	switch (strategy->btype)
 	{
@@ -767,4 +779,37 @@ StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_r
 	strategy->buffers[strategy->current] = InvalidBuffer;
 
 	return true;
+}
+
+/*
+ * StrategyReset -- reset the clock-sweep cursor for a buffer pool resize.
+ *
+ * Called by pg_resize_shared_buffers() at two distinct points:
+ *
+ *	- Just before publishing a lower lowNBuffers (shrink). The existing
+ *	  cursor may already point above new_size; resetting to 0 makes the
+ *	  next clock sweep start from the bottom of the surviving range and
+ *	  avoids ClockSweepTick() wrapping past the new buffers via modulo
+ *	  arithmetic right as the bound moves.
+ *
+ *	- At the end of an expand, after the new descriptors are initialized,
+ *	  to point the cursor at the start of the freshly added range so the
+ *	  next sweep tries the empty buffers before re-scanning existing ones
+ *	  with usage_count == 0.
+ */
+void
+StrategyReset(int old_size, int new_size)
+{
+	SpinLockAcquire(&StrategyControl->buffer_strategy_lock);
+	if (new_size > old_size)
+	{
+		/* expand: point cursor at start of new range */
+		pg_atomic_write_u32(&StrategyControl->nextVictimBuffer, old_size);
+	}
+	else
+	{
+		/* shrink: rewind cursor to the bottom of the surviving range */
+		pg_atomic_write_u32(&StrategyControl->nextVictimBuffer, 0);
+	}
+	SpinLockRelease(&StrategyControl->buffer_strategy_lock);
 }

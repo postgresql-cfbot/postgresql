@@ -12693,4 +12693,13 @@
   proname => 'hashoid8extended', prorettype => 'int8',
   proargtypes => 'oid8 int8', prosrc => 'hashoid8extended' },
 
+# Online shared buffer pool resizing (see src/backend/storage/buffer/buf_resize.c)
+{ oid => '6500', descr => 'resize the shared buffer pool to a new size',
+  proname => 'pg_resize_shared_buffers', provolatile => 'v', proretset => 't',
+  prorettype => 'record', proargtypes => 'text',
+  proallargtypes => '{text,text,float8,text}',
+  proargmodes => '{i,o,o,o}',
+  proargnames => '{new_size,key,value,unit}',
+  prosrc => 'pg_resize_shared_buffers' },
+
 ]

@@ -827,6 +827,9 @@ extern bool pgstat_drop_entry(PgStat_Kind kind, Oid dboid, uint64 objid,
 extern void pgstat_drop_all_entries(void);
 extern void pgstat_drop_matching_entries(bool (*do_drop) (PgStatShared_HashEntry *, Datum),
 										 Datum match_data);
+extern bool pgstat_drop_current(PgStatShared_HashEntry *shent,
+								dshash_seq_status *hstat);
+extern bool pgstat_has_pending(PgStatShared_HashEntry *shent);
 extern PgStat_EntryRef *pgstat_get_entry_ref_locked(PgStat_Kind kind, Oid dboid, uint64 objid,
 													bool nowait);
 extern void pgstat_reset_entry(PgStat_Kind kind, Oid dboid, uint64 objid, TimestampTz ts);

@@ -1160,6 +1160,55 @@ pgstat_drop_matching_entries(bool (*do_drop) (PgStatShared_HashEntry *, Datum),
 }
 
 /*
+ * Drop a stats entry during a dshash sequential scan.
+ *
+ * The caller must have initialized the scan with exclusive locking and
+ * passes the PgStatShared_HashEntry obtained from dshash_seq_next().
+ *
+ * Returns true if the entry was freed immediately, false if other backends
+ * still hold references (in which case it is marked as dropped for later
+ * cleanup).
+ */
+bool
+pgstat_drop_current(PgStatShared_HashEntry *shent, dshash_seq_status *hstat)
+{
+	if (shent->dropped)
+		return true;
+
+	/* release local reference if we hold one */
+	if (pgStatEntryRefHash)
+	{
+		PgStat_EntryRefHashEntry *lohashent =
+			pgstat_entry_ref_hash_lookup(pgStatEntryRefHash, shent->key);
+
+		if (lohashent)
+			pgstat_release_entry_ref(lohashent->key, lohashent->entry_ref,
+									 true);
+	}
+
+	return pgstat_drop_entry_internal(shent, hstat);
+}
+
+/*
+ * Check if the given stats entry has pending local data that hasn't been
+ * flushed yet.
+ */
+bool
+pgstat_has_pending(PgStatShared_HashEntry *shent)
+{
+	if (pgStatEntryRefHash)
+	{
+		PgStat_EntryRefHashEntry *lohashent =
+			pgstat_entry_ref_hash_lookup(pgStatEntryRefHash, shent->key);
+
+		if (lohashent && lohashent->entry_ref->pending)
+			return true;
+	}
+
+	return false;
+}
+
+/*
  * Scan through all stats hash tables and drop all entries.
  */
 void

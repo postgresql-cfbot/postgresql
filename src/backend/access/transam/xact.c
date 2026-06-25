@@ -32,6 +32,7 @@
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "access/xlogwait.h"
+#include "catalog/aclcheck_track.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_enum.h"
@@ -5389,6 +5390,7 @@ AbortSubTransaction(void)
 		if (FullTransactionIdIsValid(s->fullTransactionId))
 			AtSubAbort_childXids();
 
+		AtEOSubXact_AclTrack(false, s->subTransactionId);
 		CallSubXactCallbacks(SUBXACT_EVENT_ABORT_SUB, s->subTransactionId,
 							 s->parent->subTransactionId);
 

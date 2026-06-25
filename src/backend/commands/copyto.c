@@ -1051,15 +1051,16 @@ BeginCopyTo(ParseState *pstate,
 	{
 		cstate->json_buf = makeStringInfo();
 
-		if (rel && list_length(cstate->attnumlist) < tupDesc->natts)
+		/*
+		 * Build a projected TupleDesc for JSON output when columns are
+		 * explicitly listed or generated columns are excluded.
+		 */
+		if (rel && (attnamelist != NIL ||
+					list_length(cstate->attnumlist) < tupDesc->natts))
 		{
 			int			natts = list_length(cstate->attnumlist);
 			TupleDesc	resultDesc;
 
-			/*
-			 * Build a TupleDesc describing only the selected columns so that
-			 * composite_to_json() emits the right column names and types.
-			 */
 			resultDesc = CreateTemplateTupleDesc(natts);
 
 			foreach_int(attnum, cstate->attnumlist)

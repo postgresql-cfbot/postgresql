@@ -268,6 +268,14 @@ DETAIL:  UUID version 7 does not support infinite intervals.
 SELECT uuidv7('-infinity'::interval);
 ERROR:  interval out of range for UUID version 7
 DETAIL:  UUID version 7 does not support infinite intervals.
+-- uuidv7: timestamps before Unix epoch are rejected
+SELECT uuidv7('-1000 years'::interval);
+ERROR:  timestamp out of range for UUID version 7
+DETAIL:  UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.
+-- uuidv7: large future intervals that overflow epoch conversion are rejected
+SELECT uuidv7('292230 years'::interval);
+ERROR:  timestamp out of range for UUID version 7
+DETAIL:  UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.
 -- extract functions
 -- version
 SELECT uuid_extract_version('11111111-1111-5111-8111-111111111111');  -- 5

@@ -103,6 +103,8 @@ extern void get_atttypetypmodcoll(Oid relid, AttrNumber attnum,
 								  Oid *typid, int32 *typmod, Oid *collid);
 extern Datum get_attoptions(Oid relid, int16 attnum);
 extern Oid	get_cast_oid(Oid sourcetypeid, Oid targettypeid, bool missing_ok);
+extern Oid	get_format_cast_function(Oid sourcetypeid, Oid targettypeid,
+								   Oid *formatfunc);
 extern char *get_collation_name(Oid colloid);
 extern bool get_collation_isdeterministic(Oid colloid);
 extern char *get_constraint_name(Oid conoid);

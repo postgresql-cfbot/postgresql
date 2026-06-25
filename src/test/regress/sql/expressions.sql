@@ -305,14 +305,18 @@ rollback;
 --
 -- CAST(expr AS type FORMAT format_expr)
 --
--- The FORMAT clause is parsed and stored, but format cast resolution is not
--- implemented yet, so parse analysis must reject it (not ignore it).
+-- A FORMAT clause is resolved through a registered format cast (see CREATE
+-- FORMAT CAST) and never falls back to an ordinary cast.  No format_casts are
+-- defined in this test, so these casts fail with a missing-format cast error;
+-- this confirms the FORMAT clause is neither ignored nor treated as an
+-- ordinary cast.  An unknown-type source literal is coerced to text first,
+-- so the lookup key is (text, target).
 
--- basic form
+-- basic form (looks up a format cast for (text, date))
 SELECT CAST('2026-06-24' AS date FORMAT 'YYYY-MM-DD');
 
 -- the format may be a general expression, not just a string literal
 SELECT CAST('2026-06-24' AS date FORMAT 'YYYY' || '-MM-DD');
 
--- a no-op-looking cast must still be rejected, not relabeled away
+-- a no-op-looking cast must not be relabeled away; it needs a (text, text) format cast
 SELECT CAST('abc'::text AS text FORMAT 'whatever');

@@ -1,9 +1,10 @@
 --
 -- FORMAT CASTS
 --
--- CREATE/DROP FORMAT CAST registers format cast metadata in pg_format_cast,
--- keyed by a (source type, target type) pair.  This is catalog and DDL
--- infrastructure only; it does not transform or execute formatted casts.
+-- A format cast registers a function for a (source type, target type) pair; a
+-- CAST(... AS target FORMAT format_expr) is resolved through pg_format_cast and
+-- calls that function.  This test covers both the CREATE/DROP FORMAT CAST
+-- catalog DDL and the execution of formatted casts.
 -- A simple format cast function with the required signature
 --   function(source_type, text) returns target_type
 CREATE FUNCTION int4_to_text_fmt(integer, text) RETURNS text
@@ -104,14 +105,124 @@ CREATE FUNCTION fmt_anyel(anyelement, text) RETURNS text
 CREATE FORMAT CAST (anyelement AS text)
 	WITH FUNCTION fmt_anyel(anyelement, text);
 ERROR:  source data type anyelement is a pseudo-type
--- Registering a format cast does not enable a formatted cast: the FORMAT
--- clause must not be silently ignored or rewritten to a built-in function,
--- so CAST(... FORMAT ...) is rejected during parse analysis.
-SELECT CAST(5 AS text FORMAT 'YYYY');
-ERROR:  formatted casts are not implemented yet
-LINE 1: SELECT CAST(5 AS text FORMAT 'YYYY');
+-- ====================================================================
+-- Execution: a formatted cast resolves through pg_format_cast and calls the
+-- registered format cast function.
+-- ====================================================================
+-- basic execution, using the (integer, text) format cast created above
+SELECT CAST(5 AS text FORMAT 'abc');
+ text  
+-------
+ 5:abc
+(1 row)
+
+-- the FORMAT expression may be any expression, coerced to text
+SELECT CAST(5 AS text FORMAT 'a' || 'b');
+ text 
+------
+ 5:ab
+(1 row)
+
+SELECT CAST(5 AS text FORMAT 123);
+ text  
+-------
+ 5:123
+(1 row)
+
+-- The FORMAT expression is parse-analyzed independently of (and before) the
+-- format cast lookup, so an invalid FORMAT expression reports a normal error.
+SELECT CAST(5 AS text FORMAT no_such_column);
+ERROR:  column "no_such_column" does not exist
+LINE 1: SELECT CAST(5 AS text FORMAT no_such_column);
                                      ^
-DETAIL:  No format cast resolution mechanism is available.
+-- Like an ordinary cast that uses a cast function, a formatted cast checks
+-- EXECUTE on the format cast function at use time.
+REVOKE EXECUTE ON FUNCTION int4_to_text_fmt(integer, text) FROM PUBLIC;
+CREATE ROLE regress_format_cast_noexec NOLOGIN;
+SET ROLE regress_format_cast_noexec;
+SELECT CAST(5 AS text FORMAT 'p');			-- fails: no EXECUTE on format cast function
+ERROR:  permission denied for function int4_to_text_fmt
+RESET ROLE;
+DROP ROLE regress_format_cast_noexec;
+GRANT EXECUTE ON FUNCTION int4_to_text_fmt(integer, text) TO PUBLIC;
+-- A FORMAT clause never falls back to an ordinary cast: text -> text is a
+-- trivial ordinary cast, but a formatted cast still requires a format cast.
+SELECT CAST('abc'::text AS text FORMAT 'whatever');
+ERROR:  format cast from type text to type text does not exist
+LINE 1: SELECT CAST('abc'::text AS text FORMAT 'whatever');
+               ^
+HINT:  Use CREATE FORMAT CAST to define a format cast for this type pair.
+-- An unknown-type source literal is coerced to text first, so this also looks
+-- up (text, text), not (unknown, text).
+SELECT CAST('abc' AS text FORMAT 'fmt');
+ERROR:  format cast from type text to type text does not exist
+LINE 1: SELECT CAST('abc' AS text FORMAT 'fmt');
+               ^
+HINT:  Use CREATE FORMAT CAST to define a format cast for this type pair.
+-- A missing format cast is an error even where an ordinary cast would be valid.
+SELECT CAST(5 AS integer FORMAT 'x');
+ERROR:  format cast from type integer to type integer does not exist
+LINE 1: SELECT CAST(5 AS integer FORMAT 'x');
+               ^
+HINT:  Use CREATE FORMAT CAST to define a format cast for this type pair.
+-- Define the (text, text) format cast and re-run the text-source cases.
+CREATE FUNCTION text_to_text_fmt(text, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1 || '/' || $2;
+CREATE FORMAT CAST (text AS text)
+	WITH FUNCTION text_to_text_fmt(text, text);
+SELECT CAST('abc'::text AS text FORMAT 'whatever');
+     text     
+--------------
+ abc/whatever
+(1 row)
+
+SELECT CAST('abc' AS text FORMAT 'fmt');
+  text   
+---------
+ abc/fmt
+(1 row)
+
+-- A type modifier on the target is enforced through the ordinary coercion path.
+CREATE FUNCTION int4_to_vc_fmt(integer, text) RETURNS varchar
+	LANGUAGE sql IMMUTABLE RETURN $1::text || $2;
+CREATE FORMAT CAST (integer AS varchar)
+	WITH FUNCTION int4_to_vc_fmt(integer, text);
+SELECT CAST(5 AS varchar FORMAT 'XXXX');
+ varchar 
+---------
+ 5XXXX
+(1 row)
+
+SELECT CAST(5 AS varchar(3) FORMAT 'XXXX');			-- length 3 enforced
+ varchar 
+---------
+ 5XX
+(1 row)
+
+-- Domain target: the format cast must return the domain type, so the domain's
+-- constraints are enforced by the function's result.
+CREATE DOMAIN nonempty_text AS text CHECK (VALUE <> '');
+CREATE FUNCTION text_to_netext_fmt(text, text) RETURNS nonempty_text
+	LANGUAGE sql IMMUTABLE RETURN $2::nonempty_text;
+CREATE FORMAT CAST (text AS nonempty_text)
+	WITH FUNCTION text_to_netext_fmt(text, text);
+SELECT CAST('z'::text AS nonempty_text FORMAT 'ok');
+ nonempty_text 
+---------------
+ ok
+(1 row)
+
+SELECT CAST('z'::text AS nonempty_text FORMAT '');	-- domain check violation
+ERROR:  value for domain nonempty_text violates check constraint "nonempty_text_check"
+CONTEXT:  SQL function "text_to_netext_fmt" statement 1
+-- Drop the objects created in this execution section.
+DROP FORMAT CAST (text AS text);
+DROP FUNCTION text_to_text_fmt(text, text);
+DROP FORMAT CAST (integer AS varchar);
+DROP FUNCTION int4_to_vc_fmt(integer, text);
+DROP FORMAT CAST (text AS nonempty_text);
+DROP FUNCTION text_to_netext_fmt(text, text);
+DROP DOMAIN nonempty_text;
 -- Dependency behavior: the format cast depends on its function.
 DROP FUNCTION int4_to_text_fmt(integer, text);				-- fails (RESTRICT)
 ERROR:  cannot drop function int4_to_text_fmt(integer,text) because other objects depend on it
@@ -154,3 +265,135 @@ DROP FUNCTION fmt_bad_arg1(bigint, text);
 DROP FUNCTION fmt_bad_ret(integer, text);
 DROP FUNCTION fmt_bad_set(integer, text);
 DROP FUNCTION fmt_anyel(anyelement, text);
+-- ====================================================================
+-- CoerceViaFormatCast: deparse fidelity and dependency on the format cast row
+-- ====================================================================
+CREATE FUNCTION i2t_view(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || ':' || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION i2t_view(integer, text);
+-- A view over a formatted cast deparses back to CAST(... FORMAT ...).
+CREATE VIEW format_cast_view AS SELECT CAST(5 AS text FORMAT 'abc') AS x;
+SELECT pg_get_viewdef('format_cast_view'::regclass, true);
+                  pg_get_viewdef                  
+--------------------------------------------------
+  SELECT CAST(5 AS text FORMAT 'abc'::text) AS x;
+(1 row)
+
+SELECT * FROM format_cast_view;
+   x   
+-------
+ 5:abc
+(1 row)
+
+-- The view depends on the pg_format_cast row, so DROP FORMAT CAST RESTRICT fails.
+DROP FORMAT CAST (integer AS text);					-- fails (RESTRICT, view depends)
+ERROR:  cannot drop format cast from integer to text because other objects depend on it
+DETAIL:  view format_cast_view depends on format cast from integer to text
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- ... and CASCADE drops the dependent view.
+DROP FORMAT CAST (integer AS text) CASCADE;
+NOTICE:  drop cascades to view format_cast_view
+SELECT count(*) FROM pg_class WHERE relname = 'format_cast_view';
+ count 
+-------
+     0
+(1 row)
+
+DROP FUNCTION i2t_view(integer, text);
+-- ====================================================================
+-- Collation: a formatted cast behaves like calling the format cast function
+-- formatfunc(arg, format).  Its result collation is the result type's
+-- collation, and the input collation is derived from the arg and FORMAT
+-- expressions exactly as for an ordinary two-argument function call.
+-- ====================================================================
+-- text_larger(text, text) returns text and is collation-sensitive at the C
+-- level (it reads PG_GET_COLLATION), so it exercises the input collation.
+CREATE FORMAT CAST (text AS text)
+	WITH FUNCTION pg_catalog.text_larger(text, text);
+-- The default collation flows into the format cast call; if the input collation
+-- were left unset this would fail with "could not determine which collation".
+SELECT CAST('apple'::text AS text FORMAT 'banana'::text);
+  text  
+--------
+ banana
+(1 row)
+
+-- An explicit COLLATE on an operand is honored as the input collation.
+SELECT CAST('apple'::text AS text FORMAT 'banana'::text COLLATE "C");
+  text  
+--------
+ banana
+(1 row)
+
+-- The result is collatable, so an explicit COLLATE on the cast itself works.
+SELECT CAST('apple'::text AS text FORMAT 'banana'::text) COLLATE "C" < 'zzz';
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Conflicting explicit input collations are rejected, just like a plain
+-- function call text_larger('a' COLLATE "C", 'b' COLLATE "POSIX").
+SELECT CAST('a'::text COLLATE "C" AS text FORMAT 'b'::text COLLATE "POSIX");
+ERROR:  collation mismatch between explicit collations "C" and "POSIX"
+LINE 1: ...ST('a'::text COLLATE "C" AS text FORMAT 'b'::text COLLATE "P...
+                                                             ^
+DROP FORMAT CAST (text AS text);
+-- ====================================================================
+-- ruleutils: arg and FORMAT subexpressions deparse unambiguously inside
+-- CAST(...), needing no extra parentheses, and re-parse to the same thing.
+-- ====================================================================
+CREATE FUNCTION i2t_paren(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION i2t_paren(integer, text);
+CREATE VIEW format_cast_paren_view AS
+	SELECT CAST((1 + 2) AS text FORMAT ('a' || 'b')) AS x;
+SELECT pg_get_viewdef('format_cast_paren_view'::regclass, true);
+                         pg_get_viewdef                          
+-----------------------------------------------------------------
+  SELECT CAST(1 + 2 AS text FORMAT 'a'::text || 'b'::text) AS x;
+(1 row)
+
+SELECT * FROM format_cast_paren_view;
+  x  
+-----
+ 3ab
+(1 row)
+
+DROP VIEW format_cast_paren_view;
+DROP FORMAT CAST (integer AS text);
+DROP FUNCTION i2t_paren(integer, text);
+-- ====================================================================
+-- Dependency completeness: a view over a formatted cast depends (through the
+-- pg_format_cast row) on the format cast function, so dropping the function with
+-- CASCADE removes both the format cast row and the view in one step.
+-- ====================================================================
+CREATE FUNCTION i2t_chain(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION i2t_chain(integer, text);
+CREATE VIEW format_cast_chain_view AS SELECT CAST(7 AS text FORMAT 'q') AS x;
+DROP FUNCTION i2t_chain(integer, text);					-- fails: format cast + view depend
+ERROR:  cannot drop function i2t_chain(integer,text) because other objects depend on it
+DETAIL:  format cast from integer to text depends on function i2t_chain(integer,text)
+view format_cast_chain_view depends on function i2t_chain(integer,text)
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP FUNCTION i2t_chain(integer, text) CASCADE;			-- drops format cast and view
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to format cast from integer to text
+drop cascades to view format_cast_chain_view
+SELECT count(*) FROM pg_format_cast
+	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM pg_class WHERE relname = 'format_cast_chain_view';
+ count 
+-------
+     0
+(1 row)
+

@@ -1200,6 +1200,24 @@ ExecInitExprRec(Expr *node, ExprState *state,
 				break;
 			}
 
+		case T_CoerceViaFormatCast:
+			{
+				CoerceViaFormatCast *fmt = (CoerceViaFormatCast *) node;
+
+				/*
+				 * A formatted cast is executed exactly like a call to its
+				 * format cast function: formatfunc(arg, format).  Reuse the
+				 * ordinary function-call setup, which also performs the
+				 * run-time EXECUTE permission check on the format cast function.
+				 */
+				ExecInitFunc(&scratch, node,
+							 list_make2(fmt->arg, fmt->format),
+							 fmt->formatfunc, fmt->inputcollid,
+							 state);
+				ExprEvalPushStep(state, &scratch);
+				break;
+			}
+
 		case T_OpExpr:
 			{
 				OpExpr	   *op = (OpExpr *) node;

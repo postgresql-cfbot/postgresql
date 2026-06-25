@@ -78,6 +78,7 @@ static Node *transformWholeRowRef(ParseState *pstate,
 								  int sublevels_up, int location);
 static Node *transformIndirection(ParseState *pstate, A_Indirection *ind);
 static Node *transformTypeCast(ParseState *pstate, TypeCast *tc);
+static Node *transformFormattedTypeCast(ParseState *pstate, TypeCast *tc);
 static Node *transformCollateClause(ParseState *pstate, CollateClause *c);
 static Node *transformJsonObjectConstructor(ParseState *pstate,
 											JsonObjectConstructor *ctor);
@@ -2744,17 +2745,12 @@ transformTypeCast(ParseState *pstate, TypeCast *tc)
 	int			location;
 
 	/*
-	 * Formatted casts (CAST(expr AS type FORMAT format_expr)) are parsed and
-	 * represented in the parse tree, but format cast resolution is not yet
-	 * implemented.  Reject such casts here rather than silently ignoring the
-	 * FORMAT clause.
+	 * A FORMAT clause turns this into a formatted cast, which is resolved
+	 * exclusively through the pg_format_cast catalog (never through ordinary
+	 * cast rules).  Handle it in a separate code path.
 	 */
 	if (tc->format != NULL)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("formatted casts are not implemented yet"),
-				 errdetail("No format cast resolution mechanism is available."),
-				 parser_errposition(pstate, exprLocation(tc->format))));
+		return transformFormattedTypeCast(pstate, tc);
 
 	/* Look up the type name first */
 	typenameTypeIdAndMod(pstate, tc->typeName, &targetType, &targetTypmod);
@@ -2820,6 +2816,128 @@ transformTypeCast(ParseState *pstate, TypeCast *tc)
 						format_type_be(inputType),
 						format_type_be(targetType)),
 				 parser_coercion_errposition(pstate, location, expr)));
+
+	return result;
+}
+
+/*
+ * Handle a formatted cast: CAST(arg AS typeName FORMAT format).
+ *
+ * Resolved exclusively through the pg_format_cast catalog, keyed by
+ * (source type, target type).  We build a CoerceViaFormatCast node, which at
+ * execution time calls the registered format cast function with the source
+ * value and the FORMAT expression (coerced to text).  Using a dedicated node
+ * (rather than a bare FuncExpr) lets the expression deparse back to
+ * CAST ... FORMAT and depend on the pg_format_cast row.
+ */
+static Node *
+transformFormattedTypeCast(ParseState *pstate, TypeCast *tc)
+{
+	Node	   *expr;
+	Node	   *fmt;
+	Oid			sourceType;
+	Oid			targetType;
+	int32		targetTypmod;
+	Oid			formatcastid;
+	Oid			fmtfuncid = InvalidOid;
+	Oid			funcrettype;
+	CoerceViaFormatCast *cvf;
+	Node	   *result;
+	int			location;
+
+	/* Resolve the declared target type, exactly as an ordinary cast does. */
+	typenameTypeIdAndMod(pstate, tc->typeName, &targetType, &targetTypmod);
+
+	/* Transform the source expression. */
+	expr = transformExprRecurse(pstate, tc->arg);
+	sourceType = exprType(expr);
+
+	/*
+	 * An unknown-type source (typically a bare string literal or untyped
+	 * NULL) is coerced to text before the format cast lookup, so that, e.g.,
+	 * CAST('2026-06-24' AS date FORMAT 'YYYY-MM-DD') uses a format cast
+	 * registered for (text, date) rather than requiring one for (unknown,
+	 * date).
+	 */
+	if (sourceType == UNKNOWNOID)
+	{
+		expr = coerce_to_specific_type(pstate, expr, TEXTOID, "CAST");
+		sourceType = exprType(expr);
+	}
+
+	location = tc->location;
+	if (location < 0)
+		location = tc->typeName->location;
+
+	/*
+	 * Transform the FORMAT expression and coerce it to text before the
+	 * format cast lookup, so an invalid FORMAT expression reports a normal
+	 * error rather than being masked by a missing-format cast error.
+	 */
+	fmt = transformExprRecurse(pstate, tc->format);
+	fmt = coerce_to_specific_type(pstate, fmt, TEXTOID, "FORMAT");
+
+	/*
+	 * Look up the format cast for this (source, target) pair.  A FORMAT clause
+	 * never falls back to ordinary cast resolution.
+	 */
+	formatcastid = get_format_cast_function(sourceType, targetType, &fmtfuncid);
+	if (!OidIsValid(formatcastid))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("format cast from type %s to type %s does not exist",
+						format_type_be(sourceType),
+						format_type_be(targetType)),
+				 errhint("Use CREATE FORMAT CAST to define a format cast for this type pair."),
+				 parser_errposition(pstate, location)));
+
+	/*
+	 * Build the CoerceViaFormatCast node.  Its result type is the format cast
+	 * function's return type, which CREATE FORMAT CAST guarantees equals the
+	 * target type.
+	 *
+	 * The collation fields are left unset here; they are assigned later by
+	 * parse_collate.c, where CoerceViaFormatCast takes the same general n-ary
+	 * expression path as FuncExpr (its result/input collation get/set hooks
+	 * live in nodeFuncs.c).
+	 */
+	funcrettype = get_func_rettype(fmtfuncid);
+	if (!OidIsValid(funcrettype))
+		elog(ERROR, "cache lookup failed for function %u", fmtfuncid);
+	Assert(funcrettype == targetType);
+
+	cvf = makeNode(CoerceViaFormatCast);
+	cvf->arg = (Expr *) expr;
+	cvf->format = (Expr *) fmt;
+	cvf->resulttype = funcrettype;
+	cvf->resulttypmod = -1;		/* typmod enforced below, if any */
+	cvf->resultcollid = InvalidOid;
+	cvf->inputcollid = InvalidOid;
+	cvf->formatfunc = fmtfuncid;
+	cvf->formatcastid = formatcastid;
+	cvf->coercionformat = COERCE_EXPLICIT_CAST;
+	cvf->location = location;
+	result = (Node *) cvf;
+
+	/*
+	 * Enforce the declared target type modifier (and any domain constraints)
+	 * using the ordinary coercion machinery.  In the common case where the
+	 * target has no typmod and is not a domain this is a no-op; otherwise it
+	 * layers the same length coercion / domain check that an ordinary cast to
+	 * the same target would apply.
+	 */
+	result = coerce_to_target_type(pstate, result, funcrettype,
+								   targetType, targetTypmod,
+								   COERCION_EXPLICIT,
+								   COERCE_EXPLICIT_CAST,
+								   location);
+	if (result == NULL)
+		ereport(ERROR,
+				(errcode(ERRCODE_CANNOT_COERCE),
+				 errmsg("cannot cast type %s to %s",
+						format_type_be(funcrettype),
+						format_type_be(targetType)),
+				 parser_errposition(pstate, location)));
 
 	return result;
 }

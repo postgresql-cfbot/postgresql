@@ -182,6 +182,9 @@ exprType(const Node *expr)
 		case T_CoerceViaIO:
 			type = ((const CoerceViaIO *) expr)->resulttype;
 			break;
+		case T_CoerceViaFormatCast:
+			type = ((const CoerceViaFormatCast *) expr)->resulttype;
+			break;
 		case T_ArrayCoerceExpr:
 			type = ((const ArrayCoerceExpr *) expr)->resulttype;
 			break;
@@ -531,6 +534,8 @@ exprTypmod(const Node *expr)
 			break;
 		case T_CoerceToDomain:
 			return ((const CoerceToDomain *) expr)->resulttypmod;
+		case T_CoerceViaFormatCast:
+			return ((const CoerceViaFormatCast *) expr)->resulttypmod;
 		case T_CoerceToDomainValue:
 			return ((const CoerceToDomainValue *) expr)->typeMod;
 		case T_SetToDefault:
@@ -943,6 +948,9 @@ exprCollation(const Node *expr)
 		case T_CoerceViaIO:
 			coll = ((const CoerceViaIO *) expr)->resultcollid;
 			break;
+		case T_CoerceViaFormatCast:
+			coll = ((const CoerceViaFormatCast *) expr)->resultcollid;
+			break;
 		case T_ArrayCoerceExpr:
 			coll = ((const ArrayCoerceExpr *) expr)->resultcollid;
 			break;
@@ -1227,6 +1235,9 @@ exprSetCollation(Node *expr, Oid collation)
 		case T_CoerceViaIO:
 			((CoerceViaIO *) expr)->resultcollid = collation;
 			break;
+		case T_CoerceViaFormatCast:
+			((CoerceViaFormatCast *) expr)->resultcollid = collation;
+			break;
 		case T_ArrayCoerceExpr:
 			((ArrayCoerceExpr *) expr)->resultcollid = collation;
 			break;
@@ -1348,6 +1359,9 @@ exprSetInputCollation(Node *expr, Oid inputcollation)
 			break;
 		case T_FuncExpr:
 			((FuncExpr *) expr)->inputcollid = inputcollation;
+			break;
+		case T_CoerceViaFormatCast:
+			((CoerceViaFormatCast *) expr)->inputcollid = inputcollation;
 			break;
 		case T_OpExpr:
 			((OpExpr *) expr)->inputcollid = inputcollation;
@@ -1521,6 +1535,15 @@ exprLocation(const Node *expr)
 		case T_CoerceViaIO:
 			{
 				const CoerceViaIO *cexpr = (const CoerceViaIO *) expr;
+
+				/* Much as above */
+				loc = leftmostLoc(cexpr->location,
+								  exprLocation((Node *) cexpr->arg));
+			}
+			break;
+		case T_CoerceViaFormatCast:
+			{
+				const CoerceViaFormatCast *cexpr = (const CoerceViaFormatCast *) expr;
 
 				/* Much as above */
 				loc = leftmostLoc(cexpr->location,
@@ -1994,6 +2017,15 @@ check_functions_in_node(Node *node, check_function_callback checker,
 					return true;
 			}
 			break;
+		case T_CoerceViaFormatCast:
+			{
+				CoerceViaFormatCast *expr = (CoerceViaFormatCast *) node;
+
+				/* check the format cast function */
+				if (checker(expr->formatfunc, context))
+					return true;
+			}
+			break;
 		case T_RowCompareExpr:
 			{
 				RowCompareExpr *rcexpr = (RowCompareExpr *) node;
@@ -2296,6 +2328,16 @@ expression_tree_walker_impl(Node *node,
 			return WALK(((RelabelType *) node)->arg);
 		case T_CoerceViaIO:
 			return WALK(((CoerceViaIO *) node)->arg);
+		case T_CoerceViaFormatCast:
+			{
+				CoerceViaFormatCast *fmt = (CoerceViaFormatCast *) node;
+
+				if (WALK(fmt->arg))
+					return true;
+				if (WALK(fmt->format))
+					return true;
+			}
+			break;
 		case T_ArrayCoerceExpr:
 			{
 				ArrayCoerceExpr *acoerce = (ArrayCoerceExpr *) node;
@@ -3315,6 +3357,17 @@ expression_tree_mutator_impl(Node *node,
 
 				FLATCOPY(newnode, iocoerce, CoerceViaIO);
 				MUTATE(newnode->arg, iocoerce->arg, Expr *);
+				return (Node *) newnode;
+			}
+			break;
+		case T_CoerceViaFormatCast:
+			{
+				CoerceViaFormatCast *fmtcoerce = (CoerceViaFormatCast *) node;
+				CoerceViaFormatCast *newnode;
+
+				FLATCOPY(newnode, fmtcoerce, CoerceViaFormatCast);
+				MUTATE(newnode->arg, fmtcoerce->arg, Expr *);
+				MUTATE(newnode->format, fmtcoerce->format, Expr *);
 				return (Node *) newnode;
 			}
 			break;

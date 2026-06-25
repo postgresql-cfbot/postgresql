@@ -2131,6 +2131,29 @@ find_expr_references_walker(Node *node,
 			add_object_address(CollationRelationId, iocoerce->resultcollid, 0,
 							   context->addrs);
 	}
+	else if (IsA(node, CoerceViaFormatCast))
+	{
+		CoerceViaFormatCast *fmt = (CoerceViaFormatCast *) node;
+
+		/* depend on the result type */
+		add_object_address(TypeRelationId, fmt->resulttype, 0,
+						   context->addrs);
+		/* depend on the format cast function */
+		add_object_address(ProcedureRelationId, fmt->formatfunc, 0,
+						   context->addrs);
+		/*
+		 * Also depend on the pg_format_cast row itself, so that DROP FORMAT CAST
+		 * is refused (or cascades) while a stored expression uses it.
+		 */
+		if (OidIsValid(fmt->formatcastid))
+			add_object_address(FormatCastRelationId, fmt->formatcastid, 0,
+							   context->addrs);
+		/* the collation might not be referenced anywhere else, either */
+		if (OidIsValid(fmt->resultcollid) &&
+			fmt->resultcollid != DEFAULT_COLLATION_OID)
+			add_object_address(CollationRelationId, fmt->resultcollid, 0,
+							   context->addrs);
+	}
 	else if (IsA(node, ArrayCoerceExpr))
 	{
 		ArrayCoerceExpr *acoerce = (ArrayCoerceExpr *) node;

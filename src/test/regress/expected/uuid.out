@@ -276,6 +276,10 @@ DETAIL:  UUID version 7 supports timestamps from 1970-01-01 to approximately yea
 SELECT uuidv7('292230 years'::interval);
 ERROR:  timestamp out of range for UUID version 7
 DETAIL:  UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.
+-- uuidv7: timestamps beyond 48-bit ms field (~year 10889) are rejected
+SELECT uuidv7('9000 years'::interval);
+ERROR:  timestamp out of range for UUID version 7
+DETAIL:  UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.
 -- extract functions
 -- version
 SELECT uuid_extract_version('11111111-1111-5111-8111-111111111111');  -- 5

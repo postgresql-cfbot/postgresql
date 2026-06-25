@@ -715,6 +715,13 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 				 errmsg("timestamp out of range for UUID version 7"),
 				 errdetail("UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.")));
 
+	/* Reject timestamps beyond the 48-bit millisecond field maximum */
+	if (us / US_PER_MS > (INT64CONST(1) << 48) - 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range for UUID version 7"),
+				 errdetail("UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.")));
+
 	/* Generate an UUIDv7 */
 	uuid = generate_uuidv7(us / US_PER_MS, (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US);
 

@@ -1335,12 +1335,6 @@ transformForPortionOfClause(ParseState *pstate,
 	ForPortionOfExpr *result;
 	Var		   *rangeVar;
 
-	/* We don't support FOR PORTION OF FDW queries. */
-	if (targetrel->rd_rel->relkind == RELKIND_FOREIGN_TABLE)
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("foreign tables don't support FOR PORTION OF")));
-
 	result = makeNode(ForPortionOfExpr);
 
 	/* Look up the FOR PORTION OF name requested. */
@@ -1489,9 +1483,6 @@ transformForPortionOfClause(ParseState *pstate,
 													args,
 													InvalidOid, InvalidOid, COERCE_EXPLICIT_CALL);
 	}
-	if (contain_volatile_functions_after_planning((Expr *) result->targetRange))
-		ereport(ERROR,
-				(errmsg("FOR PORTION OF bounds cannot contain volatile functions")));
 
 	/*
 	 * Build overlapsExpr to use as an extra qual. This means we only hit rows

@@ -16,8 +16,9 @@
 #include "c.h"
 
 #if !defined(WIN32)
+#include "port/pg_threads.h"
+
 #include <langinfo.h>
-#include <pthread.h>
 #endif
 
 #include <limits.h>
@@ -335,12 +336,12 @@ exit:
 											LC_NUMERIC);
 	}
 #else
-	/* We have nothing better than standard POSIX facilities. */
+	/* We have nothing better than standard C facilities. */
 	{
-		static pthread_mutex_t big_lock = PTHREAD_MUTEX_INITIALIZER;
+		static pg_mtx_t big_lock = PG_MTX_INIT;
 		locale_t	save_locale;
 
-		pthread_mutex_lock(&big_lock);
+		pg_mtx_lock(&big_lock);
 		/* Copy the LC_MONETARY members. */
 		save_locale = uselocale(monetary_locale);
 		result = pg_localeconv_copy_members(output,
@@ -354,7 +355,7 @@ exit:
 												localeconv(),
 												LC_NUMERIC);
 		}
-		pthread_mutex_unlock(&big_lock);
+		pg_mtx_unlock(&big_lock);
 
 		uselocale(save_locale);
 	}

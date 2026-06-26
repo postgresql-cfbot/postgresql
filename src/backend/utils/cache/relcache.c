@@ -1952,6 +1952,7 @@ formrdesc(const char *relationName, Oid relationReltype,
 	relation->rd_rel->relallvisible = 0;
 	relation->rd_rel->relallfrozen = 0;
 	relation->rd_rel->relkind = RELKIND_RELATION;
+	relation->rd_rel->reloncommit = RELONCOMMIT_PRESERVE_ROWS;
 	relation->rd_rel->relnatts = (int16) natts;
 
 	/*
@@ -3524,7 +3525,8 @@ RelationBuildLocalRelation(const char *relname,
 						   bool shared_relation,
 						   bool mapped_relation,
 						   char relpersistence,
-						   char relkind)
+						   char relkind,
+						   OnCommitAction oncommit)
 {
 	Relation	rel;
 	MemoryContext oldcxt;
@@ -3665,6 +3667,21 @@ RelationBuildLocalRelation(const char *relname,
 			break;
 		default:
 			elog(ERROR, "invalid relpersistence: %c", relpersistence);
+			break;
+	}
+
+	/* set up oncommit behavior */
+	switch (oncommit)
+	{
+		case ONCOMMIT_NOOP:
+		case ONCOMMIT_PRESERVE_ROWS:
+			rel->rd_rel->reloncommit = RELONCOMMIT_PRESERVE_ROWS;
+			break;
+		case ONCOMMIT_DELETE_ROWS:
+			rel->rd_rel->reloncommit = RELONCOMMIT_DELETE_ROWS;
+			break;
+		case ONCOMMIT_DROP:
+			rel->rd_rel->reloncommit = RELONCOMMIT_DROP;
 			break;
 	}
 

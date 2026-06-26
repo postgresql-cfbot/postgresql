@@ -7,6 +7,7 @@
  */
 #include "postgres_fe.h"
 
+#include "catalog/pg_type_d.h"
 #include "common.h"
 #include "common/int.h"
 #include "common/logging.h"
@@ -82,6 +83,8 @@ static bool printCrosstab(const PGresult *result,
 						  int num_columns, pivot_field *piv_columns, int field_for_columns,
 						  int num_rows, pivot_field *piv_rows, int field_for_rows,
 						  int field_for_data);
+static char *printDisplayValue(char *value, Oid ftype, const printQueryOpt *opt,
+							   const char *default_null);
 static void avlInit(avl_tree *tree);
 static void avlMergeValue(avl_tree *tree, char *name, char *sort_value);
 static int	avlCollectFields(avl_tree *tree, avl_node *node,
@@ -292,6 +295,9 @@ printCrosstab(const PGresult *result,
 				rn;
 	char		col_align;
 	int		   *horiz_map;
+	Oid			col_ftype = PQftype(result, field_for_columns);
+	Oid			row_ftype = PQftype(result, field_for_rows);
+	Oid			data_ftype = PQftype(result, field_for_data);
 	bool		retval = false;
 
 	printTableInit(&cont, &popt.topt, popt.title, num_columns + 1, num_rows);
@@ -302,8 +308,7 @@ printCrosstab(const PGresult *result,
 	printTableAddHeader(&cont,
 						PQfname(result, field_for_rows),
 						false,
-						column_type_alignment(PQftype(result,
-													  field_for_rows)));
+						column_type_alignment(row_ftype));
 
 	/*
 	 * To iterate over piv_columns[] by piv_columns[].rank, create a reverse
@@ -317,15 +322,14 @@ printCrosstab(const PGresult *result,
 	/*
 	 * The display alignment depends on its PQftype().
 	 */
-	col_align = column_type_alignment(PQftype(result, field_for_data));
+	col_align = column_type_alignment(data_ftype);
 
 	for (i = 0; i < num_columns; i++)
 	{
 		char	   *colname;
 
-		colname = piv_columns[horiz_map[i]].name ?
-			piv_columns[horiz_map[i]].name :
-			(popt.nullPrint ? popt.nullPrint : "");
+		colname = printDisplayValue(piv_columns[horiz_map[i]].name,
+									col_ftype, &popt, "");
 
 		printTableAddHeader(&cont, colname, false, col_align);
 	}
@@ -335,10 +339,10 @@ printCrosstab(const PGresult *result,
 	for (i = 0; i < num_rows; i++)
 	{
 		int			k = piv_rows[i].rank;
+		int			idx = k * (num_columns + 1);
 
-		cont.cells[k * (num_columns + 1)] = piv_rows[i].name ?
-			piv_rows[i].name :
-			(popt.nullPrint ? popt.nullPrint : "");
+		cont.cells[idx] =
+			printDisplayValue(piv_rows[i].name, row_ftype, &popt, "");
 	}
 	cont.cellsadded = num_rows * (num_columns + 1);
 
@@ -384,6 +388,7 @@ printCrosstab(const PGresult *result,
 		if (col_number >= 0 && row_number >= 0)
 		{
 			int			idx;
+			char	   *value = NULL;
 
 			/* index into the cont.cells array */
 			idx = 1 + col_number + row_number * (num_columns + 1);
@@ -394,16 +399,17 @@ printCrosstab(const PGresult *result,
 			if (cont.cells[idx] != NULL)
 			{
 				pg_log_error("\\crosstabview: query result contains multiple data values for row \"%s\", column \"%s\"",
-							 rp->name ? rp->name :
-							 (popt.nullPrint ? popt.nullPrint : "(null)"),
-							 cp->name ? cp->name :
-							 (popt.nullPrint ? popt.nullPrint : "(null)"));
+							 printDisplayValue(rp->name, row_ftype, &popt,
+											   "(null)"),
+							 printDisplayValue(cp->name, col_ftype, &popt,
+											   "(null)"));
 				goto error;
 			}
 
-			cont.cells[idx] = !PQgetisnull(result, rn, field_for_data) ?
-				PQgetvalue(result, rn, field_for_data) :
-				(popt.nullPrint ? popt.nullPrint : "");
+			if (!PQgetisnull(result, rn, field_for_data))
+				value = PQgetvalue(result, rn, field_for_data);
+			cont.cells[idx] =
+				printDisplayValue(value, data_ftype, &popt, "");
 		}
 	}
 
@@ -424,6 +430,26 @@ error:
 	printTableCleanup(&cont);
 
 	return retval;
+}
+
+/*
+ * Return the display representation of a crosstab value, following pset
+ * substitutions.  The returned pointer should not be freed.
+ */
+static char *
+printDisplayValue(char *value, Oid ftype, const printQueryOpt *opt,
+				  const char *default_null)
+{
+	if (value == NULL)
+		return opt->nullPrint ? opt->nullPrint :
+			unconstify(char *, default_null);
+
+	if (ftype == BOOLOID)
+		return value[0] == 't' ?
+			(opt->truePrint ? opt->truePrint : "t") :
+			(opt->falsePrint ? opt->falsePrint : "f");
+
+	return value;
 }
 
 /*

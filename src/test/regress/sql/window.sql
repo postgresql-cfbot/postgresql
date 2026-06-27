@@ -1431,6 +1431,181 @@ SELECT * FROM
    FROM empsalary) emp
 WHERE c <= 3;
 
+CREATE TEMPORARY TABLE window_exclusion (
+  id int,
+  k int,
+  v int
+);
+
+INSERT INTO window_exclusion VALUES
+  (1, 1, 1),
+  (2, 1, NULL),
+  (3, 1, 1),
+  (4, 2, 1);
+
+-- Ensure we don't push down for count() when the frame excludes rows.
+EXPLAIN (COSTS OFF)
+SELECT id
+FROM (
+  SELECT id,
+         count(v) OVER (
+           ORDER BY k
+           RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+           EXCLUDE CURRENT ROW
+         ) AS c
+  FROM window_exclusion
+) s
+WHERE c <= 1;
+
+SELECT 'exclude_current_row' AS test_name,
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ORDER BY k
+                        RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        EXCLUDE CURRENT ROW
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c <= 1
+             ORDER BY id) AS source,
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ORDER BY k
+                        RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        EXCLUDE CURRENT ROW
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c + 0 <= 1
+             ORDER BY id) AS nopush
+UNION ALL
+SELECT 'exclude_ties',
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ORDER BY k
+                        RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        EXCLUDE TIES
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c <= 0
+             ORDER BY id),
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ORDER BY k
+                        RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                        EXCLUDE TIES
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c + 0 <= 0
+             ORDER BY id)
+UNION ALL
+SELECT 'no_order_current_row',
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        EXCLUDE CURRENT ROW
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c <= 2
+             ORDER BY id),
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+                        EXCLUDE CURRENT ROW
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c + 0 <= 2
+             ORDER BY id)
+ORDER BY test_name;
+
+TRUNCATE window_exclusion;
+
+INSERT INTO window_exclusion VALUES
+  (1, 1, NULL),
+  (2, 1, NULL),
+  (3, 2, 1),
+  (4, 2, NULL);
+
+SELECT 'exclude_group' AS test_name,
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ORDER BY k
+                        GROUPS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING
+                        EXCLUDE GROUP
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c <= 0
+             ORDER BY id) AS source,
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(v) OVER (
+                        ORDER BY k
+                        GROUPS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING
+                        EXCLUDE GROUP
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c + 0 <= 0
+             ORDER BY id) AS nopush;
+
+TRUNCATE window_exclusion;
+
+INSERT INTO window_exclusion VALUES
+  (1, 1, NULL),
+  (2, 2, NULL),
+  (3, 2, NULL),
+  (4, 2, NULL),
+  (5, 2, NULL),
+  (6, 2, NULL);
+
+SELECT 'count_star_exclude_group' AS test_name,
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(*) OVER (
+                        ORDER BY k
+                        GROUPS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING
+                        EXCLUDE GROUP
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c <= 1
+             ORDER BY id) AS source,
+       ARRAY(SELECT id
+             FROM (
+               SELECT id,
+                      count(*) OVER (
+                        ORDER BY k
+                        GROUPS BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING
+                        EXCLUDE GROUP
+                      ) AS c
+               FROM window_exclusion
+             ) s
+             WHERE c + 0 <= 1
+             ORDER BY id) AS nopush;
+
+DROP TABLE window_exclusion;
+
 -- Ensure we don't push down when the window function's monotonic properties
 -- don't match that of the clauses.
 EXPLAIN (COSTS OFF)

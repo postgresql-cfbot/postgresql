@@ -533,6 +533,7 @@ Constraint
 ConstraintCategory
 ConstraintInfo
 ConstraintsSetStmt
+ContainRPRContext
 ControlData
 ControlFileData
 ConvInfo
@@ -662,7 +663,10 @@ DecodingWorkerShared
 DefElem
 DefElemAction
 DefaultACLInfo
+DefineMetadataContext
+DefinePhase
 DefineStmt
+DefineWalkCtx
 DefnDumperPtr
 DeleteStmt
 DependenciesParseState
@@ -761,6 +765,7 @@ ErrorData
 ErrorSaveContext
 EstimateDSMForeignScan_function
 EstimationInfo
+EvalDefineOffsetsContext
 EventTriggerCacheEntry
 EventTriggerCacheItem
 EventTriggerCacheStateType
@@ -1831,6 +1836,8 @@ NamedLWLockTrancheRequest
 NamedTuplestoreScan
 NamedTuplestoreScanState
 NamespaceInfo
+NavTraversal
+NavVisitFn
 NestLoop
 NestLoopParam
 NestLoopState
@@ -1840,6 +1847,7 @@ NewConstraint
 NextSampleBlock_function
 NextSampleTuple_function
 NextValueExpr
+NFALengthStats
 Node
 NodeInstrumentation
 NodeTag
@@ -2522,6 +2530,22 @@ RI_ConstraintInfo
 RI_FastPathEntry
 RI_QueryHashEntry
 RI_QueryKey
+RPCommonSyntax
+RPRDepth
+RPRElemFlags
+RPRElemIdx
+RPRNFAContext
+RPRNFAState
+RPRNavExpr
+RPRNavKind
+RPRNavOffsetKind
+RPRPattern
+RPRPatternElement
+RPRPatternNode
+RPRPatternNodeType
+RPRQuantity
+RPRVarId
+RPSkipTo
 RTEKind
 RTEPermissionInfo
 RWConflict

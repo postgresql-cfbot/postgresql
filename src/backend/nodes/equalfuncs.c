@@ -20,6 +20,7 @@
 #include "postgres.h"
 
 #include "miscadmin.h"
+#include "nodes/plannodes.h"
 #include "utils/datum.h"
 
 

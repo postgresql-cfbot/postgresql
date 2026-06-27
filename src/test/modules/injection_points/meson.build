@@ -51,6 +51,7 @@ tests += {
       'repack_toast',
       'syscache-update-pruned',
       'heap_lock_update',
+      'vacuum_skip_lock_stats',
     ],
     'runningcheck': false, # see syscache-update-pruned
     # Some tests wait for all snapshots, so avoid parallel execution

@@ -2586,6 +2586,7 @@ typedef enum AlterTableType
 	AT_SetIdentity,				/* SET identity column options */
 	AT_DropIdentity,			/* DROP IDENTITY */
 	AT_ReAddStatistics,			/* internal to commands/tablecmds.c */
+	AT_ReAddTrigger,			/* internal to commands/tablecmds.c */
 } AlterTableType;
 
 typedef struct AlterTableCmd	/* one subcommand of an ALTER TABLE */
@@ -3231,6 +3232,8 @@ typedef struct CreateTrigStmt
 	bool		deferrable;		/* [NOT] DEFERRABLE */
 	bool		initdeferred;	/* INITIALLY {DEFERRED|IMMEDIATE} */
 	RangeVar   *constrrel;		/* opposite relation, if RI trigger */
+	bool		transformed;
+	char	   *trigcomment;	/* comment to apply to trigger, or NULL */
 } CreateTrigStmt;
 
 /* ----------------------

@@ -180,6 +180,22 @@ SELECT trigger_name, event_manipulation, event_object_schema, event_object_table
   FROM information_schema.triggers
   WHERE event_object_table IN ('main_table')
   ORDER BY trigger_name COLLATE "C", 2;
+
+PREPARE get_trigger_info(text[]) AS
+SELECT event_object_table as trigger_table, event_object_schema as schema, trigger_name, event_manipulation as command_type,
+       action_order, action_condition, action_orientation, action_timing
+FROM information_schema.triggers
+WHERE event_object_table = ANY ($1)
+ORDER BY trigger_name COLLATE "C", 2;
+
+EXECUTE get_trigger_info('{main_table}');
+COMMENT ON TRIGGER modified_a ON main_table IS 'modified_a trigger';
+
+ALTER TABLE main_table ALTER COLUMN a SET DATA TYPE text; --error
+ALTER TABLE main_table ALTER COLUMN a SET DATA TYPE numeric; --ok
+EXECUTE get_trigger_info('{main_table}');
+\dd modified_a
+
 INSERT INTO main_table (a) VALUES (123), (456);
 COPY main_table FROM stdin;
 123	999
@@ -188,6 +204,8 @@ COPY main_table FROM stdin;
 DELETE FROM main_table WHERE a IN (123, 456);
 UPDATE main_table SET a = 50, b = 60;
 SELECT * FROM main_table ORDER BY a, b;
+SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'insert_a';
+ALTER TABLE main_table ALTER COLUMN a SET DATA TYPE integer;
 SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_a';
 SELECT pg_get_triggerdef(oid, false) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_a';
 SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_any';
@@ -204,6 +222,25 @@ DROP TRIGGER delete_a ON main_table;
 DROP TRIGGER insert_when ON main_table;
 DROP TRIGGER delete_when ON main_table;
 
+CREATE TABLE main_table1 (a text);
+CREATE FUNCTION test_before_ins_trig () RETURNS TRIGGER LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.a = 'a';
+  RETURN new;
+END;
+$$;
+
+CREATE TRIGGER before_trig
+BEFORE INSERT OR UPDATE ON main_table1
+FOR EACH ROW EXECUTE PROCEDURE test_before_ins_trig ();
+
+ALTER TABLE main_table1 ALTER COLUMN a SET data TYPE int8 USING a::bigint;
+INSERT INTO main_table1 VALUES (1); --error
+
+DROP TABLE main_table1;
+DROP FUNCTION test_before_ins_trig;
+
 -- Test WHEN condition accessing system columns.
 create table table_with_oids(a int);
 insert into table_with_oids values (1);
@@ -211,6 +248,8 @@ create trigger oid_unchanged_trig after update on table_with_oids
 	for each row
 	when (new.tableoid = old.tableoid AND new.tableoid <> 0)
 	execute procedure trigger_func('after_upd_oid_unchanged');
+alter table table_with_oids alter column a set data type text; --ok
+alter table table_with_oids alter column a set data type int using a::integer;
 update table_with_oids set a = a + 1;
 drop table table_with_oids;
 
@@ -1496,6 +1535,12 @@ create trigger parted_trig_odd after insert on parted_irreg for each row
 insert into parted_irreg values (1, 'aardvark'), (2, 'aanimals');
 insert into parted1_irreg values ('aardwolf', 2);
 insert into parted_irreg_ancestor values ('aasvogel', 3);
+-- While the partitioned table has no triggers, individual partitions do.
+-- Rebuild the partition's trigger may fail if the existing WHEN clause cannot
+-- cope with the new data type.
+alter table parted_irreg_ancestor alter column a set data type text; --error
+alter table parted_irreg_ancestor alter column a set data type numeric;
+execute get_trigger_info('{parted_irreg_ancestor, parted1_irreg}');
 drop table parted_irreg_ancestor;
 
 -- Before triggers and partitions
@@ -1608,6 +1653,12 @@ create constraint trigger parted_trig_two after insert on parted_constr
   deferrable initially deferred enforced
   for each row when (bark(new.b) AND new.a % 2 = 1)
   execute procedure trigger_notice_ab();
+
+alter table parted_constr_ancestor alter column a set data type text; --error
+alter table parted_constr_ancestor alter column a set data type numeric;
+execute get_trigger_info('{parted_constr_ancestor, parted_constr, parted_constr_ancestor, parted1_constr}');
+alter table parted_constr_ancestor alter column a set data type int;
+deallocate get_trigger_info;
 
 -- The immediate constraint is fired immediately; the WHEN clause of the
 -- deferred constraint is also called immediately.  The deferred constraint

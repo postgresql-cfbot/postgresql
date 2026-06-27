@@ -315,6 +315,9 @@ get_altertable_subcmdinfo(PG_FUNCTION_ARGS)
 			case AT_ReAddStatistics:
 				strtype = "(re) ADD STATS";
 				break;
+			case AT_ReAddTrigger:
+				strtype = "(re) ADD TRIGGER";
+				break;
 		}
 
 		if (subcmd->recurse)

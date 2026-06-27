@@ -94,18 +94,34 @@ copy (select * from copytest) to stdout (format json);
 
 -- all of the following should yield error
 copy copytest to stdout (format json, delimiter '|');
+copy copytest to stdout (format json, delimiter);
 copy copytest to stdout (format json, null '\N');
+copy copytest to stdout (format json, null);
 copy copytest to stdout (format json, default '|');
+copy copytest to stdout (format json, default);
 copy copytest to stdout (format json, header);
 copy copytest to stdout (format json, header 1);
+copy copytest to stdout (format json, header false);
+copy copytest to stdout (format json, header 0);
+copy copytest to stdout (format binary, header false);
+copy copytest to stdout (format json, escape);
+copy copytest to stdout (format json, quote);
 copy copytest to stdout (format json, quote '"');
 copy copytest to stdout (format json, escape '"');
+copy copytest to stdout (format json, quote);
+copy copytest to stdout (format json, escape);
+copy copytest to stdout (delimiter);
+copy copytest to stdout (null);
+copy copytest from stdin (default);
+copy copytest to stdout (format csv, quote);
+copy copytest to stdout (format csv, escape);
 copy copytest to stdout (format json, force_quote *);
 copy copytest to stdout (format json, force_not_null *);
 copy copytest to stdout (format json, force_null *);
 copy copytest to stdout (format json, on_error ignore);
 copy copytest to stdout (format json, reject_limit 1);
 copy copytest from stdin(format json);
+copy copytest to stdout (freeze false);
 -- all of the above should yield error
 
 -- column list with json format
@@ -113,6 +129,9 @@ copy copytest (style, test, filler) to stdout (format json);
 
 -- should fail: force_array requires json format
 copy copytest to stdout (format csv, force_array true);
+copy copytest to stdout (format csv, force_array false);
+copy copytest to stdout (force_array false);
+copy copytest from stdin (force_array false);
 
 -- force_array variants
 copy copytest to stdout (format json, force_array);

@@ -111,18 +111,48 @@ copy (select * from copytest) to stdout (format json);
 -- all of the following should yield error
 copy copytest to stdout (format json, delimiter '|');
 ERROR:  cannot specify DELIMITER in JSON mode
+copy copytest to stdout (format json, delimiter);
+ERROR:  cannot specify DELIMITER in JSON mode
 copy copytest to stdout (format json, null '\N');
 ERROR:  cannot specify NULL in JSON mode
+copy copytest to stdout (format json, null);
+ERROR:  cannot specify NULL in JSON mode
 copy copytest to stdout (format json, default '|');
+ERROR:  cannot specify DEFAULT in JSON mode
+copy copytest to stdout (format json, default);
 ERROR:  cannot specify DEFAULT in JSON mode
 copy copytest to stdout (format json, header);
 ERROR:  cannot specify HEADER in JSON mode
 copy copytest to stdout (format json, header 1);
 ERROR:  cannot specify HEADER in JSON mode
+copy copytest to stdout (format json, header false);
+ERROR:  cannot specify HEADER in JSON mode
+copy copytest to stdout (format json, header 0);
+ERROR:  cannot specify HEADER in JSON mode
+copy copytest to stdout (format binary, header false);
+ERROR:  cannot specify HEADER in BINARY mode
+copy copytest to stdout (format json, escape);
+ERROR:  COPY ESCAPE requires CSV mode
+copy copytest to stdout (format json, quote);
+ERROR:  COPY QUOTE requires CSV mode
 copy copytest to stdout (format json, quote '"');
 ERROR:  COPY QUOTE requires CSV mode
 copy copytest to stdout (format json, escape '"');
 ERROR:  COPY ESCAPE requires CSV mode
+copy copytest to stdout (format json, quote);
+ERROR:  COPY QUOTE requires CSV mode
+copy copytest to stdout (format json, escape);
+ERROR:  COPY ESCAPE requires CSV mode
+copy copytest to stdout (delimiter);
+ERROR:  delimiter requires a parameter
+copy copytest to stdout (null);
+ERROR:  null requires a parameter
+copy copytest from stdin (default);
+ERROR:  default requires a parameter
+copy copytest to stdout (format csv, quote);
+ERROR:  quote requires a parameter
+copy copytest to stdout (format csv, escape);
+ERROR:  escape requires a parameter
 copy copytest to stdout (format json, force_quote *);
 ERROR:  COPY FORCE_QUOTE requires CSV mode
 copy copytest to stdout (format json, force_not_null *);
@@ -137,6 +167,8 @@ copy copytest to stdout (format json, reject_limit 1);
 ERROR:  COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE
 copy copytest from stdin(format json);
 ERROR:  COPY FORMAT JSON is not supported for COPY FROM
+copy copytest to stdout (freeze false);
+ERROR:  COPY FREEZE cannot be used with COPY TO
 -- all of the above should yield error
 -- column list with json format
 copy copytest (style, test, filler) to stdout (format json);
@@ -146,6 +178,12 @@ copy copytest (style, test, filler) to stdout (format json);
 {"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb","filler":4}
 -- should fail: force_array requires json format
 copy copytest to stdout (format csv, force_array true);
+ERROR:  COPY FORCE_ARRAY can only be used with JSON mode
+copy copytest to stdout (format csv, force_array false);
+ERROR:  COPY FORCE_ARRAY can only be used with JSON mode
+copy copytest to stdout (force_array false);
+ERROR:  COPY FORCE_ARRAY can only be used with JSON mode
+copy copytest from stdin (force_array false);
 ERROR:  COPY FORCE_ARRAY can only be used with JSON mode
 -- force_array variants
 copy copytest to stdout (format json, force_array);

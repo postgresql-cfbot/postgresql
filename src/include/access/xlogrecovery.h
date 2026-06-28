@@ -139,7 +139,7 @@ extern PGDLLIMPORT char *archiveCleanupCommand;
 extern PGDLLIMPORT TransactionId recoveryTargetXid;
 extern PGDLLIMPORT char *recovery_target_time_string;
 extern PGDLLIMPORT TimestampTz recoveryTargetTime;
-extern PGDLLIMPORT const char *recoveryTargetName;
+extern PGDLLIMPORT char *recoveryTargetName;
 extern PGDLLIMPORT XLogRecPtr recoveryTargetLSN;
 extern PGDLLIMPORT RecoveryTargetType recoveryTarget;
 extern PGDLLIMPORT bool wal_receiver_create_temp_slot;

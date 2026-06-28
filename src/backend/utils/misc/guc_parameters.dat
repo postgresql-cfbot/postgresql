@@ -2472,7 +2472,6 @@
   variable => 'recovery_target_string',
   boot_val => '""',
   check_hook => 'check_recovery_target',
-  assign_hook => 'assign_recovery_target',
 },
 
 { name => 'recovery_target_action', type => 'enum', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',
@@ -2498,10 +2497,9 @@
 
 { name => 'recovery_target_name', type => 'string', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',
   short_desc => 'Sets the named restore point up to which recovery will proceed.',
-  variable => 'recovery_target_name_string',
+  variable => 'recoveryTargetName',
   boot_val => '""',
   check_hook => 'check_recovery_target_name',
-  assign_hook => 'assign_recovery_target_name',
 },
 
 { name => 'recovery_target_time', type => 'string', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',
@@ -2509,7 +2507,6 @@
   variable => 'recovery_target_time_string',
   boot_val => '""',
   check_hook => 'check_recovery_target_time',
-  assign_hook => 'assign_recovery_target_time',
 },
 
 { name => 'recovery_target_timeline', type => 'string', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY_TARGET',

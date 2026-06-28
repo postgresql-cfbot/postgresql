@@ -103,7 +103,6 @@ extern bool check_recovery_prefetch(int *new_value, void **extra,
 extern void assign_recovery_prefetch(int new_value, void *extra);
 extern bool check_recovery_target(char **newval, void **extra,
 								  GucSource source);
-extern void assign_recovery_target(const char *newval, void *extra);
 extern bool check_recovery_target_lsn(char **newval, void **extra,
 									  GucSource source);
 extern void assign_recovery_target_lsn(const char *newval, void *extra);
@@ -112,7 +111,6 @@ extern bool check_recovery_target_name(char **newval, void **extra,
 extern void assign_recovery_target_name(const char *newval, void *extra);
 extern bool check_recovery_target_time(char **newval, void **extra,
 									   GucSource source);
-extern void assign_recovery_target_time(const char *newval, void *extra);
 extern bool check_recovery_target_timeline(char **newval, void **extra,
 										   GucSource source);
 extern void assign_recovery_target_timeline(const char *newval, void *extra);

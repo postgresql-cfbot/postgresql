@@ -770,10 +770,13 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         the connection to fail.
         See <xref linkend="failures-and-retries"/> for more information.
        </para>
+
        <para>
         This option is useful when your custom script may raise errors
         such as unique constraint violations, but you want the benchmark
-        to continue and measure performance including those failures.
+        to continue despite individual statement failures.  Failed
+        transactions are reported separately, but are not counted as
+        transactions actually processed, nor are they included in TPS.
        </para>
       </listitem>
      </varlistentry>
@@ -2933,9 +2936,14 @@ statement latencies in milliseconds, failures and retries:
 
   <para>
    The latency of a successful transaction includes the entire time of
-   transaction execution with rollbacks and retries. The latency is measured
-   only for successful transactions and commands but not for failed transactions
-   or commands.
+   transaction execution with rollbacks and retries.  In the main report,
+   when none of <option>--progress</option>, <option>--rate</option>, and
+   <option>--latency-limit</option> is specified, <literal>latency average</literal>
+   is computed from both successful and failed transactions.  In such cases,
+   this is explicitly indicated by <literal>(including failures)</literal>.
+   Other latency statistics, including the per-script and per-command reports,
+   are measured only for successful transactions and commands, not for failed
+   transactions or commands.
   </para>
 
   <para>

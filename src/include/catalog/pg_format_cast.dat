@@ -1,0 +1,71 @@
+#----------------------------------------------------------------------
+#
+# pg_format_cast.dat
+#    Initial contents of the pg_format_cast system catalog.
+#
+# These are the built-in format casts for CAST ( <operand> AS <type>
+# FORMAT <template> ).  Each row maps an exact (source type, target type) pair
+# to a wrapper function with the signature
+#     function(source_type, text) returns target_type
+# Lookup is by exact source and target type, so text, varchar and bpchar are
+# registered separately on each side.  The wrapper functions live in
+# formatting.c and reuse PostgreSQL's existing formatting code.
+#
+# Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
+# Portions Copyright (c) 1994, Regents of the University of California
+#
+# src/include/catalog/pg_format_cast.dat
+#
+#----------------------------------------------------------------------
+
+[
+
+# string -> date
+{ oid => '8668', fmtsource => 'text', fmttarget => 'date',
+  fmtfunc => 'pg_format_text_to_date(text,text)' },
+{ oid => '8669', fmtsource => 'varchar', fmttarget => 'date',
+  fmtfunc => 'pg_format_varchar_to_date(varchar,text)' },
+{ oid => '8670', fmtsource => 'bpchar', fmttarget => 'date',
+  fmtfunc => 'pg_format_bpchar_to_date(bpchar,text)' },
+
+# string -> timestamp without time zone
+{ oid => '8671', fmtsource => 'text', fmttarget => 'timestamp',
+  fmtfunc => 'pg_format_text_to_timestamp(text,text)' },
+{ oid => '8672', fmtsource => 'varchar', fmttarget => 'timestamp',
+  fmtfunc => 'pg_format_varchar_to_timestamp(varchar,text)' },
+{ oid => '8673', fmtsource => 'bpchar', fmttarget => 'timestamp',
+  fmtfunc => 'pg_format_bpchar_to_timestamp(bpchar,text)' },
+
+# string -> timestamp with time zone
+{ oid => '8674', fmtsource => 'text', fmttarget => 'timestamptz',
+  fmtfunc => 'pg_format_text_to_timestamptz(text,text)' },
+{ oid => '8675', fmtsource => 'varchar', fmttarget => 'timestamptz',
+  fmtfunc => 'pg_format_varchar_to_timestamptz(varchar,text)' },
+{ oid => '8676', fmtsource => 'bpchar', fmttarget => 'timestamptz',
+  fmtfunc => 'pg_format_bpchar_to_timestamptz(bpchar,text)' },
+
+# date -> string
+{ oid => '8677', fmtsource => 'date', fmttarget => 'text',
+  fmtfunc => 'pg_format_date_to_text(date,text)' },
+{ oid => '8678', fmtsource => 'date', fmttarget => 'varchar',
+  fmtfunc => 'pg_format_date_to_varchar(date,text)' },
+{ oid => '8679', fmtsource => 'date', fmttarget => 'bpchar',
+  fmtfunc => 'pg_format_date_to_bpchar(date,text)' },
+
+# timestamp without time zone -> string
+{ oid => '8680', fmtsource => 'timestamp', fmttarget => 'text',
+  fmtfunc => 'pg_format_timestamp_to_text(timestamp,text)' },
+{ oid => '8681', fmtsource => 'timestamp', fmttarget => 'varchar',
+  fmtfunc => 'pg_format_timestamp_to_varchar(timestamp,text)' },
+{ oid => '8682', fmtsource => 'timestamp', fmttarget => 'bpchar',
+  fmtfunc => 'pg_format_timestamp_to_bpchar(timestamp,text)' },
+
+# timestamp with time zone -> string
+{ oid => '8683', fmtsource => 'timestamptz', fmttarget => 'text',
+  fmtfunc => 'pg_format_timestamptz_to_text(timestamptz,text)' },
+{ oid => '8684', fmtsource => 'timestamptz', fmttarget => 'varchar',
+  fmtfunc => 'pg_format_timestamptz_to_varchar(timestamptz,text)' },
+{ oid => '8685', fmtsource => 'timestamptz', fmttarget => 'bpchar',
+  fmtfunc => 'pg_format_timestamptz_to_bpchar(timestamptz,text)' },
+
+]

@@ -81,7 +81,9 @@ CREATE FUNCTION fmt_bad_set(integer, text) RETURNS SETOF text
 CREATE FORMAT CAST (integer AS text)
 	WITH FUNCTION fmt_bad_set(integer, text);		-- set-returning rejected
 
--- No pseudo-types
+-- No pseudo-types: a format cast's source/target may not be a pseudo-type, so
+-- CREATE FORMAT CAST on a polymorphic (anyelement) source is intentionally
+-- rejected.
 CREATE FUNCTION fmt_anyel(anyelement, text) RETURNS text
 	LANGUAGE sql IMMUTABLE AS $$ SELECT $2 $$;
 CREATE FORMAT CAST (anyelement AS text)
@@ -263,3 +265,127 @@ DROP FUNCTION i2t_chain(integer, text) CASCADE;			-- drops format cast and view
 SELECT count(*) FROM pg_format_cast
 	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype;
 SELECT count(*) FROM pg_class WHERE relname = 'format_cast_chain_view';
+
+-- ====================================================================
+-- Built-in datetime/string format casts.
+-- These rows are registered in pg_format_cast and reuse PostgreSQL's
+-- existing formatting template behavior.
+-- This initial set covers date, timestamp and timestamptz with
+-- text/varchar/bpchar.
+-- ====================================================================
+-- Pin the time zone and date style so results are stable across machines.
+SET TimeZone = 'UTC';
+SET DateStyle = 'ISO, YMD';
+
+-- text -> date.  The unknown-type literal is coerced to text before format
+-- cast lookup.
+SELECT CAST('2026-06-28' AS date FORMAT 'YYYY-MM-DD');
+-- varchar source -> date
+SELECT CAST('2026-06-28'::varchar AS date FORMAT 'YYYY-MM-DD');
+-- bpchar source -> date: a CHAR(10) holds the value exactly, and a wider
+-- CHAR(20) pads with blanks that the format cast trims before parsing.
+SELECT CAST('2026-06-28'::char(10) AS date FORMAT 'YYYY-MM-DD');
+SELECT CAST('2026-06-28'::char(20) AS date FORMAT 'YYYY-MM-DD');
+
+-- The built-in format cast functions are STRICT: a NULL source or a NULL FORMAT
+-- expression yields NULL without invoking the format cast.
+SELECT CAST(NULL::text AS date FORMAT 'YYYY-MM-DD') IS NULL AS null_src;
+SELECT CAST('2026-06-28' AS date FORMAT NULL::text) IS NULL AS null_fmt;
+SELECT CAST(NULL::date AS text FORMAT 'YYYY-MM-DD') IS NULL AS null_src_out;
+
+-- date -> text / varchar
+SELECT CAST(date '2026-06-28' AS text FORMAT 'YYYY-MM-DD');
+SELECT CAST(date '2026-06-28' AS varchar FORMAT 'YYYY-MM-DD');
+-- date -> varchar with a typmod: the declared length is enforced by the
+-- ordinary coercion layered above the format cast (here it truncates to 7).
+SELECT CAST(date '2026-06-28' AS varchar(7) FORMAT 'YYYY-MM-DD');
+-- date -> bpchar: AS char(12) pads to the declared length; bare AS char is
+-- char(1), so the ordinary coercion truncates to one character.  The wrapper
+-- returns a text varlena that is a valid bpchar value.
+SELECT CAST(date '2026-06-28' AS char(12) FORMAT 'YYYY-MM-DD');
+SELECT CAST(date '2026-06-28' AS char FORMAT 'YYYY-MM-DD');
+
+-- Collation: a formatted cast is collated like the function call it executes.
+-- A collatable result type (text) must get a real result collation, not
+-- InvalidOid; "collation for" reports "default" (it would be NULL if the
+-- result collation were unset), and an explicit COLLATE on the result works.
+SELECT pg_collation_for(CAST(date '2026-06-28' AS text FORMAT 'YYYY-MM-DD'));
+SELECT pg_collation_for(CAST(date '2026-06-28' AS text FORMAT 'YYYY-MM-DD') COLLATE "C");
+-- An explicit COLLATE on the FORMAT argument flows in as the input collation.
+SELECT pg_collation_for(CAST(date '2026-06-28' AS text
+                             FORMAT 'YYYY-MM-DD'::text COLLATE "C"));
+
+-- timestamp without time zone, both directions
+SELECT CAST('2026-06-28 13:45:30' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+SELECT CAST(timestamp '2026-06-28 13:45:30' AS text FORMAT 'YYYY-MM-DD HH24:MI:SS');
+-- a date-only template is widened to timestamp (midnight)
+SELECT CAST('2026-06-28' AS timestamp FORMAT 'YYYY-MM-DD');
+-- The built-ins reuse PostgreSQL's existing formatting parser: a template with
+-- no time-zone field consumes only the fields it names, so a trailing time zone
+-- in the input is simply ignored (existing to_timestamp() behavior, unchanged).
+SELECT CAST('2026-06-28 13:45:30+05' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+-- But a template that explicitly contains a time-zone field is rejected for a
+-- timestamp-without-time-zone target (we must not fold a zone into a zoneless
+-- result via the session TimeZone).
+SELECT CAST('2026-06-28 13:45:30+05' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS TZH');
+-- timestamp WITHOUT time zone must not depend on the session TimeZone: the same
+-- (unzoned) input/template yields the same wall-clock value under any zone.
+SET TimeZone = 'America/Los_Angeles';
+SELECT CAST('2026-06-28 13:45:30' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+SET TimeZone = 'UTC';
+SELECT CAST('2026-06-28 13:45:30' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+
+-- timestamp with time zone, both directions (TimeZone is UTC, set above)
+SELECT CAST('2026-06-28 13:45:30 +00' AS timestamptz FORMAT 'YYYY-MM-DD HH24:MI:SS TZH');
+SELECT CAST(timestamptz '2026-06-28 13:45:30+00' AS text FORMAT 'YYYY-MM-DD HH24:MI:SS TZH');
+
+-- A sampling of datetime template tokens, exercised through the existing
+-- to_char/to_timestamp engine.  TZM and SSSSS are supported here.
+SELECT CAST(timestamptz '2026-06-28 13:45:30+00' AS text
+            FORMAT 'YYYY-MM-DD"T"HH24:MI:SS TZH:TZM');
+SELECT CAST(timestamp '2026-06-28 13:45:30' AS text FORMAT 'SSSSS');
+-- Fractional seconds (FFn) are accepted by to_char in the output direction.
+SELECT CAST(timestamp '2026-06-28 13:45:30.123456' AS text
+            FORMAT 'HH24:MI:SS.FF6');
+
+-- Empty FORMAT template behavior follows the underlying formatting functions.
+-- In the parse direction the underlying to_date() engine parses no fields and
+-- returns the all-defaults date; in the format direction the wrappers mirror
+-- to_char(value, ''), which is NULL.
+SELECT CAST('2026-06-28' AS date FORMAT '');
+SELECT CAST(date '2026-06-28' AS text FORMAT '') IS NULL AS empty_fmt_out;
+
+-- The FORMAT clause remains a PostgreSQL extension: it may be any expression
+-- coercible to text, not just a string literal.
+SELECT CAST('2026-' || '06-28' AS date FORMAT 'YYYY-' || 'MM-DD');
+
+-- A FORMAT clause never falls back to an ordinary cast: an integer -> date
+-- pair has no format cast (and no ordinary cast), so it errors.
+SELECT CAST(5 AS date FORMAT 'YYYY');
+
+-- A built-in format cast occupies its (source, target) pair, so a user
+-- CREATE FORMAT CAST for the same pair fails with the usual duplicate error.
+CREATE FUNCTION my_text_to_date(text, text) RETURNS date
+	LANGUAGE sql IMMUTABLE RETURN to_date($1, $2);
+CREATE FORMAT CAST (text AS date)
+	WITH FUNCTION my_text_to_date(text, text);		-- fails: already exists
+DROP FUNCTION my_text_to_date(text, text);
+
+-- Built-in format cast rows are system objects (their OIDs are in the pinned
+-- range), so they cannot be dropped.
+DROP FORMAT CAST (text AS date);				-- fails: pinned system object
+
+-- A view over a built-in formatted cast deparses back to CAST(... FORMAT ...).
+CREATE VIEW builtin_format_cast_view AS
+	SELECT CAST('2026-06-28' AS date FORMAT 'YYYY-MM-DD') AS d;
+SELECT pg_get_viewdef('builtin_format_cast_view'::regclass, true);
+SELECT * FROM builtin_format_cast_view;
+DROP VIEW builtin_format_cast_view;
+
+-- Make sure query jumbling handles CoerceViaFormatCast.
+SET compute_query_id = on;
+SELECT CAST('2026-06-28' AS date FORMAT 'YYYY-MM-DD');
+RESET compute_query_id;
+
+RESET TimeZone;
+RESET DateStyle;

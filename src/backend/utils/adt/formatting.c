@@ -4138,6 +4138,323 @@ to_date(PG_FUNCTION_ARGS)
 	PG_RETURN_DATEADT(result);
 }
 
+/* ----------
+ * Built-in format casts for CAST ( <operand> AS <type> FORMAT <template> )
+ *
+ * These wrappers are registered in pg_format_cast (see pg_format_cast.dat) and
+ * reached through a CoerceViaFormatCast node.  They reuse PostgreSQL's existing
+ * formatting code: to_date()/to_timestamp()/parse_datetime() for the
+ * string -> datetime direction and timestamp_to_char()/timestamptz_to_char()
+ * for the datetime -> string direction, so the accepted template tokens are
+ * those of to_char()/to_date().
+ *
+ * There is a separate wrapper per exact source/target type pair, because
+ * pg_format_cast lookup matches the exact source and target types and text,
+ * varchar and bpchar are distinct on each side.  bpchar sources are
+ * right-trimmed first.  The returned text varlena is a valid varchar/bpchar
+ * value; any declared length/typmod is enforced by the ordinary coercion
+ * layered above the CoerceViaFormatCast node.
+ *
+ * All of these functions are STRICT, so a NULL source value or NULL FORMAT
+ * expression yields NULL without the C code being called.
+ * ----------
+ */
+
+/*
+ * Strip blank padding from a bpchar argument, returning a plain text value.
+ * Standard-style character casts must not fail merely because a fixed-length
+ * CHAR(n) source carries trailing spaces, so bpchar sources are right-trimmed
+ * before the format template is applied.
+ *
+ * bpchar padding uses ordinary ASCII space bytes, so we trim only trailing
+ * ' ' bytes here.  This is deliberately not a general Unicode whitespace trim.
+ */
+static text *
+formatcast_rtrim_blanks(text *src)
+{
+	char	   *data = VARDATA_ANY(src);
+	int			len = VARSIZE_ANY_EXHDR(src);
+	int			orig_len = len;
+
+	while (len > 0 && data[len - 1] == ' ')
+		len--;
+
+	/* Avoid a copy when there was no trailing padding to trim. */
+	if (len == orig_len)
+		return src;
+
+	return cstring_to_text_with_len(data, len);
+}
+
+/*
+ * string -> date: reuse to_date() verbatim, so behavior matches the
+ * SQL-callable to_date(text, text).
+ */
+static Datum
+formatcast_in_date(text *src, text *fmt, Oid collid)
+{
+	return DirectFunctionCall2Coll(to_date, collid,
+								   PointerGetDatum(src), PointerGetDatum(fmt));
+}
+
+/*
+ * string -> timestamp without time zone.  There is no SQL-callable function
+ * for this (to_timestamp() returns timestamptz), so we parse with
+ * parse_datetime() and build the result from the local datetime fields without
+ * consulting the session time zone.  A date-only template is widened to
+ * timestamp; a zoned template is rejected, since the result type carries no
+ * zone and we must not silently fold a time zone through the session setting.
+ */
+static Datum
+formatcast_in_timestamp(text *src, text *fmt, Oid collid)
+{
+	Oid			typid;
+	int32		typmod;
+	int			tz;
+	Datum		d;
+
+	d = parse_datetime(src, fmt, collid, false, &typid, &typmod, &tz, NULL);
+
+	switch (typid)
+	{
+		case TIMESTAMPOID:
+			return d;
+		case DATEOID:
+			return TimestampGetDatum(date2timestamp_safe(DatumGetDateADT(d),
+														 NULL));
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_INVALID_DATETIME_FORMAT),
+					 errmsg("FORMAT template for a cast to timestamp without time zone must not specify a time zone")));
+			return (Datum) 0;	/* keep compiler quiet */
+	}
+}
+
+/*
+ * string -> timestamp with time zone: reuse to_timestamp() verbatim, matching
+ * the SQL-callable to_timestamp(text, text).
+ */
+static Datum
+formatcast_in_timestamptz(text *src, text *fmt, Oid collid)
+{
+	return DirectFunctionCall2Coll(to_timestamp, collid,
+								   PointerGetDatum(src), PointerGetDatum(fmt));
+}
+
+/* string -> date (text and varchar sources) */
+Datum
+formatcast_str_to_date(PG_FUNCTION_ARGS)
+{
+	return formatcast_in_date(PG_GETARG_TEXT_PP(0), PG_GETARG_TEXT_PP(1),
+							  PG_GET_COLLATION());
+}
+
+/* string -> date (bpchar source; trailing blanks trimmed) */
+Datum
+formatcast_bpchar_to_date(PG_FUNCTION_ARGS)
+{
+	return formatcast_in_date(formatcast_rtrim_blanks(PG_GETARG_TEXT_PP(0)),
+							  PG_GETARG_TEXT_PP(1), PG_GET_COLLATION());
+}
+
+/* string -> timestamp (text and varchar sources) */
+Datum
+formatcast_str_to_timestamp(PG_FUNCTION_ARGS)
+{
+	return formatcast_in_timestamp(PG_GETARG_TEXT_PP(0), PG_GETARG_TEXT_PP(1),
+								   PG_GET_COLLATION());
+}
+
+/* string -> timestamp (bpchar source; trailing blanks trimmed) */
+Datum
+formatcast_bpchar_to_timestamp(PG_FUNCTION_ARGS)
+{
+	return formatcast_in_timestamp(formatcast_rtrim_blanks(PG_GETARG_TEXT_PP(0)),
+								   PG_GETARG_TEXT_PP(1), PG_GET_COLLATION());
+}
+
+/* string -> timestamptz (text and varchar sources) */
+Datum
+formatcast_str_to_timestamptz(PG_FUNCTION_ARGS)
+{
+	return formatcast_in_timestamptz(PG_GETARG_TEXT_PP(0), PG_GETARG_TEXT_PP(1),
+									 PG_GET_COLLATION());
+}
+
+/* string -> timestamptz (bpchar source; trailing blanks trimmed) */
+Datum
+formatcast_bpchar_to_timestamptz(PG_FUNCTION_ARGS)
+{
+	return formatcast_in_timestamptz(formatcast_rtrim_blanks(PG_GETARG_TEXT_PP(0)),
+									 PG_GETARG_TEXT_PP(1), PG_GET_COLLATION());
+}
+
+/*
+ * Call a collation-aware (datetime, text) -> text formatting function,
+ * propagating a SQL NULL result.  DirectFunctionCall cannot handle a SQL NULL
+ * result, so build a local FunctionCallInfo.  Pass the caller's flinfo to
+ * provide a normal fmgr context; the callees used here do not depend on
+ * function-specific flinfo state.
+ */
+static Datum
+formatcast_to_char_call(FunctionCallInfo caller_fcinfo, PGFunction fn,
+						Oid collid, Datum value, Datum fmt, bool *resultnull)
+{
+	LOCAL_FCINFO(fcinfo, 2);
+	Datum		result;
+
+	InitFunctionCallInfoData(*fcinfo, caller_fcinfo->flinfo, 2, collid,
+							 NULL, NULL);
+	fcinfo->args[0].value = value;
+	fcinfo->args[0].isnull = false;
+	fcinfo->args[1].value = fmt;
+	fcinfo->args[1].isnull = false;
+
+	result = (*fn) (fcinfo);
+	*resultnull = fcinfo->isnull;
+	return result;
+}
+
+/*
+ * Per-source-type helpers shared by the datetime -> string wrappers below.
+ * Each formats the source value with the given template, returning the result
+ * text (with *resultnull set on an empty template, as for to_char()).
+ */
+static Datum
+formatcast_date_out(FunctionCallInfo fcinfo, bool *resultnull)
+{
+	DateADT		dateVal = PG_GETARG_DATEADT(0);
+	text	   *fmt = PG_GETARG_TEXT_PP(1);
+	Timestamp	ts = date2timestamp_safe(dateVal, NULL);
+
+	return formatcast_to_char_call(fcinfo, timestamp_to_char, PG_GET_COLLATION(),
+								   TimestampGetDatum(ts), PointerGetDatum(fmt),
+								   resultnull);
+}
+
+static Datum
+formatcast_timestamp_out(FunctionCallInfo fcinfo, bool *resultnull)
+{
+	return formatcast_to_char_call(fcinfo, timestamp_to_char, PG_GET_COLLATION(),
+								   PG_GETARG_DATUM(0), PG_GETARG_DATUM(1),
+								   resultnull);
+}
+
+static Datum
+formatcast_timestamptz_out(FunctionCallInfo fcinfo, bool *resultnull)
+{
+	return formatcast_to_char_call(fcinfo, timestamptz_to_char, PG_GET_COLLATION(),
+								   PG_GETARG_DATUM(0), PG_GETARG_DATUM(1),
+								   resultnull);
+}
+
+/*
+ * Exported datetime -> string wrappers.  The text, varchar and bpchar targets
+ * each get a distinct C symbol so that no two built-in functions share a
+ * prosrc with a different return type; they all delegate to the per-source
+ * helper above, so there is no duplicated logic.  The returned text varlena is
+ * a valid varchar/bpchar value; any declared length/typmod is enforced by the
+ * ordinary coercion layered above the CoerceViaFormatCast node.
+ */
+Datum
+formatcast_date_to_text(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_date_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_date_to_varchar(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_date_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_date_to_bpchar(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_date_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_timestamp_to_text(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_timestamp_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_timestamp_to_varchar(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_timestamp_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_timestamp_to_bpchar(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_timestamp_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_timestamptz_to_text(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_timestamptz_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_timestamptz_to_varchar(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_timestamptz_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
+Datum
+formatcast_timestamptz_to_bpchar(PG_FUNCTION_ARGS)
+{
+	bool		resultnull;
+	Datum		result = formatcast_timestamptz_out(fcinfo, &resultnull);
+
+	if (resultnull)
+		PG_RETURN_NULL();
+	PG_RETURN_DATUM(result);
+}
+
 /*
  * Convert the 'date_txt' input to a datetime type using argument 'fmt'
  * as a format string.  The collation 'collid' may be used for case-folding

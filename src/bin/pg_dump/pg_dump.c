@@ -2189,6 +2189,29 @@ selectDumpableCast(CastInfo *cast, Archive *fout)
 }
 
 /*
+ * selectDumpableFormatCast: policy-setting subroutine
+ *		Mark a format cast as to be dumped or not
+ *
+ * Like casts, format_casts have no namespace and no identifiable owner, so we
+ * distinguish the built-in (initdb-created) format_casts from user-defined ones
+ * by checking whether the format cast's OID is in the range reserved for initdb.
+ * Built-in format casts are part of the system catalogs and must not be dumped
+ * as CREATE FORMAT CAST commands.
+ */
+static void
+selectDumpableFormatCast(FormatCastInfo *formatcast, Archive *fout)
+{
+	if (checkExtensionMembership(&formatcast->dobj, fout))
+		return;					/* extension membership overrides all else */
+
+	if (formatcast->dobj.catId.oid <= g_last_builtin_oid)
+		formatcast->dobj.dump = DUMP_COMPONENT_NONE;
+	else
+		formatcast->dobj.dump = fout->dopt->include_everything ?
+			DUMP_COMPONENT_ALL : DUMP_COMPONENT_NONE;
+}
+
+/*
  * selectDumpableProcLang: policy-setting subroutine
  *		Mark a procedural language as to be dumped or not
  *
@@ -9390,7 +9413,7 @@ getFormatCasts(Archive *fout)
 		formatcastinfo[i].dobj.name = namebuf.data;
 
 		/* Decide whether we want to dump it */
-		selectDumpableObject(&(formatcastinfo[i].dobj), fout);
+		selectDumpableFormatCast(&(formatcastinfo[i]), fout);
 	}
 
 	PQclear(res);

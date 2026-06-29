@@ -917,7 +917,7 @@ pq_recvbuf(void)
 	/* Can fill buffer from PqRecvLength and upwards */
 	for (;;)
 	{
-		int			r;
+		ssize_t		r;
 
 		errno = 0;
 
@@ -1003,7 +1003,7 @@ pq_peekbyte(void)
 int
 pq_getbyte_if_available(unsigned char *c)
 {
-	int			r;
+	ssize_t		r;
 
 	Assert(PqCommReadingMsg);
 
@@ -1369,7 +1369,7 @@ internal_flush_buffer(const char *buf, size_t *start, size_t *end)
 
 	while (bufptr < bufend)
 	{
-		int			r;
+		ssize_t		r;
 
 		r = secure_write(MyProcPort, bufptr, bufend - bufptr);
 

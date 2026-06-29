@@ -430,11 +430,11 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		if (errinfo.wre_errno != 0)
 		{
 			errno = errinfo.wre_errno;
-			pg_fatal("could not read from file \"%s\", offset %d: %m",
+			pg_fatal("could not read from file \"%s\", offset %u: %m",
 					 fname, errinfo.wre_off);
 		}
 		else
-			pg_fatal("could not read from file \"%s\", offset %d: read %d of %d",
+			pg_fatal("could not read from file \"%s\", offset %u: read %zd of %zu",
 					 fname, errinfo.wre_off, errinfo.wre_read,
 					 errinfo.wre_req);
 	}

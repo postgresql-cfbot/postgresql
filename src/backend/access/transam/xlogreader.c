@@ -1548,8 +1548,8 @@ WALRead(XLogReaderState *state,
 	while (nbytes > 0)
 	{
 		uint32		startoff;
-		int			segbytes;
-		int			readbytes;
+		size_t		segbytes;
+		ssize_t		readbytes;
 
 		startoff = XLogSegmentOffset(recptr, state->segcxt.ws_segsize);
 

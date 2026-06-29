@@ -2823,6 +2823,45 @@ LookupGXactBySubid(Oid subid)
 }
 
 /*
+ * GetPreparedTransactionGid
+ *		Get the GID for the prepared transaction with the given XID.
+ *
+ * Returns true when a matching prepared transaction is found.  gid will be
+ * set to an empty string when no match is found.
+ */
+bool
+GetPreparedTransactionGid(TransactionId xid, char gid[GIDSIZE])
+{
+	bool		found = false;
+
+	Assert(TransactionIdIsValid(xid));
+
+	gid[0] = '\0';
+
+	if (max_prepared_xacts == 0 || TwoPhaseState == NULL)
+		return false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+	for (int i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+
+		if (!gxact->valid)
+			continue;
+
+		if (!TransactionIdEquals(XidFromFullTransactionId(gxact->fxid), xid))
+			continue;
+
+		strlcpy(gid, gxact->gid, GIDSIZE);
+		found = true;
+		break;
+	}
+	LWLockRelease(TwoPhaseStateLock);
+
+	return found;
+}
+
+/*
  * TwoPhaseGetOldestXidInCommit
  *		Return the oldest transaction ID from prepared transactions that are
  *		currently in the commit critical section.

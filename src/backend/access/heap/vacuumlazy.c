@@ -151,6 +151,7 @@
 #include "storage/freespace.h"
 #include "storage/latch.h"
 #include "storage/lmgr.h"
+#include "storage/procarray.h"
 #include "storage/read_stream.h"
 #include "utils/injection_point.h"
 #include "utils/lsyscache.h"
@@ -1074,6 +1075,69 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 							 vacrel->tuples_deleted,
 							 (int64) vacrel->new_rel_tuples,
 							 vacrel->recently_dead_tuples);
+			if (vacrel->recently_dead_tuples > 0)
+			{
+				XidHorizonBlocker blocker;
+
+				if (GetXidHorizonBlocker(vacrel->rel,
+										 vacrel->cutoffs.OldestXmin,
+										 &blocker))
+				{
+					switch (blocker.type)
+					{
+						case XHB_ACTIVE_TRANSACTION:
+							appendStringInfo(&buf,
+											 _("oldest xmin blocker: active transaction (pid = %d)\n"),
+											 blocker.pid);
+							break;
+						case XHB_IDLE_IN_TRANSACTION:
+							appendStringInfo(&buf,
+											 _("oldest xmin blocker: idle in transaction (pid = %d)\n"),
+											 blocker.pid);
+							break;
+						case XHB_XMIN_ACTIVE_TRANSACTION:
+							appendStringInfo(&buf,
+											 _("oldest xmin blocker: active transaction holding snapshot (pid = %d)\n"),
+											 blocker.pid);
+							break;
+						case XHB_XMIN_IDLE_IN_TRANSACTION:
+							appendStringInfo(&buf,
+											 _("oldest xmin blocker: idle in transaction holding snapshot (pid = %d)\n"),
+											 blocker.pid);
+							break;
+						case XHB_PREPARED_TRANSACTION:
+							if (blocker.name[0] != '\0')
+								appendStringInfo(&buf,
+												 _("oldest xmin blocker: prepared transaction (gid = %s)\n"),
+												 blocker.name);
+							else
+								appendStringInfo(&buf,
+												 _("oldest xmin blocker: prepared transaction\n"));
+							break;
+						case XHB_HOT_STANDBY_FEEDBACK:
+							if (blocker.name[0] != '\0')
+								appendStringInfo(&buf,
+												 _("oldest xmin blocker: hot standby feedback (standby name = %s, pid = %d)\n"),
+												 blocker.name,
+												 blocker.pid);
+							else
+								appendStringInfo(&buf,
+												 _("oldest xmin blocker: hot standby feedback (pid = %d)\n"),
+												 blocker.pid);
+							break;
+						case XHB_PHYSICAL_REPLICATION_SLOT:
+							appendStringInfo(&buf,
+											 _("oldest xmin blocker: physical replication slot (slot name = %s)\n"),
+											 blocker.name);
+							break;
+						case XHB_LOGICAL_REPLICATION_SLOT:
+							appendStringInfo(&buf,
+											 _("oldest xmin blocker: logical replication slot (slot name = %s)\n"),
+											 blocker.name);
+							break;
+					}
+				}
+			}
 			if (vacrel->missed_dead_tuples > 0)
 				appendStringInfo(&buf,
 								 _("tuples missed: %" PRId64 " dead from %u pages not removed due to cleanup lock contention\n"),

@@ -647,8 +647,8 @@ static Oid
 lo_import_internal(PGconn *conn, const char *filename, Oid oid)
 {
 	int			fd;
-	int			nbytes,
-				tmp;
+	ssize_t		nbytes;
+	int			tmp;
 	char		buf[LO_BUFSIZE];
 	Oid			lobjOid;
 	int			lobj;

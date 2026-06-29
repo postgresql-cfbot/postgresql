@@ -37,8 +37,8 @@ importFile(PGconn *conn, char *filename)
 	Oid			lobjId;
 	int			lobj_fd;
 	char		buf[BUFSIZE];
-	int			nbytes,
-				tmp;
+	ssize_t		nbytes;
+	int			tmp;
 	int			fd;
 
 	/*

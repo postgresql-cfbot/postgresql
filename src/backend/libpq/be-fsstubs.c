@@ -424,8 +424,8 @@ static Oid
 lo_import_internal(text *filename, Oid lobjOid)
 {
 	int			fd;
-	int			nbytes,
-				tmp PG_USED_FOR_ASSERTS_ONLY;
+	ssize_t		nbytes;
+	int			tmp PG_USED_FOR_ASSERTS_ONLY;
 	char		buf[BUFSIZE];
 	char		fnamebuf[MAXPGPATH];
 	LargeObjectDesc *lobj;

@@ -331,7 +331,7 @@ FindStreamingStart(uint32 *tli)
 			char		buf[4];
 			int			bytes_out;
 			char		fullpath[MAXPGPATH * 2];
-			int			r;
+			ssize_t		r;
 
 			snprintf(fullpath, sizeof(fullpath), "%s/%s", basedir, dirent->d_name);
 
@@ -349,7 +349,7 @@ FindStreamingStart(uint32 *tli)
 					pg_fatal("could not read compressed file \"%s\": %m",
 							 fullpath);
 				else
-					pg_fatal("could not read compressed file \"%s\": read %d of %zu",
+					pg_fatal("could not read compressed file \"%s\": read %zd of %zu",
 							 fullpath, r, sizeof(buf));
 			}
 

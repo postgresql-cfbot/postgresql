@@ -1227,7 +1227,6 @@ scan_for_existing_tablespaces(char *pathname, cb_options *opt)
 		Oid			oid;
 		char		tblspcdir[MAXPGPATH];
 		char		link_target[MAXPGPATH];
-		int			link_length;
 		cb_tablespace *ts;
 		cb_tablespace *otherts;
 		PGFileType	type;
@@ -1268,6 +1267,7 @@ scan_for_existing_tablespaces(char *pathname, cb_options *opt)
 		 */
 		if (type == PGFILETYPE_LNK)
 		{
+			ssize_t		link_length;
 			cb_tablespace_mapping *tsmap;
 
 			/* Read the link target. */

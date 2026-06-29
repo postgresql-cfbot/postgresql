@@ -698,7 +698,7 @@ write_reconstructed_file(const char *input_filename,
 			 */
 			do
 			{
-				int			wb;
+				ssize_t		wb;
 
 				wb = copy_file_range(s->fd, &off, wfd, NULL, BLCKSZ - nwritten, 0);
 

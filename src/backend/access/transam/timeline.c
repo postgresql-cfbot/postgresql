@@ -311,7 +311,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	char		buffer[BLCKSZ];
 	int			srcfd;
 	int			fd;
-	int			nbytes;
+	ssize_t		nbytes;
 
 	Assert(newTLI > parentTLI); /* else bad selection of newTLI */
 
@@ -355,7 +355,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 		{
 			errno = 0;
 			pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_READ);
-			nbytes = (int) read(srcfd, buffer, sizeof(buffer));
+			nbytes = read(srcfd, buffer, sizeof(buffer));
 			pgstat_report_wait_end();
 			if (nbytes < 0 || errno != 0)
 				ereport(ERROR,
@@ -365,7 +365,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 				break;
 			errno = 0;
 			pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_WRITE);
-			if ((int) write(fd, buffer, nbytes) != nbytes)
+			if (write(fd, buffer, nbytes) != nbytes)
 			{
 				int			save_errno = errno;
 
@@ -409,7 +409,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	nbytes = strlen(buffer);
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_WRITE);
-	if ((int) write(fd, buffer, nbytes) != nbytes)
+	if (write(fd, buffer, nbytes) != nbytes)
 	{
 		int			save_errno = errno;
 

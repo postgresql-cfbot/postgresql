@@ -617,7 +617,7 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 	char		path[MAXPGPATH];
 	int			fd;
 	off_t		histfilelen;
-	off_t		bytesleft;
+	size_t		bytesleft;
 	Size		len;
 
 	dest = CreateDestReceiver(DestRemoteSimple);
@@ -669,7 +669,7 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 	while (bytesleft > 0)
 	{
 		PGAlignedBlock rbuf;
-		int			nread;
+		ssize_t		nread;
 
 		pgstat_report_wait_start(WAIT_EVENT_WALSENDER_TIMELINE_HISTORY_READ);
 		nread = read(fd, rbuf.data, sizeof(rbuf));
@@ -682,10 +682,20 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 		else if (nread == 0)
 			ereport(ERROR,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
-							path, nread, (Size) bytesleft)));
+					 errmsg("could not read file \"%s\": read %zd of %zu",
+							path, nread, bytesleft)));
+
+		/*
+		 * We could have read more than expected if the file changed
+		 * concurrently.  In that case, only send as much as we expected and
+		 * make sure the loop aborts properly (no wrap of bytesleft).  (This
+		 * isn't possible in practice, because the files are updated by atomic
+		 * renames, but it's a safer programming practice.)
+		 */
+		nread = Min(nread, bytesleft);
 
 		pq_sendbytes(&buf, rbuf.data, nread);
+
 		bytesleft -= nread;
 	}
 

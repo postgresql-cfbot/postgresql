@@ -236,7 +236,7 @@ search_directory(const char *directory, const char *fname, int *WalSegSz)
 	if (fd >= 0)
 	{
 		PGAlignedXLogBlock buf;
-		int			r;
+		ssize_t		r;
 
 		r = read(fd, buf.data, XLOG_BLCKSZ);
 		if (r == XLOG_BLCKSZ)
@@ -259,8 +259,8 @@ search_directory(const char *directory, const char *fname, int *WalSegSz)
 			pg_fatal("could not read file \"%s\": %m",
 					 fname);
 		else
-			pg_fatal("could not read file \"%s\": read %d of %d",
-					 fname, r, XLOG_BLCKSZ);
+			pg_fatal("could not read file \"%s\": read %zd of %zu",
+					 fname, r, (size_t) XLOG_BLCKSZ);
 		close(fd);
 		return true;
 	}

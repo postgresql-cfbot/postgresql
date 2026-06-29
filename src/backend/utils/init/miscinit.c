@@ -1164,7 +1164,6 @@ CreateLockFile(const char *filename, bool amPostmaster,
 	int			fd;
 	char		buffer[MAXPGPATH * 2 + 256];
 	int			ntries;
-	int			len;
 	int			encoded_pid;
 	pid_t		other_pid;
 	pid_t		my_pid,
@@ -1216,6 +1215,8 @@ CreateLockFile(const char *filename, bool amPostmaster,
 	 */
 	for (ntries = 0;; ntries++)
 	{
+		ssize_t		len;
+
 		/*
 		 * Try to create the lock file --- O_EXCL makes this atomic.
 		 *
@@ -1521,7 +1522,7 @@ void
 AddToDataDirLockFile(int target_line, const char *str)
 {
 	int			fd;
-	int			len;
+	ssize_t		len;
 	int			lineno;
 	char	   *srcptr;
 	char	   *destptr;
@@ -1648,7 +1649,7 @@ bool
 RecheckDataDirLockFile(void)
 {
 	int			fd;
-	int			len;
+	ssize_t		len;
 	long		file_pid;
 	char		buffer[BLCKSZ];
 

@@ -61,7 +61,7 @@ static void write_reconstructed_file(const char *input_filename,
 									 CopyMethod copy_method,
 									 bool debug,
 									 bool dry_run);
-static void read_bytes(const rfile *rf, void *buffer, unsigned length);
+static void read_bytes(const rfile *rf, void *buffer, size_t length);
 static void write_block(int fd, const char *output_filename,
 						const uint8 *buffer,
 						pg_checksum_context *checksum_ctx);
@@ -532,16 +532,18 @@ make_rfile(const char *filename, bool missing_ok)
  * Read the indicated number of bytes from an rfile into the buffer.
  */
 static void
-read_bytes(const rfile *rf, void *buffer, unsigned length)
+read_bytes(const rfile *rf, void *buffer, size_t length)
 {
-	int			rb = read(rf->fd, buffer, length);
+	ssize_t		rb;
+
+	rb = read(rf->fd, buffer, length);
 
 	if (rb != length)
 	{
 		if (rb < 0)
 			pg_fatal("could not read file \"%s\": %m", rf->filename);
 		else
-			pg_fatal("could not read file \"%s\": read %d of %u",
+			pg_fatal("could not read file \"%s\": read %zd of %zu",
 					 rf->filename, rb, length);
 	}
 }

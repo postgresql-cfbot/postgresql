@@ -36,8 +36,8 @@ importFile(PGconn *conn, char *filename)
 	Oid			lobjId;
 	int			lobj_fd;
 	char		buf[BUFSIZE];
-	int			nbytes,
-				tmp;
+	ssize_t		nbytes;
+	int			tmp;
 	int			fd;
 
 	/*
@@ -79,7 +79,7 @@ pickout(PGconn *conn, Oid lobjId, int start, int len)
 {
 	int			lobj_fd;
 	char	   *buf;
-	int			nbytes;
+	ssize_t		nbytes;
 	int			nread;
 
 	lobj_fd = lo_open(conn, lobjId, INV_READ);

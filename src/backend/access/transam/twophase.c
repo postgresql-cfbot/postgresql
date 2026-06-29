@@ -1301,6 +1301,7 @@ static char *
 ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 {
 	char		path[MAXPGPATH];
+	size_t		buflen;
 	char	   *buf;
 	TwoPhaseFileHeader *hdr;
 	int			fd;
@@ -1308,7 +1309,7 @@ ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 	uint32		crc_offset;
 	pg_crc32c	calc_crc,
 				file_crc;
-	int			r;
+	ssize_t		r;
 
 	TwoPhaseFilePath(path, fxid);
 
@@ -1355,11 +1356,12 @@ ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 	/*
 	 * OK, slurp in the file.
 	 */
-	buf = (char *) palloc(stat.st_size);
+	buflen = stat.st_size;
+	buf = (char *) palloc(buflen);
 
 	pgstat_report_wait_start(WAIT_EVENT_TWOPHASE_FILE_READ);
-	r = read(fd, buf, stat.st_size);
-	if (r != stat.st_size)
+	r = read(fd, buf, buflen);
+	if (r != buflen)
 	{
 		if (r < 0)
 			ereport(ERROR,
@@ -1367,8 +1369,8 @@ ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 					 errmsg("could not read file \"%s\": %m", path)));
 		else
 			ereport(ERROR,
-					(errmsg("could not read file \"%s\": read %d of %lld",
-							path, r, (long long int) stat.st_size)));
+					(errmsg("could not read file \"%s\": read %zd of %zu",
+							path, r, buflen)));
 	}
 
 	pgstat_report_wait_end();

@@ -412,11 +412,10 @@ parse_manifest_file(char *manifest_path)
 	uint32		initial_size;
 	manifest_files_hash *ht;
 	char	   *buffer;
-	int			rc;
 	JsonManifestParseContext context;
 	manifest_data *result;
-
-	int			chunk_size = READ_CHUNK_SIZE;
+	size_t		total_size;
+	const size_t chunk_size = READ_CHUNK_SIZE;
 
 	/* Open the manifest file. */
 	if ((fd = open(manifest_path, O_RDONLY | PG_BINARY, 0)) < 0)
@@ -442,31 +441,35 @@ parse_manifest_file(char *manifest_path)
 	context.per_wal_range_cb = verifybackup_per_wal_range_cb;
 	context.error_cb = report_manifest_error;
 
+	total_size = statbuf.st_size;
+
 	/*
 	 * Parse the file, in chunks if necessary.
 	 */
-	if (statbuf.st_size <= chunk_size)
+	if (total_size <= chunk_size)
 	{
-		buffer = pg_malloc(statbuf.st_size);
-		rc = read(fd, buffer, statbuf.st_size);
-		if (rc != statbuf.st_size)
+		ssize_t		rc;
+
+		buffer = pg_malloc(total_size);
+		rc = read(fd, buffer, total_size);
+		if (rc != total_size)
 		{
 			if (rc < 0)
 				pg_fatal("could not read file \"%s\": %m", manifest_path);
 			else
-				pg_fatal("could not read file \"%s\": read %d of %lld",
-						 manifest_path, rc, (long long int) statbuf.st_size);
+				pg_fatal("could not read file \"%s\": read %zd of %zu",
+						 manifest_path, rc, total_size);
 		}
 
 		/* Close the manifest file. */
 		close(fd);
 
 		/* Parse the manifest. */
-		json_parse_manifest(&context, buffer, statbuf.st_size);
+		json_parse_manifest(&context, buffer, total_size);
 	}
 	else
 	{
-		int			bytes_left = statbuf.st_size;
+		size_t		bytes_left = total_size;
 		JsonManifestParseIncrementalState *inc_state;
 
 		inc_state = json_parse_manifest_incremental_init(&context);
@@ -475,7 +478,8 @@ parse_manifest_file(char *manifest_path)
 
 		while (bytes_left > 0)
 		{
-			int			bytes_to_read = chunk_size;
+			ssize_t		rc;
+			size_t		bytes_to_read = chunk_size;
 
 			/*
 			 * Make sure that the last chunk is sufficiently large. (i.e. at
@@ -492,10 +496,10 @@ parse_manifest_file(char *manifest_path)
 				if (rc < 0)
 					pg_fatal("could not read file \"%s\": %m", manifest_path);
 				else
-					pg_fatal("could not read file \"%s\": read %lld of %lld",
+					pg_fatal("could not read file \"%s\": read %zu of %zu",
 							 manifest_path,
-							 (long long int) (statbuf.st_size + rc - bytes_left),
-							 (long long int) statbuf.st_size);
+							 total_size + rc - bytes_left,
+							 total_size);
 			}
 			bytes_left -= rc;
 			json_parse_manifest_incremental_chunk(inc_state, buffer, rc,
@@ -1016,7 +1020,7 @@ verify_tar_file(verifier_context *context, char *relpath, char *fullpath,
 				astreamer *streamer)
 {
 	int			fd;
-	int			rc;
+	ssize_t		rc;
 	char	   *buffer;
 
 	pg_log_debug("reading \"%s\"", fullpath);
@@ -1124,7 +1128,7 @@ verify_file_checksum(verifier_context *context, manifest_file *m,
 	pg_checksum_context checksum_ctx;
 	const char *relpath = m->pathname;
 	int			fd;
-	int			rc;
+	ssize_t		rc;
 	uint64		bytes_read = 0;
 	uint8		checksumbuf[PG_CHECKSUM_MAX_LENGTH];
 	int			checksumlen;

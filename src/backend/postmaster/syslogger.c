@@ -533,7 +533,7 @@ SysLoggerMain(const void *startup_data, size_t startup_data_len)
 
 		if (rc == 1 && event.events == WL_SOCKET_READABLE)
 		{
-			int			bytesRead;
+			ssize_t		bytesRead;
 
 			bytesRead = read(syslogPipe[0],
 							 logbuffer + bytes_in_logbuffer,

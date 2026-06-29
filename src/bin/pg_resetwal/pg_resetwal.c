@@ -596,7 +596,7 @@ static bool
 read_controlfile(void)
 {
 	int			fd;
-	int			len;
+	ssize_t		len;
 	char	   *buffer;
 	pg_crc32c	crc;
 

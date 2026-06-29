@@ -5361,7 +5361,7 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, const char *fname)
 {
 	char		path[MAXPGPATH];
 	int			fd;
-	int			readBytes;
+	ssize_t		readBytes;
 	LogicalRewriteMappingData map;
 
 	sprintf(path, "%s/%s", PG_LOGICAL_MAPPINGS_DIR, fname);
@@ -5396,9 +5396,9 @@ ApplyLogicalMappingFile(HTAB *tuplecid_data, const char *fname)
 		else if (readBytes != sizeof(LogicalRewriteMappingData))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read from file \"%s\": read %d instead of %d bytes",
+					 errmsg("could not read from file \"%s\": read %zd of %zu",
 							path, readBytes,
-							(int32) sizeof(LogicalRewriteMappingData))));
+							sizeof(LogicalRewriteMappingData))));
 
 		key.rlocator = map.old_locator;
 		ItemPointerCopy(&map.old_tid,

@@ -196,8 +196,9 @@ scan_file(const char *fn, int segmentno)
 	for (blockno = 0;; blockno++)
 	{
 		uint16		csum;
-		int			r = read(f, buf.data, BLCKSZ);
+		ssize_t		r;
 
+		r = read(f, buf.data, BLCKSZ);
 		if (r == 0)
 			break;
 		if (r != BLCKSZ)
@@ -206,8 +207,8 @@ scan_file(const char *fn, int segmentno)
 				pg_fatal("could not read block %u in file \"%s\": %m",
 						 blockno, fn);
 			else
-				pg_fatal("could not read block %u in file \"%s\": read %d of %d",
-						 blockno, fn, r, BLCKSZ);
+				pg_fatal("could not read block %u in file \"%s\": read %zd of %zu",
+						 blockno, fn, r, (size_t) BLCKSZ);
 		}
 		blocks_scanned++;
 

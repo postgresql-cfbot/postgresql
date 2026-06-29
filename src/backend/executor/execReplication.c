@@ -191,6 +191,7 @@ RelationFindReplTupleByIndex(Relation rel, Oid idxoid,
 	TransactionId xwait;
 	Relation	idxrel;
 	bool		found;
+	bool		recheck;
 	TypeCacheEntry **eq = NULL;
 	bool		isIdxSafeToSkipDuplicates;
 
@@ -205,7 +206,7 @@ RelationFindReplTupleByIndex(Relation rel, Oid idxoid,
 	skey_attoff = build_replindex_scan_key(skey, rel, idxrel, searchslot);
 
 	/* Start an index scan. */
-	scan = index_beginscan(rel, idxrel,
+	scan = index_beginscan(rel, idxrel, false,
 						   &snap, NULL, skey_attoff, 0, SO_NONE);
 
 retry:
@@ -214,7 +215,7 @@ retry:
 	index_rescan(scan, skey, skey_attoff, NULL, 0);
 
 	/* Try to find the tuple */
-	while (index_getnext_slot(scan, ForwardScanDirection, outslot))
+	while (table_index_getnext_slot(scan, ForwardScanDirection, outslot, &recheck))
 	{
 		/*
 		 * Avoid expensive equality check if the index is primary key or
@@ -228,6 +229,8 @@ retry:
 			if (!tuples_equal(outslot, searchslot, eq, NULL))
 				continue;
 		}
+		else
+			Assert(!recheck);
 
 		ExecMaterializeSlot(outslot);
 
@@ -645,6 +648,7 @@ RelationFindDeletedTupleInfoByIndex(Relation rel, Oid idxoid,
 	TupleTableSlot *scanslot;
 	TypeCacheEntry **eq = NULL;
 	bool		isIdxSafeToSkipDuplicates;
+	bool		recheck;
 	TupleDesc	desc PG_USED_FOR_ASSERTS_ONLY = RelationGetDescr(rel);
 
 	Assert(equalTupleDescs(desc, searchslot->tts_tupleDescriptor));
@@ -669,13 +673,13 @@ RelationFindDeletedTupleInfoByIndex(Relation rel, Oid idxoid,
 	 * not yet committed or those just committed prior to the scan are
 	 * excluded in update_most_recent_deletion_info().
 	 */
-	scan = index_beginscan(rel, idxrel,
+	scan = index_beginscan(rel, idxrel, false,
 						   SnapshotAny, NULL, skey_attoff, 0, SO_NONE);
 
 	index_rescan(scan, skey, skey_attoff, NULL, 0);
 
 	/* Try to find the tuple */
-	while (index_getnext_slot(scan, ForwardScanDirection, scanslot))
+	while (table_index_getnext_slot(scan, ForwardScanDirection, scanslot, &recheck))
 	{
 		/*
 		 * Avoid expensive equality check if the index is primary key or
@@ -689,6 +693,8 @@ RelationFindDeletedTupleInfoByIndex(Relation rel, Oid idxoid,
 			if (!tuples_equal(scanslot, searchslot, eq, NULL))
 				continue;
 		}
+		else
+			Assert(!recheck);
 
 		update_most_recent_deletion_info(scanslot, oldestxmin, delete_xid,
 										 delete_time, delete_origin);

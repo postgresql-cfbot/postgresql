@@ -96,6 +96,13 @@ static List *resolve_unique_index_expr(ParseState *pstate, InferClause *infer,
 									   Relation heapRel);
 static List *addTargetToGroupList(ParseState *pstate, TargetEntry *tle,
 								  List *grouplist, List *targetlist, int location);
+static List *addTargetToGroupListWithSortClause(ParseState *pstate,
+											   TargetEntry *tle,
+											   List *grouplist,
+											   List *targetlist,
+											   List *sortClause,
+											   int location,
+											   bool toplevel);
 static WindowClause *findWindowClause(List *wclist, const char *name);
 static Node *transformFrameOffset(ParseState *pstate, int frameOptions,
 								  Oid rangeopfamily, Oid rangeopcintype, Oid *inRangeFunc,
@@ -2514,7 +2521,6 @@ transformGroupClauseExpr(List **flatresult, Bitmapset *seen_local,
 						 ParseExprKind exprKind, bool useSQL99, bool toplevel)
 {
 	TargetEntry *tle;
-	bool		found = false;
 
 	if (useSQL99)
 		tle = findTargetlistEntrySQL99(pstate, gexpr,
@@ -2525,8 +2531,6 @@ transformGroupClauseExpr(List **flatresult, Bitmapset *seen_local,
 
 	if (tle->ressortgroupref > 0)
 	{
-		ListCell   *sl;
-
 		/*
 		 * Eliminate duplicates (GROUP BY x, x) but only at local level.
 		 * (Duplicates in grouping sets can affect the number of returned
@@ -2537,14 +2541,44 @@ transformGroupClauseExpr(List **flatresult, Bitmapset *seen_local,
 		 */
 		if (bms_is_member(tle->ressortgroupref, seen_local))
 			return 0;
+	}
+
+	*flatresult = addTargetToGroupListWithSortClause(pstate, tle,
+													 *flatresult, *targetlist,
+													 sortClause,
+													 exprLocation(gexpr),
+													 toplevel);
+
+	/*
+	 * _something_ must have assigned us a sortgroupref by now...
+	 */
+
+	return tle->ressortgroupref;
+}
+
+/*
+ * Add a targetlist entry to the GROUP BY list, copying matching ORDER BY
+ * operator information if available.
+ */
+static List *
+addTargetToGroupListWithSortClause(ParseState *pstate, TargetEntry *tle,
+								   List *grouplist, List *targetlist,
+								   List *sortClause, int location,
+								   bool toplevel)
+{
+	bool		found = false;
+
+	if (tle->ressortgroupref > 0)
+	{
+		ListCell   *sl;
 
 		/*
 		 * If we're already in the flat clause list, we don't need to consider
 		 * adding ourselves again.
 		 */
-		found = targetIsInSortList(tle, InvalidOid, *flatresult);
+		found = targetIsInSortList(tle, InvalidOid, grouplist);
 		if (found)
-			return tle->ressortgroupref;
+			return grouplist;
 
 		/*
 		 * If the GROUP BY tlist entry also appears in ORDER BY, copy operator
@@ -2575,7 +2609,7 @@ transformGroupClauseExpr(List **flatresult, Bitmapset *seen_local,
 
 				if (!toplevel)
 					grpc->nulls_first = false;
-				*flatresult = lappend(*flatresult, grpc);
+				grouplist = lappend(grouplist, grpc);
 				found = true;
 				break;
 			}
@@ -2587,15 +2621,10 @@ transformGroupClauseExpr(List **flatresult, Bitmapset *seen_local,
 	 * sort/group semantics.
 	 */
 	if (!found)
-		*flatresult = addTargetToGroupList(pstate, tle,
-										   *flatresult, *targetlist,
-										   exprLocation(gexpr));
+		grouplist = addTargetToGroupList(pstate, tle, grouplist,
+										  targetlist, location);
 
-	/*
-	 * _something_ must have assigned us a sortgroupref by now...
-	 */
-
-	return tle->ressortgroupref;
+	return grouplist;
 }
 
 /*
@@ -2822,16 +2851,17 @@ transformGroupClause(ParseState *pstate, List *grouplist, bool groupByAll,
 				continue;
 
 			/*
-			 * Otherwise, add the TLE to the result using default sort/group
-			 * semantics.  We specify the parse location as the TLE's
-			 * location, despite the comment for addTargetToGroupList
-			 * discouraging that.  The only other thing we could point to is
-			 * the ALL keyword, which seems unhelpful when there are multiple
-			 * TLEs.
+			 * Otherwise, add the TLE to the result.  We specify the parse
+			 * location as the TLE's location, despite the comment for
+			 * addTargetToGroupList discouraging that.  The only other thing
+			 * we could point to is the ALL keyword, which seems unhelpful
+			 * when there are multiple TLEs.
 			 */
-			result = addTargetToGroupList(pstate, tle,
-										  result, *targetlist,
-										  exprLocation((Node *) tle->expr));
+			result = addTargetToGroupListWithSortClause(pstate, tle,
+														result, *targetlist,
+														sortClause,
+														exprLocation((Node *) tle->expr),
+														true);
 		}
 
 		/* If we found any acceptable targets, we're done */

@@ -1834,6 +1834,33 @@ SELECT pg_get_viewdef('v1'::regclass);
 
 DROP VIEW v1;
 DROP TABLE t1;
+-- GROUP BY ALL should use ORDER BY's equality semantics, just as an
+-- equivalent explicit GROUP BY clause would.
+CREATE TYPE t_rec AS (x numeric);
+CREATE TEMP TABLE t_rec_ops (a t_rec);
+INSERT INTO t_rec_ops VALUES (row(1.0)::t_rec), (row(1.00)::t_rec);
+SET enable_hashagg = off;
+SELECT count(*) AS groups FROM
+  (SELECT a, count(*) FROM t_rec_ops
+    GROUP BY a
+    ORDER BY a USING OPERATOR(pg_catalog.*<)) s;
+ groups 
+--------
+      2
+(1 row)
+
+SELECT count(*) AS groups FROM
+  (SELECT a, count(*) FROM t_rec_ops
+    GROUP BY ALL
+    ORDER BY a USING OPERATOR(pg_catalog.*<)) s;
+ groups 
+--------
+      2
+(1 row)
+
+RESET enable_hashagg;
+DROP TABLE t_rec_ops;
+DROP TYPE t_rec;
 --
 -- Test GROUP BY matching of join columns that are type-coerced due to USING
 --

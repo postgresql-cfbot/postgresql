@@ -170,7 +170,9 @@ typedef struct ExprState
  *		retail creation of index entries.
  *
  * ii_Concurrent, ii_BrokenHotChain, and ii_ParallelWorkers are used only
- * during index build; they're conventionally zeroed otherwise.
+ * during index build; they're conventionally zeroed otherwise.  ii_Auxiliary
+ * is also used during retail inserts to skip datum formation for auxiliary
+ * indexes.
  * ----------------
  */
 typedef struct IndexInfo
@@ -230,7 +232,10 @@ typedef struct IndexInfo
 	bool		ii_WithoutOverlaps;
 	/* # of workers requested (excludes leader) */
 	int			ii_ParallelWorkers;
-
+	/* is auxiliary for concurrent index build? */
+	bool		ii_Auxiliary;
+	/* if creating an auxiliary index, the OID of the main index; otherwise InvalidOid. */
+	Oid			ii_AuxiliaryForIndexId;
 	/* Oid of index AM */
 	Oid			ii_Am;
 	/* private cache area for index AM */

@@ -4564,7 +4564,7 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 
 	while (restored < max_changes_in_memory && *segno <= last_segno)
 	{
-		int			readBytes;
+		ssize_t		readBytes;
 		ReorderBufferDiskChange *ondisk;
 
 		CHECK_FOR_INTERRUPTS();
@@ -4629,9 +4629,9 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		else if (readBytes != sizeof(ReorderBufferDiskChange))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: read %d instead of %u bytes",
+					 errmsg("could not read from reorderbuffer spill file: read %zd of %zu",
 							readBytes,
-							(uint32) sizeof(ReorderBufferDiskChange))));
+							sizeof(ReorderBufferDiskChange))));
 
 		file->curOffset += readBytes;
 
@@ -4654,9 +4654,9 @@ ReorderBufferRestoreChanges(ReorderBuffer *rb, ReorderBufferTXN *txn,
 		else if (readBytes != ondisk->size - sizeof(ReorderBufferDiskChange))
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not read from reorderbuffer spill file: read %d instead of %u bytes",
+					 errmsg("could not read from reorderbuffer spill file: read %zd of %zu",
 							readBytes,
-							(uint32) (ondisk->size - sizeof(ReorderBufferDiskChange)))));
+							(ondisk->size - sizeof(ReorderBufferDiskChange)))));
 
 		file->curOffset += readBytes;
 

@@ -2300,6 +2300,7 @@ typedef struct SelectStmt
 	bool		groupByAll;		/* Is this GROUP BY ALL? */
 	Node	   *havingClause;	/* HAVING conditional-expression */
 	List	   *windowClause;	/* WINDOW window_name AS (...), ... */
+	Node	   *qualifyClause;	/* QUALIFY conditional-expression */
 
 	/*
 	 * In a "leaf" node representing a VALUES list, the above fields are all

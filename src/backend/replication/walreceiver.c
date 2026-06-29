@@ -913,7 +913,7 @@ static void
 XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 {
 	int			startoff;
-	int			byteswritten;
+	ssize_t		byteswritten;
 	instr_time	start;
 
 	Assert(tli != 0);

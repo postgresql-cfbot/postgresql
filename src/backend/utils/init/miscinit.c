@@ -1522,7 +1522,8 @@ void
 AddToDataDirLockFile(int target_line, const char *str)
 {
 	int			fd;
-	ssize_t		len;
+	ssize_t		nread;
+	size_t		len;
 	int			lineno;
 	char	   *srcptr;
 	char	   *destptr;
@@ -1539,9 +1540,9 @@ AddToDataDirLockFile(int target_line, const char *str)
 		return;
 	}
 	pgstat_report_wait_start(WAIT_EVENT_LOCK_FILE_ADDTODATADIR_READ);
-	len = read(fd, srcbuffer, sizeof(srcbuffer) - 1);
+	nread = read(fd, srcbuffer, sizeof(srcbuffer) - 1);
 	pgstat_report_wait_end();
-	if (len < 0)
+	if (nread < 0)
 	{
 		ereport(LOG,
 				(errcode_for_file_access(),
@@ -1550,7 +1551,7 @@ AddToDataDirLockFile(int target_line, const char *str)
 		close(fd);
 		return;
 	}
-	srcbuffer[len] = '\0';
+	srcbuffer[nread] = '\0';
 
 	/*
 	 * Advance over lines we are not supposed to rewrite, then copy them to

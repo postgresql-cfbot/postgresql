@@ -781,7 +781,7 @@ write_block(int fd, const char *output_filename,
 static void
 read_block(const rfile *s, off_t off, uint8 *buffer)
 {
-	int			rb;
+	ssize_t		rb;
 
 	/* Read the block from the correct source, except if dry-run. */
 	rb = pg_pread(s->fd, buffer, BLCKSZ, off);
@@ -790,7 +790,7 @@ read_block(const rfile *s, off_t off, uint8 *buffer)
 		if (rb < 0)
 			pg_fatal("could not read from file \"%s\": %m", s->filename);
 		else
-			pg_fatal("could not read from file \"%s\", offset %lld: read %d of %d",
-					 s->filename, (long long) off, rb, BLCKSZ);
+			pg_fatal("could not read from file \"%s\", offset %lld: read %zd of %zu",
+					 s->filename, (long long) off, rb, (size_t) BLCKSZ);
 	}
 }

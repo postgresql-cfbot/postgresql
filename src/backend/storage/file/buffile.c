@@ -437,6 +437,7 @@ BufFileLoadBuffer(BufFile *file)
 	File		thisfile;
 	instr_time	io_start;
 	instr_time	io_time;
+	ssize_t		rc;
 
 	/*
 	 * Advance to next component file if necessary and possible.
@@ -458,12 +459,12 @@ BufFileLoadBuffer(BufFile *file)
 	/*
 	 * Read whatever we can get, up to a full bufferload.
 	 */
-	file->nbytes = FileRead(thisfile,
-							file->buffer.data,
-							sizeof(file->buffer.data),
-							file->curOffset,
-							WAIT_EVENT_BUFFILE_READ);
-	if (file->nbytes < 0)
+	rc = FileRead(thisfile,
+				  file->buffer.data,
+				  sizeof(file->buffer.data),
+				  file->curOffset,
+				  WAIT_EVENT_BUFFILE_READ);
+	if (rc < 0)
 	{
 		file->nbytes = 0;
 		ereport(ERROR,
@@ -471,6 +472,8 @@ BufFileLoadBuffer(BufFile *file)
 				 errmsg("could not read file \"%s\": %m",
 						FilePathName(thisfile))));
 	}
+
+	file->nbytes = rc;
 
 	if (track_io_timing)
 	{

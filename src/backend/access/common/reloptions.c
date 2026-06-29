@@ -109,15 +109,6 @@ static relopt_bool boolRelOpts[] =
 	},
 	{
 		{
-			"autovacuum_enabled",
-			"Enables autovacuum in this relation",
-			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
-			ShareUpdateExclusiveLock
-		},
-		true
-	},
-	{
-		{
 			"user_catalog_table",
 			"Declare a table as an additional catalog table, e.g. for the purpose of logical replication",
 			RELOPT_KIND_HEAP,
@@ -168,6 +159,14 @@ static relopt_bool boolRelOpts[] =
 
 static relopt_ternary ternaryRelOpts[] =
 {
+	{
+		{
+			"autovacuum_enabled",
+			"Enables autovacuum in this relation",
+			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
+			ShareUpdateExclusiveLock
+		}
+	},
 	{
 		{
 			"vacuum_truncate",
@@ -518,6 +517,7 @@ static relopt_real realRelOpts[] =
 /* values from StdRdOptIndexCleanup */
 static relopt_enum_elt_def StdRdOptIndexCleanupValues[] =
 {
+	/* no value for NOT_SET */
 	{"auto", STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO},
 	{"on", STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON},
 	{"off", STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF},
@@ -558,7 +558,7 @@ static relopt_enum enumRelOpts[] =
 			ShareUpdateExclusiveLock
 		},
 		StdRdOptIndexCleanupValues,
-		STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO,
+		STDRD_OPTION_VACUUM_INDEX_CLEANUP_NOT_SET,
 		gettext_noop("Valid values are \"on\", \"off\", and \"auto\".")
 	},
 	{
@@ -1976,7 +1976,7 @@ default_reloptions(Datum reloptions, bool validate, relopt_kind kind)
 {
 	static const relopt_parse_elt tab[] = {
 		{"fillfactor", RELOPT_TYPE_INT, offsetof(StdRdOptions, fillfactor)},
-		{"autovacuum_enabled", RELOPT_TYPE_BOOL,
+		{"autovacuum_enabled", RELOPT_TYPE_TERNARY,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, enabled)},
 		{"autovacuum_parallel_workers", RELOPT_TYPE_INT,
 		offsetof(StdRdOptions, autovacuum) + offsetof(AutoVacOpts, autovacuum_parallel_workers)},

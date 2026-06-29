@@ -51,6 +51,11 @@ typedef struct
 
 typedef struct
 {
+	Oid			reltypid;		/* the whole-row typeid */
+} contain_wholerow_context;
+
+typedef struct
+{
 	int			var_location;
 	int			sublevels_up;
 } locate_var_of_level_context;
@@ -73,6 +78,7 @@ typedef struct
 static bool pull_varnos_walker(Node *node,
 							   pull_varnos_context *context);
 static bool pull_varattnos_walker(Node *node, pull_varattnos_context *context);
+static bool expr_contain_wholerow_walker(Node *node, contain_wholerow_context *context);
 static bool pull_vars_walker(Node *node, pull_vars_context *context);
 static bool contain_var_clause_walker(Node *node, void *context);
 static bool contain_vars_of_level_walker(Node *node, int *sublevels_up);
@@ -326,6 +332,56 @@ pull_varattnos_walker(Node *node, pull_varattnos_context *context)
 
 	return expression_tree_walker(node, pull_varattnos_walker, context);
 }
+
+static bool
+expr_contain_wholerow_walker(Node *node, contain_wholerow_context *context)
+{
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, Var))
+	{
+		Var		   *var = (Var *) node;
+
+		if (var->varattno == InvalidAttrNumber &&
+			var->vartype == context->reltypid)
+			return true;
+
+		return false;
+	}
+
+	if (IsA(node, Query))
+		return query_tree_walker((Query *) node, expr_contain_wholerow_walker,
+								 context, 0);
+
+	return expression_tree_walker(node, expr_contain_wholerow_walker, context);
+}
+
+/*
+ * expr_contain_wholerow -
+ *
+ * Determine whether an expression contains whole-row Var reference, recursing as needed.
+ * For simple expressions without sublinks, pull_varattnos is usually sufficient
+ * to detect a whole-row Var. But if the node contains sublinks (unplanned
+ * subqueries), the check must instead rely on the whole-row type OID.
+ *
+ * Use expr_contain_wholerow to check whole-row var existsence when in doubt.
+ */
+bool
+expr_contain_wholerow(Node *node, Oid reltypid)
+{
+	contain_wholerow_context context;
+
+	context.reltypid = reltypid;
+
+	Assert(OidIsValid(reltypid));
+
+	return query_or_expression_tree_walker(node,
+										   expr_contain_wholerow_walker,
+										   &context,
+										   0);
+}
+
 
 
 /*

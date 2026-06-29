@@ -234,6 +234,12 @@ typedef struct NewConstraint
  * are just copied from the old table during ATRewriteTable.  Note that the
  * expr is an expression over *old* table values, except when is_generated
  * is true; then it is an expression over columns of the *new* tuple.
+ *
+ * If need_compute is true, using table scan to evaluate the new column value in
+ * Phase 3, no table rewrite is required.  Currently, this is only used in the
+ * ALTER COLUMN SET DATA TYPE command, where the column’s data type is being
+ * changed to a constrained domain. need_compute is irrelevant in case of table
+ * rewrite.
  */
 typedef struct NewColumnValue
 {
@@ -241,6 +247,7 @@ typedef struct NewColumnValue
 	Expr	   *expr;			/* expression to compute */
 	ExprState  *exprstate;		/* execution state */
 	bool		is_generated;	/* is it a GENERATED expression? */
+	bool		need_compute;
 } NewColumnValue;
 
 /*
@@ -688,7 +695,7 @@ static void ATPrepAlterColumnType(List **wqueue,
 								  bool recurse, bool recursing,
 								  AlterTableCmd *cmd, LOCKMODE lockmode,
 								  AlterTableUtilityContext *context);
-static bool ATColumnChangeRequiresRewrite(Node *expr, AttrNumber varattno);
+static bool ATColumnChangeRequiresRewrite(Node *expr, AttrNumber varattno, bool *scan_only);
 static ObjectAddress ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 										   AlterTableCmd *cmd, LOCKMODE lockmode);
 static void RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
@@ -6111,7 +6118,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 * rebuild data.
 			 */
 			if (tab->constraints != NIL || tab->verify_new_notnull ||
-				tab->partition_constraint != NULL)
+				tab->partition_constraint != NULL || tab->newvals)
 				ATRewriteTable(tab, InvalidOid);
 
 			/*
@@ -6306,6 +6313,9 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap)
 
 		/* expr already planned */
 		ex->exprstate = ExecInitExpr(ex->expr, NULL);
+
+		if (ex->need_compute)
+			needscan = true;
 	}
 
 	notnull_attrs = notnull_virtual_attrs = NIL;
@@ -6535,6 +6545,48 @@ ATRewriteTable(AlteredTableInfo *tab, Oid OIDNewHeap)
 				 * new constraints etc.
 				 */
 				insertslot = oldslot;
+
+				/*
+				 * To safely evaluate the NewColumnValue expression against
+				 * the original table slot, temporarily switch oldslot's
+				 * tts_tupleDescriptor to oldTupDesc, and then switch it back
+				 * to newTupDesc afterwards.
+				 *
+				 * Rationale: 1. If there is no table rewrite, the contents of
+				 * oldslot are guaranteed to be fully compatible with
+				 * oldTupDesc. See the comments in slot_deform_heap_tuple
+				 * regarding slot_getmissingattrs.
+				 *
+				 * 2. Passing the updated newTupDesc into ExecEvalExpr would
+				 * cause CheckVarSlotCompatibility to fail, we have to
+				 * temporarily use oldTupDesc
+				 */
+				if (tab->newvals != NIL)
+				{
+					bool		isnull pg_attribute_unused();
+
+					insertslot->tts_tupleDescriptor = oldTupDesc;
+					econtext->ecxt_scantuple = insertslot;
+
+					foreach(l, tab->newvals)
+					{
+						NewColumnValue *ex = lfirst(l);
+
+						if (!ex->need_compute)
+							continue;
+
+						/*
+						 * ExecEvalExprNoReturn cannot be used here because
+						 * the expression was compiled via ExecInitExpr. We
+						 * only need to check if oldslot satisfies new
+						 * expression (NewColumnValue->expr), so it's fine to
+						 * ignore value returned by ExecEvalExpr.
+						 */
+						(void) ExecEvalExpr(ex->exprstate, econtext, &isnull);
+					}
+
+					insertslot->tts_tupleDescriptor = newTupDesc;
+				}
 			}
 
 			/* Now check any constraints on the possibly-changed tuple */
@@ -14945,6 +14997,8 @@ ATPrepAlterColumnType(List **wqueue,
 	else if (tab->relkind == RELKIND_RELATION ||
 			 tab->relkind == RELKIND_PARTITIONED_TABLE)
 	{
+		bool		scan_only = false;
+
 		/*
 		 * Set up an expression to transform the old data value to the new
 		 * type. If a USING option was given, use the expression as
@@ -15009,9 +15063,15 @@ ATPrepAlterColumnType(List **wqueue,
 		newval->expr = (Expr *) transform;
 		newval->is_generated = false;
 
-		tab->newvals = lappend(tab->newvals, newval);
-		if (ATColumnChangeRequiresRewrite(transform, attnum))
+		if (ATColumnChangeRequiresRewrite(transform, attnum, &scan_only))
+		{
 			tab->rewrite |= AT_REWRITE_COLUMN_REWRITE;
+			newval->need_compute = true;
+		}
+		else if (!tab->rewrite && scan_only)
+			newval->need_compute = true;
+
+		tab->newvals = lappend(tab->newvals, newval);
 	}
 	else if (transform)
 		ereport(ERROR,
@@ -15142,15 +15202,17 @@ ATPrepAlterColumnType(List **wqueue,
  * rewrite in these cases:
  *
  * - the old type is binary coercible to the new type
- * - the new type is an unconstrained domain over the old type
  * - {NEW,OLD} or {OLD,NEW} is {timestamptz,timestamp} and the timezone is UTC
  *
  * In the case of a constrained domain, we could get by with scanning the
- * table and checking the constraint rather than actually rewriting it, but we
- * don't currently try to do that.
+ * table and checking the constraint rather than actually rewriting it,
+ * in that case, scan_only will set to true.
+ *
+ * The caller must initialize *scan_only to false before calling.
+ * If any constrained domain is found, *scan_only is set to true.
  */
 static bool
-ATColumnChangeRequiresRewrite(Node *expr, AttrNumber varattno)
+ATColumnChangeRequiresRewrite(Node *expr, AttrNumber varattno, bool *scan_only)
 {
 	Assert(expr != NULL);
 
@@ -15166,7 +15228,8 @@ ATColumnChangeRequiresRewrite(Node *expr, AttrNumber varattno)
 			CoerceToDomain *d = (CoerceToDomain *) expr;
 
 			if (DomainHasConstraints(d->resulttype, NULL))
-				return true;
+				*scan_only = true;
+
 			expr = (Node *) d->arg;
 		}
 		else if (IsA(expr, FuncExpr))

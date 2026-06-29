@@ -46,7 +46,8 @@ static const char *SlotSyncSkipReasonNames[] = {
  */
 static void
 create_physical_replication_slot(char *name, bool immediately_reserve,
-								 bool temporary, XLogRecPtr restart_lsn)
+								 bool temporary, XLogRecPtr restart_lsn,
+								 bool auto_revalidate)
 {
 	Assert(!MyReplicationSlot);
 
@@ -67,6 +68,16 @@ create_physical_replication_slot(char *name, bool immediately_reserve,
 		ReplicationSlotMarkDirty();
 		ReplicationSlotSave();
 	}
+
+	if (auto_revalidate)
+	{
+		SpinLockAcquire(&MyReplicationSlot->mutex);
+		MyReplicationSlot->data.auto_revalidate = true;
+		SpinLockRelease(&MyReplicationSlot->mutex);
+
+		ReplicationSlotMarkDirty();
+		ReplicationSlotSave();
+	}
 }
 
 /*
@@ -79,6 +90,7 @@ pg_create_physical_replication_slot(PG_FUNCTION_ARGS)
 	Name		name = PG_GETARG_NAME(0);
 	bool		immediately_reserve = PG_GETARG_BOOL(1);
 	bool		temporary = PG_GETARG_BOOL(2);
+	bool		auto_revalidate = PG_GETARG_BOOL(3);
 	Datum		values[2];
 	bool		nulls[2];
 	TupleDesc	tupdesc;
@@ -95,7 +107,8 @@ pg_create_physical_replication_slot(PG_FUNCTION_ARGS)
 	create_physical_replication_slot(NameStr(*name),
 									 immediately_reserve,
 									 temporary,
-									 InvalidXLogRecPtr);
+									 InvalidXLogRecPtr,
+									 auto_revalidate);
 
 	values[0] = NameGetDatum(&MyReplicationSlot->data.name);
 	nulls[0] = false;
@@ -255,7 +268,7 @@ pg_drop_replication_slot(PG_FUNCTION_ARGS)
 Datum
 pg_get_replication_slots(PG_FUNCTION_ARGS)
 {
-#define PG_GET_REPLICATION_SLOTS_COLS 21
+#define PG_GET_REPLICATION_SLOTS_COLS 22
 	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 	XLogRecPtr	currlsn;
 	int			slotno;
@@ -462,6 +475,8 @@ pg_get_replication_slots(PG_FUNCTION_ARGS)
 		values[i++] = BoolGetDatum(slot_contents.data.failover);
 
 		values[i++] = BoolGetDatum(slot_contents.data.synced);
+
+		values[i++] = BoolGetDatum(slot_contents.data.auto_revalidate);
 
 		if (slot_contents.slotsync_skip_reason == SS_SKIP_NONE)
 			nulls[i++] = true;
@@ -758,7 +773,8 @@ copy_replication_slot(FunctionCallInfo fcinfo, bool logical_slot)
 		create_physical_replication_slot(NameStr(*dst_name),
 										 true,
 										 temporary,
-										 src_restart_lsn);
+										 src_restart_lsn,
+										 first_slot_contents.data.auto_revalidate);
 
 	/*
 	 * Update the destination slot to current values of the source slot;

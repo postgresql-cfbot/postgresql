@@ -237,7 +237,7 @@ scan_file(const char *fn, int segmentno)
 		}
 		else if (mode == PG_MODE_ENABLE)
 		{
-			int			w;
+			ssize_t		w;
 
 			/*
 			 * Do not rewrite if the checksum is already set to the expected
@@ -263,8 +263,8 @@ scan_file(const char *fn, int segmentno)
 					pg_fatal("could not write block %u in file \"%s\": %m",
 							 blockno, fn);
 				else
-					pg_fatal("could not write block %u in file \"%s\": wrote %d of %d",
-							 blockno, fn, w, BLCKSZ);
+					pg_fatal("could not write block %u in file \"%s\": wrote %zd of %zu",
+							 blockno, fn, w, (size_t) BLCKSZ);
 			}
 		}
 

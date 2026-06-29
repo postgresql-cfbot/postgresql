@@ -102,7 +102,7 @@ fork_process(void)
 			if (fd >= 0)
 			{
 				const char *oomvalue = getenv("PG_OOM_ADJUST_VALUE");
-				int			rc;
+				ssize_t		rc;
 
 				if (oomvalue == NULL)	/* supply a useful default */
 					oomvalue = "0";

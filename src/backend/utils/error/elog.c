@@ -3027,7 +3027,7 @@ write_eventlog(int level, const char *line, int len)
 static void
 write_console(const char *line, int len)
 {
-	int			rc;
+	ssize_t		rc;
 
 #ifdef WIN32
 
@@ -3917,7 +3917,7 @@ write_pipe_chunks(char *data, int len, int dest)
 {
 	PipeProtoChunk p;
 	int			fd = fileno(stderr);
-	int			rc;
+	ssize_t		rc;
 
 	Assert(len > 0);
 

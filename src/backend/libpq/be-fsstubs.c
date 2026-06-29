@@ -488,8 +488,7 @@ be_lo_export(PG_FUNCTION_ARGS)
 	Oid			lobjId = PG_GETARG_OID(0);
 	text	   *filename = PG_GETARG_TEXT_PP(1);
 	int			fd;
-	int			nbytes,
-				tmp;
+	int			nbytes;
 	char		buf[BUFSIZE];
 	char		fnamebuf[MAXPGPATH];
 	LargeObjectDesc *lobj;
@@ -531,6 +530,8 @@ be_lo_export(PG_FUNCTION_ARGS)
 	 */
 	while ((nbytes = inv_read(lobj, buf, BUFSIZE)) > 0)
 	{
+		ssize_t		tmp;
+
 		tmp = write(fd, buf, nbytes);
 		if (tmp != nbytes)
 			ereport(ERROR,

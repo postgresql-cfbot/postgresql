@@ -758,15 +758,15 @@ static void
 write_block(int fd, const char *output_filename,
 			const uint8 *buffer, pg_checksum_context *checksum_ctx)
 {
-	int			wb;
+	ssize_t		wb;
 
 	if ((wb = write(fd, buffer, BLCKSZ)) != BLCKSZ)
 	{
 		if (wb < 0)
 			pg_fatal("could not write file \"%s\": %m", output_filename);
 		else
-			pg_fatal("could not write file \"%s\": wrote %d of %d",
-					 output_filename, wb, BLCKSZ);
+			pg_fatal("could not write file \"%s\": wrote %zd of %zu",
+					 output_filename, wb, (size_t) BLCKSZ);
 	}
 
 	/* Update the checksum computation. */

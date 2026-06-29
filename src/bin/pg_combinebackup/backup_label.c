@@ -151,18 +151,19 @@ write_backup_label(char *output_directory, StringInfo buf,
 		if (!line_starts_with(s, e, "INCREMENTAL FROM LSN: ", NULL) &&
 			!line_starts_with(s, e, "INCREMENTAL FROM TLI: ", NULL))
 		{
+			const size_t bytes_left = e - s;
 			ssize_t		wb;
 
-			wb = write(output_fd, s, e - s);
-			if (wb != e - s)
+			wb = write(output_fd, s, bytes_left);
+			if (wb != bytes_left)
 			{
 				if (wb < 0)
 					pg_fatal("could not write file \"%s\": %m", output_filename);
 				else
-					pg_fatal("could not write file \"%s\": wrote %d of %d",
-							 output_filename, (int) wb, (int) (e - s));
+					pg_fatal("could not write file \"%s\": wrote %zd of %zu",
+							 output_filename, wb, bytes_left);
 			}
-			if (pg_checksum_update(&checksum_ctx, (uint8 *) s, e - s) < 0)
+			if (pg_checksum_update(&checksum_ctx, (uint8 *) s, bytes_left) < 0)
 				pg_fatal("could not update checksum of file \"%s\"",
 						 output_filename);
 		}

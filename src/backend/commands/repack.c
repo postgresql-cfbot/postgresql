@@ -2159,22 +2159,9 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 
 			index = (Form_pg_index) GETSTRUCT(tuple);
 
-			/*
-			 * Try to obtain a light lock on the index's table, to ensure it
-			 * doesn't go away while we collect the list.  If we cannot, just
-			 * disregard it.  Be sure to release this if we ultimately decide
-			 * not to process the table!
-			 */
-			if (!ConditionalLockRelationOid(index->indrelid, AccessShareLock))
-				continue;
-
-			/* Verify that the table still exists; skip if not */
 			classtup = SearchSysCache1(RELOID, ObjectIdGetDatum(index->indrelid));
 			if (!HeapTupleIsValid(classtup))
-			{
-				UnlockRelationOid(index->indrelid, AccessShareLock);
 				continue;
-			}
 			classForm = (Form_pg_class) GETSTRUCT(classtup);
 
 			/* Skip temp relations belonging to other sessions */
@@ -2182,7 +2169,6 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 				!isTempOrTempToastNamespace(classForm->relnamespace))
 			{
 				ReleaseSysCache(classtup);
-				UnlockRelationOid(index->indrelid, AccessShareLock);
 				continue;
 			}
 
@@ -2191,10 +2177,7 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 			/* noisily skip rels which the user can't process */
 			if (!repack_is_permitted_for_relation(cmd, index->indrelid,
 												  GetUserId()))
-			{
-				UnlockRelationOid(index->indrelid, AccessShareLock);
 				continue;
-			}
 
 			/* Use a permanent memory context for the result list */
 			oldcxt = MemoryContextSwitchTo(permcxt);
@@ -2218,45 +2201,20 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 
 			class = (Form_pg_class) GETSTRUCT(tuple);
 
-			/*
-			 * Try to obtain a light lock on the table, to ensure it doesn't
-			 * go away while we collect the list.  If we cannot, just
-			 * disregard the table.  Be sure to release this if we ultimately
-			 * decide not to process the table!
-			 */
-			if (!ConditionalLockRelationOid(class->oid, AccessShareLock))
-				continue;
-
-			/* Verify that the table still exists */
-			if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(class->oid)))
-			{
-				UnlockRelationOid(class->oid, AccessShareLock);
-				continue;
-			}
-
 			/* Can only process plain tables and matviews */
 			if (class->relkind != RELKIND_RELATION &&
 				class->relkind != RELKIND_MATVIEW)
-			{
-				UnlockRelationOid(class->oid, AccessShareLock);
 				continue;
-			}
 
 			/* Skip temp relations belonging to other sessions */
 			if (class->relpersistence == RELPERSISTENCE_TEMP &&
 				!isTempOrTempToastNamespace(class->relnamespace))
-			{
-				UnlockRelationOid(class->oid, AccessShareLock);
 				continue;
-			}
 
 			/* noisily skip rels which the user can't process */
 			if (!repack_is_permitted_for_relation(cmd, class->oid,
 												  GetUserId()))
-			{
-				UnlockRelationOid(class->oid, AccessShareLock);
 				continue;
-			}
 
 			/* Use a permanent memory context for the result list */
 			oldcxt = MemoryContextSwitchTo(permcxt);
@@ -2269,7 +2227,7 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 	}
 
 	table_endscan(scan);
-	relation_close(catalog, AccessShareLock);
+	table_close(catalog, AccessShareLock);
 
 	return rtcs;
 }
@@ -2347,15 +2305,28 @@ get_tables_to_repack_partitioned(RepackCommand cmd, Oid relid,
 static bool
 repack_is_permitted_for_relation(RepackCommand cmd, Oid relid, Oid userid)
 {
+	bool		is_missing = false;
+
 	Assert(cmd == REPACK_COMMAND_CLUSTER || cmd == REPACK_COMMAND_REPACK);
 
-	if (pg_class_aclcheck(relid, userid, ACL_MAINTAIN) == ACLCHECK_OK)
+	if (pg_class_aclcheck_ext(relid, userid, ACL_MAINTAIN, &is_missing) == ACLCHECK_OK)
 		return true;
 
-	ereport(WARNING,
-			errmsg("permission denied to execute %s on \"%s\", skipping it",
-				   RepackCommandAsString(cmd),
-				   get_rel_name(relid)));
+	/* Report a warning if the relation still exists. */
+	if (!is_missing)
+	{
+		char	   *relname;
+
+		relname = get_rel_name(relid);
+		if (relname != NULL)
+		{
+			ereport(WARNING,
+					errmsg("permission denied to execute %s on \"%s\", skipping it",
+						   RepackCommandAsString(cmd), relname));
+
+			pfree(relname);
+		}
+	}
 
 	return false;
 }

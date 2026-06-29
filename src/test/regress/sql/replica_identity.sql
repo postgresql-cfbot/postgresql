@@ -134,6 +134,61 @@ ALTER TABLE test_replica_identity5 ALTER b SET NOT NULL;
 ALTER TABLE test_replica_identity5 DROP CONSTRAINT test_replica_identity5_pkey;
 ALTER TABLE test_replica_identity5 ALTER b DROP NOT NULL;
 
+--
+-- Test index rebuild preserves replica identity against partitioned tables
+--
+CREATE TABLE test_replica_identity_partitioned (id int NOT NULL, val int NOT NULL) PARTITION BY RANGE (id);
+CREATE TABLE test_replica_identity_partitioned_p1 PARTITION OF test_replica_identity_partitioned
+    FOR VALUES FROM (0) TO (100);
+CREATE TABLE test_replica_identity_partitioned_p2 PARTITION OF test_replica_identity_partitioned
+    FOR VALUES FROM (101) TO (200) PARTITION BY LIST (id);
+CREATE TABLE test_replica_identity_partitioned_p2_1 PARTITION OF test_replica_identity_partitioned_p2
+    FOR VALUES IN (150, 160);
+-- For better coverage, create a parition in a different schema
+CREATE SCHEMA test_replica_identity_schema;
+CREATE TABLE test_replica_identity_schema.test_replica_identity_partitioned_p2_2 PARTITION OF test_replica_identity_partitioned_p2
+    FOR VALUES IN (170, 180);
+CREATE UNIQUE INDEX test_replica_identity_partitioned_pkey ON test_replica_identity_partitioned (id, val);
+ALTER TABLE test_replica_identity_partitioned REPLICA IDENTITY USING INDEX test_replica_identity_partitioned_pkey;
+ALTER TABLE test_replica_identity_partitioned_p1 REPLICA IDENTITY USING INDEX test_replica_identity_partitioned_p1_id_val_idx;
+ALTER TABLE test_replica_identity_partitioned_p2_1 REPLICA IDENTITY USING INDEX test_replica_identity_partitioned_p2_1_id_val_idx;
+ALTER TABLE test_replica_identity_schema.test_replica_identity_partitioned_p2_2 REPLICA IDENTITY USING INDEX test_replica_identity_partitioned_p2_2_id_val_idx;
+SELECT tc.relname as table_name, tc.relreplident, i.indexrelid::regclass AS index_name, i.indisreplident FROM pg_class c
+  LEFT JOIN pg_index i ON c.oid = i.indexrelid
+  LEFT JOIN pg_class tc ON i.indrelid = tc.oid
+  WHERE c.relname LIKE 'test_replica_identity_partitioned%' and c.relkind in ('i', 'I')
+  ORDER BY c.relname;
+-- Create a temp table to store the index OIDs before rebuild
+CREATE TEMP TABLE test_replica_identity_partitioned_temp_index_oids_before AS
+SELECT c.oid AS index_oid, c.relname AS index_name, i.indisreplident FROM pg_class c
+  LEFT JOIN pg_index i ON c.oid = i.indexrelid
+  LEFT JOIN pg_class tc ON i.indrelid = tc.oid
+  WHERE c.relname LIKE 'test_replica_identity_partitioned%' and c.relkind in ('i', 'I')
+  ORDER BY c.relname;
+ALTER TABLE test_replica_identity_partitioned ALTER COLUMN val TYPE bigint;
+SELECT tc.relname as table_name, tc.relreplident, i.indexrelid::regclass AS index_name, i.indisreplident FROM pg_class c
+  LEFT JOIN pg_index i ON c.oid = i.indexrelid
+  LEFT JOIN pg_class tc ON i.indrelid = tc.oid
+  WHERE c.relname LIKE 'test_replica_identity_partitioned%' and c.relkind in ('i', 'I')
+  ORDER BY c.relname;
+-- Create a temp table to store the index OIDs after rebuild
+CREATE TEMP TABLE test_replica_identity_partitioned_temp_index_oids_after AS
+SELECT c.oid AS index_oid, c.relname AS index_name, i.indisreplident FROM pg_class c
+  LEFT JOIN pg_index i ON c.oid = i.indexrelid
+  LEFT JOIN pg_class tc ON i.indrelid = tc.oid
+  WHERE c.relname LIKE 'test_replica_identity_partitioned%' and c.relkind in ('i', 'I')
+  ORDER BY c.relname;
+-- Compare the before and after to ensure replica identity preserved
+SELECT b.index_name, b.index_oid != a.index_oid as rebuilt, b.indisreplident != a.indisreplident AS ri_lost
+  FROM test_replica_identity_partitioned_temp_index_oids_before b
+  JOIN test_replica_identity_partitioned_temp_index_oids_after a
+  ON b.index_name = a.index_name
+  ORDER BY b.index_name;
+DROP SCHEMA test_replica_identity_schema CASCADE;
+
+--
+-- Cleanup
+--
 DROP TABLE test_replica_identity;
 DROP TABLE test_replica_identity2;
 DROP TABLE test_replica_identity3;

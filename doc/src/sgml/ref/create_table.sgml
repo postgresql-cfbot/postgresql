@@ -30,7 +30,7 @@ CREATE [ <replaceable>persistence_mode</replaceable> ] TABLE [ IF NOT EXISTS ] <
 [ INHERITS ( <replaceable>parent_table</replaceable> [, ... ] ) ]
 [ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
 [ USING <replaceable class="parameter">method</replaceable> ]
-[ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
+[ WITH ( <replaceable class="parameter">table_storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
@@ -42,7 +42,7 @@ CREATE [ <replaceable>persistence_mode</replaceable> ] TABLE [ IF NOT EXISTS ] <
 ) ]
 [ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
 [ USING <replaceable class="parameter">method</replaceable> ]
-[ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
+[ WITH ( <replaceable class="parameter">table_storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
@@ -54,7 +54,7 @@ CREATE [ <replaceable>persistence_mode</replaceable> ] TABLE [ IF NOT EXISTS ] <
 ) ] { FOR VALUES <replaceable class="parameter">partition_bound_spec</replaceable> | DEFAULT }
 [ PARTITION BY { RANGE | LIST | HASH } ( { <replaceable class="parameter">column_name</replaceable> | ( <replaceable class="parameter">expression</replaceable> ) } [ COLLATE <replaceable class="parameter">collation</replaceable> ] [ <replaceable class="parameter">opclass</replaceable> ] [, ... ] ) ]
 [ USING <replaceable class="parameter">method</replaceable> ]
-[ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
+[ WITH ( <replaceable class="parameter">table_storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) | WITHOUT OIDS ]
 [ ON COMMIT { PRESERVE ROWS | DELETE ROWS | DROP } ]
 [ TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
@@ -112,7 +112,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
 <phrase>and <replaceable class="parameter">index_parameters</replaceable> in <literal>UNIQUE</literal>, <literal>PRIMARY KEY</literal>, and <literal>EXCLUDE</literal> constraints are:</phrase>
 
 [ INCLUDE ( <replaceable class="parameter">column_name</replaceable> [, ... ] ) ]
-[ WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
+[ WITH ( <replaceable class="parameter">index_storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] ) ]
 [ USING INDEX TABLESPACE <replaceable class="parameter">tablespace_name</replaceable> ]
 
 <phrase>and <replaceable class="parameter">exclude_element</replaceable> in an <literal>EXCLUDE</literal> constraint is:</phrase>
@@ -1471,12 +1471,17 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </varlistentry>
 
    <varlistentry id="sql-createtable-parms-with">
-    <term><literal>WITH ( <replaceable class="parameter">storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )</literal></term>
+    <term><literal>WITH ( <replaceable class="parameter">table_storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )</literal></term>
+    <term><literal>WITH ( <replaceable class="parameter">index_storage_parameter</replaceable> [= <replaceable class="parameter">value</replaceable>] [, ... ] )</literal></term>
     <listitem>
      <para>
-      This clause specifies optional storage parameters for a table or index;
+      These clauses specify optional storage parameters for tables and indexes respectively;
       see <xref linkend="sql-createtable-storage-parameters"/> below for more
-      information.  For backward-compatibility the <literal>WITH</literal>
+      information on table storage parameters. For index storage parameters
+      see <xref linkend="sql-createindex-storage-parameters"/>.
+     </para>
+     <para>
+      For backward-compatibility the <literal>WITH</literal>
       clause for a table can also include <literal>OIDS=FALSE</literal> to
       specify that rows of the new table should not contain OIDs (object
       identifiers), <literal>OIDS=TRUE</literal> is not supported anymore.
@@ -1575,8 +1580,8 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
 
   </variablelist>
 
-  <refsect2 id="sql-createtable-storage-parameters" xreflabel="Storage Parameters">
-   <title>Storage Parameters</title>
+  <refsect2 id="sql-createtable-storage-parameters" xreflabel="Table Storage Parameters">
+   <title>Table Storage Parameters</title>
 
  <indexterm zone="sql-createtable-storage-parameters">
   <primary>storage parameters</primary>
@@ -1587,7 +1592,7 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     for tables, and for indexes associated with a <literal>UNIQUE</literal>,
     <literal>PRIMARY KEY</literal>, or <literal>EXCLUDE</literal> constraint.
     Storage parameters for
-    indexes are documented in <xref linkend="sql-createindex"/>.
+    indexes are documented in <xref linkend="sql-createindex-storage-parameters"/>
     The storage parameters currently
     available for tables are listed below.  For many of these parameters, as
     shown, there is an additional parameter with the same name prefixed with

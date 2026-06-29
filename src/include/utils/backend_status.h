@@ -169,6 +169,15 @@ typedef struct PgBackendStatus
 	Oid			st_progress_command_target;
 	int64		st_progress_param[PGSTAT_NUM_PROGRESS_PARAM];
 
+	/*
+	 * Some commands have a sub-command, e.g. REPACK (re)builds indexes. The
+	 * target can be different, e.g. when the sub-command builds an index on
+	 * TOAST relation.
+	 */
+	ProgressCommandType st_progress_command2;
+	Oid			st_progress_command_target2;
+	int64		st_progress_param2[PGSTAT_NUM_PROGRESS_PARAM];
+
 	/* query identifier, optionally computed using post_parse_analyze_hook */
 	int64		st_query_id;
 
@@ -176,6 +185,16 @@ typedef struct PgBackendStatus
 	int64		st_plan_id;
 } PgBackendStatus;
 
+/*
+ * Check the depth of progress tracking.
+ *
+ * 0 - tracking disabled
+ * 1 - enabled for the "main" command
+ * 2 - enabled for both main command and its sub-command.
+ */
+#define PGSTAT_PROGRESS_STATE(state) \
+	((state)->st_progress_command == PROGRESS_COMMAND_INVALID ? 0 :\
+	 (state)->st_progress_command2 == PROGRESS_COMMAND_INVALID ? 1 : 2)
 
 /*
  * Macros to load and store st_changecount with appropriate memory barriers.

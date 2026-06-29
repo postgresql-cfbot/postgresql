@@ -4321,7 +4321,7 @@ raw_expression_tree_walker_impl(Node *node,
 			}
 			break;
 		case T_JsonTablePathSpec:
-			return WALK(((JsonTablePathSpec *) node)->string);
+			return WALK(((JsonTablePathSpec *) node)->expr);
 		case T_NullTest:
 			return WALK(((NullTest *) node)->arg);
 		case T_BooleanTest:

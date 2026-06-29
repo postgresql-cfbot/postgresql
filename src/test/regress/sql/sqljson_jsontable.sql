@@ -312,13 +312,28 @@ FROM JSON_TABLE(
 SELECT *
 FROM JSON_TABLE(
 	jsonb '[1,2,3]',
-	'$[*] ? (@ < $x)'
+	'$[*] ? (@ < $x)'::jsonpath
 		PASSING 10 AS x, 3 AS y
 		COLUMNS (a text FORMAT JSON PATH '$ ? (@ < $y)')
 	) jt;
 
--- Should fail (not supported)
-SELECT * FROM JSON_TABLE(jsonb '{"a": 123}', '$' || '.' || 'a' COLUMNS (foo int));
+-----extension of top level path_expression
+SELECT * FROM JSON_TABLE(jsonb '{"a": 123}', '$' || '.' || 'a' COLUMNS (foo int PATH '$'));
+CREATE TABLE jstable (a jsonb, b text, c jsonpath, d text, e int);
+INSERT INTO jstable VALUES ('123',  '$', '$', NULL, NULL), (NULL,  '$', '$', NULL, NULL), ('{"a":123}',  '$', '$.a', 'junk', NULL);
+
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, '$.a' COLUMNS (x int PATH '$')) bar;
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, NULL COLUMNS (item int PATH '$')) bar;
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, NULL::jsonb COLUMNS (item int PATH '$')) bar; --error
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, b COLUMNS (item int PATH '$')) bar;
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, c COLUMNS (item int PATH '$')) bar;
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, d COLUMNS (item int PATH '$')) bar WHERE d <> 'junk';
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, d COLUMNS (item int PATH '$')) bar; --error, 'junk' is not valid jsonpath expression
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, e COLUMNS (item int PATH '$')) bar; --error
+SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, '$' COLUMNS (item int PATH b)) bar; --error
+
+CREATE VIEW jstable_v1 AS SELECT t1.a, bar.* FROM jstable t1, JSON_TABLE(t1.a, d COLUMNS (item int PATH '$')) bar;
+\sv jstable_v1
 
 -- JsonPathQuery() error message mentioning column name
 SELECT * FROM JSON_TABLE('{"a": [{"b": "1"}, {"b": "2"}]}', '$' COLUMNS (b json path '$.a[*].b' ERROR ON ERROR));
@@ -407,13 +422,14 @@ from
 
 
 -- PASSING arguments are passed to nested paths and their columns' paths
-SELECT *
+SELECT x.*, y.*, jt.*
 FROM
 	generate_series(1, 3) x,
 	generate_series(1, 3) y,
+	(VALUES ('strict $[*] ? (@[*] <= $x)'::jsonpath)) zzz(zzz),
 	JSON_TABLE(jsonb
 		'[[1,2,3],[2,3,4,5],[3,4,5,6]]',
-		'strict $[*] ? (@[*] <= $x)'
+		zzz.zzz
 		PASSING x AS x, y AS y
 		COLUMNS (
 			y text FORMAT JSON PATH '$',
@@ -491,7 +507,8 @@ SELECT sub.* FROM s,
 SELECT sub.* FROM s,
 	(VALUES (23)) x(x),
 	generate_series(13, 13) y,
-	JSON_TABLE(js, '$' AS c1 PASSING x AS x, y AS y
+	(VALUES ('$'::jsonpath)) z(z),
+	JSON_TABLE(js, z.z AS c1 PASSING x AS x, y AS y
 	COLUMNS (
 		xx1 int PATH '$.c',
 		NESTED PATH '$.a.za[1]'

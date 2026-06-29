@@ -23,6 +23,7 @@
 #include "parser/parse_coerce.h"
 #include "parser/parse_expr.h"
 #include "utils/array.h"
+#include "utils/builtins.h"
 #include "utils/fmgrprotos.h"
 #include "utils/lsyscache.h"
 
@@ -46,6 +47,96 @@ typedef struct ArraySubWorkspace
 	int			lowerindex[MAXDIM];
 } ArraySubWorkspace;
 
+typedef struct
+{
+	ForeachAIterator pub;
+	ArrayIterator it;
+	Oid			result_typid;
+	int32		result_typmod;
+} ForeachAArrayIterState;
+
+static bool
+foreach_a_array_iterate(ForeachAIterator *self,
+						Datum *value, bool *isnull,
+						Oid *typid, int32 *typmod)
+{
+	ForeachAArrayIterState *iter = (ForeachAArrayIterState *) self;
+
+	*typid = iter->result_typid;
+	*typmod = iter->result_typmod;
+
+	return array_iterate(iter->it, value, isnull);
+}
+
+/*
+ * Used by plpgsql FOREACH IN ARRAY when input expression is an array
+ */
+static ForeachAIterator *
+create_foreach_a_array_iterator(Datum value, Oid typid, int32 typmod,
+								int slice, Oid target_typid, int32 target_typmod)
+{
+	ForeachAArrayIterState *iter = palloc0(sizeof(ForeachAArrayIterState));
+	ArrayType  *arr;
+	Oid			target_elem_typid;
+
+	/* check the type of the expression - must be an array */
+	if (!OidIsValid(get_element_type(typid)))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("FOREACH expression must yield an array, not type %s",
+						format_type_be(typid))));
+
+	/*
+	 * We must copy the array into current context, because input expression
+	 * is evaluated in context cleaned by exec_eval_cleanup.
+	 */
+	arr = DatumGetArrayTypePCopy(value);
+
+	/* Slice dimension must be less than or equal to array dimension */
+	if (slice < 0 || slice > ARR_NDIM(arr))
+		ereport(ERROR,
+				(errcode(ERRCODE_ARRAY_SUBSCRIPT_ERROR),
+				 errmsg("slice dimension (%d) is out of the valid range 0..%d",
+						slice, ARR_NDIM(arr))));
+
+	/*
+	 * Sanity-check the target type.  We don't try very hard here, and
+	 * should not be too picky since it's possible that exec_assign_value can
+	 * coerce values of different types.  But it seems worthwhile to complain
+	 * if the array-ness of the loop variable is not right.
+	 */
+	target_elem_typid = get_element_type(target_typid);
+
+	if (slice > 0 && target_elem_typid == InvalidOid)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("FOREACH ... SLICE loop variable must be of an array type")));
+	if (slice == 0 && target_elem_typid != InvalidOid)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATATYPE_MISMATCH),
+				 errmsg("FOREACH loop variable must not be of an array type")));
+
+	/* Identify iterator result type */
+	if (slice > 0)
+	{
+		/* When slicing, nominal type of result is same as array type */
+		iter->result_typid = typid;
+		iter->result_typmod = typmod;
+	}
+	else
+	{
+		/* Without slicing, results are individual array elements */
+		iter->result_typid = ARR_ELEMTYPE(arr);
+		iter->result_typmod = typmod;
+	}
+
+	/* Create an iterator to step through the array */
+	iter->it = array_create_iterator(arr, slice, NULL);
+
+	iter->pub.iterate = foreach_a_array_iterate;
+
+	return (ForeachAIterator *) iter;
+}
 
 /*
  * Finish parse analysis of a SubscriptingRef expression for an array.
@@ -545,7 +636,8 @@ array_subscript_handler(PG_FUNCTION_ARGS)
 		.exec_setup = array_exec_setup,
 		.fetch_strict = true,	/* fetch returns NULL for NULL inputs */
 		.fetch_leakproof = true,	/* fetch returns NULL for bad subscript */
-		.store_leakproof = false	/* ... but assignment throws error */
+		.store_leakproof = false,	/* ... but assignment throws error */
+		.create_foreach_a_iterator = create_foreach_a_array_iterator
 	};
 
 	PG_RETURN_POINTER(&sbsroutines);
@@ -572,7 +664,8 @@ raw_array_subscript_handler(PG_FUNCTION_ARGS)
 		.exec_setup = array_exec_setup,
 		.fetch_strict = true,	/* fetch returns NULL for NULL inputs */
 		.fetch_leakproof = true,	/* fetch returns NULL for bad subscript */
-		.store_leakproof = false	/* ... but assignment throws error */
+		.store_leakproof = false,	/* ... but assignment throws error */
+		.create_foreach_a_iterator = create_foreach_a_array_iterator
 	};
 
 	PG_RETURN_POINTER(&sbsroutines);

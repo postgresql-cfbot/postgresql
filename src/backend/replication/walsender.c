@@ -661,6 +661,8 @@ SendTimeLineHistory(TimeLineHistoryCmd *cmd)
 				(errcode_for_file_access(),
 				 errmsg("could not seek to beginning of file \"%s\": %m", path)));
 
+	/* XXX might truncate histfilelen */
+	Assert(histfilelen <= UINT32_MAX);
 	pq_sendint32(&buf, histfilelen);	/* col2 len */
 
 	bytesleft = histfilelen;

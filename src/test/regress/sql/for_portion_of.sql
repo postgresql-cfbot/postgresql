@@ -1591,9 +1591,13 @@ UPDATE fpo_update_of_trigger
   SET id = 2;
 DROP TABLE fpo_update_of_trigger;
 
--- Inserting leftovers should be skipped on views with INSTEAD OF triggers
+-- Inserting leftovers should be skipped on views with INSTEAD OF triggers.
+-- The FOR PORTION OF range must still restrict which rows are affected, and
+-- UPDATE triggers should see the correct NEW.valid_at.
 CREATE TABLE fpo_instead_base (id int, valid_at daterange, val int);
-INSERT INTO fpo_instead_base VALUES (1, '[2024-01-01,2025-01-01)', 100);
+INSERT INTO fpo_instead_base VALUES
+  (1, '[2024-01-01,2025-01-01)', 100),
+  (2, '[2020-01-01,2021-01-01)', 200);
 CREATE VIEW fpo_instead_view AS SELECT * FROM fpo_instead_base;
 CREATE FUNCTION fpo_instead_trig_fn() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
@@ -1613,12 +1617,11 @@ CREATE TRIGGER fpo_instead_del INSTEAD OF DELETE ON fpo_instead_view
   FOR EACH ROW EXECUTE FUNCTION fpo_instead_trig_fn();
 
 UPDATE fpo_instead_view FOR PORTION OF valid_at FROM '2024-04-01' TO '2024-08-01'
-    SET val = 999 WHERE id = 1;
-SELECT * FROM fpo_instead_view;
+    SET val = 999;
+SELECT * FROM fpo_instead_view ORDER BY id;
 
-DELETE FROM fpo_instead_view FOR PORTION OF valid_at FROM '2024-04-01' TO '2024-08-01'
-    WHERE id = 1;
-SELECT * FROM fpo_instead_view;
+DELETE FROM fpo_instead_view FOR PORTION OF valid_at FROM '2024-04-01' TO '2024-08-01';
+SELECT * FROM fpo_instead_view ORDER BY id;
 
 DROP VIEW fpo_instead_view;
 DROP TABLE fpo_instead_base;

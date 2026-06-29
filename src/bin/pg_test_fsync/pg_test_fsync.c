@@ -593,7 +593,7 @@ test_non_sync(void)
 static void
 signal_cleanup(SIGNAL_ARGS)
 {
-	int			rc;
+	ssize_t		rc;
 
 	/* Delete the file if it exists. Ignore errors */
 	if (needs_unlink)

@@ -755,7 +755,7 @@ WalRcvFetchTimeLineHistoryFiles(TimeLineID first, TimeLineID last)
 		{
 			char	   *fname;
 			char	   *content;
-			int			len;
+			size_t		len;
 			char		expectedfname[MAXFNAMELEN];
 
 			ereport(LOG,

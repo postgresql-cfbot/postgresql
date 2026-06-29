@@ -186,7 +186,7 @@ static CRITICAL_SECTION signal_info_lock;
 #define write_stderr(str) \
 	do { \
 		const char *str_ = (str); \
-		int		rc_; \
+		ssize_t	rc_; \
 		rc_ = write(fileno(stderr), str_, strlen(str_)); \
 		(void) rc_; \
 	} while (0)
@@ -1528,7 +1528,7 @@ getMessageFromLeader(int pipefd[2])
 static void
 sendMessageToLeader(int pipefd[2], const char *str)
 {
-	int			len = strlen(str) + 1;
+	size_t		len = strlen(str) + 1;
 
 	if (pipewrite(pipefd[PIPE_WRITE], str, len) != len)
 		pg_fatal("could not write to the communication channel: %m");
@@ -1645,7 +1645,7 @@ getMessageFromWorker(ParallelState *pstate, bool do_wait, int *worker)
 static void
 sendMessageToWorker(ParallelState *pstate, int worker, const char *str)
 {
-	int			len = strlen(str) + 1;
+	size_t		len = strlen(str) + 1;
 
 	if (pipewrite(pstate->parallelSlot[worker].pipeWrite, str, len) != len)
 	{

@@ -460,7 +460,7 @@ static void
 CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 {
 	int			fd;
-	int			nbytes;
+	size_t		nbytes;
 	char		versionfile[MAXPGPATH];
 	char		buf[16];
 
@@ -500,7 +500,7 @@ CreateDirAndVersionFile(char *dbpath, Oid dbid, Oid tsid, bool isRedo)
 	/* Write PG_MAJORVERSION in the PG_VERSION file. */
 	pgstat_report_wait_start(WAIT_EVENT_VERSION_FILE_WRITE);
 	errno = 0;
-	if ((int) write(fd, buf, nbytes) != nbytes)
+	if (write(fd, buf, nbytes) != nbytes)
 	{
 		/* If write didn't set errno, assume problem is no disk space. */
 		if (errno == 0)

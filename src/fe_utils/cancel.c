@@ -31,7 +31,7 @@
 #define write_stderr(str) \
 	do { \
 		const char *str_ = (str); \
-		int		rc_; \
+		ssize_t	rc_; \
 		rc_ = write(fileno(stderr), str_, strlen(str_)); \
 		(void) rc_; \
 	} while (0)

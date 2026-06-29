@@ -4253,14 +4253,18 @@ RewriteQuery(Query *parsetree, List *rewrite_events, int orig_rt_length,
 			if (parsetree->forPortionOf)
 			{
 				/*
-				 * Don't add FOR PORTION OF details until we're done rewriting
-				 * a view update, so that we don't add the same qual and TLE
-				 * on the recursion.
+				 * Add the FOR PORTION OF qual and the range-narrowing TLE.
+				 *
+				 * For a plain table we add them here. For an auto-updatable
+				 * view we defer them: after rewriteTargetView we'll recurse
+				 * back here and do it then. But views with INSTEAD OF triggers
+				 * never recurse, so we must do those now too.
 				 *
 				 * Views don't need to do anything special here to remap Vars;
 				 * that is handled by the tree walker.
 				 */
-				if (rt_entry_relation->rd_rel->relkind != RELKIND_VIEW)
+				if (rt_entry_relation->rd_rel->relkind != RELKIND_VIEW ||
+					view_has_instead_trigger(rt_entry_relation, CMD_UPDATE, NIL))
 				{
 					ListCell   *tl;
 
@@ -4270,7 +4274,10 @@ RewriteQuery(Query *parsetree, List *rewrite_events, int orig_rt_length,
 					 */
 					AddQual(parsetree, parsetree->forPortionOf->overlapsExpr);
 
-					/* Update FOR PORTION OF column(s) automatically. */
+					/*
+					 * Update the FOR PORTION OF column(s) automatically. For an
+					 * INSTEAD OF trigger this makes NEW hold the affected portion.
+					 */
 					foreach(tl, parsetree->forPortionOf->rangeTargetList)
 					{
 						TargetEntry *tle = (TargetEntry *) lfirst(tl);
@@ -4328,21 +4335,20 @@ RewriteQuery(Query *parsetree, List *rewrite_events, int orig_rt_length,
 			if (parsetree->forPortionOf)
 			{
 				/*
-				 * Don't add FOR PORTION OF details until we're done rewriting
-				 * a view delete, so that we don't add the same qual on the
-				 * recursion.
+				 * Add qual: DELETE FOR PORTION OF should be limited to rows
+				 * that overlap the target range.
+				 *
+				 * For a plain table we add the qual here. For an auto-updatable
+				 * view we defer it: after rewriteTargetView we'll recurse
+				 * back here and do it then. But views with INSTEAD OF triggers
+				 * never recurse, so we must do those now too.
 				 *
 				 * Views don't need to do anything special here to remap Vars;
 				 * that is handled by the tree walker.
 				 */
-				if (rt_entry_relation->rd_rel->relkind != RELKIND_VIEW)
-				{
-					/*
-					 * Add qual: DELETE FOR PORTION OF should be limited to
-					 * rows that overlap the target range.
-					 */
+				if (rt_entry_relation->rd_rel->relkind != RELKIND_VIEW ||
+					view_has_instead_trigger(rt_entry_relation, CMD_DELETE, NIL))
 					AddQual(parsetree, parsetree->forPortionOf->overlapsExpr);
-				}
 			}
 		}
 		else

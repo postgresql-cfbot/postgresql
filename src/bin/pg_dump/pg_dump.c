@@ -5184,6 +5184,7 @@ getSubscriptions(Archive *fout)
 	int			i_subfailover;
 	int			i_subretaindeadtuples;
 	int			i_submaxretention;
+	int			i_submessage;
 	int			i,
 				ntups;
 
@@ -5282,9 +5283,14 @@ getSubscriptions(Archive *fout)
 							 " '-1' AS subwalrcvtimeout,\n");
 
 	if (fout->remoteVersion >= 190000)
-		appendPQExpBufferStr(query, " fs.srvname AS subservername\n");
+		appendPQExpBufferStr(query, " fs.srvname AS subservername,\n");
 	else
-		appendPQExpBufferStr(query, " NULL AS subservername\n");
+		appendPQExpBufferStr(query, " NULL AS subservername,\n");
+
+	if (fout->remoteVersion >= 190000)
+		appendPQExpBufferStr(query, " s.submessage\n");
+	else
+		appendPQExpBufferStr(query, "false AS submessage\n");
 
 	appendPQExpBufferStr(query,
 						 "FROM pg_subscription s\n");
@@ -5333,6 +5339,7 @@ getSubscriptions(Archive *fout)
 	i_subpublications = PQfnumber(res, "subpublications");
 	i_suborigin = PQfnumber(res, "suborigin");
 	i_suboriginremotelsn = PQfnumber(res, "suboriginremotelsn");
+	i_submessage = PQfnumber(res, "submessage");
 
 	subinfo = pg_malloc_array(SubscriptionInfo, ntups);
 
@@ -5390,6 +5397,8 @@ getSubscriptions(Archive *fout)
 		else
 			subinfo[i].suboriginremotelsn =
 				pg_strdup(PQgetvalue(res, i, i_suboriginremotelsn));
+		subinfo[i].submessage =
+			(strcmp(PQgetvalue(res, i, i_submessage), "t") == 0);
 
 		/* Decide whether we want to dump it */
 		selectDumpableObject(&(subinfo[i].dobj), fout);
@@ -5641,6 +5650,9 @@ dumpSubscription(Archive *fout, const SubscriptionInfo *subinfo)
 
 	if (subinfo->subretaindeadtuples)
 		appendPQExpBufferStr(query, ", retain_dead_tuples = true");
+
+	if (subinfo->submessage)
+		appendPQExpBufferStr(query, ", message = true");
 
 	if (subinfo->submaxretention)
 		appendPQExpBuffer(query, ", max_retention_duration = %d", subinfo->submaxretention);

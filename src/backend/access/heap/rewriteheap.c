@@ -1078,7 +1078,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 	char		path[MAXPGPATH];
 	int			fd;
 	xl_heap_rewrite_mapping *xlrec;
-	uint32		len;
+	size_t		len;
 	char	   *data;
 
 	xlrec = (xl_heap_rewrite_mapping *) XLogRecGetData(r);

@@ -69,6 +69,12 @@ test: select_into select_distinct select_distinct_on select_implicit select_havi
 test: brin gin gist spgist privileges init_privs security_label collate matview lock replica_identity rowsecurity object_address tablesample groupingsets drop_operator password identity generated_stored join_hash
 
 # ----------
+# Additional JOIN ORDER tests
+# WIP: need to find an appropriate group for this test
+# ----------
+test: goo
+
+# ----------
 # Additional BRIN tests
 # ----------
 test: brin_bloom brin_multi
@@ -98,9 +104,6 @@ test: maintain_every
 # no relation related tests can be put in this group
 test: publication subscription
 
-# ----------
-# Another group of parallel tests
-# select_views depends on create_view
 # ----------
 test: select_views portals_p2 foreign_key dependency guc bitmapops combocid tsearch tsdicts foreign_data window xmlmap functional_deps advisory_lock indirect_toast equivclass stats_rewrite graph_table
 

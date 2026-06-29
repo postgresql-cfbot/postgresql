@@ -390,6 +390,12 @@ DELETE FROM products
   </para>
 
   <para>
+   If the updated table has an <literal>INSTEAD OF</literal> trigger, then
+   <productname>PostgreSQL</productname> skips inserting temporal leftovers.
+   It is the responsibility of the trigger to make whatever changes are desired.
+  </para>
+
+  <para>
    When temporal leftovers are inserted, all <literal>INSERT</literal>
    triggers are fired, but permission checks for inserting rows are
    skipped.

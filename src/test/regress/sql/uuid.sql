@@ -140,6 +140,19 @@ WITH uuidts AS (
 )
 SELECT y, ts, prev_ts FROM uuidts WHERE ts < prev_ts;
 
+-- uuidv7: infinite intervals are rejected
+SELECT uuidv7('infinity'::interval);
+SELECT uuidv7('-infinity'::interval);
+
+-- uuidv7: timestamps before Unix epoch are rejected
+SELECT uuidv7('-1000 years'::interval);
+
+-- uuidv7: large future intervals that overflow epoch conversion are rejected
+SELECT uuidv7('292230 years'::interval);
+
+-- uuidv7: timestamps beyond 48-bit ms field (~year 10889) are rejected
+SELECT uuidv7('9000 years'::interval);
+
 -- extract functions
 
 -- version

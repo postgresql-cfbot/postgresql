@@ -17,6 +17,7 @@
 #include <time.h>				/* for clock_gettime() */
 
 #include "common/hashfn.h"
+#include "common/int.h"
 #include "lib/hyperloglog.h"
 #include "libpq/pqformat.h"
 #include "port/pg_bswap.h"
@@ -672,6 +673,13 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 	int64		ns = get_real_time_ns_ascending();
 	int64		us;
 
+	/* Reject infinite intervals before any arithmetic */
+	if (INTERVAL_NOT_FINITE(shift))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("interval out of range for UUID version 7"),
+				 errdetail("UUID version 7 does not support infinite intervals.")));
+
 	/*
 	 * Shift the current timestamp by the given interval. To calculate time
 	 * shift correctly, we convert the UNIX epoch to TimestampTz and use
@@ -687,8 +695,32 @@ uuidv7_interval(PG_FUNCTION_ARGS)
 												 TimestampTzGetDatum(ts),
 												 IntervalPGetDatum(shift)));
 
-	/* Convert a TimestampTz value back to an UNIX epoch timestamp */
-	us = ts + (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) * SECS_PER_DAY * USECS_PER_SEC;
+	/*
+	 * Convert a TimestampTz value back to a UNIX epoch timestamp.  Use
+	 * overflow-safe addition since large intervals can exceed int64 range.
+	 */
+	if (pg_add_s64_overflow(ts,
+							(int64) (POSTGRES_EPOCH_JDATE - UNIX_EPOCH_JDATE) *
+							SECS_PER_DAY * USECS_PER_SEC,
+							&us))
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range for UUID version 7"),
+				 errdetail("UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.")));
+
+	/* UUID v7 uses an unsigned 48-bit millisecond field; reject pre-epoch */
+	if (us < 0)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range for UUID version 7"),
+				 errdetail("UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.")));
+
+	/* Reject timestamps beyond the 48-bit millisecond field maximum */
+	if (us / US_PER_MS > (INT64CONST(1) << 48) - 1)
+		ereport(ERROR,
+				(errcode(ERRCODE_DATETIME_VALUE_OUT_OF_RANGE),
+				 errmsg("timestamp out of range for UUID version 7"),
+				 errdetail("UUID version 7 supports timestamps from 1970-01-01 to approximately year 10889.")));
 
 	/* Generate an UUIDv7 */
 	uuid = generate_uuidv7(us / US_PER_MS, (us % US_PER_MS) * NS_PER_US + ns % NS_PER_US);

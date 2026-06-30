@@ -22,6 +22,10 @@
  *
  * Set st_progress_command (and st_progress_command_target) in own backend
  * entry.  Also, zero-initialize st_progress_param array.
+ *
+ * If command has already been started, start a sub-command. Only parameters
+ * of the sub-command are updated until pgstat_progress_end_command() is
+ * called. (Target relation must be the same for both commands.)
  *-----------
  */
 void
@@ -33,9 +37,30 @@ pgstat_progress_start_command(ProgressCommandType cmdtype, Oid relid)
 		return;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_command = cmdtype;
-	beentry->st_progress_command_target = relid;
-	MemSet(&beentry->st_progress_param, 0, sizeof(beentry->st_progress_param));
+	/* Sub-command should not be started w/o parent command. */
+	if (beentry->st_progress_command == PROGRESS_COMMAND_INVALID)
+	{
+		Assert(beentry->st_progress_command2 == PROGRESS_COMMAND_INVALID);
+
+		beentry->st_progress_command = cmdtype;
+		beentry->st_progress_command_target = relid;
+		MemSet(&beentry->st_progress_param, 0,
+			   sizeof(beentry->st_progress_param));
+	}
+	else if (beentry->st_progress_command2 == PROGRESS_COMMAND_INVALID)
+	{
+		Assert(beentry->st_progress_command != PROGRESS_COMMAND_INVALID);
+
+		beentry->st_progress_command2 = cmdtype;
+		beentry->st_progress_command_target2 = relid;
+		MemSet(&beentry->st_progress_param2, 0,
+			   sizeof(beentry->st_progress_param2));
+	}
+	else
+	{
+		/* Only one level of nesting is supported. */
+		Assert(false);
+	}
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -49,14 +74,21 @@ void
 pgstat_progress_update_param(int index, int64 val)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+	volatile int64	*params;
 
 	Assert(index >= 0 && index < PGSTAT_NUM_PROGRESS_PARAM);
 
 	if (!beentry || !pgstat_track_activities)
 		return;
 
+	Assert(beentry->st_progress_command != PROGRESS_COMMAND_INVALID ||
+		   beentry->st_progress_command2 != PROGRESS_COMMAND_INVALID);
+
+	params = (beentry->st_progress_command2 == PROGRESS_COMMAND_INVALID) ?
+		beentry->st_progress_param : beentry->st_progress_param2;
+
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_param[index] = val;
+	params[index] = val;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -70,14 +102,21 @@ void
 pgstat_progress_incr_param(int index, int64 incr)
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
+	volatile int64	*params;
 
 	Assert(index >= 0 && index < PGSTAT_NUM_PROGRESS_PARAM);
 
 	if (!beentry || !pgstat_track_activities)
 		return;
 
+	Assert(beentry->st_progress_command != PROGRESS_COMMAND_INVALID ||
+		   beentry->st_progress_command2 != PROGRESS_COMMAND_INVALID);
+
+	params = (beentry->st_progress_command2 == PROGRESS_COMMAND_INVALID) ?
+		beentry->st_progress_param : beentry->st_progress_param2;
+
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_param[index] += incr;
+	params[index] += incr;
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }
 
@@ -122,9 +161,16 @@ pgstat_progress_update_multi_param(int nparam, const int *index,
 {
 	volatile PgBackendStatus *beentry = MyBEEntry;
 	int			i;
+	volatile int64	*params;
 
 	if (!beentry || !pgstat_track_activities || nparam == 0)
 		return;
+
+	Assert(beentry->st_progress_command != PROGRESS_COMMAND_INVALID ||
+		   beentry->st_progress_command2 != PROGRESS_COMMAND_INVALID);
+
+	params = (beentry->st_progress_command2 == PROGRESS_COMMAND_INVALID) ?
+		beentry->st_progress_param : beentry->st_progress_param2;
 
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
 
@@ -132,7 +178,7 @@ pgstat_progress_update_multi_param(int nparam, const int *index,
 	{
 		Assert(index[i] >= 0 && index[i] < PGSTAT_NUM_PROGRESS_PARAM);
 
-		beentry->st_progress_param[index[i]] = val[i];
+		params[index[i]] = val[i];
 	}
 
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
@@ -142,7 +188,7 @@ pgstat_progress_update_multi_param(int nparam, const int *index,
  * pgstat_progress_end_command() -
  *
  * Reset st_progress_command (and st_progress_command_target) in own backend
- * entry.  This signals the end of the command.
+ * entry.  This signals the end of the command (or a sub-command).
  *-----------
  */
 void
@@ -153,11 +199,20 @@ pgstat_progress_end_command(void)
 	if (!beentry || !pgstat_track_activities)
 		return;
 
-	if (beentry->st_progress_command == PROGRESS_COMMAND_INVALID)
-		return;
-
 	PGSTAT_BEGIN_WRITE_ACTIVITY(beentry);
-	beentry->st_progress_command = PROGRESS_COMMAND_INVALID;
-	beentry->st_progress_command_target = InvalidOid;
+
+	if (beentry->st_progress_command2 != PROGRESS_COMMAND_INVALID)
+	{
+		Assert(beentry->st_progress_command != PROGRESS_COMMAND_INVALID);
+
+		beentry->st_progress_command2 = PROGRESS_COMMAND_INVALID;
+		beentry->st_progress_command_target2 = InvalidOid;
+	}
+	else
+	{
+		beentry->st_progress_command = PROGRESS_COMMAND_INVALID;
+		beentry->st_progress_command_target = InvalidOid;
+	}
+
 	PGSTAT_END_WRITE_ACTIVITY(beentry);
 }

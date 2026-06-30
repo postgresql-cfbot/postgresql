@@ -217,6 +217,8 @@ typedef struct TransactionStateData
 	bool		parallelChildXact;	/* is any parent transaction parallel? */
 	bool		chain;			/* start a new block after this one */
 	bool		topXidLogged;	/* for a subxact: is top-level XID logged? */
+	int			progress_depth;	/* progress tracking state before subxact
+								 * started */
 	struct TransactionStateData *parent;	/* back link to parent */
 } TransactionStateData;
 
@@ -2252,6 +2254,12 @@ StartTransaction(void)
 	 * progress"
 	 */
 	s->state = TRANS_INPROGRESS;
+
+	/*
+	 * Top transaction always terminates progress tracking on abort, so this
+	 * field is not needed, but be tidy.
+	 */
+	s->progress_depth = 0;
 
 	/* Schedule transaction timeout */
 	if (TransactionTimeout > 0)
@@ -5140,6 +5148,12 @@ StartSubTransaction(void)
 	s->state = TRANS_INPROGRESS;
 
 	/*
+	 * Subtransaction needs to know if it should cancel progress reporting on
+	 * abort.
+	 */
+	s->progress_depth = PGSTAT_PROGRESS_STATE(MyBEEntry);
+
+	/*
 	 * Call start-of-subxact callbacks
 	 */
 	CallSubXactCallbacks(SUBXACT_EVENT_START_SUB, s->subTransactionId,
@@ -5298,7 +5312,24 @@ AbortSubTransaction(void)
 	WaitLSNCleanup();
 
 	pgstat_report_wait_end();
-	pgstat_progress_end_command();
+
+	/*
+	 * Abort of a subtransaction does not imply the end of monitoring for the
+	 * whole transaction. Instead, we only cancel monitoring started within
+	 * the subtransaction.
+	 *
+	 * One particular case it matters is an index function that catches an
+	 * exception and lets the index build continue, so the abort should not
+	 * cancel monitoring of that build.
+	 *
+	 * XXX Shouldn't we restore the progress state as it was before the
+	 * subtransaction started? Not sure about use case - the index functions
+	 * mentioned above probably don't start their own progress tracking. On
+	 * the other hand, a monitored command started in a subtransaction usually
+	 * does not have a parent command in the parent transaction.
+	 */
+	for (int i = PGSTAT_PROGRESS_STATE(MyBEEntry); i > s->progress_depth; i--)
+		pgstat_progress_end_command();
 
 	pgaio_error_cleanup();
 

@@ -151,6 +151,9 @@ typedef struct CustomExecMethods
 											   void *coordinate);
 	void		(*ShutdownCustomScan) (CustomScanState *node);
 
+	/* Optional: retrieve parallel instrumentation */
+	void		(*RetrieveInstrumentationCustomScan) (CustomScanState *node);
+
 	/* Optional: print additional information in EXPLAIN */
 	void		(*ExplainCustomScan) (CustomScanState *node,
 									  List *ancestors,

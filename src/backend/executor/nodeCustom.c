@@ -218,6 +218,15 @@ ExecCustomScanInitializeWorker(CustomScanState *node,
 }
 
 void
+ExecCustomScanRetrieveInstrumentation(CustomScanState *node)
+{
+	const CustomExecMethods *methods = node->methods;
+
+	if (methods->RetrieveInstrumentationCustomScan)
+		methods->RetrieveInstrumentationCustomScan(node);
+}
+
+void
 ExecShutdownCustomScan(CustomScanState *node)
 {
 	const CustomExecMethods *methods = node->methods;

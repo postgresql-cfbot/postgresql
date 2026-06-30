@@ -17,17 +17,23 @@
 
 #include "postgres.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+#ifndef WIN32
+#include <sys/mman.h>
+#endif
+
 #include "fmgr.h"
 #include "funcapi.h"
 #include "injection_points.h"
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
 #include "nodes/value.h"
-#include "storage/condition_variable.h"
-#include "storage/dsm_registry.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
+#include "storage/spin.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/injection_point.h"
@@ -36,10 +42,6 @@
 #include "utils/wait_event.h"
 
 PG_MODULE_MAGIC;
-
-/* Maximum number of waits usable in injection points at once */
-#define INJ_MAX_WAIT	8
-#define INJ_NAME_MAXLEN	64
 
 /*
  * List of injection points stored in TopMemoryContext attached
@@ -50,25 +52,40 @@ static List *inj_list_local = NIL;
 /*
  * Shared state information for injection points.
  *
- * This state data can be initialized in two ways: dynamically with a DSM
- * or when loading the module.
+ * This is mapped from a fixed file in the data directory (INJ_STATE_FILE)
+ * rather than being allocated in the main shared memory segment or a DSM.
+ * Backing it with a file lets external programs without a backend connection
+ * map the same state, observe which injection points are being waited on and
+ * release them (see injection_points_state.c).  This works in contexts where
+ * condition variables and latches are unavailable, e.g. the postmaster or a
+ * process that has not set up its PGPROC yet.
+ *
+ * The leading InjectionPointPublicState portion is the contract shared with
+ * those external tools, so it must stay first and keep a frontend-compatible
+ * layout (see injection_points.h).  The fields below it are backend-only.
  */
 typedef struct InjectionPointSharedState
 {
-	/* Protects access to other fields */
-	slock_t		lock;
-
-	/* Counters advancing when injection_points_wakeup() is called */
-	uint32		wait_counts[INJ_MAX_WAIT];
-
-	/* Names of injection points attached to wait counters */
+	/* Names of injection points attached to wait counters (slot in use). */
 	char		name[INJ_MAX_WAIT][INJ_NAME_MAXLEN];
 
-	/* Condition variable used for waits and wakeups */
-	ConditionVariable wait_point;
+	/* Counters advancing when injection_points_wakeup() is called */
+	pg_atomic_uint32 wait_counts[INJ_MAX_WAIT];
+
+	/* Protects access to the name array (backend-only) */
+	slock_t		lock;
 } InjectionPointSharedState;
 
-/* Pointer to shared-memory state. */
+/* The public prefix must match InjectionPointPublicState bit for bit. */
+StaticAssertDecl(offsetof(InjectionPointSharedState, name) == 0,
+				 "name must be the first field of InjectionPointSharedState");
+StaticAssertDecl(offsetof(InjectionPointSharedState, wait_counts) ==
+				 offsetof(InjectionPointPublicState, wait_counts),
+				 "wait_counts offset must match InjectionPointPublicState");
+StaticAssertDecl(sizeof(pg_atomic_uint32) == sizeof(uint32),
+				 "pg_atomic_uint32 must be layout-compatible with uint32");
+
+/* Pointer to the mapped shared state. */
 static InjectionPointSharedState *inj_state = NULL;
 
 extern PGDLLEXPORT void injection_error(const char *name,
@@ -84,63 +101,292 @@ extern PGDLLEXPORT void injection_wait(const char *name,
 /* track if injection points attached in this process are linked to it */
 static bool injection_point_local = false;
 
-static void injection_shmem_request(void *arg);
+/* How injection_map_state() should open the backing file. */
+typedef enum InjectionMapMode
+{
+	INJ_MAP_CREATE,				/* discard any stale file, create fresh */
+	INJ_MAP_ATTACH,				/* map an already-existing file */
+	INJ_MAP_ATTACH_OR_CREATE,	/* attach if present, else create */
+} InjectionMapMode;
+
 static void injection_shmem_init(void *arg);
+static void injection_shmem_attach(void *arg);
 
 static const ShmemCallbacks injection_shmem_callbacks = {
-	.request_fn = injection_shmem_request,
+	/* Create and initialize the backing file once at postmaster startup. */
 	.init_fn = injection_shmem_init,
+	/* Re-map it in each child that does not inherit the mapping (Windows). */
+	.attach_fn = injection_shmem_attach,
 };
 
 /*
- * Routine for shared memory area initialization, used as a callback
- * when initializing dynamically with a DSM or when loading the module.
+ * Initialize a freshly-created shared state.
  */
 static void
-injection_point_init_state(void *ptr, void *arg)
+injection_point_init_state(InjectionPointSharedState *state)
 {
-	InjectionPointSharedState *state = (InjectionPointSharedState *) ptr;
-
 	SpinLockInit(&state->lock);
-	memset(state->wait_counts, 0, sizeof(state->wait_counts));
 	memset(state->name, 0, sizeof(state->name));
-	ConditionVariableInit(&state->wait_point);
-}
-
-static void
-injection_shmem_request(void *arg)
-{
-	ShmemRequestStruct(.name = "injection_points",
-					   .size = sizeof(InjectionPointSharedState),
-					   .ptr = (void **) &inj_state,
-		);
-}
-
-static void
-injection_shmem_init(void *arg)
-{
-	/*
-	 * First time through, so initialize.  This is shared with the dynamic
-	 * initialization using a DSM.
-	 */
-	injection_point_init_state(inj_state, NULL);
+	for (int i = 0; i < INJ_MAX_WAIT; i++)
+		pg_atomic_init_u32(&state->wait_counts[i], 0);
 }
 
 /*
- * Initialize shared memory area for this module through DSM.
+ * Resolve the absolute path of the backing file.  Anchored at the data
+ * directory rather than the current working directory: EXEC_BACKEND children
+ * re-map the file from attach_fn before they chdir into the data directory, so
+ * a relative path would resolve against the wrong directory there.  This also
+ * matches the absolute path that out-of-process tools build from the data
+ * directory they are given.
+ */
+static const char *
+injection_state_file_path(void)
+{
+	static char path[MAXPGPATH];
+
+	if (path[0] != '\0')
+		return path;
+
+	if (DataDir != NULL && DataDir[0] != '\0')
+		snprintf(path, sizeof(path), "%s/%s", DataDir, INJ_STATE_FILE);
+	else
+		strlcpy(path, INJ_STATE_FILE, sizeof(path));
+
+	return path;
+}
+
+/*
+ * proc_exit callback removing the backing file.  Registered only by the
+ * process that created it (the postmaster, or a lone backend when the module
+ * is not preloaded), so that the file disappears together with the cluster.
  */
 static void
-injection_init_shmem(void)
+injection_state_file_cleanup(int code, Datum arg)
 {
-	bool		found;
+	if (inj_state != NULL)
+	{
+#ifndef WIN32
+		munmap(inj_state, sizeof(InjectionPointSharedState));
+#else
+		UnmapViewOfFile(inj_state);
+#endif
+		inj_state = NULL;
+	}
+
+	/*
+	 * Only the postmaster (or a standalone backend) should unlink the file;
+	 * forked children inherit this callback but must not remove it.
+	 */
+	if (!IsUnderPostmaster)
+		(void) unlink(injection_state_file_path());
+}
+
+#ifndef WIN32
+/*
+ * Wait for a file created by a concurrent process to reach its final size.
+ *
+ * The winner of the O_EXCL create race makes the file at length zero and only
+ * then ftruncate()s it to "size".  A process that lost the race and is
+ * attaching could otherwise mmap() past end-of-file and take a SIGBUS on first
+ * access.  The gap is just the few instructions between create and ftruncate,
+ * so in practice this returns on the first check.
+ */
+static void
+injection_wait_for_size(int fd, Size size, const char *path, int elevel)
+{
+	/* Generous bound; the writer needs only microseconds. */
+	for (int i = 0; i < 10000; i++)
+	{
+		struct stat st;
+
+		if (fstat(fd, &st) != 0)
+		{
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not stat injection point state file \"%s\": %m",
+							path)));
+			return;
+		}
+		if (st.st_size >= (off_t) size)
+			return;
+		pg_usleep(1000L);		/* 1ms */
+	}
+
+	ereport(elevel,
+			(errmsg("injection point state file \"%s\" was never sized by its creator",
+					path)));
+}
+#endif
+
+/*
+ * Map INJ_STATE_FILE into this process, creating and/or initializing it as
+ * dictated by "mode", and set inj_state.
+ *
+ * The state is backed by an ordinary file so that external programs can map
+ * the same bytes (POSIX mmap or, on Windows, a file-backed CreateFileMapping).
+ * All accessors must use the mapping, never plain file reads, because file
+ * I/O is not guaranteed to be coherent with a mapped view on Windows.
+ */
+static void
+injection_map_state(InjectionMapMode mode, int elevel)
+{
+	Size		size = sizeof(InjectionPointSharedState);
+	const char *path = injection_state_file_path();
+	bool		created = false;
 
 	if (inj_state != NULL)
 		return;
 
-	inj_state = GetNamedDSMSegment("injection_points",
-								   sizeof(InjectionPointSharedState),
-								   injection_point_init_state,
-								   &found, NULL);
+	if (mode == INJ_MAP_CREATE)
+		(void) unlink(path);	/* drop any stale file from a crash */
+
+#ifndef WIN32
+	{
+		int			fd;
+		int			oflags = O_RDWR;
+
+		if (mode != INJ_MAP_ATTACH)
+			oflags |= O_CREAT | O_EXCL;
+
+		fd = OpenTransientFile(path, oflags);
+		if (fd < 0 && mode == INJ_MAP_ATTACH_OR_CREATE && errno == EEXIST)
+		{
+			/* Lost the race to create it; just attach. */
+			oflags = O_RDWR;
+			fd = OpenTransientFile(path, oflags);
+
+			/*
+			 * The winner may not have ftruncate()d the file to full size yet;
+			 * wait for it so the mmap() below cannot fault past end-of-file.
+			 */
+			if (fd >= 0)
+				injection_wait_for_size(fd, size, path, elevel);
+		}
+		else if (fd >= 0 && (oflags & O_CREAT))
+			created = true;
+
+		if (fd < 0)
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not open injection point state file \"%s\": %m",
+							path)));
+
+		if (created && ftruncate(fd, size) != 0)
+		{
+			CloseTransientFile(fd);
+			(void) unlink(path);
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not size injection point state file \"%s\": %m",
+							path)));
+		}
+
+		inj_state = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+		CloseTransientFile(fd);
+
+		if (inj_state == MAP_FAILED)
+		{
+			inj_state = NULL;
+			ereport(elevel,
+					(errcode_for_file_access(),
+					 errmsg("could not map injection point state file \"%s\": %m",
+							path)));
+		}
+	}
+#else
+	{
+		HANDLE		hfile;
+		HANDLE		hmap;
+		DWORD		share = FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE;
+		DWORD		disp = (mode == INJ_MAP_ATTACH) ? OPEN_EXISTING : CREATE_NEW;
+
+		hfile = CreateFile(path,
+						   GENERIC_READ | GENERIC_WRITE,
+						   share, NULL, disp, FILE_ATTRIBUTE_NORMAL, NULL);
+
+		/*
+		 * If creation failed because a file from an earlier cluster lifetime
+		 * is in the way, attach to it instead of failing.  Don't insist on a
+		 * specific error code: besides ERROR_FILE_EXISTS, a file whose
+		 * deletion is still pending reports ERROR_ACCESS_DENIED.
+		 * FILE_SHARE_DELETE (above) lets such a file be reopened and unlinked
+		 * while still mapped.
+		 */
+		if (hfile == INVALID_HANDLE_VALUE && mode == INJ_MAP_ATTACH_OR_CREATE)
+		{
+			disp = OPEN_EXISTING;
+			hfile = CreateFile(path,
+							   GENERIC_READ | GENERIC_WRITE,
+							   share, NULL, disp, FILE_ATTRIBUTE_NORMAL, NULL);
+		}
+		else if (hfile != INVALID_HANDLE_VALUE && disp == CREATE_NEW)
+			created = true;
+
+		if (hfile == INVALID_HANDLE_VALUE)
+			ereport(elevel,
+					(errmsg("could not open injection point state file \"%s\": error code %lu",
+							path, GetLastError())));
+
+		/* CreateFileMapping extends the backing file to the mapping size. */
+		hmap = CreateFileMapping(hfile, NULL, PAGE_READWRITE, 0, (DWORD) size, NULL);
+		if (hmap == NULL)
+		{
+			CloseHandle(hfile);
+			ereport(elevel,
+					(errmsg("could not create mapping for injection point state file \"%s\": error code %lu",
+							path, GetLastError())));
+		}
+
+		inj_state = MapViewOfFile(hmap, FILE_MAP_ALL_ACCESS, 0, 0, size);
+		CloseHandle(hmap);
+		CloseHandle(hfile);
+
+		if (inj_state == NULL)
+			ereport(elevel,
+					(errmsg("could not map injection point state file \"%s\": error code %lu",
+							path, GetLastError())));
+	}
+#endif
+
+	if (created)
+	{
+		injection_point_init_state(inj_state);
+		on_proc_exit(injection_state_file_cleanup, 0);
+	}
+}
+
+/*
+ * Shared memory callbacks.  We do not request any space in the main segment;
+ * the file mapping is the source of truth.  init_fn runs once in the
+ * postmaster (children inherit the mapping through fork), while attach_fn
+ * re-maps the file in children that do not inherit it (EXEC_BACKEND/Windows).
+ */
+static void
+injection_shmem_init(void *arg)
+{
+	injection_map_state(INJ_MAP_CREATE, FATAL);
+}
+
+static void
+injection_shmem_attach(void *arg)
+{
+	injection_map_state(INJ_MAP_ATTACH, FATAL);
+}
+
+/*
+ * Ensure inj_state is available in the current process.
+ *
+ * Backends preloading the module inherit (fork) or re-map (EXEC_BACKEND) the
+ * state set up at postmaster startup.  When the module is not preloaded, the
+ * first process to reach here creates the file and the rest attach to it.
+ */
+static void
+injection_init_shmem(void)
+{
+	if (inj_state != NULL)
+		return;
+
+	injection_map_state(INJ_MAP_ATTACH_OR_CREATE, ERROR);
 }
 
 /*
@@ -222,7 +468,7 @@ injection_notice(const char *name, const void *private_data, void *arg)
 		elog(NOTICE, "notice triggered for injection point %s", name);
 }
 
-/* Wait on a condition variable, awaken by injection_points_wakeup() */
+/* Wait until injection_points_wakeup() is called */
 void
 injection_wait(const char *name, const void *private_data, void *arg)
 {
@@ -254,31 +500,37 @@ injection_wait(const char *name, const void *private_data, void *arg)
 		{
 			index = i;
 			strlcpy(inj_state->name[i], name, INJ_NAME_MAXLEN);
-			old_wait_counts = inj_state->wait_counts[i];
+			old_wait_counts = pg_atomic_read_u32(&inj_state->wait_counts[i]);
 			break;
 		}
 	}
 	SpinLockRelease(&inj_state->lock);
 
 	if (index < 0)
-		elog(ERROR, "could not find free slot for wait of injection point %s ",
+		elog(ERROR, "could not find free slot for wait of injection point %s",
 			 name);
 
-	/* And sleep.. */
-	ConditionVariablePrepareToSleep(&inj_state->wait_point);
-	for (;;)
+	/*
+	 * Wait until the counter is bumped by injection_points_wakeup().
+	 *
+	 * This loop starts with a short delay for responsiveness, enlarged to
+	 * ease the CPU workload in slower environments.
+	 */
+#define INJ_WAIT_INITIAL_US		10	/* 10us */
+#define INJ_WAIT_MAX_US			100000	/* 100ms */
+	pgstat_report_wait_start(injection_wait_event);
 	{
-		uint32		new_wait_counts;
+		int			delay_us = INJ_WAIT_INITIAL_US;
 
-		SpinLockAcquire(&inj_state->lock);
-		new_wait_counts = inj_state->wait_counts[index];
-		SpinLockRelease(&inj_state->lock);
-
-		if (old_wait_counts != new_wait_counts)
-			break;
-		ConditionVariableSleep(&inj_state->wait_point, injection_wait_event);
+		while (pg_atomic_read_u32(&inj_state->wait_counts[index]) == old_wait_counts)
+		{
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(delay_us);
+			if (delay_us < INJ_WAIT_MAX_US)
+				delay_us *= 2;
+		}
 	}
-	ConditionVariableCancelSleep();
+	pgstat_report_wait_end();
 
 	/* Remove this injection point from the waiters. */
 	SpinLockAcquire(&inj_state->lock);
@@ -443,7 +695,7 @@ injection_points_wakeup(PG_FUNCTION_ARGS)
 	if (inj_state == NULL)
 		injection_init_shmem();
 
-	/* First bump the wait counter for the injection point to wake up */
+	/* Find the injection point then bump its wait counter */
 	SpinLockAcquire(&inj_state->lock);
 	for (int i = 0; i < INJ_MAX_WAIT; i++)
 	{
@@ -458,11 +710,9 @@ injection_points_wakeup(PG_FUNCTION_ARGS)
 		SpinLockRelease(&inj_state->lock);
 		elog(ERROR, "could not find injection point %s to wake up", name);
 	}
-	inj_state->wait_counts[index]++;
 	SpinLockRelease(&inj_state->lock);
 
-	/* And broadcast the change to the waiters */
-	ConditionVariableBroadcast(&inj_state->wait_point);
+	pg_atomic_fetch_add_u32(&inj_state->wait_counts[index], 1);
 	PG_RETURN_VOID();
 }
 

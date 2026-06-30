@@ -21,6 +21,17 @@ injection_points = shared_module('injection_points',
 )
 test_install_libs += injection_points
 
+# Standalone client used by the TAP tests to wait on and wake up injection
+# points without a backend connection.  It only needs the module's own header.
+injection_points_state = executable('injection_points_state',
+  files('injection_points_state.c'),
+  include_directories: include_directories('.'),
+  kwargs: default_bin_args + {
+    'install': false,
+  },
+)
+testprep_targets += injection_points_state
+
 test_install_data += files(
   'injection_points.control',
   'injection_points--1.0.sql',
@@ -30,6 +41,16 @@ tests += {
   'name': 'injection_points',
   'sd': meson.current_source_dir(),
   'bd': meson.current_build_dir(),
+  'tap': {
+    'env': {
+      'enable_injection_points': get_option('injection_points') ? 'yes' : 'no',
+      'INJECTION_POINTS_STATE': injection_points_state.full_path(),
+    },
+    'tests': [
+      't/001_wait_without_sql.pl',
+    ],
+    'deps': [injection_points_state],
+  },
   'regress': {
     'sql': [
       'injection_points',

@@ -1737,10 +1737,43 @@ pg_stat_get_wal(PG_FUNCTION_ARGS)
 									wal_stats->stat_reset_timestamp));
 }
 
+/*
+ * pg_stat_lock_build_tuples
+ *
+ * Helper routine for pg_stat_get_lock() and pg_stat_get_backend_lock(),
+ * filling a result tuplestore with one tuple for each lock type.
+ */
+static void
+pg_stat_lock_build_tuples(ReturnSetInfo *rsinfo,
+						  PgStat_LockEntry *lock_stats,
+						  TimestampTz stat_reset_timestamp)
+{
+#define PG_STAT_LOCK_COLS	5
+	for (int lcktype = 0; lcktype <= LOCKTAG_LAST_TYPE; lcktype++)
+	{
+		Datum		values[PG_STAT_LOCK_COLS] = {0};
+		bool		nulls[PG_STAT_LOCK_COLS] = {0};
+		PgStat_LockEntry *lck_stats = &lock_stats[lcktype];
+		int			i = 0;
+
+		values[i++] = CStringGetTextDatum(LockTagTypeNames[lcktype]);
+		values[i++] = Int64GetDatum(lck_stats->waits);
+		values[i++] = Int64GetDatum(lck_stats->wait_time);
+		values[i++] = Int64GetDatum(lck_stats->fastpath_exceeded);
+		if (stat_reset_timestamp != 0)
+			values[i] = TimestampTzGetDatum(stat_reset_timestamp);
+		else
+			nulls[i] = true;
+
+		Assert(i + 1 == PG_STAT_LOCK_COLS);
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+	}
+}
+
 Datum
 pg_stat_get_lock(PG_FUNCTION_ARGS)
 {
-#define PG_STAT_LOCK_COLS	5
 	ReturnSetInfo *rsinfo;
 	PgStat_Lock *lock_stats;
 
@@ -1749,26 +1782,33 @@ pg_stat_get_lock(PG_FUNCTION_ARGS)
 
 	lock_stats = pgstat_fetch_stat_lock();
 
-	for (int lcktype = 0; lcktype <= LOCKTAG_LAST_TYPE; lcktype++)
-	{
-		const char *locktypename;
-		Datum		values[PG_STAT_LOCK_COLS] = {0};
-		bool		nulls[PG_STAT_LOCK_COLS] = {0};
-		PgStat_LockEntry *lck_stats = &lock_stats->stats[lcktype];
-		int			i = 0;
+	pg_stat_lock_build_tuples(rsinfo, lock_stats->stats,
+							  lock_stats->stat_reset_timestamp);
 
-		locktypename = LockTagTypeNames[lcktype];
+	return (Datum) 0;
+}
 
-		values[i++] = CStringGetTextDatum(locktypename);
-		values[i++] = Int64GetDatum(lck_stats->waits);
-		values[i++] = Int64GetDatum(lck_stats->wait_time);
-		values[i++] = Int64GetDatum(lck_stats->fastpath_exceeded);
-		values[i] = TimestampTzGetDatum(lock_stats->stat_reset_timestamp);
+/*
+ * Returns lock statistics for a backend with given PID.
+ */
+Datum
+pg_stat_get_backend_lock(PG_FUNCTION_ARGS)
+{
+	int			pid;
+	ReturnSetInfo *rsinfo;
+	PgStat_Backend *backend_stats;
 
-		Assert(i + 1 == PG_STAT_LOCK_COLS);
+	InitMaterializedSRF(fcinfo, 0);
+	rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
 
-		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
-	}
+	pid = PG_GETARG_INT32(0);
+	backend_stats = pgstat_fetch_stat_backend_by_pid(pid, NULL);
+
+	if (!backend_stats)
+		return (Datum) 0;
+
+	pg_stat_lock_build_tuples(rsinfo, backend_stats->lock_stats.stats,
+							  backend_stats->stat_reset_timestamp);
 
 	return (Datum) 0;
 }

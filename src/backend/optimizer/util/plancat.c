@@ -1654,7 +1654,9 @@ get_relation_constraints(PlannerInfo *root,
 static void
 get_relation_statistics_worker(List **stainfos, RelOptInfo *rel,
 							   Oid statOid, bool inh,
-							   Bitmapset *keys, List *exprs)
+							   Bitmapset *keys, List *exprs,
+							   List *joinrels, List *keyvars,
+							   List *joinconds)
 {
 	Form_pg_statistic_ext_data dataForm;
 	HeapTuple	dtup;
@@ -1706,6 +1708,15 @@ get_relation_statistics_worker(List **stainfos, RelOptInfo *rel,
 		info->keys = bms_copy(keys);
 		info->exprs = exprs;
 
+		/*
+		 * Only MCV carries the join fields: CREATE STATISTICS allows no other
+		 * kind yet for join stats, so the nodes above are never join stats.
+		 * For single-table stats these locals are NIL.
+		 */
+		info->joinrels = joinrels;
+		info->keyvars = keyvars;
+		info->joinconds = joinconds;
+
 		*stainfos = lappend(*stainfos, info);
 	}
 
@@ -1748,28 +1759,24 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 	foreach(l, statoidlist)
 	{
 		Oid			statOid = lfirst_oid(l);
-		Form_pg_statistic_ext staForm;
 		HeapTuple	htup;
 		Bitmapset  *keys = NULL;
 		List	   *exprs = NIL;
-		int			i;
+		List	   *keyvars = NIL;
+
+		/* Join statistics fields */
+		List	   *joinrels = NIL;
+		List	   *target_keyvars = NIL;
+		List	   *joinconds = NIL;
 
 		htup = SearchSysCache1(STATEXTOID, ObjectIdGetDatum(statOid));
 		if (!HeapTupleIsValid(htup))
 			elog(ERROR, "cache lookup failed for statistics object %u", statOid);
-		staForm = (Form_pg_statistic_ext) GETSTRUCT(htup);
 
 		/*
-		 * First, build the array of columns covered.  This is ultimately
-		 * wasted if no stats within the object have actually been built, but
-		 * it doesn't seem worth troubling over that case.
-		 */
-		for (i = 0; i < staForm->stxkeys.dim1; i++)
-			keys = bms_add_member(keys, staForm->stxkeys.values[i]);
-
-		/*
-		 * Preprocess expressions (if any). We read the expressions, fix the
-		 * varnos, and run them through eval_const_expressions.
+		 * Preprocess stxexprs.  We read all entries, separate simple column
+		 * references (into the keys Bitmapset) from complex expressions, fix
+		 * the varnos, and run expressions through eval_const_expressions.
 		 *
 		 * XXX We don't know yet if there are any data for this stats object,
 		 * with either stxdinherit value. But it's reasonable to assume there
@@ -1777,44 +1784,30 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 		 * keys and expressions here.
 		 */
 		{
-			bool		isnull;
-			Datum		datum;
+			statext_decode_stxexprs(htup, relation, &keys, &exprs, &keyvars);
 
-			/* decode expression (if any) */
-			datum = SysCacheGetAttr(STATEXTOID, htup,
-									Anum_pg_statistic_ext_stxexprs, &isnull);
+			/*
+			 * Modify the copies we obtain from the relcache to have the
+			 * correct varno for the parent relation, so that they match up
+			 * correctly against qual clauses.
+			 *
+			 * This must be done before const-simplification because
+			 * eval_const_expressions reduces NullTest for Vars based on
+			 * varno.
+			 */
+			if (exprs != NIL && varno != 1)
+				ChangeVarNodes((Node *) exprs, 1, varno, 0);
 
-			if (!isnull)
+			/*
+			 * Run the expressions through eval_const_expressions. This is not
+			 * just an optimization, but is necessary, because the planner
+			 * will be comparing them to similarly-processed qual clauses, and
+			 * may fail to detect valid matches without this. We must not use
+			 * canonicalize_qual, however, since these aren't qual
+			 * expressions.
+			 */
+			if (exprs != NIL)
 			{
-				char	   *exprsString;
-
-				exprsString = TextDatumGetCString(datum);
-				exprs = (List *) stringToNode(exprsString);
-				pfree(exprsString);
-
-				/* Expand virtual generated columns in the expressions */
-				exprs = (List *) expand_generated_columns_in_expr((Node *) exprs, relation, 1);
-
-				/*
-				 * Modify the copies we obtain from the relcache to have the
-				 * correct varno for the parent relation, so that they match
-				 * up correctly against qual clauses.
-				 *
-				 * This must be done before const-simplification because
-				 * eval_const_expressions reduces NullTest for Vars based on
-				 * varno.
-				 */
-				if (varno != 1)
-					ChangeVarNodes((Node *) exprs, 1, varno, 0);
-
-				/*
-				 * Run the expressions through eval_const_expressions. This is
-				 * not just an optimization, but is necessary, because the
-				 * planner will be comparing them to similarly-processed qual
-				 * clauses, and may fail to detect valid matches without this.
-				 * We must not use canonicalize_qual, however, since these
-				 * aren't qual expressions.
-				 */
 				exprs = (List *) eval_const_expressions(root, (Node *) exprs);
 
 				/* May as well fix opfuncids too */
@@ -1822,11 +1815,52 @@ get_relation_statistics(PlannerInfo *root, RelOptInfo *rel,
 			}
 		}
 
+		/*
+		 * Get join statistics fields if present.  Join stats have a non-null
+		 * stxjoinrels array listing the other participating relations.
+		 */
+		{
+			bool		isnull;
+			Datum		datum;
+
+			datum = SysCacheGetAttr(STATEXTOID, htup,
+									Anum_pg_statistic_ext_stxjoinrels, &isnull);
+			if (!isnull)
+			{
+				oidvector  *jrels = (oidvector *) DatumGetPointer(datum);
+				char	   *condstr;
+
+				for (int j = 0; j < jrels->dim1; j++)
+					joinrels = lappend_oid(joinrels,
+										   jrels->values[j]);
+
+				/*
+				 * The target columns are the Var nodes collected by
+				 * statext_decode_stxexprs (in stxexprs order); each carries
+				 * both its attnum and its 1-based relation ref in varno.
+				 */
+				target_keyvars = keyvars;
+
+				/* stxjoinconds */
+				datum = SysCacheGetAttrNotNull(STATEXTOID, htup,
+											   Anum_pg_statistic_ext_stxjoinconds);
+				condstr = TextDatumGetCString(datum);
+				joinconds = (List *) stringToNode(condstr);
+				pfree(condstr);
+			}
+		}
+
 		/* extract statistics for possible values of stxdinherit flag */
 
-		get_relation_statistics_worker(&stainfos, rel, statOid, true, keys, exprs);
+		get_relation_statistics_worker(&stainfos, rel, statOid, true,
+									   keys, exprs,
+									   joinrels, target_keyvars,
+									   joinconds);
 
-		get_relation_statistics_worker(&stainfos, rel, statOid, false, keys, exprs);
+		get_relation_statistics_worker(&stainfos, rel, statOid, false,
+									   keys, exprs,
+									   joinrels, target_keyvars,
+									   joinconds);
 
 		ReleaseSysCache(htup);
 		bms_free(keys);

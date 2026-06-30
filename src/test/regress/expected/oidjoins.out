@@ -24,6 +24,11 @@ begin
       end loop;
       cmd := cmd || ', unnest(' || quote_ident(fk.fkcols[nkeys]);
       cmd := cmd || ') as ' || quote_ident(fk.fkcols[nkeys]);
+      -- For pg_statistic_ext, include stxkind for join stats filtering
+      if fk.fktable = 'pg_statistic_ext'::regclass and
+         fk.fkcols = ARRAY['stxrelid', 'stxkeys'] then
+        cmd := cmd || ', stxkind, stxjoinrels';
+      end if;
       cmd := cmd || ' FROM ' || fk.fktable::text || ') fk WHERE ';
     else
       cmd := cmd || ' FROM ' || fk.fktable::text || ' fk WHERE ';
@@ -32,6 +37,13 @@ begin
       for i in 1 .. nkeys loop
         cmd := cmd || quote_ident(fk.fkcols[i]) || ' != 0 AND ';
       end loop;
+    end if;
+    -- Special case: For join statistics, stxkeys references attributes from
+    -- the other table (via stxkeyrefs), not from stxrelid.  Skip the FK
+    -- check for join stats where stxjoinrels is not null.
+    if fk.fktable = 'pg_statistic_ext'::regclass and
+       fk.fkcols = ARRAY['stxrelid', 'stxkeys'] then
+      cmd := cmd || 'stxjoinrels IS NULL AND ';
     end if;
     cmd := cmd || 'NOT EXISTS(SELECT 1 FROM ' || fk.pktable::text || ' pk WHERE ';
     for i in 1 .. nkeys loop
@@ -166,7 +178,6 @@ NOTICE:  checking pg_statistic {starelid,staattnum} => pg_attribute {attrelid,at
 NOTICE:  checking pg_statistic_ext {stxrelid} => pg_class {oid}
 NOTICE:  checking pg_statistic_ext {stxnamespace} => pg_namespace {oid}
 NOTICE:  checking pg_statistic_ext {stxowner} => pg_authid {oid}
-NOTICE:  checking pg_statistic_ext {stxrelid,stxkeys} => pg_attribute {attrelid,attnum}
 NOTICE:  checking pg_statistic_ext_data {stxoid} => pg_statistic_ext {oid}
 NOTICE:  checking pg_rewrite {ev_class} => pg_class {oid}
 NOTICE:  checking pg_trigger {tgrelid} => pg_class {oid}

@@ -1593,6 +1593,12 @@ ANALYZE virtual_gen_stats;
 SELECT * FROM check_estimated_rows('SELECT * FROM virtual_gen_stats WHERE c = 0 AND (3*b) = 0');
 SELECT * FROM check_estimated_rows('SELECT * FROM virtual_gen_stats WHERE d = 0 AND (d-2*a) = 0');
 
+SELECT expr FROM pg_stats_ext_exprs
+    WHERE statistics_name = 'virtual_gen_stats_1' AND NOT inherited;
+
+SELECT pg_get_statisticsobjdef(oid) FROM pg_statistic_ext
+    WHERE stxname = 'virtual_gen_stats_1';
+
 -- univariate statistics on individual virtual generated columns
 DROP STATISTICS virtual_gen_stats_1;
 
@@ -1901,10 +1907,18 @@ CREATE STATISTICS stats_ext_range (mcv)
    ON irange, (irange + '[4,10)'::int4range)
    FROM stats_ext_tbl_range;
 ANALYZE stats_ext_tbl_range;
-SELECT attnames, most_common_vals
+SELECT exprs, most_common_vals
    FROM pg_stats_ext
    WHERE statistics_name = 'stats_ext_range';
 SELECT range_length_histogram, range_empty_frac, range_bounds_histogram
    FROM pg_stats_ext_exprs
    WHERE statistics_name = 'stats_ext_range';
 DROP TABLE stats_ext_tbl_range;
+
+-- Verify user-written ordering of columns and expressions is preserved.
+-- Before PG20, columns were sorted by attnum with expressions at the end.
+-- Leave for pg_upgrade testing.
+CREATE STATISTICS tenk1_mcv (mcv) ON ten, (ten + four), four FROM tenk1;
+ANALYZE tenk1;
+SELECT pg_get_statisticsobjdef(oid) FROM pg_statistic_ext
+    WHERE stxname = 'tenk1_mcv';

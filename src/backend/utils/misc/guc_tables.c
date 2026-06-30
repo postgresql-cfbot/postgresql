@@ -31,6 +31,7 @@
 
 #include "access/commit_ts.h"
 #include "access/gin.h"
+#include "access/parallel.h"
 #include "access/slru.h"
 #include "access/toast_compression.h"
 #include "access/twophase.h"
@@ -516,6 +517,12 @@ static const struct config_enum_entry data_checksums_options[] = {
 	{"off", PG_DATA_CHECKSUM_OFF, true},
 	{"inprogress-on", PG_DATA_CHECKSUM_INPROGRESS_ON, true},
 	{"inprogress-off", PG_DATA_CHECKSUM_INPROGRESS_OFF, true},
+};
+
+static const struct config_enum_entry log_parallel_workers_options[] = {
+	{"none", LOG_PARALLEL_WORKERS_NONE, false},
+	{"all", LOG_PARALLEL_WORKERS_ALL, false},
+	{"shortage", LOG_PARALLEL_WORKERS_SHORTAGE, false},
 	{NULL, 0, false}
 };
 
@@ -571,6 +578,7 @@ int			log_min_duration_statement = -1;
 int			log_parameter_max_length = -1;
 int			log_parameter_max_length_on_error = 0;
 int			log_temp_files = -1;
+int			log_parallel_workers = LOG_PARALLEL_WORKERS_NONE;
 double		log_statement_sample_rate = 1.0;
 double		log_xact_sample_rate = 0;
 char	   *backtrace_functions;

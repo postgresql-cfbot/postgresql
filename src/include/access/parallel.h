@@ -55,6 +55,13 @@ typedef struct ParallelWorkerContext
 	shm_toc    *toc;
 } ParallelWorkerContext;
 
+typedef enum
+{
+	LOG_PARALLEL_WORKERS_NONE = 0,
+	LOG_PARALLEL_WORKERS_ALL,
+	LOG_PARALLEL_WORKERS_SHORTAGE,
+}			log_parallel_workers_option_list;
+
 extern PGDLLIMPORT volatile sig_atomic_t ParallelMessagePending;
 extern PGDLLIMPORT int ParallelWorkerNumber;
 extern PGDLLIMPORT bool InitializingParallelWorker;
@@ -79,5 +86,9 @@ extern void AtEOSubXact_Parallel(bool isCommit, SubTransactionId mySubId);
 extern void ParallelWorkerReportLastRecEnd(XLogRecPtr last_xlog_end);
 
 extern void ParallelWorkerMain(Datum main_arg);
+
+extern void LogParallelWorkersIfNeeded(int log_parallel_workers,
+									   int parallel_workers_to_launch,
+									   int parallel_workers_launched);
 
 #endif							/* PARALLEL_H */

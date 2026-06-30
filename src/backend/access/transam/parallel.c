@@ -1671,3 +1671,22 @@ LookupParallelWorkerFunction(const char *libraryname, const char *funcname)
 	return (parallel_worker_main_type)
 		load_external_function(libraryname, funcname, true, NULL);
 }
+
+/*
+ * If required, emit information about parallel workers usage in
+ * the logs.
+ */
+void
+LogParallelWorkersIfNeeded(int log_parallel_workers,
+						   int parallel_workers_to_launch,
+						   int parallel_workers_launched)
+{
+	if ((log_parallel_workers == LOG_PARALLEL_WORKERS_ALL &&
+		 parallel_workers_to_launch > 0) ||
+		(log_parallel_workers == LOG_PARALLEL_WORKERS_SHORTAGE &&
+		 parallel_workers_to_launch != parallel_workers_launched))
+		ereport(LOG,
+				(errmsg("launched %i parallel workers (planned: %i)",
+						parallel_workers_launched,
+						parallel_workers_to_launch)));
+}

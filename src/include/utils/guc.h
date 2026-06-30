@@ -303,6 +303,7 @@ extern PGDLLIMPORT int log_temp_files;
 extern PGDLLIMPORT double log_statement_sample_rate;
 extern PGDLLIMPORT double log_xact_sample_rate;
 extern PGDLLIMPORT char *backtrace_functions;
+extern PGDLLIMPORT int log_parallel_workers;
 
 extern PGDLLIMPORT int temp_file_limit;
 

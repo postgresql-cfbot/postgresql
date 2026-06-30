@@ -1120,6 +1120,10 @@ _gin_end_parallel(GinLeader *ginleader, GinBuildState *state)
 	/* Shutdown worker processes */
 	WaitForParallelWorkersToFinish(ginleader->pcxt);
 
+	LogParallelWorkersIfNeeded(log_parallel_workers,
+							   ginleader->pcxt->nworkers_to_launch,
+							   ginleader->pcxt->nworkers_launched);
+
 	/*
 	 * Next, accumulate WAL usage.  (This must wait for the workers to finish,
 	 * or we might get incomplete data.)

@@ -411,7 +411,7 @@ typedef struct PgStat_StatFuncEntry
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatFuncEntry;
 
-typedef struct PgStat_StatReplSlotEntry
+typedef struct PgStat_ReplSlotStats
 {
 	PgStat_Counter spill_txns;
 	PgStat_Counter spill_count;
@@ -422,6 +422,12 @@ typedef struct PgStat_StatReplSlotEntry
 	PgStat_Counter mem_exceeded_count;
 	PgStat_Counter total_txns;
 	PgStat_Counter total_bytes;
+	PgStat_Counter output_bytes;
+} PgStat_ReplSlotStats;
+
+typedef struct PgStat_StatReplSlotEntry
+{
+	PgStat_ReplSlotStats decoding_stats;
 	PgStat_Counter slotsync_skip_count;
 	TimestampTz slotsync_last_skip;
 	TimestampTz stat_reset_timestamp;
@@ -774,7 +780,7 @@ extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
 
 extern void pgstat_reset_replslot(const char *name);
 struct ReplicationSlot;
-extern void pgstat_report_replslot(struct ReplicationSlot *slot, const PgStat_StatReplSlotEntry *repSlotStat);
+extern void pgstat_report_replslot(struct ReplicationSlot *slot, const PgStat_ReplSlotStats *repSlotStat);
 extern void pgstat_report_replslotsync(struct ReplicationSlot *slot);
 extern void pgstat_create_replslot(struct ReplicationSlot *slot);
 extern void pgstat_acquire_replslot(struct ReplicationSlot *slot);

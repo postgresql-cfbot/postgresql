@@ -2188,22 +2188,21 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 	 */
 	if (params.index_cleanup == VACOPTVALUE_UNSPECIFIED)
 	{
-		StdRdOptIndexCleanup vacuum_index_cleanup;
+		pg_ternary vacuum_index_cleanup;
 
 		if (rel->rd_options == NULL)
-			vacuum_index_cleanup = STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO;
+			vacuum_index_cleanup = PG_TERNARY_UNSET;
 		else
 			vacuum_index_cleanup =
 				((StdRdOptions *) rel->rd_options)->vacuum_index_cleanup;
 
-		if (vacuum_index_cleanup == STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO)
+		if (vacuum_index_cleanup == PG_TERNARY_UNSET)
 			params.index_cleanup = VACOPTVALUE_AUTO;
-		else if (vacuum_index_cleanup == STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON)
+		else if (vacuum_index_cleanup == PG_TERNARY_TRUE)
 			params.index_cleanup = VACOPTVALUE_ENABLED;
 		else
 		{
-			Assert(vacuum_index_cleanup ==
-				   STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF);
+			Assert(vacuum_index_cleanup == PG_TERNARY_FALSE);
 			params.index_cleanup = VACOPTVALUE_DISABLED;
 		}
 	}

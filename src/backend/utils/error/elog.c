@@ -89,6 +89,7 @@
 #include "utils/pg_locale.h"
 #include "utils/ps_status.h"
 #include "utils/varlena.h"
+#include "utils/wait_event.h"
 
 
 /* In this module, access gettext() via err_gettext() */
@@ -2890,10 +2891,16 @@ write_syslog(int level, const char *line)
 
 			chunk_nr++;
 
+			/*
+			 * A nested log write briefly masks any outer wait event
+			 * (wait events are single-slot).
+			 */
+			pgstat_report_wait_start(WAIT_EVENT_SYSLOG_WRITE);
 			if (syslog_sequence_numbers)
 				syslog(level, "[%lu-%d] %s", seq, chunk_nr, buf);
 			else
 				syslog(level, "[%d] %s", chunk_nr, buf);
+			pgstat_report_wait_end();
 
 			line += buflen;
 			len -= buflen;
@@ -2902,10 +2909,12 @@ write_syslog(int level, const char *line)
 	else
 	{
 		/* message short enough */
+		pgstat_report_wait_start(WAIT_EVENT_SYSLOG_WRITE);
 		if (syslog_sequence_numbers)
 			syslog(level, "[%lu] %s", seq, line);
 		else
 			syslog(level, "%s", line);
+		pgstat_report_wait_end();
 	}
 }
 #endif							/* HAVE_SYSLOG */
@@ -2997,6 +3006,11 @@ write_eventlog(int level, const char *line, int len)
 		{
 			const WCHAR *utf16_const = utf16;
 
+			/*
+			 * A nested log write briefly masks any outer wait event
+			 * (wait events are single-slot).
+			 */
+			pgstat_report_wait_start(WAIT_EVENT_EVENTLOG_WRITE);
 			ReportEventW(evtHandle,
 						 eventlevel,
 						 0,
@@ -3006,12 +3020,14 @@ write_eventlog(int level, const char *line, int len)
 						 0,
 						 &utf16_const,
 						 NULL);
+			pgstat_report_wait_end();
 			/* XXX Try ReportEventA() when ReportEventW() fails? */
 
 			pfree(utf16);
 			return;
 		}
 	}
+	pgstat_report_wait_start(WAIT_EVENT_EVENTLOG_WRITE);
 	ReportEventA(evtHandle,
 				 eventlevel,
 				 0,
@@ -3021,6 +3037,7 @@ write_eventlog(int level, const char *line, int len)
 				 0,
 				 &line,
 				 NULL);
+	pgstat_report_wait_end();
 }
 #endif							/* WIN32 */
 
@@ -3062,11 +3079,14 @@ write_console(const char *line, int len)
 			DWORD		written;
 
 			stdHandle = GetStdHandle(STD_ERROR_HANDLE);
+			pgstat_report_wait_start(WAIT_EVENT_STDERR_WRITE);
 			if (WriteConsoleW(stdHandle, utf16, utf16len, &written, NULL))
 			{
+				pgstat_report_wait_end();
 				pfree(utf16);
 				return;
 			}
+			pgstat_report_wait_end();
 
 			/*
 			 * In case WriteConsoleW() failed, fall back to writing the
@@ -3089,8 +3109,13 @@ write_console(const char *line, int len)
 	/*
 	 * We ignore any error from write() here.  We have no useful way to report
 	 * it ... certainly whining on stderr isn't likely to be productive.
+	 *
+	 * A nested log write briefly masks any outer wait event (wait events are
+	 * single-slot).
 	 */
+	pgstat_report_wait_start(WAIT_EVENT_STDERR_WRITE);
 	rc = write(fileno(stderr), line, len);
+	pgstat_report_wait_end();
 	(void) rc;
 }
 
@@ -3903,6 +3928,14 @@ send_message_to_server_log(ErrorData *edata)
  * that are no more than that length, and send one chunk per write() call.
  * The collector process knows how to reassemble the chunks.
  *
+ * The actual file write happens later in the syslogger process
+ * (write_syslogger_file()), which has no PGPROC and so never shows up in
+ * pg_stat_activity.  A backend blocks here on the pipe write once the pipe
+ * fills, so this SysloggerWrite event on the backend side is where such a
+ * stall becomes visible.  As with the other logging writes, the wait is
+ * reported only around the leaf write() and uses the single-slot wait-event
+ * mechanism, so a log emitted while an outer event is set briefly masks it.
+ *
  * Because of the atomic write requirement, there are only two possible
  * results from write() here: -1 for failure, or the requested number of
  * bytes.  There is not really anything we can do about a failure; retry would
@@ -3937,7 +3970,9 @@ write_pipe_chunks(char *data, int len, int dest)
 		/* no need to set PIPE_PROTO_IS_LAST yet */
 		p.proto.len = PIPE_MAX_PAYLOAD;
 		memcpy(p.proto.data, data, PIPE_MAX_PAYLOAD);
+		pgstat_report_wait_start(WAIT_EVENT_SYSLOGGER_WRITE);
 		rc = write(fd, &p, PIPE_HEADER_SIZE + PIPE_MAX_PAYLOAD);
+		pgstat_report_wait_end();
 		(void) rc;
 		data += PIPE_MAX_PAYLOAD;
 		len -= PIPE_MAX_PAYLOAD;
@@ -3947,7 +3982,9 @@ write_pipe_chunks(char *data, int len, int dest)
 	p.proto.flags |= PIPE_PROTO_IS_LAST;
 	p.proto.len = len;
 	memcpy(p.proto.data, data, len);
+	pgstat_report_wait_start(WAIT_EVENT_SYSLOGGER_WRITE);
 	rc = write(fd, &p, PIPE_HEADER_SIZE + len);
+	pgstat_report_wait_end();
 	(void) rc;
 }
 

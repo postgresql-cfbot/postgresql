@@ -82,13 +82,13 @@ typedef enum
 } JsonTypeCategory;
 
 extern void json_categorize_type(Oid typoid, bool is_jsonb,
-								 JsonTypeCategory *tcategory, Oid *outfuncoid);
-extern void json_check_mutability(Oid typoid, bool is_jsonb,
-								  bool *has_mutable);
+								 JsonTypeCategory *tcategory,
+								 FmgrInfo *outflinfo);
+extern void json_check_mutability(Oid typoid, bool *has_mutable);
 extern Datum datum_to_json(Datum val, JsonTypeCategory tcategory,
-						   Oid outfuncoid);
+						   FmgrInfo *outflinfo);
 extern Datum datum_to_jsonb(Datum val, JsonTypeCategory tcategory,
-							Oid outfuncoid);
+							FmgrInfo *outflinfo);
 extern Datum jsonb_from_text(text *js, bool unique_keys);
 
 extern Datum json_populate_type(Datum json_val, Oid json_type,

@@ -706,3 +706,8 @@ SELECT JSON_OBJECT('a': JSON_OBJECTAGG('b': stable_one() RETURNING text) FORMAT 
 EXPLAIN (VERBOSE, COSTS OFF) SELECT JSON_OBJECT('a': JSON_OBJECTAGG('b': 1 RETURNING text) FORMAT JSON);
 SELECT JSON_OBJECT('a': JSON_OBJECTAGG('b': 1 RETURNING text) FORMAT JSON);
 DROP FUNCTION volatile_one, stable_one;
+
+-- JSON_ARRAY(ROW(...)) is not immutable, so it should be impossible to
+-- create a generated column.
+-- XXX: Currently, this is erroneously allowed.
+CREATE TABLE json_array_of_row (a int, j json GENERATED ALWAYS AS (JSON_ARRAY(ROW(a))) STORED);

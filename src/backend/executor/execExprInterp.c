@@ -4766,14 +4766,14 @@ ExecEvalJsonConstructor(ExprState *state, ExprEvalStep *op,
 		else
 		{
 			Datum		value = jcstate->arg_values[0];
-			Oid			outfuncid = jcstate->arg_type_cache[0].outfuncid;
+			FmgrInfo   *outflinfo = &jcstate->arg_type_cache[0].outflinfo;
 			JsonTypeCategory category = (JsonTypeCategory)
 				jcstate->arg_type_cache[0].category;
 
 			if (is_jsonb)
-				res = datum_to_jsonb(value, category, outfuncid);
+				res = datum_to_jsonb(value, category, outflinfo);
 			else
-				res = datum_to_json(value, category, outfuncid);
+				res = datum_to_json(value, category, outflinfo);
 		}
 	}
 	else if (ctor->type == JSCTOR_JSON_PARSE)

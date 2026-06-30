@@ -74,10 +74,27 @@ Datum
 int2out(PG_FUNCTION_ARGS)
 {
 	int16		arg1 = PG_GETARG_INT16(0);
-	char	   *result = (char *) palloc(7);	/* sign, 5 digits, '\0' */
+	int			maxlen = 7;		/* sign, 5 digits, '\0' */
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pg_itoa(arg1, result);
-	PG_RETURN_CSTRING(result);
+	if (buf)
+	{
+		int			offset;
+		int			len;
+
+		len = pg_itoa(arg1, pq_begincountedfield(buf, maxlen, &offset));
+		buf->len += len;
+		pq_endcountedfield(buf, offset);
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		char	   *result = (char *) palloc(maxlen);
+
+		pg_itoa(arg1, result);
+		PG_RETURN_CSTRING(result);
+	}
 }
 
 /*
@@ -98,11 +115,21 @@ Datum
 int2send(PG_FUNCTION_ARGS)
 {
 	int16		arg1 = PG_GETARG_INT16(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendint16(&buf, arg1);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendint16_field(buf, arg1);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendint16(&buf, arg1);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 /*
@@ -327,10 +354,36 @@ Datum
 int4out(PG_FUNCTION_ARGS)
 {
 	int32		arg1 = PG_GETARG_INT32(0);
-	char	   *result = (char *) palloc(12);	/* sign, 10 digits, '\0' */
+	int			maxlen = 12;	/* sign, 10 digits, '\0' */
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pg_ltoa(arg1, result);
-	PG_RETURN_CSTRING(result);
+	if (buf)
+	{
+		/* Optimized path for output functions called as part of a larger output. */
+		int			offset;
+		int			len;
+
+		/*
+		 * Construct string directly in buffer, we don't have to care about
+		 * encoding conversions, because we assume that every encoding
+		 * embodies ascii (XXX: Is that actually true with client encodings?).
+		 */
+		len = pg_ltoa(arg1, pq_begincountedfield(buf, maxlen, &offset));
+		buf->len += len;
+		pq_endcountedfield(buf, offset);
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		/*
+		 * Fallback path called in any other context.
+		 */
+		char	   *result = (char *) palloc(maxlen);
+
+		pg_ltoa(arg1, result);
+		PG_RETURN_CSTRING(result);
+	}
 }
 
 /*
@@ -351,11 +404,21 @@ Datum
 int4send(PG_FUNCTION_ARGS)
 {
 	int32		arg1 = PG_GETARG_INT32(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendint32(&buf, arg1);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendint32_field(buf, arg1);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendint32(&buf, arg1);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 

@@ -50,6 +50,8 @@ typedef struct
 	bool		typisvarlena;	/* is it varlena (ie possibly toastable)? */
 	int16		format;			/* format code for this column */
 	FmgrInfo	finfo;			/* Precomputed call info for output fn */
+	/* XXX: Would probably be faster to allocate "inline" */
+	FunctionCallInfo outstate;	/* Prepared FCI for slightly faster calls */
 } PrinttupAttrInfo;
 
 typedef struct
@@ -61,6 +63,7 @@ typedef struct
 	int			nattrs;
 	PrinttupAttrInfo *myinfo;	/* Cached info about each attr */
 	StringInfoData buf;			/* output buffer (*not* in tmpcontext) */
+	InOutContext inout;			/* FunctionCallInfo->context data */
 	MemoryContext tmpcontext;	/* Memory context for per-row workspace */
 } DR_printtup;
 
@@ -139,6 +142,9 @@ printtup_startup(DestReceiver *self, int operation, TupleDesc typeinfo)
 								  typeinfo,
 								  FetchPortalTargetList(portal),
 								  portal->formats);
+
+	myState->inout.type = T_InOutContext;
+	myState->inout.buf = &myState->buf;
 
 	/* ----------------
 	 * We could set up the derived attr info at this time, but we postpone it
@@ -291,6 +297,19 @@ printtup_prepare_info(DR_printtup *myState, TupleDesc typeinfo, int numAttrs)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 					 errmsg("unsupported format code: %d", format)));
+
+		/* both out and send funcs have one argument */
+		thisState->outstate = palloc0(SizeForFunctionCallInfo(1));
+		thisState->outstate->flinfo = &thisState->finfo;
+
+		/*
+		 * The idea here is that output functions can optionally use more
+		 * efficient paths if they see that the context is InOutContext, by
+		 * directly appending correctly formatted output into the output
+		 * buffer.
+		 */
+		thisState->outstate->context = (Node *) &myState->inout;
+		thisState->outstate->nargs = 1;
 	}
 }
 
@@ -353,23 +372,44 @@ printtup(TupleTableSlot *slot, DestReceiver *self)
 			VALGRIND_CHECK_MEM_IS_DEFINED(DatumGetPointer(attr),
 										  VARSIZE_ANY(DatumGetPointer(attr)));
 
+		/* fill in argument for output / send function */
+		thisState->outstate->args[0].value = attr;
+
 		if (thisState->format == 0)
 		{
 			/* Text output */
 			char	   *outputstr;
 
-			outputstr = OutputFunctionCall(&thisState->finfo, attr);
-			pq_sendcountedtext(buf, outputstr, strlen(outputstr));
+			outputstr = DatumGetCString(FunctionCallInvoke(thisState->outstate));
+			Assert(!thisState->outstate->isnull);
+
+			/*
+			 * If outputstr == NULL, the output function directly appended a
+			 * correctly formatted message.
+			 */
+			if (outputstr)
+				pq_sendcountedtext(buf, outputstr, strlen(outputstr));
 		}
 		else
 		{
 			/* Binary output */
+			Datum		outputdatum;
 			bytea	   *outputbytes;
 
-			outputbytes = SendFunctionCall(&thisState->finfo, attr);
-			pq_sendint32(buf, VARSIZE(outputbytes) - VARHDRSZ);
-			pq_sendbytes(buf, VARDATA(outputbytes),
-						 VARSIZE(outputbytes) - VARHDRSZ);
+			outputdatum = FunctionCallInvoke(thisState->outstate);
+			Assert(!thisState->outstate->isnull);
+
+			/*
+			 * If outputdatum == 0, the send function directly appended a
+			 * correctly formatted message.
+			 */
+			if (outputdatum)
+			{
+				outputbytes = DatumGetByteaP(outputdatum);
+				pq_sendint32(buf, VARSIZE(outputbytes) - VARHDRSZ);
+				pq_sendbytes(buf, VARDATA(outputbytes),
+							 VARSIZE(outputbytes) - VARHDRSZ);
+			}
 		}
 	}
 

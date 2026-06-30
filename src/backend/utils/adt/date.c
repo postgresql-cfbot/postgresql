@@ -180,7 +180,6 @@ Datum
 date_out(PG_FUNCTION_ARGS)
 {
 	DateADT		date = PG_GETARG_DATEADT(0);
-	char	   *result;
 	struct pg_tm tt,
 			   *tm = &tt;
 	char		buf[MAXDATELEN + 1];
@@ -194,8 +193,10 @@ date_out(PG_FUNCTION_ARGS)
 		EncodeDateOnly(tm, DateStyle, buf);
 	}
 
-	result = pstrdup(buf);
-	PG_RETURN_CSTRING(result);
+	if (pg_send_inout_text(fcinfo, buf, strlen(buf)))
+		PG_RETURN_VOID();
+	else
+		PG_RETURN_CSTRING(pstrdup(buf));
 }
 
 /*
@@ -1606,7 +1607,6 @@ Datum
 time_out(PG_FUNCTION_ARGS)
 {
 	TimeADT		time = PG_GETARG_TIMEADT(0);
-	char	   *result;
 	struct pg_tm tt,
 			   *tm = &tt;
 	fsec_t		fsec;
@@ -1615,8 +1615,10 @@ time_out(PG_FUNCTION_ARGS)
 	time2tm(time, tm, &fsec);
 	EncodeTimeOnly(tm, fsec, false, 0, DateStyle, buf);
 
-	result = pstrdup(buf);
-	PG_RETURN_CSTRING(result);
+	if (pg_send_inout_text(fcinfo, buf, strlen(buf)))
+		PG_RETURN_VOID();
+	else
+		PG_RETURN_CSTRING(pstrdup(buf));
 }
 
 /*
@@ -1652,11 +1654,21 @@ Datum
 time_send(PG_FUNCTION_ARGS)
 {
 	TimeADT		time = PG_GETARG_TIMEADT(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendint64(&buf, time);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendint64_field(buf, time);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendint64(&buf, time);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 Datum

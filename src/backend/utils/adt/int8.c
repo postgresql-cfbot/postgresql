@@ -795,6 +795,18 @@ int8inc_support(PG_FUNCTION_ARGS)
 		MonotonicFunction monotonic = MONOTONICFUNC_NONE;
 		int			frameOptions = req->window_clause->frameOptions;
 
+		/*
+		 * Frame exclusion is applied after the frame bounds have been
+		 * determined.  The excluded rows can depend on the current row or its
+		 * peers, so the count is not guaranteed to follow the monotonic
+		 * behavior implied by the bounds alone.
+		 */
+		if (frameOptions & FRAMEOPTION_EXCLUSION)
+		{
+			req->monotonic = MONOTONICFUNC_NONE;
+			PG_RETURN_POINTER(req);
+		}
+
 		/* No ORDER BY clause then all rows are peers */
 		if (req->window_clause->orderClause == NIL)
 			monotonic = MONOTONICFUNC_BOTH;

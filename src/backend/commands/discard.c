@@ -19,6 +19,7 @@
 #include "commands/discard.h"
 #include "commands/prepare.h"
 #include "commands/sequence.h"
+#include "commands/session_variable.h"
 #include "storage/lock.h"
 #include "utils/guc.h"
 #include "utils/portal.h"
@@ -47,6 +48,7 @@ DiscardCommand(DiscardStmt *stmt, bool isTopLevel)
 
 		case DISCARD_TEMP:
 			ResetTempTableNamespace();
+			ResetSessionVariables();
 			break;
 
 		default:
@@ -76,4 +78,5 @@ DiscardAll(bool isTopLevel)
 	ResetPlanCache();
 	ResetTempTableNamespace();
 	ResetSequenceCaches();
+	ResetSessionVariables();
 }

@@ -379,6 +379,8 @@ typedef struct Const
  *				of the `paramid' field contain the SubLink's subLinkId, and
  *				the low-order 16 bits contain the column number.  (This type
  *				of Param is also converted to PARAM_EXEC during planning.)
+ *		PARAM_VARIABLE:  The parameter is a reference to a session variable
+ *				(paramvarname holds the variable's name).
  */
 typedef enum ParamKind
 {
@@ -386,6 +388,7 @@ typedef enum ParamKind
 	PARAM_EXEC,
 	PARAM_SUBLINK,
 	PARAM_MULTIEXPR,
+	PARAM_VARIABLE,
 } ParamKind;
 
 typedef struct Param
@@ -400,6 +403,8 @@ typedef struct Param
 	int32		paramtypmod;
 	/* OID of collation, or InvalidOid if none */
 	Oid			paramcollid;
+	/* OID of used session variable or InvalidOid if none */
+	char	   *paramvarname pg_node_attr(query_jumble_ignore);
 	/* token location, or -1 if unknown */
 	ParseLoc	location;
 } Param;

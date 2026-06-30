@@ -1972,6 +1972,16 @@ find_expr_references_walker(Node *node,
 	{
 		Param	   *param = (Param *) node;
 
+		/*
+		* catalog less session variable variable cannot be used in persistent
+		* catalog based object.
+		*/
+		if (param->paramkind == PARAM_VARIABLE)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("session variable \"%s\" cannot be referenced in a catalog object",
+							param->paramvarname)));
+
 		/* A parameter must depend on the parameter's datatype */
 		add_object_address(TypeRelationId, param->paramtype, 0,
 						   context->addrs);

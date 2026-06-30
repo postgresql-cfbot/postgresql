@@ -271,6 +271,12 @@ typedef struct PlannerGlobal
 	/* extension state */
 	void	  **extension_state pg_node_attr(read_write_ignore);
 	int			extension_state_allocated;
+
+	/* list of used session variables */
+	List	   *sessionVariables;
+
+	/* name of session variable used like target of LET command */
+	char	   *resultVariable;
 } PlannerGlobal;
 
 /* macro for fetching the Plan associated with a SubPlan node */
@@ -641,6 +647,8 @@ struct PlannerInfo
 	bool		hasRecursion;
 	/* true if a planner extension may replan this subquery */
 	bool		assumeReplanning;
+	/* true if session variables were used */
+	bool		hasSessionVariables;
 
 	/*
 	 * The rangetable index for the RTE_GROUP RTE, or 0 if there is no

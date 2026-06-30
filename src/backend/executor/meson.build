@@ -64,6 +64,7 @@ backend_sources += files(
   'nodeWindowAgg.c',
   'nodeWorktablescan.c',
   'spi.c',
+  'svariableReceiver.c',
   'tqueue.c',
   'tstoreReceiver.c',
 )

@@ -18,6 +18,7 @@
 #include "access/htup_details.h"
 #include "catalog/pg_aggregate.h"
 #include "catalog/pg_type.h"
+#include "commands/session_variable.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -79,6 +80,7 @@ static Node *transformWholeRowRef(ParseState *pstate,
 static Node *transformIndirection(ParseState *pstate, A_Indirection *ind);
 static Node *transformTypeCast(ParseState *pstate, TypeCast *tc);
 static Node *transformCollateClause(ParseState *pstate, CollateClause *c);
+static Node *transformVariableFence(ParseState *pstate, VariableFence *vf);
 static Node *transformJsonObjectConstructor(ParseState *pstate,
 											JsonObjectConstructor *ctor);
 static Node *transformJsonArrayConstructor(ParseState *pstate,
@@ -373,6 +375,10 @@ transformExprRecurse(ParseState *pstate, Node *expr)
 			result = transformJsonFuncExpr(pstate, (JsonFuncExpr *) expr);
 			break;
 
+		case T_VariableFence:
+			result = transformVariableFence(pstate, (VariableFence *) expr);
+			break;
+
 		default:
 			/* should not reach here */
 			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(expr));
@@ -590,6 +596,9 @@ transformColumnRef(ParseState *pstate, ColumnRef *cref)
 			break;
 		case EXPR_KIND_FOR_PORTION:
 			err = _("cannot use column reference in FOR PORTION OF expression");
+			break;
+		case EXPR_KIND_LET_TARGET:
+			err = _("cannot use column reference as target of LET command");
 			break;
 
 			/*
@@ -918,6 +927,122 @@ transformParamRef(ParseState *pstate, ParamRef *pref)
 				 parser_errposition(pstate, pref->location)));
 
 	return result;
+}
+
+/*
+ * Returns true if the given expression kind is valid for session variables.
+ * Session variables can be used everywhere where external parameters can be
+ * used.  Session variables are not allowed in DDL commands or in constraints.
+ *
+ * An identifier can be parsed as a session variable only for expression kinds
+ * where session variables are allowed.  This is the primary usage of this
+ * function.
+ *
+ * The second usage of this function is to decide whether a "column does not
+ * exist" or a "column or variable does not exist" error message should be
+ * printed.  When we are in an expression where session variables cannot be
+ * used, we raise the first form of error message.
+ */
+static bool
+expr_kind_allows_session_variables(ParseExprKind p_expr_kind)
+{
+	bool		result = false;
+
+	switch (p_expr_kind)
+	{
+		case EXPR_KIND_NONE:
+			Assert(false);		/* can't happen */
+			return false;
+
+			/* session variables allowed */
+		case EXPR_KIND_OTHER:
+		case EXPR_KIND_JOIN_ON:
+		case EXPR_KIND_FROM_SUBSELECT:
+		case EXPR_KIND_FROM_FUNCTION:
+		case EXPR_KIND_WHERE:
+		case EXPR_KIND_HAVING:
+		case EXPR_KIND_FILTER:
+		case EXPR_KIND_WINDOW_PARTITION:
+		case EXPR_KIND_WINDOW_ORDER:
+		case EXPR_KIND_WINDOW_FRAME_RANGE:
+		case EXPR_KIND_WINDOW_FRAME_ROWS:
+		case EXPR_KIND_WINDOW_FRAME_GROUPS:
+		case EXPR_KIND_SELECT_TARGET:
+		case EXPR_KIND_UPDATE_TARGET:
+		case EXPR_KIND_UPDATE_SOURCE:
+		case EXPR_KIND_MERGE_WHEN:
+		case EXPR_KIND_MERGE_RETURNING:
+		case EXPR_KIND_GROUP_BY:
+		case EXPR_KIND_ORDER_BY:
+		case EXPR_KIND_DISTINCT_ON:
+		case EXPR_KIND_LIMIT:
+		case EXPR_KIND_OFFSET:
+		case EXPR_KIND_RETURNING:
+		case EXPR_KIND_VALUES:
+		case EXPR_KIND_VALUES_SINGLE:
+		case EXPR_KIND_PROPGRAPH_PROPERTY:
+		case EXPR_KIND_FOR_PORTION:
+		case EXPR_KIND_LET_TARGET:
+			result = true;
+			break;
+
+			/* session variables not allowed */
+		case EXPR_KIND_INSERT_TARGET:
+		case EXPR_KIND_EXECUTE_PARAMETER:
+		case EXPR_KIND_CALL_ARGUMENT:
+		case EXPR_KIND_CHECK_CONSTRAINT:
+		case EXPR_KIND_DOMAIN_CHECK:
+		case EXPR_KIND_COLUMN_DEFAULT:
+		case EXPR_KIND_FUNCTION_DEFAULT:
+		case EXPR_KIND_INDEX_EXPRESSION:
+		case EXPR_KIND_INDEX_PREDICATE:
+		case EXPR_KIND_STATS_EXPRESSION:
+		case EXPR_KIND_TRIGGER_WHEN:
+		case EXPR_KIND_PARTITION_BOUND:
+		case EXPR_KIND_PARTITION_EXPRESSION:
+		case EXPR_KIND_GENERATED_COLUMN:
+		case EXPR_KIND_JOIN_USING:
+		case EXPR_KIND_CYCLE_MARK:
+		case EXPR_KIND_ALTER_COL_TRANSFORM:
+		case EXPR_KIND_POLICY:
+		case EXPR_KIND_COPY_WHERE:
+			result = false;
+			break;
+	}
+
+	return result;
+}
+
+static Node *
+transformVariableFence(ParseState *pstate, VariableFence *vf)
+{
+	Param	   *param;
+	Oid			typid;
+	int32		typmod;
+	Oid			collid;
+
+	/* VariableFence can be used only in context when variables are supported */
+	if (!expr_kind_allows_session_variables(pstate->p_expr_kind))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("session variable reference is not supported here"),
+				 parser_errposition(pstate, vf->location)));
+
+	get_session_variable_type_typmod_collid(vf->varname,
+											&typid, &typmod, &collid);
+
+
+	param = makeNode(Param);
+
+	param->paramkind = PARAM_VARIABLE;
+	param->paramvarname = pstrdup(vf->varname);
+	param->paramtype = typid;
+	param->paramtypmod = typmod;
+	param->paramcollid = collid;
+
+	pstate->p_hasSessionVariables = true;
+
+	return (Node *) param;
 }
 
 /* Test whether an a_expr is a plain NULL constant or not */
@@ -1891,6 +2016,9 @@ transformSubLink(ParseState *pstate, SubLink *sublink)
 			break;
 		case EXPR_KIND_FOR_PORTION:
 			err = _("cannot use subquery in FOR PORTION OF expression");
+			break;
+		case EXPR_KIND_LET_TARGET:
+			err = _("cannot use subquery as a target of LET command");
 			break;
 
 			/*
@@ -3255,6 +3383,8 @@ ParseExprKindName(ParseExprKind exprKind)
 			return "property definition expression";
 		case EXPR_KIND_FOR_PORTION:
 			return "FOR PORTION OF";
+		case EXPR_KIND_LET_TARGET:
+			return "LET";
 
 			/*
 			 * There is intentionally no default: case here, so that the

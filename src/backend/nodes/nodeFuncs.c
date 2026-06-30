@@ -1688,6 +1688,9 @@ exprLocation(const Node *expr)
 		case T_ParamRef:
 			loc = ((const ParamRef *) expr)->location;
 			break;
+		case T_VariableFence:
+			loc = ((const VariableFence *) expr)->location;
+			break;
 		case T_A_Const:
 			loc = ((const A_Const *) expr)->location;
 			break;
@@ -4490,6 +4493,14 @@ raw_expression_tree_walker_impl(Node *node,
 					return true;
 			}
 			break;
+		case T_LetStmt:
+			{
+				LetStmt    *stmt = (LetStmt *) node;
+
+				if (WALK(stmt->query))
+					return true;
+			}
+			break;
 		case T_PLAssignStmt:
 			{
 				PLAssignStmt *stmt = (PLAssignStmt *) node;
@@ -4853,6 +4864,9 @@ raw_expression_tree_walker_impl(Node *node,
 				if (WALK(gp->whereClause))
 					return true;
 			}
+			break;
+		case T_VariableFence:
+			/* we assume the fields contain nothing interesting */
 			break;
 		default:
 			elog(ERROR, "unrecognized node type: %d",

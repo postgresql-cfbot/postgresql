@@ -718,9 +718,10 @@ vacuum(List *relations, const VacuumParams *params, BufferAccessStrategy bstrate
  */
 bool
 vacuum_is_permitted_for_relation(Oid relid, Form_pg_class reltuple,
-								 uint32 options)
+								 uint32 options, bool missing_ok)
 {
 	char	   *relname;
+	bool		is_missing = false;
 
 	Assert((options & (VACOPT_VACUUM | VACOPT_ANALYZE)) != 0);
 
@@ -733,8 +734,19 @@ vacuum_is_permitted_for_relation(Oid relid, Form_pg_class reltuple,
 	 */
 	if ((object_ownercheck(DatabaseRelationId, MyDatabaseId, GetUserId()) &&
 		 !reltuple->relisshared) ||
-		pg_class_aclcheck(relid, GetUserId(), ACL_MAINTAIN) == ACLCHECK_OK)
+		pg_class_aclcheck_ext(relid, GetUserId(), ACL_MAINTAIN,
+							  missing_ok ? &is_missing : NULL) == ACLCHECK_OK)
 		return true;
+
+	/*
+	 * If the relation was concurrently dropped, nothing to do.  Note that
+	 * this is only reachable when the caller specified missing_ok.
+	 */
+	if (is_missing)
+	{
+		Assert(missing_ok);
+		return false;
+	}
 
 	relname = NameStr(reltuple->relname);
 
@@ -956,7 +968,7 @@ expand_vacuum_rel(VacuumRelation *vrel, MemoryContext vac_context,
 		 * Make a returnable VacuumRelation for this rel if the user has the
 		 * required privileges.
 		 */
-		if (vacuum_is_permitted_for_relation(relid, classForm, options))
+		if (vacuum_is_permitted_for_relation(relid, classForm, options, false))
 		{
 			oldcontext = MemoryContextSwitchTo(vac_context);
 			vacrels = lappend(vacrels, makeVacuumRelation(vrel->relation,
@@ -1069,7 +1081,7 @@ get_all_vacuum_rels(MemoryContext vac_context, int options)
 			continue;
 
 		/* check permissions of relation */
-		if (!vacuum_is_permitted_for_relation(relid, classForm, options))
+		if (!vacuum_is_permitted_for_relation(relid, classForm, options, true))
 			continue;
 
 		/*
@@ -2115,7 +2127,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 	 */
 	if (!vacuum_is_permitted_for_relation(priv_relid,
 										  rel->rd_rel,
-										  params.options & ~VACOPT_ANALYZE))
+										  params.options & ~VACOPT_ANALYZE,
+										  false))
 	{
 		relation_close(rel, lmode);
 		PopActiveSnapshot();

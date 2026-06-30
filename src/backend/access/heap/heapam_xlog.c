@@ -16,6 +16,7 @@
 
 #include "access/bufmask.h"
 #include "access/heapam.h"
+#include "access/heapam_xlog_dfor.h"
 #include "access/visibilitymap.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
@@ -105,12 +106,26 @@ heap_xlog_prune_freeze(XLogReaderState *record)
 		OffsetNumber *frz_offsets;
 		char	   *dataptr = XLogRecGetBlockData(record, 0, &datalen);
 		bool		do_prune;
+		char		*cursor PG_USED_FOR_ASSERTS_ONLY;
 
-		heap_xlog_deserialize_prune_and_freeze(dataptr, xlrec.flags,
+		/*
+		 * Provide DFoR unpacking with outer buffers. 3 buffer parts are
+		 * for saving the redirected, the dead and the unused tuple offsets.
+		 * Additional three parts are for internal needs of the dfor_unpack
+		 * function.
+		 */
+		union
+		{
+			int32 align_me; /* Forces 4-byte alignment */
+			uint8 dfor_buf[6 * DFOR_BUF_PART_SIZE];
+		} dfor_buf_aligned;
+
+		cursor = heap_xlog_deserialize_prune_and_freeze(dataptr, xlrec.flags,
 											   &nplans, &plans, &frz_offsets,
 											   &nredirected, &redirected,
 											   &ndead, &nowdead,
-											   &nunused, &nowunused);
+											   &nunused, &nowunused,
+											   dfor_buf_aligned.dfor_buf);
 
 		do_prune = nredirected > 0 || ndead > 0 || nunused > 0;
 
@@ -156,7 +171,7 @@ heap_xlog_prune_freeze(XLogReaderState *record)
 		}
 
 		/* There should be no more data */
-		Assert((char *) frz_offsets == dataptr + datalen);
+		Assert(cursor == dataptr + datalen);
 
 		/*
 		 * The critical integrity requirement here is that we must never end

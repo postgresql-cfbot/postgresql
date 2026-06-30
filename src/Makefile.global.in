@@ -19,7 +19,7 @@
 #
 # Meta configuration
 
-standard_targets = all install installdirs uninstall clean distclean coverage check checkprep installcheck init-po update-po
+standard_targets = all install installdirs uninstall clean distclean coverage check checkprep installcheck check-unit init-po update-po
 # these targets should recurse even into subdirectories not being built:
 standard_always_targets = clean distclean
 

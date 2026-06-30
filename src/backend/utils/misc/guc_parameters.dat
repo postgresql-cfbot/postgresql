@@ -3506,6 +3506,13 @@
   boot_val => 'false',
 },
 
+{ name => 'wal_prune_dfor_compression', type => 'bool', context => 'PGC_SUSET', group => 'WAL_SETTINGS',
+  short_desc => 'Compress dead and unused offset arrays at PRUNE/FREEZE WAL records using DFOR.',
+  long_desc => 'Enables compression of dead and unused OffsetNumber arrays stored in heap PRUNE/FREEZE WAL records using customised delta frame-of-reference encoding.',
+  variable => 'wal_prune_dfor_compression',
+  boot_val => 'true'
+},
+
 { name => 'wal_receiver_create_temp_slot', type => 'bool', context => 'PGC_SIGHUP', group => 'REPLICATION_STANDBY',
   short_desc => 'Sets whether a WAL receiver should create a temporary replication slot if no permanent slot is configured.',
   variable => 'wal_receiver_create_temp_slot',

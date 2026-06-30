@@ -15,6 +15,7 @@
 #include "postgres.h"
 
 #include "access/heapam_xlog.h"
+#include "access/heapam_xlog_dfor.h"
 #include "access/rmgrdesc_utils.h"
 #include "access/visibilitymapdefs.h"
 #include "storage/standbydefs.h"
@@ -102,17 +103,19 @@ plan_elem_desc(StringInfo buf, void *plan, void *data)
  * This is in heapdesc.c so it can be shared between heap2_redo and heap2_desc
  * code, the latter of which is used in frontend (pg_waldump) code.
  */
-void
+char *
 heap_xlog_deserialize_prune_and_freeze(char *cursor, uint16 flags,
 									   int *nplans, xlhp_freeze_plan **plans,
 									   OffsetNumber **frz_offsets,
 									   int *nredirected, OffsetNumber **redirected,
 									   int *ndead, OffsetNumber **nowdead,
-									   int *nunused, OffsetNumber **nowunused)
+									   int *nunused, OffsetNumber **nowunused,
+									   uint8 dfor_buf[])
 {
 	if (flags & XLHP_HAS_FREEZE_PLANS)
 	{
-		xlhp_freeze_plans *freeze_plans = (xlhp_freeze_plans *) cursor;
+		int nfrozen = 0;
+		xlhp_freeze_plans *freeze_plans = (xlhp_freeze_plans *)cursor;
 
 		*nplans = freeze_plans->nplans;
 		Assert(*nplans > 0);
@@ -120,6 +123,20 @@ heap_xlog_deserialize_prune_and_freeze(char *cursor, uint16 flags,
 
 		cursor += offsetof(xlhp_freeze_plans, plans);
 		cursor += sizeof(xlhp_freeze_plan) * *nplans;
+
+		if(flags & XLHP_DFOR_COMPRESSED)
+		{
+			heap_xlog_deserialize_dfor(&cursor, &nfrozen, frz_offsets,
+									   dfor_buf);
+		}
+		else
+		{
+			for (int i = 0; i < *nplans; i++)
+				nfrozen += (*plans)[i].ntuples;
+
+			*frz_offsets = (OffsetNumber *) cursor;
+			cursor += sizeof(OffsetNumber) * nfrozen;
+		}
 	}
 	else
 	{
@@ -129,14 +146,25 @@ heap_xlog_deserialize_prune_and_freeze(char *cursor, uint16 flags,
 
 	if (flags & XLHP_HAS_REDIRECTIONS)
 	{
-		xlhp_prune_items *subrecord = (xlhp_prune_items *) cursor;
+		if(flags & XLHP_DFOR_COMPRESSED)
+		{
+			heap_xlog_deserialize_dfor(&cursor, nredirected, redirected,
+									   dfor_buf + DFOR_BUF_PART_SIZE);
+			Assert(*nredirected % 2 == 0);
+			*nredirected /= 2;
+		}
+		else
+		{
+			xlhp_prune_items *subrecord = (xlhp_prune_items *) cursor;
 
-		*nredirected = subrecord->ntargets;
-		Assert(*nredirected > 0);
-		*redirected = &subrecord->data[0];
+			*nredirected = subrecord->ntargets;
+			Assert(*nredirected > 0);
+			*redirected = &subrecord->data[0];
 
-		cursor += offsetof(xlhp_prune_items, data);
-		cursor += sizeof(OffsetNumber[2]) * *nredirected;
+			cursor += offsetof(xlhp_prune_items, data);
+			cursor += sizeof(OffsetNumber[2]) * *nredirected;
+
+		}
 	}
 	else
 	{
@@ -146,14 +174,22 @@ heap_xlog_deserialize_prune_and_freeze(char *cursor, uint16 flags,
 
 	if (flags & XLHP_HAS_DEAD_ITEMS)
 	{
-		xlhp_prune_items *subrecord = (xlhp_prune_items *) cursor;
+		if(flags & XLHP_DFOR_COMPRESSED)
+		{
+			heap_xlog_deserialize_dfor(&cursor, ndead, nowdead,
+									   dfor_buf + 2 * DFOR_BUF_PART_SIZE);
+		}
+		else
+		{
+			xlhp_prune_items *subrecord = (xlhp_prune_items *) cursor;
 
-		*ndead = subrecord->ntargets;
-		Assert(*ndead > 0);
-		*nowdead = subrecord->data;
+			*ndead = subrecord->ntargets;
+			Assert(*ndead > 0);
+			*nowdead = subrecord->data;
 
-		cursor += offsetof(xlhp_prune_items, data);
-		cursor += sizeof(OffsetNumber) * *ndead;
+			cursor += offsetof(xlhp_prune_items, data);
+			cursor += sizeof(OffsetNumber) * *ndead;
+		}
 	}
 	else
 	{
@@ -163,22 +199,29 @@ heap_xlog_deserialize_prune_and_freeze(char *cursor, uint16 flags,
 
 	if (flags & XLHP_HAS_NOW_UNUSED_ITEMS)
 	{
-		xlhp_prune_items *subrecord = (xlhp_prune_items *) cursor;
+		if (flags & XLHP_DFOR_COMPRESSED)
+		{
+			heap_xlog_deserialize_dfor(&cursor, nunused, nowunused,
+									   dfor_buf + 3 * DFOR_BUF_PART_SIZE);
+		}
+		else
+		{
+			xlhp_prune_items *subrecord = (xlhp_prune_items *) cursor;
 
-		*nunused = subrecord->ntargets;
-		Assert(*nunused > 0);
-		*nowunused = subrecord->data;
+			*nunused = subrecord->ntargets;
+			Assert(*nunused > 0);
+			*nowunused = subrecord->data;
 
-		cursor += offsetof(xlhp_prune_items, data);
-		cursor += sizeof(OffsetNumber) * *nunused;
+			cursor += offsetof(xlhp_prune_items, data);
+			cursor += sizeof(OffsetNumber) * *nunused;
+		}
 	}
 	else
 	{
 		*nunused = 0;
 		*nowunused = NULL;
 	}
-
-	*frz_offsets = (OffsetNumber *) cursor;
+	return cursor;
 }
 
 void
@@ -309,13 +352,16 @@ heap2_desc(StringInfo buf, XLogReaderState *record)
 			xlhp_freeze_plan *plans;
 			OffsetNumber *frz_offsets;
 
+			uint8 dfor_buf[5 * DFOR_BUF_PART_SIZE];
+
 			char	   *cursor = XLogRecGetBlockData(record, 0, &datalen);
 
 			heap_xlog_deserialize_prune_and_freeze(cursor, xlrec->flags,
 												   &nplans, &plans, &frz_offsets,
 												   &nredirected, &redirected,
 												   &ndead, &nowdead,
-												   &nunused, &nowunused);
+												   &nunused, &nowunused,
+												   dfor_buf);
 
 			appendStringInfo(buf, ", nplans: %u, nredirected: %u, ndead: %u, nunused: %u",
 							 nplans, nredirected, ndead, nunused);

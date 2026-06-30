@@ -15,6 +15,7 @@
 #define HEAPAM_XLOG_H
 
 #include "access/htup.h"
+#include "access/htup_details.h"
 #include "access/xlogreader.h"
 #include "lib/stringinfo.h"
 #include "storage/buf.h"
@@ -341,6 +342,8 @@ typedef struct xl_heap_prune
 #define		XLHP_VM_ALL_VISIBLE			(1 << 8)
 #define		XLHP_VM_ALL_FROZEN			(1 << 9)
 
+#define		XLHP_DFOR_COMPRESSED		(1 << 10)
+
 /*
  * xlhp_freeze_plan describes how to freeze a group of one or more heap tuples
  * (appears in xl_heap_prune's xlhp_freeze_plans sub-record)
@@ -489,11 +492,12 @@ extern const char *heap2_identify(uint8 info);
 extern void heap_xlog_logical_rewrite(XLogReaderState *r);
 
 /* in heapdesc.c, so it can be shared between frontend/backend code */
-extern void heap_xlog_deserialize_prune_and_freeze(char *cursor, uint16 flags,
+extern char * heap_xlog_deserialize_prune_and_freeze(char *cursor, uint16 flags,
 												   int *nplans, xlhp_freeze_plan **plans,
 												   OffsetNumber **frz_offsets,
 												   int *nredirected, OffsetNumber **redirected,
 												   int *ndead, OffsetNumber **nowdead,
-												   int *nunused, OffsetNumber **nowunused);
+												   int *nunused, OffsetNumber **nowunused,
+												   uint8 dfor_buf[]);
 
 #endif							/* HEAPAM_XLOG_H */

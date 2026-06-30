@@ -1,5 +1,11 @@
 # Copyright (c) 2022-2026, PostgreSQL Global Development Group
 
+dfor_sources = files(
+  'bitpack_u16.c',
+  'dfor_u16.c',
+  'vect_u16.c'
+)
+
 backend_sources += files(
   'bipartite_match.c',
   'bloomfilter.c',
@@ -11,3 +17,5 @@ backend_sources += files(
   'pairingheap.c',
   'rbtree.c',
 )
+
+backend_sources += dfor_sources

@@ -10,6 +10,7 @@ pg_waldump_sources = files(
 pg_waldump_sources += rmgr_desc_sources
 pg_waldump_sources += xlogreader_sources
 pg_waldump_sources += files('../../backend/access/transam/xlogstats.c')
+pg_waldump_sources += dfor_sources
 
 if host_system == 'windows'
   pg_waldump_sources += rc_bin_gen.process(win32ver_rc, extra_args: [

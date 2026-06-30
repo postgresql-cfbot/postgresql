@@ -16,6 +16,7 @@
 
 #include "access/heapam.h"
 #include "access/heapam_xlog.h"
+#include "access/heapam_xlog_dfor.h"
 #include "access/htup_details.h"
 #include "access/multixact.h"
 #include "access/transam.h"
@@ -237,7 +238,6 @@ static bool heap_page_will_freeze(bool did_tuple_hint_fpi, bool do_prune, bool d
 								  PruneState *prstate);
 static bool heap_page_will_set_vm(PruneState *prstate, PruneReason reason,
 								  bool do_prune, bool do_freeze);
-
 
 /*
  * Optionally prune and repair fragmentation in the specified page.
@@ -2530,6 +2530,24 @@ heap_log_freeze_plan(HeapTupleFreeze *tuples, int ntuples,
 }
 
 /*
+ * Comparator for offsets.
+ */
+static int
+offset_cmp(const void *arg1, const void *arg2)
+{
+	const OffsetNumber *offset1 = arg1;
+	const OffsetNumber *offset2 = arg2;
+	return (*offset1 > *offset2) - (*offset1 < *offset2);
+}
+
+#define ST_SORT sort_offsets
+#define ST_ELEMENT_TYPE_VOID
+#define ST_COMPARE(a, b) offset_cmp(a, b)
+#define ST_SCOPE static
+#define ST_DEFINE
+#include "lib/sort_template.h"
+
+/*
  * Write an XLOG_HEAP2_PRUNE* WAL record
  *
  * This is used for several different page maintenance operations:
@@ -2586,10 +2604,44 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 	bool		do_set_vm = vmflags & VISIBILITYMAP_VALID_BITS;
 	bool		heap_fpi_allowed = true;
 
+	dfor_meta_t frozen_meta = {0};
+	dfor_meta_t redirected_meta = {0};
+	dfor_meta_t dead_meta = {0};
+	dfor_meta_t unused_meta = {0};
+
+	uint8 frozen_meta_pack[MAX_PACKED_META_SIZE];
+	uint8 redirected_meta_pack[MAX_PACKED_META_SIZE];
+	uint8 dead_meta_pack[MAX_PACKED_META_SIZE];
+	uint8 unused_meta_pack[MAX_PACKED_META_SIZE];
+
+	/*
+	 * Since this code is run in a critical section we can't use dynamic
+	 * allocation during DFoR packing, but we can use buffers allocated in the
+	 * stack. We need at maximum:
+	 * 1) 4 * DFOR_BUF_PART_SIZE
+	 *        - for 4 packed sequences: frozen, redirected, dead, unused
+	 * 2) 3 * DFOR_BUF_PART_SIZE
+	 * 		  - for internal needs of the dfor_pack function.
+	 *
+	 * Overall, 7 * DFOR_BUF_PART_SIZE
+	 */
+	union
+	{
+		int32 align_me; /* Forces 4-byte alignment */
+		uint8 dfor_buf[7 * DFOR_BUF_PART_SIZE];
+	} dfor_buf_aligned;
+
 	Assert((vmflags & VISIBILITYMAP_VALID_BITS) == vmflags);
 
 	xlrec.flags = 0;
 	regbuf_flags_heap = REGBUF_STANDARD;
+
+	/* Heuristically estimated threshold for turning on DFoR compression */
+	if (wal_prune_dfor_compression &&
+		(nredirected > 5 || ndead > 9 || nunused > 9 || nfrozen > 9))
+	{
+		xlrec.flags |= XLHP_DFOR_COMPRESSED;
+	}
 
 	/*
 	 * We can avoid an FPI of the heap page if the only modification we are
@@ -2622,6 +2674,10 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 	if (do_set_vm)
 		XLogRegisterBuffer(1, vmbuffer, 0);
 
+	/*
+	 * xlhp_freeze_plans is array of structures and is not a sequence
+	 * of integers, that is why we cannot use DFoR compression here.
+	 */
 	if (nfrozen > 0)
 	{
 		int			nplans;
@@ -2640,39 +2696,138 @@ log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 		XLogRegisterBufData(0, plans,
 							sizeof(xlhp_freeze_plan) * nplans);
 	}
-	if (nredirected > 0)
-	{
-		xlrec.flags |= XLHP_HAS_REDIRECTIONS;
 
-		redirect_items.ntargets = nredirected;
-		XLogRegisterBufData(0, &redirect_items,
-							offsetof(xlhp_prune_items, data));
-		XLogRegisterBufData(0, redirected,
-							sizeof(OffsetNumber[2]) * nredirected);
-	}
-	if (ndead > 0)
+	if ((xlrec.flags & XLHP_DFOR_COMPRESSED) != 0)
 	{
-		xlrec.flags |= XLHP_HAS_DEAD_ITEMS;
+		int frozen_pack_res = 0;
+		int redirected_pack_res = 0;
+		int dead_pack_res = 0;
+		int unused_pack_res = 0;
 
-		dead_items.ntargets = ndead;
-		XLogRegisterBufData(0, &dead_items,
-							offsetof(xlhp_prune_items, data));
-		XLogRegisterBufData(0, dead,
-							sizeof(OffsetNumber) * ndead);
+		if (nfrozen > 0)
+		{
+			frozen_pack_res = dfor_u16_pack(nfrozen, frz_offsets,
+											DFOR_EXC_USE, &frozen_meta,
+											4 * DFOR_BUF_PART_SIZE,
+											dfor_buf_aligned.dfor_buf +
+												3 * DFOR_BUF_PART_SIZE);
+		}
+
+		if (nredirected > 0)
+		{
+			redirected_pack_res = dfor_u16_pack(nredirected * 2, redirected,
+												DFOR_EXC_USE, &redirected_meta,
+												4 * DFOR_BUF_PART_SIZE,
+												dfor_buf_aligned.dfor_buf);
+		}
+
+		if (ndead > 0)
+		{
+			sort_offsets(dead, ndead, sizeof(OffsetNumber));
+			dead_pack_res = dfor_u16_pack(ndead, dead, DFOR_EXC_USE, &dead_meta,
+										  4 * DFOR_BUF_PART_SIZE,
+										  dfor_buf_aligned.dfor_buf +
+											  DFOR_BUF_PART_SIZE);
+		}
+
+		if (nunused > 0)
+		{
+			sort_offsets(unused, nunused, sizeof(OffsetNumber));
+			unused_pack_res = dfor_u16_pack(nunused, unused, DFOR_EXC_USE,
+											&unused_meta,
+											4 * DFOR_BUF_PART_SIZE,
+											dfor_buf_aligned.dfor_buf +
+												2 * DFOR_BUF_PART_SIZE);
+		}
+
+		if (frozen_pack_res == 0 && redirected_pack_res == 0 &&
+			dead_pack_res == 0 && unused_pack_res == 0)
+		{
+			/* All stages of packing have succeeded. We can save DFoR packets
+			 * into the log. */
+			size_t meta_pack_sz;
+
+			if (nfrozen > 0)
+			{
+				meta_pack_sz = log_heap_prune_and_freeze_pack_meta(
+					&frozen_meta, frozen_meta_pack);
+
+				XLogRegisterBufData(0, &frozen_meta_pack, meta_pack_sz);
+				XLogRegisterBufData(0, frozen_meta.pack, frozen_meta.nbytes);
+			}
+			if (nredirected > 0)
+			{
+				xlrec.flags |= XLHP_HAS_REDIRECTIONS;
+
+				meta_pack_sz = log_heap_prune_and_freeze_pack_meta(
+					&redirected_meta, redirected_meta_pack);
+
+				XLogRegisterBufData(0, &redirected_meta_pack, meta_pack_sz);
+				XLogRegisterBufData(0, redirected_meta.pack,
+									redirected_meta.nbytes);
+			}
+			if (ndead > 0)
+			{
+				xlrec.flags |= XLHP_HAS_DEAD_ITEMS;
+
+				meta_pack_sz = log_heap_prune_and_freeze_pack_meta(
+					&dead_meta, dead_meta_pack);
+
+				XLogRegisterBufData(0, &dead_meta_pack, meta_pack_sz);
+				XLogRegisterBufData(0, dead_meta.pack, dead_meta.nbytes);
+			}
+			if (nunused > 0)
+			{
+				xlrec.flags |= XLHP_HAS_NOW_UNUSED_ITEMS;
+
+				meta_pack_sz = log_heap_prune_and_freeze_pack_meta(
+					&unused_meta, unused_meta_pack);
+
+				XLogRegisterBufData(0, &unused_meta_pack, meta_pack_sz);
+				XLogRegisterBufData(0, unused_meta.pack, unused_meta.nbytes);
+			}
+		}
+		else
+		{
+			/* Otherwise, we can't use DFoR compression */
+			xlrec.flags &= ~XLHP_DFOR_COMPRESSED;
+		}
 	}
-	if (nunused > 0)
+
+	if ((xlrec.flags & XLHP_DFOR_COMPRESSED) == 0)
 	{
-		xlrec.flags |= XLHP_HAS_NOW_UNUSED_ITEMS;
+		if (nfrozen > 0)
+			XLogRegisterBufData(0, frz_offsets,
+								sizeof(OffsetNumber) * nfrozen);
+		if (nredirected > 0)
+		{
+			xlrec.flags |= XLHP_HAS_REDIRECTIONS;
 
-		unused_items.ntargets = nunused;
-		XLogRegisterBufData(0, &unused_items,
-							offsetof(xlhp_prune_items, data));
-		XLogRegisterBufData(0, unused,
-							sizeof(OffsetNumber) * nunused);
+			redirect_items.ntargets = nredirected;
+			XLogRegisterBufData(0, &redirect_items,
+								offsetof(xlhp_prune_items, data));
+			XLogRegisterBufData(0, redirected,
+								sizeof(OffsetNumber[2]) * nredirected);
+		}
+		if (ndead > 0)
+		{
+			xlrec.flags |= XLHP_HAS_DEAD_ITEMS;
+
+			dead_items.ntargets = ndead;
+			XLogRegisterBufData(0, &dead_items,
+								offsetof(xlhp_prune_items, data));
+			XLogRegisterBufData(0, dead, sizeof(OffsetNumber) * ndead);
+		}
+		if (nunused > 0)
+		{
+			xlrec.flags |= XLHP_HAS_NOW_UNUSED_ITEMS;
+
+			unused_items.ntargets = nunused;
+			XLogRegisterBufData(0, &unused_items,
+								offsetof(xlhp_prune_items, data));
+			XLogRegisterBufData(0, unused, sizeof(OffsetNumber) * nunused);
+		}
 	}
-	if (nfrozen > 0)
-		XLogRegisterBufData(0, frz_offsets,
-							sizeof(OffsetNumber) * nfrozen);
 
 	/*
 	 * Prepare the main xl_heap_prune record.  We already set the XLHP_HAS_*

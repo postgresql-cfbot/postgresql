@@ -11,6 +11,7 @@ rmgr_desc_sources = files(
   'gistdesc.c',
   'hashdesc.c',
   'heapdesc.c',
+  'heapam_xlog_dfor.c',
   'logicalmsgdesc.c',
   'mxactdesc.c',
   'nbtdesc.c',

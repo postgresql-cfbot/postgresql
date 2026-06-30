@@ -9360,6 +9360,97 @@ ORDER BY c.ordinal_position;
      </row>
     </tbody>
    </tgroup>
+ </table>
+ </sect1>
+
+ <sect1 id="infoschema-view-constraint-usage">
+  <title><literal>view_constraint_usage</literal></title>
+
+  <para>
+   The view <literal>view_constraint_usage</literal> identifies all
+   table constraints that are used by the query expression of a view
+   (the <command>SELECT</command> statement that defines the view).  For
+   views that contain <literal>FOR KEY</literal> joins, this includes
+   table-constraint proof sources such as referential constraints and the
+   primary-key or unique constraints that prove referenced-side uniqueness.
+   These rows identify the table-constraint dependencies whose removal or
+   alteration would invalidate the stored view definition.  A constraint is
+   only included if the table that contains the constraint is owned by a
+   currently enabled role.
+  </para>
+
+  <table>
+   <title><structname>view_constraint_usage</structname> Columns</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       Column Type
+      </para>
+      <para>
+       Description
+      </para></entry>
+     </row>
+    </thead>
+
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>view_catalog</structfield> <type>sql_identifier</type>
+      </para>
+      <para>
+       Name of the database that contains the view (always the current database)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>view_schema</structfield> <type>sql_identifier</type>
+      </para>
+      <para>
+       Name of the schema that contains the view
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>view_name</structfield> <type>sql_identifier</type>
+      </para>
+      <para>
+       Name of the view
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>constraint_catalog</structfield> <type>sql_identifier</type>
+      </para>
+      <para>
+       Name of the database that contains the constraint that is used
+       by the view (always the current database)
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>constraint_schema</structfield> <type>sql_identifier</type>
+      </para>
+      <para>
+       Name of the schema that contains the constraint that is used by
+       the view
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>constraint_name</structfield> <type>sql_identifier</type>
+      </para>
+      <para>
+       Name of the constraint that is used by the view
+      </para></entry>
+     </row>
+    </tbody>
+   </tgroup>
   </table>
  </sect1>
 

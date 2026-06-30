@@ -14566,6 +14566,8 @@ joined_table:
 					n->rarg = $4;
 					n->usingClause = NIL;
 					n->join_using_alias = NULL;
+					n->keyJoin = NULL;
+					n->joinFilter = NULL;
 					n->quals = NULL;
 					$$ = n;
 				}
@@ -14579,9 +14581,15 @@ joined_table:
 					n->rarg = $4;
 					if ($5 != NULL && IsA($5, List))
 					{
-						 /* USING clause */
+						/* USING clause */
 						n->usingClause = linitial_node(List, castNode(List, $5));
 						n->join_using_alias = lsecond_node(Alias, castNode(List, $5));
+					}
+					else if ($5 != NULL && IsA($5, KeyJoinClause))
+					{
+						/* KEY clause */
+						n->keyJoin = (Node *) $5;
+						n->joinFilter = ((KeyJoinClause *) $5)->filter;
 					}
 					else
 					{
@@ -14605,6 +14613,12 @@ joined_table:
 						n->usingClause = linitial_node(List, castNode(List, $4));
 						n->join_using_alias = lsecond_node(Alias, castNode(List, $4));
 					}
+					else if ($4 != NULL && IsA($4, KeyJoinClause))
+					{
+						/* KEY clause */
+						n->keyJoin = (Node *) $4;
+						n->joinFilter = ((KeyJoinClause *) $4)->filter;
+					}
 					else
 					{
 						/* ON clause */
@@ -14622,6 +14636,8 @@ joined_table:
 					n->rarg = $5;
 					n->usingClause = NIL; /* figure out which columns later... */
 					n->join_using_alias = NULL;
+					n->keyJoin = NULL;
+					n->joinFilter = NULL;
 					n->quals = NULL; /* fill later */
 					$$ = n;
 				}
@@ -14636,6 +14652,8 @@ joined_table:
 					n->rarg = $4;
 					n->usingClause = NIL; /* figure out which columns later... */
 					n->join_using_alias = NULL;
+					n->keyJoin = NULL;
+					n->joinFilter = NULL;
 					n->quals = NULL; /* fill later */
 					$$ = n;
 				}
@@ -14749,6 +14767,28 @@ join_qual: USING '(' name_list ')' opt_alias_clause_for_join_using
 			| ON a_expr
 				{
 					$$ = $2;
+				}
+			| FOR KEY '(' name_list ')' '<' '-' ColId '(' name_list ')' filter_clause
+				{
+					KeyJoinClause *n = makeNode(KeyJoinClause);
+					n->localCols = $4;
+					n->direction = KEY_JOIN_LEFT_ARROW;
+					n->refAlias = $8;
+					n->refCols = $10;
+					n->filter = $12;
+					n->location = @1;
+					$$ = (Node *) n;
+				}
+			| FOR KEY '(' name_list ')' RIGHT_ARROW ColId '(' name_list ')' filter_clause
+				{
+					KeyJoinClause *n = makeNode(KeyJoinClause);
+					n->localCols = $4;
+					n->direction = KEY_JOIN_RIGHT_ARROW;
+					n->refAlias = $7;
+					n->refCols = $9;
+					n->filter = $11;
+					n->location = @1;
+					$$ = (Node *) n;
 				}
 		;
 

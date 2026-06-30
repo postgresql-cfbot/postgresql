@@ -1,0 +1,20 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_create_view s2_create_view s1_commit
+step s1_begin: BEGIN;
+step s1_create_view: 
+ CREATE OR REPLACE VIEW kj_proof_blocks_view.v1 AS
+ SELECT c.id, c.parent_id
+ FROM kj_proof_blocks_view.p AS p
+ JOIN kj_proof_blocks_view.c AS c
+ FOR KEY (parent_id) -> p (id);
+
+step s2_create_view: 
+ CREATE OR REPLACE VIEW kj_proof_blocks_view.v2 AS
+ SELECT c.id, c.parent_id
+ FROM kj_proof_blocks_view.p AS p
+ JOIN kj_proof_blocks_view.c AS c
+ FOR KEY (parent_id) -> p (id);
+ <waiting ...>
+step s1_commit: COMMIT;
+step s2_create_view: <... completed>

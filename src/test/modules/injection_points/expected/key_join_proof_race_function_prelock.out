@@ -1,0 +1,24 @@
+Parsed test spec with 3 sessions
+
+starting permutation: create_view drop_function release
+step create_view: 
+	CREATE VIEW consumer AS
+	SELECT p.id AS parent_key, c.parent_id
+	FROM parent_v p
+	LEFT JOIN child_v c FOR KEY (parent_id) -> p (id);
+ <waiting ...>
+step drop_function: 
+	DROP FUNCTION bucket_eq(integer, integer) CASCADE;
+ <waiting ...>
+step release: 
+	SELECT FROM injection_points_wakeup('key-join-after-equality-operator-lock');
+	SELECT FROM injection_points_detach('key-join-after-equality-operator-lock');
+
+ddl: NOTICE:  drop cascades to 4 other objects
+DETAIL:  drop cascades to operator =#(integer,integer)
+drop cascades to operator class bucket_int4_ops for access method btree
+drop cascades to index parent_bucket_idx
+drop cascades to constraint child_parent_id_fkey on table child
+step drop_function: <... completed>
+step create_view: <... completed>
+ERROR:  deadlock detected

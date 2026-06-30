@@ -1,0 +1,28 @@
+Parsed test spec with 3 sessions
+
+starting permutation: create_view ddl_begin drop_function wakeup ddl_commit detach
+step create_view: 
+	DO $$
+	BEGIN
+		EXECUTE $view$
+			CREATE VIEW consumer AS
+			SELECT p.id AS parent_key, p.marker, c.parent_id
+			FROM (SELECT id, ordinary_value() AS marker FROM parent) p
+			LEFT JOIN child c FOR KEY (parent_id) -> p (id)
+		$view$;
+	EXCEPTION WHEN undefined_object THEN
+		RAISE NOTICE 'function dependency disappeared before recording';
+	END
+	$$;
+ <waiting ...>
+step ddl_begin: BEGIN;
+step drop_function: 
+	DROP FUNCTION ordinary_value();
+
+step wakeup: 
+	SELECT FROM injection_points_wakeup('key-join-after-proof-match');
+
+step ddl_commit: COMMIT;
+creator: NOTICE:  function dependency disappeared before recording
+step create_view: <... completed>
+step detach: SELECT FROM injection_points_detach('key-join-after-proof-match');

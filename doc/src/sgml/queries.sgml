@@ -251,6 +251,9 @@ FROM <replaceable>table_reference</replaceable> <optional>, <replaceable>table_r
 <synopsis>
 <replaceable>T1</replaceable> { <optional>INNER</optional> | { LEFT | RIGHT | FULL } <optional>OUTER</optional> } JOIN <replaceable>T2</replaceable> ON <replaceable>boolean_expression</replaceable>
 <replaceable>T1</replaceable> { <optional>INNER</optional> | { LEFT | RIGHT | FULL } <optional>OUTER</optional> } JOIN <replaceable>T2</replaceable> USING ( <replaceable>join column list</replaceable> )
+<replaceable>T1</replaceable> { <optional>INNER</optional> | { LEFT | RIGHT | FULL } <optional>OUTER</optional> } JOIN <replaceable>T2</replaceable>
+    FOR KEY ( <replaceable>right column list</replaceable> ) { -&gt; | &lt;- } <replaceable>T1 relation</replaceable> ( <replaceable>left column list</replaceable> )
+    <optional> FILTER (WHERE <replaceable>boolean_expression</replaceable>) </optional>
 <replaceable>T1</replaceable> NATURAL { <optional>INNER</optional> | { LEFT | RIGHT | FULL } <optional>OUTER</optional> } JOIN <replaceable>T2</replaceable>
 </synopsis>
 
@@ -264,10 +267,11 @@ FROM <replaceable>table_reference</replaceable> <optional>, <replaceable>table_r
 
        <para>
         The <firstterm>join condition</firstterm> is specified in the
-        <literal>ON</literal> or <literal>USING</literal> clause, or implicitly by
-        the word <literal>NATURAL</literal>.  The join condition determines
-        which rows from the two source tables are considered to
-        <quote>match</quote>, as explained in detail below.
+        <literal>ON</literal>, <literal>USING</literal>, or
+        <literal>FOR KEY</literal> clause, or implicitly by the word
+        <literal>NATURAL</literal>.  The join condition determines which rows
+        from the two source tables are considered to <quote>match</quote>, as
+        explained in detail below.
        </para>
 
        <para>
@@ -378,6 +382,52 @@ FROM <replaceable>table_reference</replaceable> <optional>, <replaceable>table_r
         output column for each of the listed column pairs (in the listed
         order), followed by any remaining columns from <replaceable>T1</replaceable>,
         followed by any remaining columns from <replaceable>T2</replaceable>.
+       </para>
+
+       <para>
+        A <literal>FOR KEY</literal> clause is used when the intended join is a
+        foreign-key traversal: it enriches rows from the referencing side with
+        the uniquely matching row from the referenced side.  It generates
+        equality comparisons between a referencing column list and a referenced
+        column list, and the query is rejected if the relationship cannot be
+        proven from usable constraints and query facts.  Unlike
+        <literal>USING</literal>, <literal>FOR KEY</literal> does not remove
+        duplicate columns from the join output; its output columns are the
+        same as for <literal>JOIN ON</literal>.
+       </para>
+
+       <para>
+        In a <literal>FOR KEY</literal> clause, the list immediately after
+        <literal>FOR KEY</literal> names columns of <replaceable>T2</replaceable>.
+        The relation name after the arrow must be a relation visible from
+        <replaceable>T1</replaceable>.  The arrow always points from the
+        referencing columns toward the referenced columns.  With
+        <literal>-&gt;</literal>, the <replaceable>T2</replaceable> columns are
+        the referencing foreign-key columns and the named
+        <replaceable>T1</replaceable> columns are the referenced key columns.
+        With <literal>&lt;-</literal>, the roles are reversed.
+       </para>
+
+       <para>
+        PostgreSQL checks a <literal>FOR KEY</literal> clause at the point
+        where the join is evaluated.  The referenced columns must identify at
+        most one matching referenced row, every all-non-null referencing key
+        value present in the referencing operand must have a matching
+        referenced value in the referenced operand, and the referencing key
+        values must be known non-null or rows from the referencing side must
+        be preserved by the join type.
+       </para>
+
+       <para>
+        For example, if <structfield>orders.customer_id</structfield> is a
+        non-null foreign key referencing <structfield>customers.id</structfield>,
+        the following join asks for each order to be enriched with its
+        customer:
+<programlisting>
+SELECT o.id, c.name
+FROM orders AS o
+JOIN customers AS c FOR KEY (id) &lt;- o (customer_id);
+</programlisting>
        </para>
 
        <para>

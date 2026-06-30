@@ -1,0 +1,17 @@
+Parsed test spec with 2 sessions
+
+starting permutation: ddl_begin lock_rule_target alter_fk drop_rule ddl_commit
+step ddl_begin: BEGIN;
+step lock_rule_target: 
+ LOCK TABLE key_join_stale_table_rule_dependency.t
+ IN ACCESS EXCLUSIVE MODE;
+
+step alter_fk: 
+ ALTER TABLE key_join_stale_table_rule_dependency.c
+ ALTER CONSTRAINT c_parent_id_fkey NOT ENFORCED;
+ <waiting ...>
+step drop_rule: 
+ DROP RULE r ON key_join_stale_table_rule_dependency.t;
+
+step ddl_commit: COMMIT;
+step alter_fk: <... completed>

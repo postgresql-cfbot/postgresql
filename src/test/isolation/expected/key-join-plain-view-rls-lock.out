@@ -1,0 +1,13 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_lock_view s2_enable_rls s1_commit
+step s1_lock_view: 
+ BEGIN;
+ ALTER VIEW key_join_plain_view_rls_lock.v
+     SET (security_barrier=true);
+
+step s2_enable_rls: 
+ ALTER TABLE key_join_plain_view_rls_lock.t
+     ENABLE ROW LEVEL SECURITY;
+
+step s1_commit: COMMIT;

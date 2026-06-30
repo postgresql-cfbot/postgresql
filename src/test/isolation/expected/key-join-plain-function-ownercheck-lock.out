@@ -1,0 +1,36 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_alter_f s2_auth s2_replace_f s1_commit
+step s1_begin: BEGIN;
+step s1_alter_f: 
+ ALTER FUNCTION key_join_plain_function_ownercheck_lock.f() COST 11;
+
+step s2_auth: SET ROLE key_join_plain_function_other;
+step s2_replace_f: 
+ CREATE OR REPLACE FUNCTION key_join_plain_function_ownercheck_lock.f()
+ RETURNS int
+ LANGUAGE sql
+ RETURN 2;
+
+ERROR:  must be owner of function f
+step s1_commit: COMMIT;
+
+starting permutation: s1_begin s1_alter_f s2_auth_owner s2_replace_f s1_owner_f s1_commit
+step s1_begin: BEGIN;
+step s1_alter_f: 
+ ALTER FUNCTION key_join_plain_function_ownercheck_lock.f() COST 11;
+
+step s2_auth_owner: SET ROLE key_join_plain_function_owner;
+step s2_replace_f: 
+ CREATE OR REPLACE FUNCTION key_join_plain_function_ownercheck_lock.f()
+ RETURNS int
+ LANGUAGE sql
+ RETURN 2;
+ <waiting ...>
+step s1_owner_f: 
+ ALTER FUNCTION key_join_plain_function_ownercheck_lock.f()
+ OWNER TO key_join_plain_function_other;
+
+step s1_commit: COMMIT;
+step s2_replace_f: <... completed>
+ERROR:  must be owner of function f

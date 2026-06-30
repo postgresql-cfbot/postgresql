@@ -146,3 +146,7 @@ test: fast_default
 # run tablespace test at the end because it drops the tablespace created during
 # setup that other tests may use.
 test: tablespace
+
+# this test is to check if numeric operations are correct
+test: numeric_op_ddl
+test: numeric_op_small numeric_op_medium numeric_op_big

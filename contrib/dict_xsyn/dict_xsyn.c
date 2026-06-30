@@ -98,7 +98,7 @@ read_dictionary(DictSyn *d, const char *filename)
 		if (*line == '\0')
 			continue;
 
-		value = str_tolower(line, strlen(line), DEFAULT_COLLATION_OID);
+		value = str_casefold(line, strlen(line), DEFAULT_COLLATION_OID);
 		pfree(line);
 
 		pos = value;
@@ -215,7 +215,7 @@ dxsyn_lexize(PG_FUNCTION_ARGS)
 	{
 		char	   *temp = pnstrdup(in, length);
 
-		word.key = str_tolower(temp, length, DEFAULT_COLLATION_OID);
+		word.key = str_casefold(temp, length, DEFAULT_COLLATION_OID);
 		pfree(temp);
 		word.value = NULL;
 	}

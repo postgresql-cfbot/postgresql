@@ -697,10 +697,15 @@ OutputPluginPrepareWrite(struct LogicalDecodingContext *ctx, bool last_write)
 void
 OutputPluginWrite(struct LogicalDecodingContext *ctx, bool last_write)
 {
+	int64		output_bytes;
+
 	if (!ctx->prepared_write)
 		elog(ERROR, "OutputPluginPrepareWrite needs to be called before OutputPluginWrite");
 
+	output_bytes = ctx->out->len;
+
 	ctx->write(ctx, ctx->write_location, ctx->write_xid, last_write);
+	ctx->reorder->stats.output_bytes += output_bytes;
 	ctx->prepared_write = false;
 }
 
@@ -1957,7 +1962,13 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 		rb->stats.total_bytes <= 0 && rb->stats.mem_exceeded_count <= 0)
 		return;
 
-	elog(DEBUG2, "UpdateDecodingStats: updating stats %p %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64 " %" PRId64,
+	elog(DEBUG2,
+		 "UpdateDecodingStats: updating stats %p spill_txns=%" PRId64
+		 " spill_count=%" PRId64 " spill_bytes=%" PRId64
+		 " stream_txns=%" PRId64 " stream_count=%" PRId64
+		 " stream_bytes=%" PRId64 " mem_exceeded_count=%" PRId64
+		 " total_txns=%" PRId64 " total_bytes=%" PRId64
+		 " output_bytes=%" PRId64,
 		 rb,
 		 rb->stats.spill_txns,
 		 rb->stats.spill_count,
@@ -1967,7 +1978,8 @@ UpdateDecodingStats(LogicalDecodingContext *ctx)
 		 rb->stats.stream_bytes,
 		 rb->stats.mem_exceeded_count,
 		 rb->stats.total_txns,
-		 rb->stats.total_bytes);
+		 rb->stats.total_bytes,
+		 rb->stats.output_bytes);
 
 	pgstat_report_replslot(ctx->slot, &rb->stats);
 

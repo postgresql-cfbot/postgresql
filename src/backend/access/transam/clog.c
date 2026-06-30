@@ -450,7 +450,7 @@ static bool
 TransactionGroupUpdateXidStatus(TransactionId xid, XidStatus status,
 								XLogRecPtr lsn, int64 pageno)
 {
-	volatile PROC_HDR *procglobal = ProcGlobal;
+	PROC_HDR   *procglobal = ProcGlobal;
 	PGPROC	   *proc = MyProc;
 	uint32		nextidx;
 	uint32		wakeidx;

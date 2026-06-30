@@ -34,6 +34,7 @@
 #include "access/tableam.h"
 #include "access/transam.h"
 #include "access/xact.h"
+#include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
 #include "catalog/pg_inherits.h"
@@ -2017,10 +2018,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 	LockRelId	lockrelid;
 	Oid			priv_relid;
 	Oid			toast_relid;
-	Oid			save_userid;
-	int			save_sec_context;
-	int			save_nestlevel;
 	VacuumParams toast_vacuum_params;
+	IndexBuildSecurity ibsec;
 
 	/*
 	 * This function scribbles on the parameters, so make a copy early to
@@ -2270,16 +2269,9 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 		toast_relid = InvalidOid;
 
 	/*
-	 * Switch to the table owner's userid, so that any index functions are run
-	 * as that user.  Also lock down security-restricted operations and
-	 * arrange to make GUC variable changes local to this command. (This is
-	 * unnecessary, but harmless, for lazy VACUUM.)
+	 * Prevent index functions from doing what they are not supposed to.
 	 */
-	GetUserIdAndSecContext(&save_userid, &save_sec_context);
-	SetUserIdAndSecContext(rel->rd_rel->relowner,
-						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
-	save_nestlevel = NewGUCNestLevel();
-	RestrictSearchPath();
+	enable_index_build_security(rel->rd_rel->relowner, &ibsec);
 
 	/*
 	 * If PROCESS_MAIN is set (the default), it's time to vacuum the main
@@ -2310,11 +2302,8 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 			table_relation_vacuum(rel, &params, bstrategy);
 	}
 
-	/* Roll back any GUC changes executed by index functions */
-	AtEOXact_GUC(false, save_nestlevel);
-
-	/* Restore userid and security context */
-	SetUserIdAndSecContext(save_userid, save_sec_context);
+	/* Relax the restrictions imposed above. */
+	disable_index_build_security(&ibsec);
 
 	/* all done with this class, but hold lock until commit */
 	if (rel)

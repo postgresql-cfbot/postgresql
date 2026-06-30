@@ -856,6 +856,18 @@ SELECT sum(extends) AS io_sum_bulkwrite_strategy_extends_after
   FROM pg_stat_io WHERE context = 'bulkwrite' \gset
 SELECT :io_sum_bulkwrite_strategy_extends_after > :io_sum_bulkwrite_strategy_extends_before;
 
+-- Test that writes done while building a relation by bypassing shared buffers
+-- (here, building a B-tree index) are tracked in pg_stat_io in the bypass
+-- IOContext.
+SELECT sum(extends) AS io_sum_bypass_extends_before
+  FROM pg_stat_io WHERE context = 'bypass' AND object = 'relation' \gset
+CREATE INDEX test_io_bulkwrite_strategy_idx
+  ON test_io_bulkwrite_strategy (i);
+SELECT pg_stat_force_next_flush();
+SELECT sum(extends) AS io_sum_bypass_extends_after
+  FROM pg_stat_io WHERE context = 'bypass' AND object = 'relation' \gset
+SELECT :io_sum_bypass_extends_after > :io_sum_bypass_extends_before;
+
 -- Test IO stats reset
 SELECT pg_stat_have_stats('io', 0, 0);
 SELECT sum(evictions) + sum(reuses) + sum(extends) + sum(fsyncs) + sum(reads) + sum(writes) + sum(writebacks) + sum(hits) AS io_stats_pre_reset

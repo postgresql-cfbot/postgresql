@@ -192,6 +192,77 @@ SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'main_table'
 SELECT pg_get_triggerdef(oid, false) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_a';
 SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_any';
 
+-- Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function with WHEN clauses.
+SELECT pg_get_trigger_ddl('main_table', 'modified_a');
+SELECT pg_get_trigger_ddl('main_table', 'modified_any');
+SELECT pg_get_trigger_ddl('main_table', 'insert_a');
+SELECT pg_get_trigger_ddl('main_table', 'delete_a');
+SELECT pg_get_trigger_ddl('main_table', 'insert_when');
+SELECT pg_get_trigger_ddl('main_table', 'delete_when');
+
+-- Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function for CONSTRAINT triggers.
+CREATE CONSTRAINT TRIGGER constraint_trig AFTER INSERT ON main_table
+  DEFERRABLE
+  FOR EACH ROW EXECUTE PROCEDURE trigger_func('modified_a');
+SELECT pg_get_trigger_ddl('main_table', 'constraint_trig');
+DROP TRIGGER constraint_trig ON main_table;
+
+-- Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function with NULL cases.
+SELECT pg_get_trigger_ddl(NULL, 'delete_when');
+SELECT pg_get_trigger_ddl('main_table', NULL);
+SELECT pg_get_trigger_ddl(NULL, NULL);
+
+-- Fail. Test the output of the pg_get_trigger_ddl(table_name, trigger_name) function for ERROR cases.
+SELECT pg_get_trigger_ddl('main_table', 'no_such_trigger');
+SELECT pg_get_trigger_ddl('no_such_table', 'modified_a');
+SELECT pg_get_trigger_ddl(-1, 'modified_a');
+
+-- Test the output of a double quoted trigger name with pg_get_trigger_ddl(table_name, trigger_name).
+CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON main_table
+FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE trigger_func('"MODIFIED_CAP"');
+
+-- Fail.
+SELECT pg_get_trigger_ddl('main_table', 'MODIFIED_CAP');
+-- Ok.
+SELECT pg_get_trigger_ddl('main_table', '"MODIFIED_CAP"');
+
+DROP TRIGGER "MODIFIED_CAP" ON main_table;
+
+-- Test the output of a double quoted table and trigger name with pg_get_trigger_ddl(table_name, trigger_name).
+
+CREATE TABLE "FooTable" (a int unique, b int);
+CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON "FooTable"
+FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE trigger_func('"MODIFIED_CAP"');
+
+-- Fail.
+SELECT pg_get_trigger_ddl('FooTable', '"MODIFIED_CAP"');
+SELECT pg_get_trigger_ddl('"FooTable"', 'MODIFIED_CAP');
+-- Ok.
+SELECT pg_get_trigger_ddl('"FooTable"', '"MODIFIED_CAP"');
+
+DROP TRIGGER "MODIFIED_CAP" ON "FooTable";
+DROP TABLE "FooTable";
+
+-- Test the output of a double quoted schema, table, and trigger name with double quotes.
+CREATE SCHEMA "TestSchema";
+SET search_path TO "TestSchema", public;
+CREATE TABLE "TestSchema"."TestTable" (a int unique, b int);
+CREATE TRIGGER "MODIFIED_CAP" BEFORE UPDATE OF a ON "TestSchema"."TestTable"
+FOR EACH ROW WHEN (OLD.a <> NEW.a) EXECUTE PROCEDURE trigger_func('"MODIFIED_CAP"');
+
+-- Fail.
+SELECT pg_get_trigger_ddl('"TestSchema.TestTable"', '"MODIFIED_CAP"');
+SELECT pg_get_trigger_ddl('"TestSchema"."TestTable"', 'MODIFIED_CAP');
+SELECT pg_get_trigger_ddl('TestSchema.TestTable', '"MODIFIED_CAP"');
+-- Ok.
+SELECT pg_get_trigger_ddl('"TestSchema"."TestTable"', '"MODIFIED_CAP"');
+
+-- Fail. Test the output of adding a schema name to the trigger name
+SELECT pg_get_trigger_ddl('"TestSchema"."TestTable"', '"TestSchema"."MODIFIED_CAP"');
+SELECT pg_get_trigger_ddl('main_table', 'public.modified_a');
+
+DROP SCHEMA "TestSchema" CASCADE;
+
 -- Test RENAME TRIGGER
 ALTER TRIGGER modified_a ON main_table RENAME TO modified_modified_a;
 SELECT count(*) FROM pg_trigger WHERE tgrelid = 'main_table'::regclass AND tgname = 'modified_a';

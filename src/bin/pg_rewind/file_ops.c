@@ -435,6 +435,7 @@ recurse_dir(const char *datadir, const char *parentpath,
 				 *
 				 * TODO: But complain if we're processing the target dir!
 				 */
+				continue;
 			}
 			else
 				pg_fatal("could not stat file \"%s\": %m",

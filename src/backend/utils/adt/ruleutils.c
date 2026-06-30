@@ -9796,6 +9796,9 @@ get_json_expr_options(JsonExpr *jsexpr, deparse_context *context,
 	if (jsexpr->on_empty && jsexpr->on_empty->btype != default_behavior)
 		get_json_behavior(jsexpr->on_empty, context, "EMPTY");
 
+	if (jsexpr->on_mismatch && jsexpr->on_mismatch->btype != default_behavior)
+		get_json_behavior(jsexpr->on_mismatch, context, "MISMATCH");
+
 	if (jsexpr->on_error && jsexpr->on_error->btype != default_behavior)
 		get_json_behavior(jsexpr->on_error, context, "ERROR");
 }

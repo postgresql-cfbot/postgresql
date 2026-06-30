@@ -3409,6 +3409,7 @@ ERROR:  jsonpath array subscript is out of bounds
 <optional> { <literal>WITHOUT</literal> | <literal>WITH</literal> { <literal>CONDITIONAL</literal> | <optional><literal>UNCONDITIONAL</literal></optional> } } <optional> <literal>ARRAY</literal> </optional> <literal>WRAPPER</literal> </optional>
 <optional> { <literal>KEEP</literal> | <literal>OMIT</literal> } <literal>QUOTES</literal> <optional> <literal>ON SCALAR STRING</literal> </optional> </optional>
 <optional> { <literal>ERROR</literal> | <literal>NULL</literal> | <literal>EMPTY</literal> { <optional> <literal>ARRAY</literal> </optional> | <literal>OBJECT</literal> } | <literal>DEFAULT</literal> <replaceable>expression</replaceable> } <literal>ON EMPTY</literal> </optional>
+<optional> { <literal>ERROR</literal> | <literal>NULL</literal> | <literal>EMPTY</literal> { <optional> <literal>ARRAY</literal> </optional> | <literal>OBJECT</literal> } | <literal>DEFAULT</literal> <replaceable>expression</replaceable> } <literal>ON MISMATCH</literal> </optional>
 <optional> { <literal>ERROR</literal> | <literal>NULL</literal> | <literal>EMPTY</literal> { <optional> <literal>ARRAY</literal> </optional> | <literal>OBJECT</literal> } | <literal>DEFAULT</literal> <replaceable>expression</replaceable> } <literal>ON ERROR</literal> </optional>) <returnvalue>jsonb</returnvalue>
 </synopsis>
       </para>
@@ -3456,17 +3457,21 @@ ERROR:  jsonpath array subscript is out of bounds
        <para>
         The <literal>ON EMPTY</literal> clause specifies the behavior if
         evaluating <replaceable>path_expression</replaceable> yields an empty
-        set. The <literal>ON ERROR</literal> clause specifies the behavior
-        if an error occurs when evaluating <replaceable>path_expression</replaceable>,
-        when coercing the result value to the <literal>RETURNING</literal> type,
-        or when evaluating the <literal>ON EMPTY</literal> expression if the
-        <replaceable>path_expression</replaceable> evaluation returns an empty
         set.
+        The <literal>ON MISMATCH</literal> clause specifies the behavior if
+        the result value cannot be coerced to the <literal>RETURNING</literal> type
+        (for example, if an array is found when a scalar is required, or a string cannot be cast to the target type).
+        The <literal>ON ERROR</literal> clause specifies the behavior
+        if an error occurs when evaluating <replaceable>path_expression</replaceable>.
+        If <literal>ON MISMATCH</literal> is not specified, coercion errors are handled
+        by the <literal>ON ERROR</literal> clause.
+        <literal>ON ERROR</literal> also handles errors occurring during evaluation of
+        <literal>ON EMPTY</literal> or <literal>ON MISMATCH</literal> expressions.
        </para>
       </listitem>
       <listitem>
        <para>
-        For both <literal>ON EMPTY</literal> and <literal>ON ERROR</literal>,
+        For <literal>ON EMPTY</literal>, <literal>ON MISMATCH</literal>, and <literal>ON ERROR</literal>,
         specifying <literal>ERROR</literal> will cause an error to be thrown with
         the appropriate message. Other options include returning an SQL NULL, an
         empty array (<literal>EMPTY <optional>ARRAY</optional></literal>),
@@ -3475,6 +3480,8 @@ ERROR:  jsonpath array subscript is out of bounds
         that can be coerced to jsonb or the type specified in <literal>RETURNING</literal>.
         The default when <literal>ON EMPTY</literal> or <literal>ON ERROR</literal>
         is not specified is to return an SQL NULL value.
+        If <literal>ON MISMATCH</literal> is not specified, it defaults to handling coercion
+        errors via the <literal>ON ERROR</literal> clause.
        </para>
       </listitem>
      </itemizedlist>
@@ -3497,6 +3504,10 @@ ERROR:  malformed array literal: "[1, 2]"
 DETAIL:  Missing "]" after array dimensions.
 </programlisting>
        </para>
+       <para>
+        <literal>JSON_QUERY(jsonb '{"ids": [1, 2]}', '$.ids' RETURNING int DEFAULT 0 ON MISMATCH)</literal>
+        <returnvalue>0</returnvalue>
+       </para>
       </entry>
      </row>
      <row>
@@ -3508,6 +3519,7 @@ DETAIL:  Missing "]" after array dimensions.
 <optional> <literal>PASSING</literal> { <replaceable>value</replaceable> <literal>AS</literal> <replaceable>varname</replaceable> } <optional>, ...</optional></optional>
 <optional> <literal>RETURNING</literal> <replaceable>data_type</replaceable> </optional>
 <optional> { <literal>ERROR</literal> | <literal>NULL</literal> | <literal>DEFAULT</literal> <replaceable>expression</replaceable> } <literal>ON EMPTY</literal> </optional>
+<optional> { <literal>ERROR</literal> | <literal>NULL</literal> | <literal>DEFAULT</literal> <replaceable>expression</replaceable> } <literal>ON MISMATCH</literal> </optional>
 <optional> { <literal>ERROR</literal> | <literal>NULL</literal> | <literal>DEFAULT</literal> <replaceable>expression</replaceable> } <literal>ON ERROR</literal> </optional>) <returnvalue>text</returnvalue>
 </synopsis>
        </para>
@@ -3538,10 +3550,11 @@ DETAIL:  Missing "]" after array dimensions.
       </listitem>
       <listitem>
        <para>
-        The <literal>ON ERROR</literal> and <literal>ON EMPTY</literal>
+        The <literal>ON EMPTY</literal>, <literal>ON MISMATCH</literal>, and <literal>ON ERROR</literal>
         clauses have similar semantics as mentioned in the description of
-        <function>JSON_QUERY</function>, except the set of values returned in
-        lieu of throwing an error is different.
+        <function>JSON_QUERY</function>, except that the set of values returned in
+        lieu of throwing an error is restricted: <literal>EMPTY ARRAY</literal>
+        and <literal>EMPTY OBJECT</literal> are not allowed.
        </para>
       </listitem>
       <listitem>
@@ -3570,6 +3583,10 @@ DETAIL:  Missing "]" after array dimensions.
        <para>
         <literal>JSON_VALUE(jsonb '[1,2]', 'strict $[*]' DEFAULT 9 ON ERROR)</literal>
         <returnvalue>9</returnvalue>
+       </para>
+       <para>
+        <literal>JSON_VALUE(jsonb '{"id": "N/A", "valid_id": 123}', '$.id' RETURNING int DEFAULT -1 ON MISMATCH );</literal>
+        <returnvalue>-1</returnvalue>
        </para>
       </entry>
      </row>
@@ -3658,28 +3675,29 @@ DETAIL:  Missing "]" after array dimensions.
    The syntax is:
   </para>
 
-<synopsis>
-JSON_TABLE (
-    <replaceable>context_item</replaceable>, <replaceable>path_expression</replaceable> <optional> AS <replaceable>json_path_name</replaceable> </optional> <optional> PASSING { <replaceable>value</replaceable> AS <replaceable>varname</replaceable> } <optional>, ...</optional> </optional>
-    COLUMNS ( <replaceable class="parameter">json_table_column</replaceable> <optional>, ...</optional> )
-    <optional> { <literal>ERROR</literal> | <literal>EMPTY</literal> <optional>ARRAY</optional>} <literal>ON ERROR</literal> </optional>
-)
+  <synopsis>
+   JSON_TABLE (
+   <replaceable>context_item</replaceable>, <replaceable>path_expression</replaceable> <optional> AS <replaceable>json_path_name</replaceable> </optional> <optional> PASSING { <replaceable>value</replaceable> AS <replaceable>varname</replaceable> } <optional>, ...</optional> </optional>
+   COLUMNS ( <replaceable class="parameter">json_table_column</replaceable> <optional>, ...</optional> )
+   <optional> { <literal>ERROR</literal> | <literal>EMPTY</literal> <optional>ARRAY</optional>} <literal>ON ERROR</literal> </optional>
+   )
 
-<phrase>
-where <replaceable class="parameter">json_table_column</replaceable> is:
-</phrase>
-  <replaceable>name</replaceable> FOR ORDINALITY
-  | <replaceable>name</replaceable> <replaceable>type</replaceable>
-        <optional> FORMAT JSON <optional>ENCODING <literal>UTF8</literal></optional></optional>
-        <optional> PATH <replaceable>path_expression</replaceable> </optional>
-        <optional> { WITHOUT | WITH { CONDITIONAL | <optional>UNCONDITIONAL</optional> } } <optional> ARRAY </optional> WRAPPER </optional>
-        <optional> { KEEP | OMIT } QUOTES <optional> ON SCALAR STRING </optional> </optional>
-        <optional> { ERROR | NULL | EMPTY { <optional>ARRAY</optional> | OBJECT } | DEFAULT <replaceable>expression</replaceable> } ON EMPTY </optional>
-        <optional> { ERROR | NULL | EMPTY { <optional>ARRAY</optional> | OBJECT } | DEFAULT <replaceable>expression</replaceable> } ON ERROR </optional>
-  | <replaceable>name</replaceable> <replaceable>type</replaceable> EXISTS <optional> PATH <replaceable>path_expression</replaceable> </optional>
-        <optional> { ERROR | TRUE | FALSE | UNKNOWN } ON ERROR </optional>
-  | NESTED <optional> PATH </optional> <replaceable>path_expression</replaceable> <optional> AS <replaceable>json_path_name</replaceable> </optional> COLUMNS ( <replaceable>json_table_column</replaceable> <optional>, ...</optional> )
-</synopsis>
+   <phrase>
+    where <replaceable class="parameter">json_table_column</replaceable> is:
+   </phrase>
+   <replaceable>name</replaceable> FOR ORDINALITY
+   | <replaceable>name</replaceable> <replaceable>type</replaceable>
+   <optional> FORMAT JSON <optional>ENCODING <literal>UTF8</literal></optional></optional>
+   <optional> PATH <replaceable>path_expression</replaceable> </optional>
+   <optional> { WITHOUT | WITH { CONDITIONAL | <optional>UNCONDITIONAL</optional> } } <optional> ARRAY </optional> WRAPPER </optional>
+   <optional> { KEEP | OMIT } QUOTES <optional> ON SCALAR STRING </optional> </optional>
+   <optional> { ERROR | NULL | EMPTY { <optional>ARRAY</optional> | OBJECT } | DEFAULT <replaceable>expression</replaceable> } ON EMPTY </optional>
+   <optional> { ERROR | NULL | EMPTY { <optional>ARRAY</optional> | OBJECT } | DEFAULT <replaceable>expression</replaceable> } ON MISMATCH </optional>
+   <optional> { ERROR | NULL | EMPTY { <optional>ARRAY</optional> | OBJECT } | DEFAULT <replaceable>expression</replaceable> } ON ERROR </optional>
+   | <replaceable>name</replaceable> <replaceable>type</replaceable> EXISTS <optional> PATH <replaceable>path_expression</replaceable> </optional>
+   <optional> { ERROR | TRUE | FALSE | UNKNOWN } ON ERROR </optional>
+   | NESTED <optional> PATH </optional> <replaceable>path_expression</replaceable> <optional> AS <replaceable>json_path_name</replaceable> </optional> COLUMNS ( <replaceable>json_table_column</replaceable> <optional>, ...</optional> )
+  </synopsis>
 
   <para>
    Each syntax element is described below in more detail.
@@ -4080,7 +4098,33 @@ COLUMNS (
        1 |          |       |          |       2 | Wonder  |         2 | Craig Doe
 (5 rows)
 </screen>
-
      </para>
+
+<para>
+ This example demonstrates the distinction between <literal>ON MISMATCH</literal>
+ and <literal>ON ERROR</literal> using the <literal>my_films</literal> table.
+ The first column triggers a mismatch because the <literal>"kind"</literal>
+ field exists (value is <literal>"comedy"</literal>) but cannot be cast to an integer.
+ The second column triggers an error because the path is in <literal>strict</literal>
+ mode and the key <literal>"ratings"</literal> does not exist.
+</para>
+
+<programlisting>
+SELECT
+    json_query(js, '$.favorites[0].kind'
+               RETURNING int
+               DEFAULT -1 ON MISMATCH) AS kind_mismatch,
+    json_query(js, 'strict $.favorites[0].ratings'
+               RETURNING int
+               DEFAULT -2 ON ERROR) AS strict_error
+FROM my_films;
+</programlisting>
+
+<screen>
+ kind_mismatch | strict_error
+---------------+--------------
+            -1 |           -2
+(1 row)
+</screen>
   </sect2>
  </sect1>

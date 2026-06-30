@@ -1856,8 +1856,9 @@ typedef struct JsonExpr
 	List	   *passing_names;
 	List	   *passing_values;
 
-	/* User-specified or default ON EMPTY and ON ERROR behaviors */
+	/* User-specified or default ON EMPTY, ON_MISMATCH and ON ERROR behaviors */
 	JsonBehavior *on_empty;
+	JsonBehavior *on_mismatch;
 	JsonBehavior *on_error;
 
 	/*

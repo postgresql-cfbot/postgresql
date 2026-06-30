@@ -1960,6 +1960,7 @@ typedef struct JsonFuncExpr
 	List	   *passing;		/* list of PASSING clause arguments, if any */
 	JsonOutput *output;			/* output clause, if specified */
 	JsonBehavior *on_empty;		/* ON EMPTY behavior */
+	JsonBehavior *on_mismatch;	/* ON MISMATCH behavior */
 	JsonBehavior *on_error;		/* ON ERROR behavior */
 	JsonWrapper wrapper;		/* array wrapper behavior (JSON_QUERY only) */
 	JsonQuotes	quotes;			/* omit or keep quotes? (JSON_QUERY only) */
@@ -2027,6 +2028,7 @@ typedef struct JsonTableColumn
 	JsonQuotes	quotes;			/* omit or keep quotes on scalar strings? */
 	List	   *columns;		/* nested columns */
 	JsonBehavior *on_empty;		/* ON EMPTY behavior */
+	JsonBehavior *on_mismatch;	/* ON MISMATCH behavior */
 	JsonBehavior *on_error;		/* ON ERROR behavior */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } JsonTableColumn;

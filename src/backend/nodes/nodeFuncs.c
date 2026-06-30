@@ -3493,6 +3493,7 @@ expression_tree_mutator_impl(Node *node,
 				MUTATE(newnode->passing_values, jexpr->passing_values, List *);
 				/* assume mutator does not care about passing_names */
 				MUTATE(newnode->on_empty, jexpr->on_empty, JsonBehavior *);
+				MUTATE(newnode->on_mismatch, jexpr->on_mismatch, JsonBehavior *);
 				MUTATE(newnode->on_error, jexpr->on_error, JsonBehavior *);
 				return (Node *) newnode;
 			}

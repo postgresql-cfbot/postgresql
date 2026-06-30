@@ -2628,8 +2628,8 @@ find_modifytable_subplan(PlannerInfo *root,
 	{
 		Append	   *appendplan = (Append *) subplan;
 
-		if (subplan_index < list_length(appendplan->appendplans))
-			subplan = (Plan *) list_nth(appendplan->appendplans, subplan_index);
+		if (subplan_index < list_length(appendplan->ab.subplans))
+			subplan = (Plan *) list_nth(appendplan->ab.subplans, subplan_index);
 	}
 	else if (IsA(subplan, Result) &&
 			 outerPlan(subplan) != NULL &&
@@ -2637,8 +2637,8 @@ find_modifytable_subplan(PlannerInfo *root,
 	{
 		Append	   *appendplan = (Append *) outerPlan(subplan);
 
-		if (subplan_index < list_length(appendplan->appendplans))
-			subplan = (Plan *) list_nth(appendplan->appendplans, subplan_index);
+		if (subplan_index < list_length(appendplan->ab.subplans))
+			subplan = (Plan *) list_nth(appendplan->ab.subplans, subplan_index);
 	}
 
 	/* Now, have we got a ForeignScan on the desired rel? */
@@ -8162,8 +8162,8 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 	ForeignScanState *node = (ForeignScanState *) areq->requestee;
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	AsyncRequest *pendingAreq = fsstate->conn_state->pendingAreq;
-	AppendState *requestor = (AppendState *) areq->requestor;
-	WaitEventSet *set = requestor->as_eventset;
+	AppendBaseState *requestor = (AppendBaseState *) areq->requestor;
+	WaitEventSet *set = requestor->eventset;
 
 	/* This should not be called unless callback_pending */
 	Assert(areq->callback_pending);
@@ -8205,7 +8205,7 @@ postgresForeignAsyncConfigureWait(AsyncRequest *areq)
 		 * below, because we might otherwise end up with no configured events
 		 * other than the postmaster death event.
 		 */
-		if (!bms_is_empty(requestor->as_needrequest))
+		if (!bms_is_empty(requestor->needrequest))
 			return;
 		if (GetNumRegisteredWaitEvents(set) > 1)
 			return;

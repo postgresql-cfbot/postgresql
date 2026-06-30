@@ -1901,12 +1901,19 @@ text_regclass(PG_FUNCTION_ARGS)
 	text	   *relname = PG_GETARG_TEXT_PP(0);
 	Oid			result;
 	RangeVar   *rv;
+	List	   *namelist;
 
-	rv = makeRangeVarFromNameList(textToQualifiedNameList(relname));
+	namelist = textToQualifiedNameListSafe(relname, fcinfo->context);
+	if (SOFT_ERROR_OCCURRED(fcinfo->context))
+		PG_RETURN_NULL();
+
+	rv = makeRangeVarFromNameListSafe(namelist, fcinfo->context);
+	if (SOFT_ERROR_OCCURRED(fcinfo->context))
+		PG_RETURN_NULL();
 
 	/* We might not even have permissions on this relation; don't lock it. */
-	result = RangeVarGetRelid(rv, NoLock, false);
-
+	result = RangeVarGetRelidExtendedSafe(rv, NoLock, 0, NULL, NULL,
+										  fcinfo->context);
 	PG_RETURN_OID(result);
 }
 

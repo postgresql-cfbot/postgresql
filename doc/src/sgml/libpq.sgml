@@ -1129,6 +1129,48 @@ postgresql://%2Fvar%2Flib%2Fpostgresql/dbname
     The currently recognized parameter key words are:
 
     <variablelist>
+     <varlistentry id="libpq-connect-srvhost" xreflabel="srvhost">
+      <term><literal>srvhost</literal></term>
+      <listitem>
+       <para>
+        DNS domain name used for SRV-based service discovery (RFC 2782).
+        When set, libpq queries DNS for
+        <literal>_postgresql._tcp.<replaceable>srvhost</replaceable></literal>
+        SRV records and derives the list of hosts and ports to try from the
+        sorted result.  Records are ordered by priority (ascending) then
+        weight (descending), exactly as specified in RFC 2782.
+       </para>
+       <para>
+        This parameter is mutually exclusive with <literal>host</literal> and
+        <literal>hostaddr</literal>.  It works together with all other
+        connection parameters, including <literal>target_session_attrs</literal>
+        and <literal>load_balance_hosts</literal>, which are applied to the
+        expanded host list after DNS resolution.
+       </para>
+       <para>
+        The environment variable equivalent is <envar>PGSRVHOST</envar>.
+       </para>
+       <para>
+        The <literal>postgresql+srv://</literal> and
+        <literal>postgres+srv://</literal> URI schemes are a shorthand for
+        setting <literal>srvhost</literal> from the URI host part:
+
+<synopsis>
+postgresql+srv://<replaceable>cluster.example.com</replaceable>/<replaceable>mydb</replaceable>
+</synopsis>
+
+        is equivalent to:
+
+<synopsis>
+postgresql:///<replaceable>mydb</replaceable>?srvhost=<replaceable>cluster.example.com</replaceable>
+</synopsis>
+
+        Multiple hosts are not permitted in a <literal>+srv</literal> URI
+        because the host expansion is performed by DNS.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="libpq-connect-host" xreflabel="host">
       <term><literal>host</literal></term>
       <listitem>
@@ -9065,6 +9107,16 @@ myEventProc(PGEventId evtId, void *evtInfo, void *passThrough)
    information into simple client applications, for example.
 
    <itemizedlist>
+    <listitem>
+     <para>
+      <indexterm>
+       <primary><envar>PGSRVHOST</envar></primary>
+      </indexterm>
+      <envar>PGSRVHOST</envar> behaves the same as the <xref
+      linkend="libpq-connect-srvhost"/> connection parameter.
+     </para>
+    </listitem>
+
     <listitem>
      <para>
       <indexterm>

@@ -101,12 +101,12 @@ pgbench -i <optional> <replaceable>other-options</replaceable> </optional> <repl
 
   <caution>
    <para>
-    <literal>pgbench -i</literal> creates four tables <structname>pgbench_accounts</structname>,
-    <structname>pgbench_branches</structname>, <structname>pgbench_history</structname>, and
-    <structname>pgbench_tellers</structname>,
-    destroying any existing tables of these names.
-    Be very careful to use another database if you have tables having these
-    names!
+    <literal>pgbench -i</literal> creates four tables (<structname>pgbench_accounts</structname>,
+    <structname>pgbench_branches</structname>, <structname>pgbench_history</structname>,
+    and <structname>pgbench_tellers</structname>) and six functions with names
+    begining with <structname>pgbench_</structname>. This operation will drop
+    any existing tables or functions with these names, including all dependent
+    objects.
    </para>
   </caution>
 
@@ -192,15 +192,23 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         <replaceable>init_steps</replaceable> specifies the
         initialization steps to be performed, using one character per step.
         Each step is invoked in the specified order.
-        The default is <literal>dtgvp</literal>.
+        The default is <literal>dYtgvpy</literal>.
         The available steps are:
 
         <variablelist>
          <varlistentry id="pgbench-option-init-steps-d">
-          <term><literal>d</literal> (Drop)</term>
+          <term><literal>d</literal> (Drop Tables)</term>
           <listitem>
            <para>
             Drop any existing <application>pgbench</application> tables.
+           </para>
+          </listitem>
+         </varlistentry>
+         <varlistentry id="pgbench-option-init-steps-Y">
+          <term><literal>Y</literal> (Drop Functions)</term>
+          <listitem>
+           <para>
+            Drop any existing <application>pgbench</application> functions.
            </para>
           </listitem>
          </varlistentry>
@@ -268,7 +276,15 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
            </para>
           </listitem>
          </varlistentry>
-         <varlistentry id="pgbench-option-init-steps-f">
+         <varlistentry id="pgbench-option-init-steps-y">
+          <term><literal>y</literal> (create Functions)</term>
+          <listitem>
+           <para>
+            Create any neccessary <application>pgbench</application> functions.
+           </para>
+          </listitem>
+         </varlistentry>
+          <varlistentry id="pgbench-option-init-steps-f">
          <term><literal>f</literal> (create Foreign keys)</term>
           <listitem>
            <para>
@@ -360,6 +376,17 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
       </listitem>
      </varlistentry>
 
+     <varlistentry id="pgbench-option-no-functions">
+      <term><option>--no-functions</option></term>
+      <listitem>
+       <para>
+        Do not create pl/pgsql or SQL functions for internal scripts.
+        (This option suppresses the <literal>y</literal> initialization step,
+        even if it was specified in <option>-I</option>.)
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="pgbench-option-partition-method">
       <term><option>--partition-method=<replaceable>NAME</replaceable></option></term>
       <listitem>
@@ -426,8 +453,35 @@ pgbench <optional> <replaceable>options</replaceable> </optional> <replaceable>d
         Available built-in scripts are: <literal>tpcb-like</literal>,
         <literal>simple-update</literal> and <literal>select-only</literal>.
         Unambiguous prefixes of built-in names are accepted.
+       </para>
+       <para>
+        Unless disabled with the <literal>--no-functions</literal> option at database
+        init, the <literal>tpcb-like</literal> and <literal>simple-update</literal>
+        scripts are also implemented as User-Defined functions in the database which
+        can be tested using scripts named <literal>plpgsql-tpcb-like</literal>,
+        <literal>sqlfunc-tpcb-like</literal>, <literal>oldsqlf-tpcb-like</literal>,
+        <literal>plpgsql-simple-update</literal>, <literal>sqlfunc-simple-update</literal>
+        and <literal>oldsqlf-simple-update</literal>.
+        The <literal>sqlfunc-*</literal> versions use the new SQL-standard SQL functions and
+        the <literal>oldsqlf-*</literal> use the SQL functions defined using <literal>LANGUAGE SQL</literal>.
+        Use <literal>--show-script=scriptname</literal> to see what is actually run.
+       </para>
+       <para>
         With the special name <literal>list</literal>, show the list of built-in scripts
-        and exit immediately.
+        and exit immediately :
+<programlisting>
+$ pgbench -b list
+Available builtin scripts:
+              tpcb-like: &lt;builtin: TPC-B (sort of)&gt;
+      plpgsql-tpcb-like: &lt;builtin: TPC-B (sort of) - pl/pgsql UDF&gt;
+      sqlfunc-tpcb-like: &lt;builtin: TPC-B (sort of) - 'BEGIN ATOMIC' SQL UDF&gt;
+      oldsqlf-tpcb-like: &lt;builtin: TPC-B (sort of) - LANGUAGE SQL UDF&gt;
+          simple-update: &lt;builtin: simple update&gt;
+  plpgsql-simple-update: &lt;builtin: simple update - pl/pgsql UDF&gt;
+  sqlfunc-simple-update: &lt;builtin: simple update - 'BEGIN ATOMIC' SQL UDF&gt;
+  oldsqlf-simple-update: &lt;builtin: simple update - LANGUAGE SQL UDF&gt;
+            select-only: &lt;builtin: select only&gt;
+</programlisting>
        </para>
        <para>
         Optionally, write an integer weight after <literal>@</literal> to

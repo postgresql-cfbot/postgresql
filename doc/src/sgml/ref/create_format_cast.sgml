@@ -1,0 +1,131 @@
+<!--
+doc/src/sgml/ref/create_format_cast.sgml
+PostgreSQL documentation
+-->
+
+<refentry id="sql-createformatcast">
+ <indexterm zone="sql-createformatcast">
+  <primary>CREATE FORMAT CAST</primary>
+ </indexterm>
+
+ <refmeta>
+  <refentrytitle>CREATE FORMAT CAST</refentrytitle>
+  <manvolnum>7</manvolnum>
+  <refmiscinfo>SQL - Language Statements</refmiscinfo>
+ </refmeta>
+
+ <refnamediv>
+  <refname>CREATE FORMAT CAST</refname>
+  <refpurpose>define a new format cast for a formatted cast</refpurpose>
+ </refnamediv>
+
+ <refsynopsisdiv>
+<synopsis>
+CREATE FORMAT CAST (<replaceable>source_type</replaceable> AS <replaceable>target_type</replaceable>)
+    WITH FUNCTION <replaceable>function_name</replaceable> [ (<replaceable>argument_type</replaceable> [, ...]) ]
+</synopsis>
+ </refsynopsisdiv>
+
+ <refsect1 id="sql-createformatcast-description">
+  <title>Description</title>
+
+  <para>
+   <command>CREATE FORMAT CAST</command> defines a formatting conversion for
+   <literal>CAST(<replaceable>expr</replaceable> AS <replaceable>target_type</replaceable> FORMAT <replaceable>format_expr</replaceable>)</literal>.
+   A format cast is selected by the source type and target type of the cast.
+   Unlike an ordinary cast (see <xref linkend="sql-createcast"/>), a formatted
+   cast is always explicit and always uses a function, and the function
+   additionally receives the <literal>FORMAT</literal> expression.
+  </para>
+
+  <para>
+   The format cast function must take exactly two arguments and return the
+   target type:
+<synopsis>
+<replaceable>function_name</replaceable>(<replaceable>source_type</replaceable>, text) RETURNS <replaceable>target_type</replaceable>
+</synopsis>
+   The first argument is the value being formatted, and the second argument
+   receives the <literal>FORMAT</literal> expression coerced to
+   <type>text</type>.  Only one format cast may be registered for a given
+   <literal>(<replaceable>source_type</replaceable>,
+   <replaceable>target_type</replaceable>)</literal> pair.  Neither the source
+   type nor the target type may be a pseudo-type.
+  </para>
+
+  <para>
+   To create a format cast, you must be the owner of the source type or the
+   target type, and you must have <literal>EXECUTE</literal> privilege on the
+   format cast function.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>Parameters</title>
+
+   <variablelist>
+    <varlistentry>
+     <term><replaceable>source_type</replaceable></term>
+     <listitem>
+      <para>
+       The data type of the value passed to the format cast (the source of the
+       cast).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><replaceable>target_type</replaceable></term>
+     <listitem>
+      <para>
+       The data type returned by the format cast (the target of the cast).
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><replaceable>function_name</replaceable>[(<replaceable>argument_type</replaceable> [, ...])]</term>
+     <listitem>
+      <para>
+       The function used to perform the formatted cast.  The argument list, if
+       given, must name the two argument types
+       (<replaceable>source_type</replaceable> and <type>text</type>).
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+ </refsect1>
+
+ <refsect1 id="sql-createformatcast-examples">
+  <title>Examples</title>
+
+  <para>
+   Register a format cast that converts an <type>integer</type> to
+   <type>text</type> using the supplied format string:
+<programlisting>
+CREATE FUNCTION int4_to_text_fmt(integer, text) RETURNS text
+    LANGUAGE sql IMMUTABLE RETURN $1::text || ':' || $2;
+
+CREATE FORMAT CAST (integer AS text)
+    WITH FUNCTION int4_to_text_fmt(integer, text);
+</programlisting></para>
+ </refsect1>
+
+ <refsect1 id="sql-createformatcast-compat">
+  <title>Compatibility</title>
+
+  <para>
+   <command>CREATE FORMAT CAST</command> is a
+   <productname>PostgreSQL</productname> extension.
+  </para>
+ </refsect1>
+
+ <refsect1>
+  <title>See Also</title>
+
+  <simplelist type="inline">
+   <member><xref linkend="sql-dropformatcast"/></member>
+   <member><xref linkend="sql-createcast"/></member>
+  </simplelist>
+ </refsect1>
+
+</refentry>

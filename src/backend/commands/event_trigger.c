@@ -2301,6 +2301,7 @@ stringify_grant_objtype(ObjectType objtype)
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
+		case OBJECT_FORMAT_CAST:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_DEFAULT:
@@ -2385,6 +2386,7 @@ stringify_adefprivs_objtype(ObjectType objtype)
 		case OBJECT_AMPROC:
 		case OBJECT_ATTRIBUTE:
 		case OBJECT_CAST:
+		case OBJECT_FORMAT_CAST:
 		case OBJECT_COLLATION:
 		case OBJECT_CONVERSION:
 		case OBJECT_DEFAULT:

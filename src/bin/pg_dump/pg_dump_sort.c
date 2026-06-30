@@ -60,6 +60,7 @@ enum dbObjectTypePriorities
 	PRIO_EXTENSION,
 	PRIO_TYPE,					/* used for DO_TYPE and DO_SHELL_TYPE */
 	PRIO_CAST,
+	PRIO_FORMAT_CAST,
 	PRIO_FUNC,
 	PRIO_AGG,
 	PRIO_ACCESS_METHOD,
@@ -128,6 +129,7 @@ static const int dbObjectTypePriority[] =
 	[DO_FK_CONSTRAINT] = PRIO_FK_CONSTRAINT,
 	[DO_PROCLANG] = PRIO_PROCLANG,
 	[DO_CAST] = PRIO_CAST,
+	[DO_FORMAT_CAST] = PRIO_FORMAT_CAST,
 	[DO_TABLE_DATA] = PRIO_TABLE_DATA,
 	[DO_SEQUENCE_SET] = PRIO_SEQUENCE_SET,
 	[DO_DUMMY_TYPE] = PRIO_DUMMY_TYPE,
@@ -1647,6 +1649,13 @@ describeDumpableObject(DumpableObject *obj, char *buf, int bufsize)
 					 "CAST %u to %u  (ID %d OID %u)",
 					 ((CastInfo *) obj)->castsource,
 					 ((CastInfo *) obj)->casttarget,
+					 obj->dumpId, obj->catId.oid);
+			return;
+		case DO_FORMAT_CAST:
+			snprintf(buf, bufsize,
+					 "FORMAT CAST %u to %u  (ID %d OID %u)",
+					 ((FormatCastInfo *) obj)->fmtsource,
+					 ((FormatCastInfo *) obj)->fmttarget,
 					 obj->dumpId, obj->catId.oid);
 			return;
 		case DO_TRANSFORM:

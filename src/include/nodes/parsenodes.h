@@ -402,6 +402,7 @@ typedef struct TypeCast
 	NodeTag		type;
 	Node	   *arg;			/* the expression being casted */
 	TypeName   *typeName;		/* the target type */
+	Node	   *format;			/* FORMAT expression, or NULL if none */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } TypeCast;
 
@@ -2444,6 +2445,7 @@ typedef enum ObjectType
 	OBJECT_FDW,
 	OBJECT_FOREIGN_SERVER,
 	OBJECT_FOREIGN_TABLE,
+	OBJECT_FORMAT_CAST,
 	OBJECT_FUNCTION,
 	OBJECT_INDEX,
 	OBJECT_LANGUAGE,
@@ -4354,6 +4356,22 @@ typedef struct CreateTransformStmt
 	ObjectWithArgs *fromsql;
 	ObjectWithArgs *tosql;
 } CreateTransformStmt;
+
+/* ----------------------
+ *	CREATE FORMAT CAST Statement
+ *
+ * Registers a format cast function for CAST(... AS target FORMAT ...) on a
+ * (sourcetype, targettype) pair.  DROP FORMAT CAST reuses the generic
+ * DropStmt path with removeType == OBJECT_FORMAT_CAST.
+ * ----------------------
+ */
+typedef struct CreateFormatCastStmt
+{
+	NodeTag		type;
+	TypeName   *sourcetype;		/* source data type */
+	TypeName   *targettype;		/* target data type */
+	ObjectWithArgs *func;		/* format cast function */
+} CreateFormatCastStmt;
 
 /* ----------------------
  *		PREPARE Statement

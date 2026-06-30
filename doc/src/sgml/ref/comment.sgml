@@ -37,6 +37,7 @@ COMMENT ON
   EVENT TRIGGER <replaceable class="parameter">object_name</replaceable> |
   FOREIGN DATA WRAPPER <replaceable class="parameter">object_name</replaceable> |
   FOREIGN TABLE <replaceable class="parameter">object_name</replaceable> |
+  FORMAT CAST (<replaceable>source_type</replaceable> AS <replaceable>target_type</replaceable>) |
   FUNCTION <replaceable class="parameter">function_name</replaceable> [ ( [ [ <replaceable class="parameter">argmode</replaceable> ] [ <replaceable class="parameter">argname</replaceable> ] <replaceable class="parameter">argtype</replaceable> [, ...] ] ) ] |
   INDEX <replaceable class="parameter">object_name</replaceable> |
   LARGE OBJECT <replaceable class="parameter">large_object_oid</replaceable> |
@@ -336,6 +337,7 @@ COMMENT ON EVENT TRIGGER abort_ddl IS 'Aborts all DDL commands';
 COMMENT ON EXTENSION hstore IS 'implements the hstore data type';
 COMMENT ON FOREIGN DATA WRAPPER mywrapper IS 'my foreign data wrapper';
 COMMENT ON FOREIGN TABLE my_foreign_table IS 'Employee Information in other database';
+COMMENT ON FORMAT CAST (integer AS text) IS 'Allow formatted casts from integer to text';
 COMMENT ON FUNCTION my_function (timestamp) IS 'Returns Roman Numeral';
 COMMENT ON INDEX my_index IS 'Enforces uniqueness on employee ID';
 COMMENT ON LANGUAGE plpython IS 'Python support for stored procedures';

@@ -27,6 +27,7 @@
 #include "catalog/pg_collation.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_database.h"
+#include "catalog/pg_format_cast.h"
 #include "catalog/pg_index.h"
 #include "catalog/pg_language.h"
 #include "catalog/pg_namespace.h"
@@ -1236,6 +1237,42 @@ get_cast_oid(Oid sourcetypeid, Oid targettypeid, bool missing_ok)
 						format_type_be(sourcetypeid),
 						format_type_be(targettypeid))));
 	return oid;
+}
+
+/*				---------- PG_FORMAT_CAST CACHE ----------				 */
+
+/*
+ * get_format_cast_function
+ *
+ *		Given source and target type OIDs, look up the format cast registered
+ *		for that (source, target) pair.  Returns the pg_format_cast row OID, or
+ *		InvalidOid if none is registered.  If found and formatfunc is not
+ *		NULL, *formatfunc is set to the format cast function OID.
+ */
+Oid
+get_format_cast_function(Oid sourcetypeid, Oid targettypeid, Oid *formatfunc)
+{
+	HeapTuple	tp;
+	Oid			result;
+
+	tp = SearchSysCache2(FORMATCASTSOURCETARGET,
+						 ObjectIdGetDatum(sourcetypeid),
+						 ObjectIdGetDatum(targettypeid));
+	if (!HeapTupleIsValid(tp))
+		return InvalidOid;
+
+	{
+		Form_pg_format_cast fmt = (Form_pg_format_cast) GETSTRUCT(tp);
+
+		/* A valid pg_format_cast row always names a format cast function. */
+		Assert(OidIsValid(fmt->fmtfunc));
+
+		result = fmt->oid;
+		if (formatfunc != NULL)
+			*formatfunc = fmt->fmtfunc;
+	}
+	ReleaseSysCache(tp);
+	return result;
 }
 
 /*				---------- COLLATION CACHE ----------					 */

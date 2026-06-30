@@ -62,6 +62,7 @@ catalog_headers = [
   'pg_parameter_acl.h',
   'pg_partitioned_table.h',
   'pg_range.h',
+  'pg_format_cast.h',
   'pg_transform.h',
   'pg_sequence.h',
   'pg_publication.h',

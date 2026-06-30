@@ -9447,6 +9447,10 @@ isSimpleNode(Node *node, Node *parentNode, int prettyFlags)
 			/* function-like: name(..) or name[..] */
 			return true;
 
+		case T_CoerceViaFormatCast:
+			/* deparses as CAST(.. FORMAT ..), self-delimiting */
+			return true;
+
 			/* CASE keywords act as parentheses */
 		case T_CaseExpr:
 			return true;
@@ -10307,6 +10311,21 @@ get_rule_expr(Node *node, deparse_context *context,
 									  -1,
 									  node);
 				}
+			}
+			break;
+
+		case T_CoerceViaFormatCast:
+			{
+				CoerceViaFormatCast *fmt = (CoerceViaFormatCast *) node;
+
+				/* always print the SQL-standard CAST(... FORMAT ...) syntax */
+				appendStringInfoString(buf, "CAST(");
+				get_rule_expr((Node *) fmt->arg, context, false);
+				appendStringInfo(buf, " AS %s FORMAT ",
+								 format_type_with_typemod(fmt->resulttype,
+														  fmt->resulttypmod));
+				get_rule_expr((Node *) fmt->format, context, false);
+				appendStringInfoChar(buf, ')');
 			}
 			break;
 

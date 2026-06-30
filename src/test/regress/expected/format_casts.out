@@ -1,0 +1,676 @@
+--
+-- FORMAT CASTS
+--
+-- A format cast registers a function for a (source type, target type) pair; a
+-- CAST(... AS target FORMAT format_expr) is resolved through pg_format_cast and
+-- calls that function.  This test covers both the CREATE/DROP FORMAT CAST
+-- catalog DDL and the execution of formatted casts.
+-- A simple format cast function with the required signature
+--   function(source_type, text) returns target_type
+CREATE FUNCTION int4_to_text_fmt(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || ':' || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION int4_to_text_fmt(integer, text);
+-- It shows up in the catalog (use regtype/regprocedure, not raw OIDs)
+SELECT fmtsource::regtype, fmttarget::regtype, fmtfunc::regprocedure
+	FROM pg_format_cast
+	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype;
+ fmtsource | fmttarget |            fmtfunc             
+-----------+-----------+--------------------------------
+ integer   | text      | int4_to_text_fmt(integer,text)
+(1 row)
+
+-- ... and as a first-class object
+SELECT pg_describe_object('pg_format_cast'::regclass, oid, 0)
+	FROM pg_format_cast
+	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype;
+        pg_describe_object        
+----------------------------------
+ format cast from integer to text
+(1 row)
+
+-- Object identity and COMMENT use "FORMAT CAST (source AS target)" (no "FOR CAST").
+SELECT identity FROM pg_identify_object('pg_format_cast'::regclass,
+	(SELECT oid FROM pg_format_cast
+	 WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype), 0);
+           identity           
+------------------------------
+ (integer AS pg_catalog.text)
+(1 row)
+
+COMMENT ON FORMAT CAST (integer AS text) IS 'demo format cast';
+SELECT obj_description((SELECT oid FROM pg_format_cast
+	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype),
+	'pg_format_cast');
+ obj_description  
+------------------
+ demo format cast
+(1 row)
+
+COMMENT ON FORMAT CAST (integer AS text) IS NULL;
+-- pg_identify_object_as_address() must round-trip back through
+-- pg_get_object_address() to the same catalog object.
+WITH fmt AS (
+	SELECT oid FROM pg_format_cast
+	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype
+), addr AS (
+	SELECT * FROM pg_identify_object_as_address('pg_format_cast'::regclass,
+												(SELECT oid FROM fmt), 0)
+)
+SELECT addr.type, addr.object_names, addr.object_args,
+	   (SELECT classid = 'pg_format_cast'::regclass
+			   AND objid = (SELECT oid FROM fmt)
+			   AND objsubid = 0
+		FROM pg_get_object_address(addr.type, addr.object_names, addr.object_args))
+	   AS round_trips
+	FROM addr;
+    type     | object_names |    object_args    | round_trips 
+-------------+--------------+-------------------+-------------
+ format cast | {integer}    | {pg_catalog.text} | t
+(1 row)
+
+-- Only one format cast per (source, target) pair
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION int4_to_text_fmt(integer, text);
+ERROR:  format cast from type integer to type text already exists
+-- Function signature validation
+CREATE FUNCTION fmt_bad_nargs(integer) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION fmt_bad_nargs(integer);			-- wrong # of arguments
+ERROR:  format cast function must take exactly two arguments
+CREATE FUNCTION fmt_bad_arg2(integer, integer) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION fmt_bad_arg2(integer, integer);	-- second arg not text
+ERROR:  second argument of format cast function must be type text
+CREATE FUNCTION fmt_bad_arg1(bigint, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION fmt_bad_arg1(bigint, text);		-- first arg mismatch
+ERROR:  first argument of format cast function must be type integer
+CREATE FUNCTION fmt_bad_ret(integer, text) RETURNS boolean
+	LANGUAGE sql IMMUTABLE RETURN true;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION fmt_bad_ret(integer, text);		-- return type mismatch
+ERROR:  return data type of format cast function must be type text
+CREATE FUNCTION fmt_bad_set(integer, text) RETURNS SETOF text
+	LANGUAGE sql IMMUTABLE AS $$ SELECT $1::text $$;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION fmt_bad_set(integer, text);		-- set-returning rejected
+ERROR:  format cast function must not return a set
+-- No pseudo-types: a format cast's source/target may not be a pseudo-type, so
+-- CREATE FORMAT CAST on a polymorphic (anyelement) source is intentionally
+-- rejected.
+CREATE FUNCTION fmt_anyel(anyelement, text) RETURNS text
+	LANGUAGE sql IMMUTABLE AS $$ SELECT $2 $$;
+CREATE FORMAT CAST (anyelement AS text)
+	WITH FUNCTION fmt_anyel(anyelement, text);
+ERROR:  source data type anyelement is a pseudo-type
+-- ====================================================================
+-- Execution: a formatted cast resolves through pg_format_cast and calls the
+-- registered format cast function.
+-- ====================================================================
+-- basic execution, using the (integer, text) format cast created above
+SELECT CAST(5 AS text FORMAT 'abc');
+ text  
+-------
+ 5:abc
+(1 row)
+
+-- the FORMAT expression may be any expression, coerced to text
+SELECT CAST(5 AS text FORMAT 'a' || 'b');
+ text 
+------
+ 5:ab
+(1 row)
+
+SELECT CAST(5 AS text FORMAT 123);
+ text  
+-------
+ 5:123
+(1 row)
+
+-- The FORMAT expression is parse-analyzed independently of (and before) the
+-- format cast lookup, so an invalid FORMAT expression reports a normal error.
+SELECT CAST(5 AS text FORMAT no_such_column);
+ERROR:  column "no_such_column" does not exist
+LINE 1: SELECT CAST(5 AS text FORMAT no_such_column);
+                                     ^
+-- Like an ordinary cast that uses a cast function, a formatted cast checks
+-- EXECUTE on the format cast function at use time.
+REVOKE EXECUTE ON FUNCTION int4_to_text_fmt(integer, text) FROM PUBLIC;
+CREATE ROLE regress_format_cast_noexec NOLOGIN;
+SET ROLE regress_format_cast_noexec;
+SELECT CAST(5 AS text FORMAT 'p');			-- fails: no EXECUTE on format cast function
+ERROR:  permission denied for function int4_to_text_fmt
+RESET ROLE;
+DROP ROLE regress_format_cast_noexec;
+GRANT EXECUTE ON FUNCTION int4_to_text_fmt(integer, text) TO PUBLIC;
+-- A FORMAT clause never falls back to an ordinary cast: text -> text is a
+-- trivial ordinary cast, but a formatted cast still requires a format cast.
+SELECT CAST('abc'::text AS text FORMAT 'whatever');
+ERROR:  format cast from type text to type text does not exist
+LINE 1: SELECT CAST('abc'::text AS text FORMAT 'whatever');
+               ^
+HINT:  Use CREATE FORMAT CAST to define a format cast for this type pair.
+-- An unknown-type source literal is coerced to text first, so this also looks
+-- up (text, text), not (unknown, text).
+SELECT CAST('abc' AS text FORMAT 'fmt');
+ERROR:  format cast from type text to type text does not exist
+LINE 1: SELECT CAST('abc' AS text FORMAT 'fmt');
+               ^
+HINT:  Use CREATE FORMAT CAST to define a format cast for this type pair.
+-- A missing format cast is an error even where an ordinary cast would be valid.
+SELECT CAST(5 AS integer FORMAT 'x');
+ERROR:  format cast from type integer to type integer does not exist
+LINE 1: SELECT CAST(5 AS integer FORMAT 'x');
+               ^
+HINT:  Use CREATE FORMAT CAST to define a format cast for this type pair.
+-- Define the (text, text) format cast and re-run the text-source cases.
+CREATE FUNCTION text_to_text_fmt(text, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1 || '/' || $2;
+CREATE FORMAT CAST (text AS text)
+	WITH FUNCTION text_to_text_fmt(text, text);
+SELECT CAST('abc'::text AS text FORMAT 'whatever');
+     text     
+--------------
+ abc/whatever
+(1 row)
+
+SELECT CAST('abc' AS text FORMAT 'fmt');
+  text   
+---------
+ abc/fmt
+(1 row)
+
+-- A type modifier on the target is enforced through the ordinary coercion path.
+CREATE FUNCTION int4_to_vc_fmt(integer, text) RETURNS varchar
+	LANGUAGE sql IMMUTABLE RETURN $1::text || $2;
+CREATE FORMAT CAST (integer AS varchar)
+	WITH FUNCTION int4_to_vc_fmt(integer, text);
+SELECT CAST(5 AS varchar FORMAT 'XXXX');
+ varchar 
+---------
+ 5XXXX
+(1 row)
+
+SELECT CAST(5 AS varchar(3) FORMAT 'XXXX');			-- length 3 enforced
+ varchar 
+---------
+ 5XX
+(1 row)
+
+-- Domain target: the format cast must return the domain type, so the domain's
+-- constraints are enforced by the function's result.
+CREATE DOMAIN nonempty_text AS text CHECK (VALUE <> '');
+CREATE FUNCTION text_to_netext_fmt(text, text) RETURNS nonempty_text
+	LANGUAGE sql IMMUTABLE RETURN $2::nonempty_text;
+CREATE FORMAT CAST (text AS nonempty_text)
+	WITH FUNCTION text_to_netext_fmt(text, text);
+SELECT CAST('z'::text AS nonempty_text FORMAT 'ok');
+ nonempty_text 
+---------------
+ ok
+(1 row)
+
+SELECT CAST('z'::text AS nonempty_text FORMAT '');	-- domain check violation
+ERROR:  value for domain nonempty_text violates check constraint "nonempty_text_check"
+CONTEXT:  SQL function "text_to_netext_fmt" statement 1
+-- Drop the objects created in this execution section.
+DROP FORMAT CAST (text AS text);
+DROP FUNCTION text_to_text_fmt(text, text);
+DROP FORMAT CAST (integer AS varchar);
+DROP FUNCTION int4_to_vc_fmt(integer, text);
+DROP FORMAT CAST (text AS nonempty_text);
+DROP FUNCTION text_to_netext_fmt(text, text);
+DROP DOMAIN nonempty_text;
+-- Dependency behavior: the format cast depends on its function.
+DROP FUNCTION int4_to_text_fmt(integer, text);				-- fails (RESTRICT)
+ERROR:  cannot drop function int4_to_text_fmt(integer,text) because other objects depend on it
+DETAIL:  format cast from integer to text depends on function int4_to_text_fmt(integer,text)
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP FUNCTION int4_to_text_fmt(integer, text) CASCADE;		-- drops format cast
+NOTICE:  drop cascades to format cast from integer to text
+SELECT count(*) FROM pg_format_cast
+	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype;
+ count 
+-------
+     0
+(1 row)
+
+-- Privileges: the creator must own the source or the target type.  (The
+-- ownership check happens before the function is looked up, so the function
+-- name here is irrelevant.)
+CREATE ROLE regress_format_cast_user;
+SET ROLE regress_format_cast_user;
+CREATE FORMAT CAST (text AS integer)
+	WITH FUNCTION pg_catalog.length(text);
+ERROR:  must be owner of type text or type integer
+RESET ROLE;
+DROP ROLE regress_format_cast_user;
+-- DROP FORMAT CAST, including IF EXISTS
+CREATE FUNCTION int4_to_text_fmt(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || ':' || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION int4_to_text_fmt(integer, text);
+DROP FORMAT CAST (integer AS text);
+DROP FORMAT CAST (integer AS text);					-- fails, gone
+ERROR:  format cast from type integer to type text does not exist
+DROP FORMAT CAST IF EXISTS (integer AS text);		-- notice, no error
+NOTICE:  format cast from type integer to type text does not exist, skipping
+-- Clean up
+DROP FUNCTION int4_to_text_fmt(integer, text);
+DROP FUNCTION fmt_bad_nargs(integer);
+DROP FUNCTION fmt_bad_arg2(integer, integer);
+DROP FUNCTION fmt_bad_arg1(bigint, text);
+DROP FUNCTION fmt_bad_ret(integer, text);
+DROP FUNCTION fmt_bad_set(integer, text);
+DROP FUNCTION fmt_anyel(anyelement, text);
+-- ====================================================================
+-- CoerceViaFormatCast: deparse fidelity and dependency on the format cast row
+-- ====================================================================
+CREATE FUNCTION i2t_view(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || ':' || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION i2t_view(integer, text);
+-- A view over a formatted cast deparses back to CAST(... FORMAT ...).
+CREATE VIEW format_cast_view AS SELECT CAST(5 AS text FORMAT 'abc') AS x;
+SELECT pg_get_viewdef('format_cast_view'::regclass, true);
+                  pg_get_viewdef                  
+--------------------------------------------------
+  SELECT CAST(5 AS text FORMAT 'abc'::text) AS x;
+(1 row)
+
+SELECT * FROM format_cast_view;
+   x   
+-------
+ 5:abc
+(1 row)
+
+-- The view depends on the pg_format_cast row, so DROP FORMAT CAST RESTRICT fails.
+DROP FORMAT CAST (integer AS text);					-- fails (RESTRICT, view depends)
+ERROR:  cannot drop format cast from integer to text because other objects depend on it
+DETAIL:  view format_cast_view depends on format cast from integer to text
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+-- ... and CASCADE drops the dependent view.
+DROP FORMAT CAST (integer AS text) CASCADE;
+NOTICE:  drop cascades to view format_cast_view
+SELECT count(*) FROM pg_class WHERE relname = 'format_cast_view';
+ count 
+-------
+     0
+(1 row)
+
+DROP FUNCTION i2t_view(integer, text);
+-- ====================================================================
+-- Collation: a formatted cast behaves like calling the format cast function
+-- formatfunc(arg, format).  Its result collation is the result type's
+-- collation, and the input collation is derived from the arg and FORMAT
+-- expressions exactly as for an ordinary two-argument function call.
+-- ====================================================================
+-- text_larger(text, text) returns text and is collation-sensitive at the C
+-- level (it reads PG_GET_COLLATION), so it exercises the input collation.
+CREATE FORMAT CAST (text AS text)
+	WITH FUNCTION pg_catalog.text_larger(text, text);
+-- The default collation flows into the format cast call; if the input collation
+-- were left unset this would fail with "could not determine which collation".
+SELECT CAST('apple'::text AS text FORMAT 'banana'::text);
+  text  
+--------
+ banana
+(1 row)
+
+-- An explicit COLLATE on an operand is honored as the input collation.
+SELECT CAST('apple'::text AS text FORMAT 'banana'::text COLLATE "C");
+  text  
+--------
+ banana
+(1 row)
+
+-- The result is collatable, so an explicit COLLATE on the cast itself works.
+SELECT CAST('apple'::text AS text FORMAT 'banana'::text) COLLATE "C" < 'zzz';
+ ?column? 
+----------
+ t
+(1 row)
+
+-- Conflicting explicit input collations are rejected, just like a plain
+-- function call text_larger('a' COLLATE "C", 'b' COLLATE "POSIX").
+SELECT CAST('a'::text COLLATE "C" AS text FORMAT 'b'::text COLLATE "POSIX");
+ERROR:  collation mismatch between explicit collations "C" and "POSIX"
+LINE 1: ...ST('a'::text COLLATE "C" AS text FORMAT 'b'::text COLLATE "P...
+                                                             ^
+DROP FORMAT CAST (text AS text);
+-- ====================================================================
+-- ruleutils: arg and FORMAT subexpressions deparse unambiguously inside
+-- CAST(...), needing no extra parentheses, and re-parse to the same thing.
+-- ====================================================================
+CREATE FUNCTION i2t_paren(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION i2t_paren(integer, text);
+CREATE VIEW format_cast_paren_view AS
+	SELECT CAST((1 + 2) AS text FORMAT ('a' || 'b')) AS x;
+SELECT pg_get_viewdef('format_cast_paren_view'::regclass, true);
+                         pg_get_viewdef                          
+-----------------------------------------------------------------
+  SELECT CAST(1 + 2 AS text FORMAT 'a'::text || 'b'::text) AS x;
+(1 row)
+
+SELECT * FROM format_cast_paren_view;
+  x  
+-----
+ 3ab
+(1 row)
+
+DROP VIEW format_cast_paren_view;
+DROP FORMAT CAST (integer AS text);
+DROP FUNCTION i2t_paren(integer, text);
+-- ====================================================================
+-- Dependency completeness: a view over a formatted cast depends (through the
+-- pg_format_cast row) on the format cast function, so dropping the function with
+-- CASCADE removes both the format cast row and the view in one step.
+-- ====================================================================
+CREATE FUNCTION i2t_chain(integer, text) RETURNS text
+	LANGUAGE sql IMMUTABLE RETURN $1::text || $2;
+CREATE FORMAT CAST (integer AS text)
+	WITH FUNCTION i2t_chain(integer, text);
+CREATE VIEW format_cast_chain_view AS SELECT CAST(7 AS text FORMAT 'q') AS x;
+DROP FUNCTION i2t_chain(integer, text);					-- fails: format cast + view depend
+ERROR:  cannot drop function i2t_chain(integer,text) because other objects depend on it
+DETAIL:  format cast from integer to text depends on function i2t_chain(integer,text)
+view format_cast_chain_view depends on function i2t_chain(integer,text)
+HINT:  Use DROP ... CASCADE to drop the dependent objects too.
+DROP FUNCTION i2t_chain(integer, text) CASCADE;			-- drops format cast and view
+NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to format cast from integer to text
+drop cascades to view format_cast_chain_view
+SELECT count(*) FROM pg_format_cast
+	WHERE fmtsource = 'integer'::regtype AND fmttarget = 'text'::regtype;
+ count 
+-------
+     0
+(1 row)
+
+SELECT count(*) FROM pg_class WHERE relname = 'format_cast_chain_view';
+ count 
+-------
+     0
+(1 row)
+
+-- ====================================================================
+-- Built-in datetime/string format casts.
+-- These rows are registered in pg_format_cast and reuse PostgreSQL's
+-- existing formatting template behavior.
+-- This initial set covers date, timestamp and timestamptz with
+-- text/varchar/bpchar.
+-- ====================================================================
+-- Pin the time zone and date style so results are stable across machines.
+SET TimeZone = 'UTC';
+SET DateStyle = 'ISO, YMD';
+-- text -> date.  The unknown-type literal is coerced to text before format
+-- cast lookup.
+SELECT CAST('2026-06-28' AS date FORMAT 'YYYY-MM-DD');
+    date    
+------------
+ 2026-06-28
+(1 row)
+
+-- varchar source -> date
+SELECT CAST('2026-06-28'::varchar AS date FORMAT 'YYYY-MM-DD');
+    date    
+------------
+ 2026-06-28
+(1 row)
+
+-- bpchar source -> date: a CHAR(10) holds the value exactly, and a wider
+-- CHAR(20) pads with blanks that the format cast trims before parsing.
+SELECT CAST('2026-06-28'::char(10) AS date FORMAT 'YYYY-MM-DD');
+    date    
+------------
+ 2026-06-28
+(1 row)
+
+SELECT CAST('2026-06-28'::char(20) AS date FORMAT 'YYYY-MM-DD');
+    date    
+------------
+ 2026-06-28
+(1 row)
+
+-- The built-in format cast functions are STRICT: a NULL source or a NULL FORMAT
+-- expression yields NULL without invoking the format cast.
+SELECT CAST(NULL::text AS date FORMAT 'YYYY-MM-DD') IS NULL AS null_src;
+ null_src 
+----------
+ t
+(1 row)
+
+SELECT CAST('2026-06-28' AS date FORMAT NULL::text) IS NULL AS null_fmt;
+ null_fmt 
+----------
+ t
+(1 row)
+
+SELECT CAST(NULL::date AS text FORMAT 'YYYY-MM-DD') IS NULL AS null_src_out;
+ null_src_out 
+--------------
+ t
+(1 row)
+
+-- date -> text / varchar
+SELECT CAST(date '2026-06-28' AS text FORMAT 'YYYY-MM-DD');
+    text    
+------------
+ 2026-06-28
+(1 row)
+
+SELECT CAST(date '2026-06-28' AS varchar FORMAT 'YYYY-MM-DD');
+  varchar   
+------------
+ 2026-06-28
+(1 row)
+
+-- date -> varchar with a typmod: the declared length is enforced by the
+-- ordinary coercion layered above the format cast (here it truncates to 7).
+SELECT CAST(date '2026-06-28' AS varchar(7) FORMAT 'YYYY-MM-DD');
+ varchar 
+---------
+ 2026-06
+(1 row)
+
+-- date -> bpchar: AS char(12) pads to the declared length; bare AS char is
+-- char(1), so the ordinary coercion truncates to one character.  The wrapper
+-- returns a text varlena that is a valid bpchar value.
+SELECT CAST(date '2026-06-28' AS char(12) FORMAT 'YYYY-MM-DD');
+    bpchar    
+--------------
+ 2026-06-28  
+(1 row)
+
+SELECT CAST(date '2026-06-28' AS char FORMAT 'YYYY-MM-DD');
+ bpchar 
+--------
+ 2
+(1 row)
+
+-- Collation: a formatted cast is collated like the function call it executes.
+-- A collatable result type (text) must get a real result collation, not
+-- InvalidOid; "collation for" reports "default" (it would be NULL if the
+-- result collation were unset), and an explicit COLLATE on the result works.
+SELECT pg_collation_for(CAST(date '2026-06-28' AS text FORMAT 'YYYY-MM-DD'));
+ pg_collation_for 
+------------------
+ "default"
+(1 row)
+
+SELECT pg_collation_for(CAST(date '2026-06-28' AS text FORMAT 'YYYY-MM-DD') COLLATE "C");
+ pg_collation_for 
+------------------
+ "C"
+(1 row)
+
+-- An explicit COLLATE on the FORMAT argument flows in as the input collation.
+SELECT pg_collation_for(CAST(date '2026-06-28' AS text
+                             FORMAT 'YYYY-MM-DD'::text COLLATE "C"));
+ pg_collation_for 
+------------------
+ "C"
+(1 row)
+
+-- timestamp without time zone, both directions
+SELECT CAST('2026-06-28 13:45:30' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+      timestamp      
+---------------------
+ 2026-06-28 13:45:30
+(1 row)
+
+SELECT CAST(timestamp '2026-06-28 13:45:30' AS text FORMAT 'YYYY-MM-DD HH24:MI:SS');
+        text         
+---------------------
+ 2026-06-28 13:45:30
+(1 row)
+
+-- a date-only template is widened to timestamp (midnight)
+SELECT CAST('2026-06-28' AS timestamp FORMAT 'YYYY-MM-DD');
+      timestamp      
+---------------------
+ 2026-06-28 00:00:00
+(1 row)
+
+-- The built-ins reuse PostgreSQL's existing formatting parser: a template with
+-- no time-zone field consumes only the fields it names, so a trailing time zone
+-- in the input is simply ignored (existing to_timestamp() behavior, unchanged).
+SELECT CAST('2026-06-28 13:45:30+05' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+      timestamp      
+---------------------
+ 2026-06-28 13:45:30
+(1 row)
+
+-- But a template that explicitly contains a time-zone field is rejected for a
+-- timestamp-without-time-zone target (we must not fold a zone into a zoneless
+-- result via the session TimeZone).
+SELECT CAST('2026-06-28 13:45:30+05' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS TZH');
+ERROR:  FORMAT template for a cast to timestamp without time zone must not specify a time zone
+-- timestamp WITHOUT time zone must not depend on the session TimeZone: the same
+-- (unzoned) input/template yields the same wall-clock value under any zone.
+SET TimeZone = 'America/Los_Angeles';
+SELECT CAST('2026-06-28 13:45:30' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+      timestamp      
+---------------------
+ 2026-06-28 13:45:30
+(1 row)
+
+SET TimeZone = 'UTC';
+SELECT CAST('2026-06-28 13:45:30' AS timestamp FORMAT 'YYYY-MM-DD HH24:MI:SS');
+      timestamp      
+---------------------
+ 2026-06-28 13:45:30
+(1 row)
+
+-- timestamp with time zone, both directions (TimeZone is UTC, set above)
+SELECT CAST('2026-06-28 13:45:30 +00' AS timestamptz FORMAT 'YYYY-MM-DD HH24:MI:SS TZH');
+      timestamptz       
+------------------------
+ 2026-06-28 13:45:30+00
+(1 row)
+
+SELECT CAST(timestamptz '2026-06-28 13:45:30+00' AS text FORMAT 'YYYY-MM-DD HH24:MI:SS TZH');
+          text           
+-------------------------
+ 2026-06-28 13:45:30 +00
+(1 row)
+
+-- A sampling of datetime template tokens, exercised through the existing
+-- to_char/to_timestamp engine.  TZM and SSSSS are supported here.
+SELECT CAST(timestamptz '2026-06-28 13:45:30+00' AS text
+            FORMAT 'YYYY-MM-DD"T"HH24:MI:SS TZH:TZM');
+            text            
+----------------------------
+ 2026-06-28T13:45:30 +00:00
+(1 row)
+
+SELECT CAST(timestamp '2026-06-28 13:45:30' AS text FORMAT 'SSSSS');
+ text  
+-------
+ 49530
+(1 row)
+
+-- Fractional seconds (FFn) are accepted by to_char in the output direction.
+SELECT CAST(timestamp '2026-06-28 13:45:30.123456' AS text
+            FORMAT 'HH24:MI:SS.FF6');
+      text       
+-----------------
+ 13:45:30.123456
+(1 row)
+
+-- Empty FORMAT template behavior follows the underlying formatting functions.
+-- In the parse direction the underlying to_date() engine parses no fields and
+-- returns the all-defaults date; in the format direction the wrappers mirror
+-- to_char(value, ''), which is NULL.
+SELECT CAST('2026-06-28' AS date FORMAT '');
+     date      
+---------------
+ 0001-01-01 BC
+(1 row)
+
+SELECT CAST(date '2026-06-28' AS text FORMAT '') IS NULL AS empty_fmt_out;
+ empty_fmt_out 
+---------------
+ t
+(1 row)
+
+-- The FORMAT clause remains a PostgreSQL extension: it may be any expression
+-- coercible to text, not just a string literal.
+SELECT CAST('2026-' || '06-28' AS date FORMAT 'YYYY-' || 'MM-DD');
+    date    
+------------
+ 2026-06-28
+(1 row)
+
+-- A FORMAT clause never falls back to an ordinary cast: an integer -> date
+-- pair has no format cast (and no ordinary cast), so it errors.
+SELECT CAST(5 AS date FORMAT 'YYYY');
+ERROR:  format cast from type integer to type date does not exist
+LINE 1: SELECT CAST(5 AS date FORMAT 'YYYY');
+               ^
+HINT:  Use CREATE FORMAT CAST to define a format cast for this type pair.
+-- A built-in format cast occupies its (source, target) pair, so a user
+-- CREATE FORMAT CAST for the same pair fails with the usual duplicate error.
+CREATE FUNCTION my_text_to_date(text, text) RETURNS date
+	LANGUAGE sql IMMUTABLE RETURN to_date($1, $2);
+CREATE FORMAT CAST (text AS date)
+	WITH FUNCTION my_text_to_date(text, text);		-- fails: already exists
+ERROR:  format cast from type text to type date already exists
+DROP FUNCTION my_text_to_date(text, text);
+-- Built-in format cast rows are system objects (their OIDs are in the pinned
+-- range), so they cannot be dropped.
+DROP FORMAT CAST (text AS date);				-- fails: pinned system object
+ERROR:  cannot drop format cast from text to date because it is required by the database system
+-- A view over a built-in formatted cast deparses back to CAST(... FORMAT ...).
+CREATE VIEW builtin_format_cast_view AS
+	SELECT CAST('2026-06-28' AS date FORMAT 'YYYY-MM-DD') AS d;
+SELECT pg_get_viewdef('builtin_format_cast_view'::regclass, true);
+                              pg_get_viewdef                              
+--------------------------------------------------------------------------
+  SELECT CAST('2026-06-28'::text AS date FORMAT 'YYYY-MM-DD'::text) AS d;
+(1 row)
+
+SELECT * FROM builtin_format_cast_view;
+     d      
+------------
+ 2026-06-28
+(1 row)
+
+DROP VIEW builtin_format_cast_view;
+-- Make sure query jumbling handles CoerceViaFormatCast.
+SET compute_query_id = on;
+SELECT CAST('2026-06-28' AS date FORMAT 'YYYY-MM-DD');
+    date    
+------------
+ 2026-06-28
+(1 row)
+
+RESET compute_query_id;
+RESET TimeZone;
+RESET DateStyle;

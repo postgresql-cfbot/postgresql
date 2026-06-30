@@ -295,13 +295,14 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
 		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
 		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
+		CreateFormatCastStmt
 		CreatePropGraphStmt AlterPropGraphStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
 		DropOpClassStmt DropOpFamilyStmt DropStmt
 		DropCastStmt DropRoleStmt
 		DropdbStmt DropTableSpaceStmt
-		DropTransformStmt
+		DropTransformStmt DropFormatCastStmt
 		DropUserMappingStmt ExplainStmt FetchStmt
 		GrantStmt GrantRoleStmt ImportForeignSchemaStmt IndexStmt InsertStmt
 		ListenStmt LoadStmt LockStmt MergeStmt NotifyStmt ExplainableStmt PreparableStmt
@@ -1105,6 +1106,7 @@ stmt:
 			| CreateStatsStmt
 			| CreateTableSpaceStmt
 			| CreateTransformStmt
+			| CreateFormatCastStmt
 			| CreateTrigStmt
 			| CreateEventTrigStmt
 			| CreateRoleStmt
@@ -1125,6 +1127,7 @@ stmt:
 			| DropSubscriptionStmt
 			| DropTableSpaceStmt
 			| DropTransformStmt
+			| DropFormatCastStmt
 			| DropRoleStmt
 			| DropUserMappingStmt
 			| DropdbStmt
@@ -5522,6 +5525,16 @@ AlterExtensionContentsStmt:
 					n->object = (Node *) list_make2($7, $9);
 					$$ = (Node *) n;
 				}
+			| ALTER EXTENSION name add_drop FORMAT CAST '(' Typename AS Typename ')'
+				{
+					AlterExtensionContentsStmt *n = makeNode(AlterExtensionContentsStmt);
+
+					n->extname = $3;
+					n->action = $4;
+					n->objtype = OBJECT_FORMAT_CAST;
+					n->object = (Node *) list_make2($8, $10);
+					$$ = (Node *) n;
+				}
 			| ALTER EXTENSION name add_drop DOMAIN_P Typename
 				{
 					AlterExtensionContentsStmt *n = makeNode(AlterExtensionContentsStmt);
@@ -7510,6 +7523,15 @@ CommentStmt:
 					n->objtype = OBJECT_CAST;
 					n->object = (Node *) list_make2($5, $7);
 					n->comment = $10;
+					$$ = (Node *) n;
+				}
+			| COMMENT ON FORMAT CAST '(' Typename AS Typename ')' IS comment_text
+				{
+					CommentStmt *n = makeNode(CommentStmt);
+
+					n->objtype = OBJECT_FORMAT_CAST;
+					n->object = (Node *) list_make2($6, $8);
+					n->comment = $11;
 					$$ = (Node *) n;
 				}
 		;
@@ -9888,6 +9910,38 @@ DropTransformStmt: DROP TRANSFORM opt_if_exists FOR Typename LANGUAGE name opt_d
 					n->objects = list_make1(list_make2($5, makeString($7)));
 					n->behavior = $8;
 					n->missing_ok = $3;
+					$$ = (Node *) n;
+				}
+		;
+
+
+/*****************************************************************************
+ *
+ *		CREATE FORMAT CAST / DROP FORMAT CAST
+ *
+ * A format cast registers the function implementing
+ * CAST(expr AS target FORMAT format_expr) for a (source, target) type pair.
+ *****************************************************************************/
+
+CreateFormatCastStmt: CREATE FORMAT CAST '(' Typename AS Typename ')' WITH FUNCTION function_with_argtypes
+				{
+					CreateFormatCastStmt *n = makeNode(CreateFormatCastStmt);
+
+					n->sourcetype = $5;
+					n->targettype = $7;
+					n->func = $11;
+					$$ = (Node *) n;
+				}
+		;
+
+DropFormatCastStmt: DROP FORMAT CAST opt_if_exists '(' Typename AS Typename ')' opt_drop_behavior
+				{
+					DropStmt *n = makeNode(DropStmt);
+
+					n->removeType = OBJECT_FORMAT_CAST;
+					n->objects = list_make1(list_make2($6, $8));
+					n->behavior = $10;
+					n->missing_ok = $4;
 					$$ = (Node *) n;
 				}
 		;
@@ -16787,6 +16841,13 @@ func_expr_common_subexpr:
 				}
 			| CAST '(' a_expr AS Typename ')'
 				{ $$ = makeTypeCast($3, $5, @1); }
+			| CAST '(' a_expr AS Typename FORMAT a_expr ')'
+				{
+					TypeCast   *n = (TypeCast *) makeTypeCast($3, $5, @1);
+
+					n->format = $7;
+					$$ = (Node *) n;
+				}
 			| EXTRACT '(' extract_list ')'
 				{
 					$$ = (Node *) makeFuncCall(SystemFuncName("extract"),

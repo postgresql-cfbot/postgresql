@@ -1231,6 +1231,44 @@ typedef struct CoerceViaIO
 } CoerceViaIO;
 
 /* ----------------
+ * CoerceViaFormatCast
+ *
+ * CoerceViaFormatCast represents CAST(arg AS resulttype FORMAT format), a
+ * formatted cast resolved through the pg_format_cast catalog.  It calls the
+ * registered format cast function with the source value and the FORMAT
+ * expression (already coerced to text), returning the target type:
+ *
+ *		formatfunc(arg, format) returns resulttype
+ *
+ * Unlike a plain FuncExpr, this node remembers that it came from
+ * CAST ... FORMAT (so it deparses back to that syntax) and which
+ * pg_format_cast row it resolved to (so a stored expression can depend on the
+ * format cast object).  It is executed by reusing ordinary function-call
+ * evaluation, so EXECUTE permission on formatfunc is checked at run time,
+ * as for an ordinary function-backed cast.
+ * ----------------
+ */
+typedef struct CoerceViaFormatCast
+{
+	Expr		xpr;
+	Expr	   *arg;			/* source expression */
+	Expr	   *format;			/* FORMAT expression, already coerced to text */
+	Oid			resulttype;		/* output type of the cast */
+	/* output typmod (usually -1; typmod enforcement is layered above) */
+	int32		resulttypmod pg_node_attr(query_jumble_ignore);
+	/* OID of result collation, or InvalidOid if none */
+	Oid			resultcollid pg_node_attr(query_jumble_ignore);
+	/* input collation for the format cast function call */
+	Oid			inputcollid pg_node_attr(query_jumble_ignore);
+	Oid			formatfunc;	/* pg_format_cast.fmtfunc */
+	/* pg_format_cast row OID this resolved to (for dependencies) */
+	Oid			formatcastid pg_node_attr(query_jumble_ignore);
+	/* how to display this node */
+	CoercionForm coercionformat pg_node_attr(query_jumble_ignore);
+	ParseLoc	location;		/* token location, or -1 if unknown */
+} CoerceViaFormatCast;
+
+/* ----------------
  * ArrayCoerceExpr
  *
  * ArrayCoerceExpr represents a type coercion from one array type to another,

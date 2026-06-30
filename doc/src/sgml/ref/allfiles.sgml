@@ -70,6 +70,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY createExtension    SYSTEM "create_extension.sgml">
 <!ENTITY createForeignDataWrapper SYSTEM "create_foreign_data_wrapper.sgml">
 <!ENTITY createForeignTable SYSTEM "create_foreign_table.sgml">
+<!ENTITY createFormatCast    SYSTEM "create_format_cast.sgml">
 <!ENTITY createFunction     SYSTEM "create_function.sgml">
 <!ENTITY createGroup        SYSTEM "create_group.sgml">
 <!ENTITY createIndex        SYSTEM "create_index.sgml">
@@ -118,6 +119,7 @@ Complete list of usable sgml source files in this directory.
 <!ENTITY dropExtension      SYSTEM "drop_extension.sgml">
 <!ENTITY dropForeignDataWrapper SYSTEM "drop_foreign_data_wrapper.sgml">
 <!ENTITY dropForeignTable   SYSTEM "drop_foreign_table.sgml">
+<!ENTITY dropFormatCast      SYSTEM "drop_format_cast.sgml">
 <!ENTITY dropFunction       SYSTEM "drop_function.sgml">
 <!ENTITY dropGroup          SYSTEM "drop_group.sgml">
 <!ENTITY dropIndex          SYSTEM "drop_index.sgml">

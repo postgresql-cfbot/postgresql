@@ -188,6 +188,9 @@ getSchemaData(Archive *fout, int *numTablesPtr)
 	pg_log_info("reading transforms");
 	getTransforms(fout);
 
+	pg_log_info("reading format casts");
+	getFormatCasts(fout);
+
 	pg_log_info("reading table inheritance information");
 	inhinfo = getInherits(fout, &numInherits);
 

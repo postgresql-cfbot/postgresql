@@ -73,6 +73,7 @@ typedef enum
 	DO_FOREIGN_SERVER,
 	DO_DEFAULT_ACL,
 	DO_TRANSFORM,
+	DO_FORMAT_CAST,
 	DO_LARGE_OBJECT,
 	DO_LARGE_OBJECT_DATA,
 	DO_PRE_DATA_BOUNDARY,
@@ -559,6 +560,14 @@ typedef struct _transformInfo
 	Oid			trftosql;
 } TransformInfo;
 
+typedef struct _formatCastInfo
+{
+	DumpableObject dobj;
+	Oid			fmtsource;
+	Oid			fmttarget;
+	Oid			fmtfunc;
+} FormatCastInfo;
+
 /* InhInfo isn't a DumpableObject, just temporary state */
 typedef struct _inhInfo
 {
@@ -814,6 +823,7 @@ extern void getTriggers(Archive *fout, TableInfo tblinfo[], int numTables);
 extern void getProcLangs(Archive *fout);
 extern void getCasts(Archive *fout);
 extern void getTransforms(Archive *fout);
+extern void getFormatCasts(Archive *fout);
 extern void getTableAttrs(Archive *fout, TableInfo *tblinfo, int numTables);
 extern bool shouldPrintColumn(const DumpOptions *dopt, const TableInfo *tbinfo, int colno);
 extern void getTSParsers(Archive *fout);

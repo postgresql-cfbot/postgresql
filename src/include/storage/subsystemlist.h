@@ -42,6 +42,7 @@ PG_SHMEM_SUBSYSTEM(MultiXactShmemCallbacks)
 PG_SHMEM_SUBSYSTEM(BufferManagerShmemCallbacks)
 PG_SHMEM_SUBSYSTEM(StrategyCtlShmemCallbacks)
 PG_SHMEM_SUBSYSTEM(BufTableShmemCallbacks)
+PG_SHMEM_SUBSYSTEM(WalPipelineShmemCallbacks)
 
 /* lock manager */
 PG_SHMEM_SUBSYSTEM(LockManagerShmemCallbacks)

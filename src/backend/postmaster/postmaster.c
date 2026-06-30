@@ -91,6 +91,7 @@
 
 #include "access/xlog.h"
 #include "access/xlog_internal.h"
+#include "access/xlogpipeline.h"
 #include "access/xlogrecovery.h"
 #include "common/file_perm.h"
 #include "common/pg_prng.h"
@@ -3936,12 +3937,21 @@ process_pm_pmsignal(void)
 		CheckPromoteSignal())
 	{
 		/*
-		 * Tell startup process to finish recovery.
+		 * Tell startup process to finish recovery. Incase pipeline is enabled
+		 * also signal the pipeline worker.
 		 *
 		 * Leave the promote signal file in place and let the Startup process
 		 * do the unlink.
 		 */
 		signal_child(StartupPMChild, SIGUSR2);
+
+		if (wal_pipeline_enabled && WalPipeline_IsActive())
+		{
+			pid_t pipeline_bgw = WalPipeline_GetProducerPid();
+
+			if (pipeline_bgw != InvalidPid)
+				signal_child(FindPostmasterChildByPid(pipeline_bgw), SIGUSR2);
+		}
 	}
 }
 

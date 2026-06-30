@@ -20,6 +20,7 @@
 #include "access/twophase.h"
 #include "access/xact.h"
 #include "access/xlog.h"
+#include "catalog/aclcheck_track.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_authid.h"
 #include "catalog/pg_inherits.h"
@@ -510,24 +511,38 @@ ProcessUtility(PlannedStmt *pstmt,
 			   DestReceiver *dest,
 			   QueryCompletion *qc)
 {
+	TrackAclTable *prevTrackAclTable = CurrentTrackAclTable;
+
 	Assert(IsA(pstmt, PlannedStmt));
 	Assert(pstmt->commandType == CMD_UTILITY);
 	Assert(queryString != NULL);	/* required as of 8.4 */
 	Assert(qc == NULL || qc->commandTag == CMDTAG_UNKNOWN);
 
-	/*
-	 * We provide a function hook variable that lets loadable plugins get
-	 * control when ProcessUtility is called.  Such a plugin would normally
-	 * call standard_ProcessUtility().
-	 */
-	if (ProcessUtility_hook)
-		(*ProcessUtility_hook) (pstmt, queryString, readOnlyTree,
-								context, params, queryEnv,
-								dest, qc);
-	else
-		standard_ProcessUtility(pstmt, queryString, readOnlyTree,
-								context, params, queryEnv,
-								dest, qc);
+	/* Allocate a fresh acl tracking table for this utility statement. */
+	CurrentTrackAclTable = CreateTrackAclTable();
+
+	PG_TRY();
+	{
+		/*
+		 * We provide a function hook variable that lets loadable plugins get
+		 * control when ProcessUtility is called.  Such a plugin would
+		 * normally call standard_ProcessUtility().
+		 */
+		if (ProcessUtility_hook)
+			(*ProcessUtility_hook) (pstmt, queryString, readOnlyTree,
+									context, params, queryEnv,
+									dest, qc);
+		else
+			standard_ProcessUtility(pstmt, queryString, readOnlyTree,
+									context, params, queryEnv,
+									dest, qc);
+	}
+	PG_FINALLY();
+	{
+		FreeTrackAclTable(CurrentTrackAclTable);
+		CurrentTrackAclTable = prevTrackAclTable;
+	}
+	PG_END_TRY();
 }
 
 /*

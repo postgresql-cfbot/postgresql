@@ -19,7 +19,8 @@ ISOLATION = basic \
 	    repack_temporal_multirange \
 	    repack_toast \
 	    syscache-update-pruned \
-	    heap_lock_update
+	    heap_lock_update \
+	    fk_column_ref
 
 # some isolation tests require wal_level=replica
 ISOLATION_OPTS = --temp-config $(top_srcdir)/src/test/modules/injection_points/extra.conf

@@ -1,0 +1,33 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_attach s1_add_fk s2_invalidate_and_wakeup
+step s1_attach: 
+	SELECT injection_points_set_local();
+	SELECT injection_points_attach('checkFkeyPermissions-after-table-acl-fail', 'wait');
+
+injection_points_set_local
+--------------------------
+                          
+(1 row)
+
+injection_points_attach
+-----------------------
+                       
+(1 row)
+
+step s1_add_fk: 
+	SET ROLE role_fk_tester;
+	ALTER TABLE fk_source ADD FOREIGN KEY (ref_id) REFERENCES fk_ref_target(id);
+	RESET ROLE;
+ <waiting ...>
+step s2_invalidate_and_wakeup: 
+	GRANT SELECT ON produce_inval TO role_fk_tester;
+	REVOKE SELECT ON produce_inval FROM role_fk_tester;
+	SELECT injection_points_wakeup('checkFkeyPermissions-after-table-acl-fail');
+
+injection_points_wakeup
+-----------------------
+                       
+(1 row)
+
+step s1_add_fk: <... completed>

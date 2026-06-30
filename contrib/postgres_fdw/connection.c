@@ -1091,6 +1091,16 @@ pgfdw_get_result(PGconn *conn)
 }
 
 /*
+ * Used in case of streaming_fetch mode.
+ * Caller is responsible for the error handling on the result.
+ */
+PGresult *
+pgfdw_get_next_result(PGconn *conn)
+{
+	return libpqsrv_get_result(conn, pgfdw_we_get_result);
+}
+
+/*
  * Report an error we got from the remote server.
  *
  * Callers should use pgfdw_report_error() to throw an error, or use
@@ -2753,4 +2763,22 @@ pgfdw_has_required_scram_options(const char **keywords, const char **values)
 	has_scram_keys = has_scram_client_key && has_scram_server_key && MyProcPort != NULL && MyProcPort->has_scram_keys;
 
 	return (has_scram_keys && has_require_auth);
+}
+
+/*
+ * Cancel an in-flight query on conn without treating query_canceled as an
+ * error.  Used in streaming_fetch mode to end the scan early.
+ */
+void
+pgfdw_cancel_scan(PGconn *conn)
+{
+	TimestampTz now = GetCurrentTimestamp();
+	TimestampTz endtime =
+		TimestampTzPlusMilliseconds(now, CONNECTION_CLEANUP_TIMEOUT);
+	TimestampTz retrycanceltime =
+		TimestampTzPlusMilliseconds(now, RETRY_CANCEL_TIMEOUT);
+
+	/* best-effort cancel; pgfdw_cancel_query_begin emits a WARNING on failure */
+	pgfdw_cancel_query_begin(conn, endtime);
+	pgfdw_cancel_query_end(conn, endtime, retrycanceltime, false);
 }

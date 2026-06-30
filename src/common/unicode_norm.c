@@ -19,13 +19,11 @@
 #endif
 
 #include "common/unicode_norm.h"
+#include "common/unicode_norm_table.h"
 #ifndef FRONTEND
-#include "common/unicode_norm_hashfunc.h"
 #include "common/unicode_normprops_table.h"
 #include "port/pg_bswap.h"
 #include "utils/memutils.h"
-#else
-#include "common/unicode_norm_table.h"
 #endif
 
 #ifndef FRONTEND
@@ -47,21 +45,6 @@
 #define NCOUNT		VCOUNT * TCOUNT
 #define SCOUNT		LCOUNT * NCOUNT
 
-#ifdef FRONTEND
-/* comparison routine for bsearch() of decomposition lookup table. */
-static int
-conv_compare(const void *p1, const void *p2)
-{
-	uint32		v1,
-				v2;
-
-	v1 = *(const uint32 *) p1;
-	v2 = ((const pg_unicode_decomposition *) p2)->codepoint;
-	return (v1 > v2) ? 1 : ((v1 == v2) ? 0 : -1);
-}
-
-#endif
-
 /*
  * get_code_entry
  *
@@ -72,38 +55,9 @@ conv_compare(const void *p1, const void *p2)
 static const pg_unicode_decomposition *
 get_code_entry(char32_t code)
 {
-#ifndef FRONTEND
-	int			h;
-	uint32		hashkey;
-	pg_unicode_decompinfo decompinfo = UnicodeDecompInfo;
+	uint16		idx = normalization_index(code);
 
-	/*
-	 * Compute the hash function. The hash key is the codepoint with the bytes
-	 * in network order.
-	 */
-	hashkey = pg_hton32(code);
-	h = decompinfo.hash(&hashkey);
-
-	/* An out-of-range result implies no match */
-	if (h < 0 || h >= decompinfo.num_decomps)
-		return NULL;
-
-	/*
-	 * Since it's a perfect hash, we need only match to the specific codepoint
-	 * it identifies.
-	 */
-	if (code != decompinfo.decomps[h].codepoint)
-		return NULL;
-
-	/* Success! */
-	return &decompinfo.decomps[h];
-#else
-	return bsearch(&(code),
-				   UnicodeDecompMain,
-				   lengthof(UnicodeDecompMain),
-				   sizeof(pg_unicode_decomposition),
-				   conv_compare);
-#endif
+	return idx != 0 ? &UnicodeDecompMain[idx] : NULL;
 }
 
 /*
@@ -143,70 +97,129 @@ get_code_decomposition(const pg_unicode_decomposition *entry, int *dec_size)
 		*dec_size = 1;
 		return &x;
 	}
-	else
+
+	*dec_size = DECOMPOSITION_SIZE(entry);
+	return &UnicodeDecompCodepoints[entry->dec_index];
+
+}
+
+static const char32_t *
+get_code_compat_decomposition(const pg_unicode_decomposition *entry,
+							  int *dec_size)
+{
+	static char32_t x;
+
+	if (DECOMPOSITION_IS_INLINE(entry))
 	{
-		*dec_size = DECOMPOSITION_SIZE(entry);
-		return &UnicodeDecomp_codepoints[entry->dec_index];
+		x = (char32_t) entry->dec_index;
+		*dec_size = 1;
+		return &x;
 	}
+
+	*dec_size = DECOMPOSITION_COMPAT_SIZE(entry);
+	if (*dec_size > 0)
+		return &UnicodeDecompCodepoints[entry->dec_index
+										+ DECOMPOSITION_SIZE(entry)];
+
+	*dec_size = DECOMPOSITION_SIZE(entry);
+	return &UnicodeDecompCodepoints[entry->dec_index];
 }
 
 /*
- * Calculate how many characters a given character will decompose to.
- *
- * This needs to recurse, if the character decomposes into characters that
- * are, in turn, decomposable.
+ * Given a decomposition entry looked up earlier, get the decomposed size.
  */
-static int
-get_decomposed_size(char32_t code, bool compat)
+static inline int
+get_code_size(const pg_unicode_decomposition *entry)
 {
-	const pg_unicode_decomposition *entry;
-	int			size = 0;
-	int			i;
-	const uint32 *decomp;
-	int			dec_size;
-
-	/*
-	 * Fast path for Hangul characters not stored in tables to save memory as
-	 * decomposition is algorithmic. See
-	 * https://www.unicode.org/reports/tr15/tr15-18.html, annex 10 for details
-	 * on the matter.
-	 */
-	if (code >= SBASE && code < SBASE + SCOUNT)
-	{
-		uint32		tindex,
-					sindex;
-
-		sindex = code - SBASE;
-		tindex = sindex % TCOUNT;
-
-		if (tindex != 0)
-			return 3;
-		return 2;
-	}
-
-	entry = get_code_entry(code);
-
-	/*
-	 * Just count current code if no other decompositions.  A NULL entry is
-	 * equivalent to a character with class 0 and no decompositions.
-	 */
-	if (entry == NULL || DECOMPOSITION_SIZE(entry) == 0 ||
-		(!compat && DECOMPOSITION_IS_COMPAT(entry)))
+	if (DECOMPOSITION_IS_INLINE(entry))
 		return 1;
 
-	/*
-	 * If this entry has other decomposition codes look at them as well. First
-	 * get its decomposition in the list of tables available.
-	 */
-	decomp = get_code_decomposition(entry, &dec_size);
-	for (i = 0; i < dec_size; i++)
-	{
-		uint32		lcode = decomp[i];
+	return DECOMPOSITION_SIZE(entry);
 
-		size += get_decomposed_size(lcode, compat);
+}
+
+static inline int
+get_code_compat_size(const pg_unicode_decomposition *entry)
+{
+	int			size;
+
+	if (DECOMPOSITION_IS_INLINE(entry))
+		return 1;
+
+	size = DECOMPOSITION_COMPAT_SIZE(entry);
+	if (size > 0)
+		return size;
+
+	return DECOMPOSITION_SIZE(entry);
+}
+
+/*
+ * Calculate how many characters long the decomposed version will be.
+ */
+static bool
+get_decomposed_size(const char32_t *p, bool compat, int *decomp_size)
+{
+	char32_t	code;
+	const pg_unicode_decomposition *entry;
+	Size		size = 0;
+
+	while ((code = *p++))
+	{
+		int			code_size;
+
+		/*
+		 * Fast path for Hangul characters not stored in tables to save memory
+		 * as decomposition is algorithmic. See
+		 * https://www.unicode.org/reports/tr15/tr15-18.html, annex 10 for
+		 * details on the matter.
+		 */
+		if (code >= SBASE && code < SBASE + SCOUNT)
+		{
+			uint32		tindex,
+						sindex;
+
+			sindex = code - SBASE;
+			tindex = sindex % TCOUNT;
+
+			if (tindex != 0)
+				code_size = 3;
+			else
+				code_size = 2;
+		}
+		else
+		{
+			entry = get_code_entry(code);
+
+			/*
+			 * Just count current code if no other decompositions.  A NULL
+			 * entry is equivalent to a character with class 0 and no
+			 * decompositions.
+			 */
+			if (entry == NULL || entry->dec_index == 0 ||
+				(!compat && DECOMPOSITION_IS_COMPAT(entry)))
+				code_size = 1;
+
+			/*
+			 * If this entry has other decomposition codes look at them as
+			 * well. First get its decomposition in the list of tables
+			 * available.
+			 */
+			else if (!compat)
+				code_size = get_code_size(entry);
+			else
+				code_size = get_code_compat_size(entry);
+		}
+
+		size += code_size;
+		if (unlikely(size > MaxAllocSize / sizeof(char32_t)))
+		{
+			*decomp_size = (int) size;
+			return false;
+		}
 	}
 
-	return size;
+	*decomp_size = (int) size;
+	return true;
 }
 
 /*
@@ -215,7 +228,7 @@ get_decomposed_size(char32_t code, bool compat)
  * table is necessary. Returns true if a recomposition can be done, and
  * false otherwise.
  */
-static bool
+static inline bool
 recompose_code(uint32 start, uint32 code, uint32 *result)
 {
 	/*
@@ -244,150 +257,187 @@ recompose_code(uint32 start, uint32 code, uint32 *result)
 		*result = start + tindex;
 		return true;
 	}
-	else
-	{
-		const pg_unicode_decomposition *entry;
 
-		/*
-		 * Do an inverse lookup of the decomposition tables to see if anything
-		 * matches. The comparison just needs to be a perfect match on the
-		 * sub-table of size two, because the start character has already been
-		 * recomposed partially.  This lookup uses a perfect hash function for
-		 * the backend code.
-		 */
-#ifndef FRONTEND
+	*result = normalization_inverse(start, code);
 
-		int			h,
-					inv_lookup_index;
-		uint64		hashkey;
-		pg_unicode_recompinfo recompinfo = UnicodeRecompInfo;
-
-		/*
-		 * Compute the hash function. The hash key is formed by concatenating
-		 * bytes of the two codepoints in network order. See also
-		 * src/common/unicode/generate-unicode_norm_table.pl.
-		 */
-		hashkey = pg_hton64(((uint64) start << 32) | (uint64) code);
-		h = recompinfo.hash(&hashkey);
-
-		/* An out-of-range result implies no match */
-		if (h < 0 || h >= recompinfo.num_recomps)
-			return false;
-
-		inv_lookup_index = recompinfo.inverse_lookup[h];
-		entry = &UnicodeDecompMain[inv_lookup_index];
-
-		if (start == UnicodeDecomp_codepoints[entry->dec_index] &&
-			code == UnicodeDecomp_codepoints[entry->dec_index + 1])
-		{
-			*result = entry->codepoint;
-			return true;
-		}
-
-#else
-
-		int			i;
-
-		for (i = 0; i < lengthof(UnicodeDecompMain); i++)
-		{
-			entry = &UnicodeDecompMain[i];
-
-			if (DECOMPOSITION_SIZE(entry) != 2)
-				continue;
-
-			if (DECOMPOSITION_NO_COMPOSE(entry))
-				continue;
-
-			if (start == UnicodeDecomp_codepoints[entry->dec_index] &&
-				code == UnicodeDecomp_codepoints[entry->dec_index + 1])
-			{
-				*result = entry->codepoint;
-				return true;
-			}
-		}
-#endif							/* !FRONTEND */
-	}
-
-	return false;
+	return *result != 0;
 }
 
 /*
- * Decompose the given code into the array given by caller. The
- * decomposition begins at the position given by caller, saving one
- * lookup on the decomposition table. The current position needs to be
- * updated here to let the caller know from where to continue filling
- * in the array result.
+ * Canonical ordering.
  */
 static void
-decompose_code(char32_t code, bool compat, char32_t **result, int *current)
+unicode_canonical_reorder(char32_t *decomps, char32_t *last_starter,
+						  uint8 *cur_class)
 {
-	const pg_unicode_decomposition *entry;
-	int			i;
-	const uint32 *decomp;
-	int			dec_size;
+	int			i,
+				length;
+	uint8		ccc;
+	char32_t	tmp;
 
 	/*
-	 * Fast path for Hangul characters not stored in tables to save memory as
-	 * decomposition is algorithmic. See
-	 * https://www.unicode.org/reports/tr15/tr15-18.html, annex 10 for details
-	 * on the matter.
+	 * Reordering occurs from starter to starter. There cannot be another
+	 * starter between starters. Therefore, there is no need to perform a
+	 * combining class check on 0.
 	 */
-	if (code >= SBASE && code < SBASE + SCOUNT)
+
+	length = (int) (last_starter - decomps);
+
+	for (i = 1; i < length; i++)
 	{
-		uint32		l,
-					v,
-					tindex,
-					sindex;
-		char32_t   *res = *result;
+		/*
+		 * Per Unicode (https://www.unicode.org/reports/tr15/tr15-18.html)
+		 * annex 4, a sequence of two adjacent characters in a string is an
+		 * exchangeable pair if the combining class (from the Unicode
+		 * Character Database) for the first character is greater than the
+		 * combining class for the second, and the second is not a starter.  A
+		 * character is a starter if its combining class is 0.
+		 */
+		if (cur_class[i - 1] <= cur_class[i])
+			continue;
 
-		sindex = code - SBASE;
-		l = LBASE + sindex / (VCOUNT * TCOUNT);
-		v = VBASE + (sindex % (VCOUNT * TCOUNT)) / TCOUNT;
-		tindex = sindex % TCOUNT;
+		/* exchange can happen */
+		tmp = decomps[i - 1];
+		decomps[i - 1] = decomps[i];
+		decomps[i] = tmp;
 
-		res[*current] = l;
-		(*current)++;
-		res[*current] = v;
-		(*current)++;
+		ccc = cur_class[i - 1];
+		cur_class[i - 1] = cur_class[i];
+		cur_class[i] = ccc;
 
-		if (tindex != 0)
+		/* backtrack to check again */
+		if (i > 1)
+			i -= 2;
+	}
+}
+
+static char32_t *
+decomposition(const char32_t *p, char32_t *decomps,
+			  uint8 *cur_class, bool compat)
+{
+	int			length;
+	uint32		l,
+				v,
+				tindex,
+				sindex;
+	char32_t	cp,
+			   *next_after_starter;
+	const char32_t *cps;
+	const pg_unicode_decomposition *entry;
+	uint8	   *next_after_class;
+
+	next_after_starter = decomps;
+	next_after_class = cur_class;
+
+	while ((cp = *p++))
+	{
+		/*
+		 * Fast path for Hangul characters not stored in tables to save memory
+		 * as decomposition is algorithmic. See
+		 * https://www.unicode.org/reports/tr15/tr15-18.html, annex 10 for
+		 * details on the matter.
+		 */
+		if (cp >= SBASE && cp < SBASE + SCOUNT)
 		{
-			res[*current] = TBASE + tindex;
-			(*current)++;
+			sindex = cp - SBASE;
+			l = LBASE + sindex / (VCOUNT * TCOUNT);
+			v = VBASE + (sindex % (VCOUNT * TCOUNT)) / TCOUNT;
+			tindex = sindex % TCOUNT;
+
+			if (decomps - next_after_starter > 1)
+				unicode_canonical_reorder(next_after_starter, decomps,
+										  next_after_class);
+
+			*decomps++ = l;
+			*cur_class++ = 0;
+
+			*decomps++ = v;
+			*cur_class++ = 0;
+
+			if (tindex != 0)
+			{
+				*decomps++ = TBASE + tindex;
+				*cur_class++ = 0;
+			}
+
+			next_after_class = cur_class;
+			next_after_starter = decomps;
+
+			continue;
 		}
 
-		return;
+		entry = get_code_entry(cp);
+
+		/*
+		 * Just fill in with the current decomposition if there are no
+		 * decomposition codes.  A NULL entry is equivalent to a character
+		 * with class 0 and no decompositions, so just leave also in this
+		 * case.
+		 */
+		if (entry == NULL || entry->dec_index == 0
+			|| (!compat && DECOMPOSITION_IS_COMPAT(entry)))
+		{
+			*decomps++ = cp;
+
+			if (entry != NULL && entry->comb_class > 0)
+			{
+				*cur_class++ = entry->comb_class;
+				continue;
+			}
+
+			*cur_class++ = 0;
+
+			if (decomps - next_after_starter > 1)
+				unicode_canonical_reorder(next_after_starter, decomps - 1,
+										  next_after_class);
+
+			next_after_class = cur_class;
+			next_after_starter = decomps;
+
+			continue;
+		}
+
+		/*
+		 * Recursion is not required in the decomposition; the data was
+		 * expanded in advance during the formation of the decomposition
+		 * tables.
+		 */
+		if (!compat)
+			cps = get_code_decomposition(entry, &length);
+		else
+			cps = get_code_compat_decomposition(entry, &length);
+
+		for (int i = 0; i < length; i++)
+		{
+			char32_t	ccc;
+			const char32_t lcode = cps[i];
+
+			ccc = get_canonical_class(lcode);
+
+			*decomps++ = lcode;
+			*cur_class++ = ccc;
+
+			if (ccc == 0)
+			{
+				char32_t   *starter = decomps - 1;
+
+				if (starter - next_after_starter > 1)
+					unicode_canonical_reorder(next_after_starter, starter,
+											  next_after_class);
+
+				next_after_starter = decomps;
+				next_after_class = cur_class;
+			}
+		}
 	}
 
-	entry = get_code_entry(code);
+	if (decomps - next_after_starter > 1)
+		unicode_canonical_reorder(next_after_starter, decomps,
+								  next_after_class);
 
-	/*
-	 * Just fill in with the current decomposition if there are no
-	 * decomposition codes to recurse to.  A NULL entry is equivalent to a
-	 * character with class 0 and no decompositions, so just leave also in
-	 * this case.
-	 */
-	if (entry == NULL || DECOMPOSITION_SIZE(entry) == 0 ||
-		(!compat && DECOMPOSITION_IS_COMPAT(entry)))
-	{
-		char32_t   *res = *result;
+	*decomps = '\0';
 
-		res[*current] = code;
-		(*current)++;
-		return;
-	}
-
-	/*
-	 * If this entry has other decomposition codes look at them as well.
-	 */
-	decomp = get_code_decomposition(entry, &dec_size);
-	for (i = 0; i < dec_size; i++)
-	{
-		char32_t	lcode = (char32_t) decomp[i];
-
-		/* Leave if no more decompositions */
-		decompose_code(lcode, compat, result, current);
-	}
+	return decomps;
 }
 
 /*
@@ -404,20 +454,16 @@ unicode_normalize(UnicodeNormalizationForm form, const char32_t *input)
 {
 	bool		compat = (form == UNICODE_NFKC || form == UNICODE_NFKD);
 	bool		recompose = (form == UNICODE_NFC || form == UNICODE_NFKC);
-	char32_t   *decomp_chars;
-	char32_t   *recomp_chars;
-	int			decomp_size,
-				current_size;
-	int			count;
-	const char32_t *p;
-
-	/* variables for recomposition */
-	int			last_class;
-	int			starter_pos;
-	int			target_pos;
-	uint32		starter_ch;
-
-	/* First, do character decomposition */
+	int			decomp_len,
+				i,
+				w;
+	char32_t   *decomps,
+			   *decomps_end,
+			   *starter,
+				composed;
+	uint8	   *classes,
+				prev_ccc;
+	uint8		class_buf[512];
 
 	/*
 	 * Calculate how many characters long the decomposed version will be.
@@ -428,77 +474,64 @@ unicode_normalize(UnicodeNormalizationForm form, const char32_t *input)
 	 * frontend we want to just return NULL in that case, so monitor the sum
 	 * and exit early once we'd need more than MaxAllocSize bytes.
 	 */
-	decomp_size = 0;
-	for (p = input; *p; p++)
+	if (!get_decomposed_size(input, compat, &decomp_len))
 	{
-		decomp_size += get_decomposed_size(*p, compat);
-		if (unlikely(decomp_size > MaxAllocSize / sizeof(char32_t)))
-		{
 #ifndef FRONTEND
-			/* Exit loop and let palloc() throw error below */
-			break;
+		/* Let palloc() throw the appropriate error below. */
 #else
-			/* Just return NULL with no explicit error */
-			return NULL;
+		/* Just return NULL with no explicit error. */
+		return NULL;
 #endif
-		}
 	}
 
-	decomp_chars = (char32_t *) ALLOC((decomp_size + 1) * sizeof(char32_t));
-	if (decomp_chars == NULL)
+	decomps = (char32_t *) ALLOC((decomp_len + 1) * sizeof(char32_t));
+	if (decomps == NULL)
 		return NULL;
 
 	/*
-	 * Now fill in each entry recursively. This needs a second pass on the
-	 * decomposition table.
+	 * We will cache all combining classes to reduce the number of visits to
+	 * data tables.
 	 */
-	current_size = 0;
-	for (p = input; *p; p++)
-		decompose_code(*p, compat, &decomp_chars, &current_size);
-	decomp_chars[decomp_size] = '\0';
-	Assert(decomp_size == current_size);
-
-	/* Leave if there is nothing to decompose */
-	if (decomp_size == 0)
-		return decomp_chars;
-
-	/*
-	 * Now apply canonical ordering.
-	 */
-	for (count = 1; count < decomp_size; count++)
+	if (decomp_len <= sizeof(class_buf))
 	{
-		char32_t	prev = decomp_chars[count - 1];
-		char32_t	next = decomp_chars[count];
-		char32_t	tmp;
-		const uint8 prevClass = get_canonical_class(prev);
-		const uint8 nextClass = get_canonical_class(next);
-
-		/*
-		 * Per Unicode (https://www.unicode.org/reports/tr15/tr15-18.html)
-		 * annex 4, a sequence of two adjacent characters in a string is an
-		 * exchangeable pair if the combining class (from the Unicode
-		 * Character Database) for the first character is greater than the
-		 * combining class for the second, and the second is not a starter.  A
-		 * character is a starter if its combining class is 0.
-		 */
-		if (prevClass == 0 || nextClass == 0)
-			continue;
-
-		if (prevClass <= nextClass)
-			continue;
-
-		/* exchange can happen */
-		tmp = decomp_chars[count - 1];
-		decomp_chars[count - 1] = decomp_chars[count];
-		decomp_chars[count] = tmp;
-
-		/* backtrack to check again */
-		if (count > 1)
-			count -= 2;
+		classes = class_buf;
+	}
+	else
+	{
+		classes = (uint8 *) ALLOC(decomp_len * sizeof(uint8));
+		if (classes == NULL)
+		{
+			FREE(decomps);
+			return NULL;
+		}
 	}
 
+	decomps_end = decomposition(input, decomps, classes, compat);
+
 	if (!recompose)
-		return decomp_chars;
+		goto done;
+
+	starter = NULL;
+	decomp_len = (int) (decomps_end - decomps);
+
+	/*
+	 * Find the first starter. This is necessary in order to avoid checking
+	 * for the presence of a starter in the main recomposition cycle.
+	 */
+	for (i = 0; i < decomp_len; i++)
+	{
+		if (classes[i] == 0)
+		{
+			starter = &decomps[i];
+			i += 1;
+			break;
+		}
+	}
+
+	if (starter == NULL)
+		goto done;
+
+	prev_ccc = 0;
 
 	/*
 	 * The last phase of NFC and NFKC is the recomposition of the reordered
@@ -506,48 +539,46 @@ unicode_normalize(UnicodeNormalizationForm form, const char32_t *input)
 	 * longer than the decomposed one, so make the allocation of the output
 	 * string based on that assumption.
 	 */
-	recomp_chars = (char32_t *) ALLOC((decomp_size + 1) * sizeof(char32_t));
-	if (!recomp_chars)
+	for (w = i; i < decomp_len; i++)
 	{
-		FREE(decomp_chars);
-		return NULL;
+		char32_t	ch = decomps[i];
+		uint8		ccc = classes[i];
+
+		if (prev_ccc != 0 && prev_ccc >= ccc)
+		{
+			if (ccc == 0)
+			{
+				starter = &decomps[w];
+				prev_ccc = 0;
+			}
+			else
+				prev_ccc = ccc;
+
+			decomps[w++] = ch;
+			continue;
+		}
+
+		if (recompose_code(*starter, ch, &composed))
+		{
+			*starter = composed;
+			continue;
+		}
+
+		if (ccc == 0)
+			starter = &decomps[w];
+
+		decomps[w++] = ch;
+		prev_ccc = ccc;
 	}
 
-	last_class = -1;			/* this eliminates a special check */
-	starter_pos = 0;
-	target_pos = 1;
-	starter_ch = recomp_chars[0] = decomp_chars[0];
+	decomps[w] = '\0';
 
-	for (count = 1; count < decomp_size; count++)
-	{
-		char32_t	ch = decomp_chars[count];
-		int			ch_class = get_canonical_class(ch);
-		char32_t	composite;
+done:
 
-		if (last_class < ch_class &&
-			recompose_code(starter_ch, ch, &composite))
-		{
-			recomp_chars[starter_pos] = composite;
-			starter_ch = composite;
-		}
-		else if (ch_class == 0)
-		{
-			starter_pos = target_pos;
-			starter_ch = ch;
-			last_class = -1;
-			recomp_chars[target_pos++] = ch;
-		}
-		else
-		{
-			last_class = ch_class;
-			recomp_chars[target_pos++] = ch;
-		}
-	}
-	recomp_chars[target_pos] = (char32_t) '\0';
+	if (classes != class_buf)
+		FREE(classes);
 
-	FREE(decomp_chars);
-
-	return recomp_chars;
+	return decomps;
 }
 
 /*

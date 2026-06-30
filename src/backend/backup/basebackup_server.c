@@ -160,7 +160,7 @@ static void
 bbsink_server_archive_contents(bbsink *sink, size_t len)
 {
 	bbsink_server *mysink = (bbsink_server *) sink;
-	int			nbytes;
+	ssize_t		nbytes;
 
 	nbytes = FileWrite(mysink->file, mysink->base.bbs_buffer, len,
 					   mysink->filepos, WAIT_EVENT_BASEBACKUP_WRITE);
@@ -176,9 +176,9 @@ bbsink_server_archive_contents(bbsink *sink, size_t len)
 		/* short write: complain appropriately */
 		ereport(ERROR,
 				(errcode(ERRCODE_DISK_FULL),
-				 errmsg("could not write file \"%s\": wrote only %d of %zu bytes at offset %u",
+				 errmsg("could not write file \"%s\": wrote only %zd of %zu bytes at offset %lld",
 						FilePathName(mysink->file),
-						nbytes, len, (unsigned) mysink->filepos),
+						nbytes, len, (long long) mysink->filepos),
 				 errhint("Check free disk space.")));
 	}
 
@@ -253,7 +253,7 @@ static void
 bbsink_server_manifest_contents(bbsink *sink, size_t len)
 {
 	bbsink_server *mysink = (bbsink_server *) sink;
-	int			nbytes;
+	ssize_t		nbytes;
 
 	nbytes = FileWrite(mysink->file, mysink->base.bbs_buffer, len,
 					   mysink->filepos, WAIT_EVENT_BASEBACKUP_WRITE);
@@ -269,9 +269,9 @@ bbsink_server_manifest_contents(bbsink *sink, size_t len)
 		/* short write: complain appropriately */
 		ereport(ERROR,
 				(errcode(ERRCODE_DISK_FULL),
-				 errmsg("could not write file \"%s\": wrote only %d of %zu bytes at offset %u",
+				 errmsg("could not write file \"%s\": wrote only %zd of %zu bytes at offset %lld",
 						FilePathName(mysink->file),
-						nbytes, len, (unsigned) mysink->filepos),
+						nbytes, len, (long long) mysink->filepos),
 				 errhint("Check free disk space.")));
 	}
 

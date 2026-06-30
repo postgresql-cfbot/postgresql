@@ -272,9 +272,9 @@ existsTimeLineHistoryFile(StreamCtl *stream)
 }
 
 static bool
-writeTimeLineHistoryFile(StreamCtl *stream, char *filename, char *content)
+writeTimeLineHistoryFile(StreamCtl *stream, const char *filename, const char *content)
 {
-	int			size = strlen(content);
+	size_t		size = strlen(content);
 	char		histfname[MAXFNAMELEN];
 	Walfile    *f;
 
@@ -299,7 +299,7 @@ writeTimeLineHistoryFile(StreamCtl *stream, char *filename, char *content)
 		return false;
 	}
 
-	if ((int) stream->walmethod->ops->write(f, content, size) != size)
+	if (stream->walmethod->ops->write(f, content, size) != size)
 	{
 		pg_log_error("could not write timeline history file \"%s\": %s",
 					 histfname, GetLastWalMethodError(stream->walmethod));

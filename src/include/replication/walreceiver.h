@@ -309,7 +309,7 @@ typedef void (*walrcv_readtimelinehistoryfile_fn) (WalReceiverConn *conn,
 												   TimeLineID tli,
 												   char **filename,
 												   char **content,
-												   int *size);
+												   size_t *size);
 
 /*
  * walrcv_startstreaming_fn

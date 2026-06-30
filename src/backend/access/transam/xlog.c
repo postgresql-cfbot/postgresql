@@ -3506,7 +3506,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 	 */
 	for (nbytes = 0; nbytes < wal_segment_size; nbytes += sizeof(buffer))
 	{
-		int			nread;
+		ssize_t		nread;
 
 		nread = upto - nbytes;
 
@@ -3519,7 +3519,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 
 		if (nread > 0)
 		{
-			int			r;
+			ssize_t		r;
 
 			if (nread > sizeof(buffer))
 				nread = sizeof(buffer);
@@ -3535,14 +3535,14 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 				else
 					ereport(ERROR,
 							(errcode(ERRCODE_DATA_CORRUPTED),
-							 errmsg("could not read file \"%s\": read %d of %zu",
-									path, r, (Size) nread)));
+							 errmsg("could not read file \"%s\": read %zd of %zu",
+									path, r, nread)));
 			}
 			pgstat_report_wait_end();
 		}
 		errno = 0;
 		pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_WRITE);
-		if ((int) write(fd, buffer.data, sizeof(buffer)) != (int) sizeof(buffer))
+		if (write(fd, buffer.data, sizeof(buffer)) != sizeof(buffer))
 		{
 			int			save_errno = errno;
 
@@ -4408,7 +4408,7 @@ ReadControlFile(void)
 	pg_crc32c	crc;
 	int			fd;
 	char		wal_segsz_str[20];
-	int			r;
+	ssize_t		r;
 
 	/*
 	 * Read data...
@@ -4433,7 +4433,7 @@ ReadControlFile(void)
 		else
 			ereport(PANIC,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
+					 errmsg("could not read file \"%s\": read %zd of %zu",
 							XLOG_CONTROL_FILE, r, sizeof(ControlFileData))));
 	}
 	pgstat_report_wait_end();
@@ -9668,7 +9668,7 @@ do_pg_backup_start(const char *backupidstr, bool fast, List **tablespaces,
 			if (de_type == PGFILETYPE_LNK)
 			{
 				StringInfoData escapedpath;
-				int			rllen;
+				ssize_t		rllen;
 
 				rllen = readlink(fullpath, linkpath, sizeof(linkpath));
 				if (rllen < 0)

@@ -1741,7 +1741,7 @@ pgconn_bio_read(BIO *h, char *buf, int size)
 	PGconn	   *conn = (PGconn *) BIO_get_data(h);
 	int			res;
 
-	res = pqsecure_raw_read(conn, buf, size);
+	res = (int) pqsecure_raw_read(conn, buf, size);
 	BIO_clear_retry_flags(h);
 	conn->last_read_was_eof = res == 0;
 	if (res < 0)
@@ -1775,7 +1775,7 @@ pgconn_bio_write(BIO *h, const char *buf, int size)
 {
 	int			res;
 
-	res = pqsecure_raw_write((PGconn *) BIO_get_data(h), buf, size);
+	res = (int) pqsecure_raw_write((PGconn *) BIO_get_data(h), buf, size);
 	BIO_clear_retry_flags(h);
 	if (res < 0)
 	{

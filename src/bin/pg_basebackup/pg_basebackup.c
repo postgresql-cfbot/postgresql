@@ -480,12 +480,13 @@ reached_end_position(XLogRecPtr segendpos, uint32 timeline,
 		r = select(bgpipe[0] + 1, &fds, NULL, NULL, &tv);
 		if (r == 1)
 		{
+			ssize_t		nread;
 			char		xlogend[64] = {0};
 			uint32		hi,
 						lo;
 
-			r = read(bgpipe[0], xlogend, sizeof(xlogend) - 1);
-			if (r < 0)
+			nread = read(bgpipe[0], xlogend, sizeof(xlogend) - 1);
+			if (nread < 0)
 				pg_fatal("could not read from ready pipe: %m");
 
 			if (sscanf(xlogend, "%X/%08X", &hi, &lo) != 2)
@@ -1822,7 +1823,7 @@ BaseBackup(char *compression_algorithm, char *compression_detail,
 	{
 		int			fd;
 		char		mbuf[65536];
-		int			nbytes;
+		ssize_t		nbytes;
 
 		/* Reject if server is too old. */
 		if (serverVersion < MINIMUM_VERSION_FOR_WAL_SUMMARIES)

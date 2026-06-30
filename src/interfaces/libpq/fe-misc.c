@@ -606,7 +606,7 @@ int
 pqReadData(PGconn *conn)
 {
 	int			someread = 0;
-	int			nread;
+	ssize_t		nread;
 
 	if (conn->sock == PGINVALID_SOCKET)
 	{
@@ -864,7 +864,7 @@ pqSendSome(PGconn *conn, int len)
 	/* while there's still data to send */
 	while (len > 0)
 	{
-		int			sent;
+		ssize_t		sent;
 
 #ifndef WIN32
 		sent = pqsecure_write(conn, ptr, len);

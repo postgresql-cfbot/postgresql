@@ -303,7 +303,7 @@ findNewestTimeLine(TimeLineID startTLI)
  */
 void
 writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
-					 XLogRecPtr switchpoint, char *reason)
+					 XLogRecPtr switchpoint, const char *reason)
 {
 	char		path[MAXPGPATH];
 	char		tmppath[MAXPGPATH];
@@ -311,7 +311,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	char		buffer[BLCKSZ];
 	int			srcfd;
 	int			fd;
-	int			nbytes;
+	ssize_t		nbytes;
 
 	Assert(newTLI > parentTLI); /* else bad selection of newTLI */
 
@@ -355,7 +355,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 		{
 			errno = 0;
 			pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_READ);
-			nbytes = (int) read(srcfd, buffer, sizeof(buffer));
+			nbytes = read(srcfd, buffer, sizeof(buffer));
 			pgstat_report_wait_end();
 			if (nbytes < 0 || errno != 0)
 				ereport(ERROR,
@@ -365,7 +365,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 				break;
 			errno = 0;
 			pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_WRITE);
-			if ((int) write(fd, buffer, nbytes) != nbytes)
+			if (write(fd, buffer, nbytes) != nbytes)
 			{
 				int			save_errno = errno;
 
@@ -409,7 +409,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
 	nbytes = strlen(buffer);
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_WRITE);
-	if ((int) write(fd, buffer, nbytes) != nbytes)
+	if (write(fd, buffer, nbytes) != nbytes)
 	{
 		int			save_errno = errno;
 
@@ -461,7 +461,7 @@ writeTimeLineHistory(TimeLineID newTLI, TimeLineID parentTLI,
  * to avoid emplacing a bogus file.
  */
 void
-writeTimeLineHistoryFile(TimeLineID tli, char *content, int size)
+writeTimeLineHistoryFile(TimeLineID tli, const char *content, size_t size)
 {
 	char		path[MAXPGPATH];
 	char		tmppath[MAXPGPATH];
@@ -483,7 +483,7 @@ writeTimeLineHistoryFile(TimeLineID tli, char *content, int size)
 
 	errno = 0;
 	pgstat_report_wait_start(WAIT_EVENT_TIMELINE_HISTORY_FILE_WRITE);
-	if ((int) write(fd, content, size) != size)
+	if (write(fd, content, size) != size)
 	{
 		int			save_errno = errno;
 

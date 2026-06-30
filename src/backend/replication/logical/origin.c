@@ -741,7 +741,7 @@ StartupReplicationOrigin(void)
 {
 	const char *path = PG_REPLORIGIN_CHECKPOINT_FILENAME;
 	int			fd;
-	int			readBytes;
+	ssize_t		readBytes;
 	uint32		magic = REPLICATION_STATE_MAGIC;
 	int			last_state = 0;
 	pg_crc32c	file_crc;
@@ -788,7 +788,7 @@ StartupReplicationOrigin(void)
 		else
 			ereport(PANIC,
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read file \"%s\": read %d of %zu",
+					 errmsg("could not read file \"%s\": read %zd of %zu",
 							path, readBytes, sizeof(magic))));
 	}
 	COMP_CRC32C(crc, &magic, sizeof(magic));
@@ -826,7 +826,7 @@ StartupReplicationOrigin(void)
 		{
 			ereport(PANIC,
 					(errcode_for_file_access(),
-					 errmsg("could not read file \"%s\": read %d of %zu",
+					 errmsg("could not read file \"%s\": read %zd of %zu",
 							path, readBytes, sizeof(disk_state))));
 		}
 

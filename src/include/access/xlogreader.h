@@ -382,9 +382,9 @@ extern void XLogReaderResetError(XLogReaderState *state);
 typedef struct WALReadError
 {
 	int			wre_errno;		/* errno set by the last pg_pread() */
-	int			wre_off;		/* Offset we tried to read from. */
-	int			wre_req;		/* Bytes requested to be read. */
-	int			wre_read;		/* Bytes read by the last read(). */
+	uint32		wre_off;		/* Offset we tried to read from. */
+	size_t		wre_req;		/* Bytes requested to be read. */
+	ssize_t		wre_read;		/* Bytes read by the last read(). */
 	WALOpenSegment wre_seg;		/* Segment we tried to read from. */
 } WALReadError;
 

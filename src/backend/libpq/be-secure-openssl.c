@@ -1347,7 +1347,7 @@ port_bio_read(BIO *h, char *buf, int size)
 
 	if (buf != NULL)
 	{
-		res = secure_raw_read(port, buf, size);
+		res = (int) secure_raw_read(port, buf, size);
 		BIO_clear_retry_flags(h);
 		port->last_read_was_eof = res == 0;
 		if (res <= 0)
@@ -1368,7 +1368,7 @@ port_bio_write(BIO *h, const char *buf, int size)
 {
 	int			res = 0;
 
-	res = secure_raw_write(((Port *) BIO_get_data(h)), buf, size);
+	res = (int) secure_raw_write(((Port *) BIO_get_data(h)), buf, size);
 	BIO_clear_retry_flags(h);
 	if (res <= 0)
 	{

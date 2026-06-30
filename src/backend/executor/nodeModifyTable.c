@@ -201,6 +201,14 @@ static void fireBSTriggers(ModifyTableState *node);
 static void fireASTriggers(ModifyTableState *node);
 static void ExecInitForPortionOf(ModifyTableState *mtstate, EState *estate,
 								 ResultRelInfo *resultRelInfo);
+static Datum ExecForPortionOfSaveRange(ModifyTableContext *context,
+									   ResultRelInfo *resultRelInfo,
+									   TupleTableSlot *slot,
+									   bool *isNull);
+static void ExecForPortionOfCheckRange(ModifyTableContext *context,
+									   ResultRelInfo *resultRelInfo,
+									   TupleTableSlot *slot,
+									   Datum origRange, bool origIsNull);
 
 
 /*
@@ -2390,14 +2398,46 @@ ExecUpdatePrologue(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	if (resultRelInfo->ri_TrigDesc &&
 		resultRelInfo->ri_TrigDesc->trig_update_before_row)
 	{
+		Node	   *forPortionOf = ((ModifyTable *) context->mtstate->ps.plan)->forPortionOf;
+		Datum		origRange = (Datum) 0;
+		bool		origIsNull = false;
+		bool		proceed;
+
 		/* Flush any pending inserts, so rows are visible to the triggers */
 		if (context->estate->es_insert_pending_result_relations != NIL)
 			ExecPendingInserts(context->estate);
 
-		return ExecBRUpdateTriggers(context->estate, context->epqstate,
-									resultRelInfo, tupleid, oldtuple, slot,
-									result, &context->tmfd,
-									context->mtstate->operation == CMD_MERGE);
+		/*
+		 * With FOR PORTION OF, we must forbid triggers from changing the
+		 * application time column, just as users can't SET it. Capture
+		 * the current value, run triggers, then check below for changes.
+		 */
+		if (forPortionOf)
+			origRange = ExecForPortionOfSaveRange(context, resultRelInfo, slot,
+												  &origIsNull);
+
+		proceed = ExecBRUpdateTriggers(context->estate, context->epqstate,
+									   resultRelInfo, tupleid, oldtuple, slot,
+									   result, &context->tmfd,
+									   context->mtstate->operation == CMD_MERGE);
+
+		/*
+		 * Check only when the trigger let the update proceed; either way,
+		 * free the memory.
+		 */
+		if (forPortionOf)
+		{
+			ForPortionOfState *fpoState = resultRelInfo->ri_forPortionOf;
+
+			if (proceed)
+				ExecForPortionOfCheckRange(context, resultRelInfo, slot,
+										   origRange, origIsNull);
+
+			if (!origIsNull && !fpoState->fp_leftoverstypcache->typbyval)
+				pfree(DatumGetPointer(origRange));
+		}
+
+		return proceed;
 	}
 
 	return true;
@@ -5948,4 +5988,120 @@ ExecInitForPortionOf(ModifyTableState *mtstate, EState *estate,
 	resultRelInfo->ri_forPortionOf = leafState;
 
 	MemoryContextSwitchTo(oldcxt);
+}
+
+/* ----------------------------------------------------------------
+ *		ExecForPortionOfSaveRange
+ *
+ *		Capture the FOR PORTION OF range column value from the new tuple slot
+ *		just before BEFORE UPDATE triggers run. ExecForPortionOfCheckRange
+ *		compares this against the post-trigger value to detect whether a
+ *		trigger changed the range column, which is not allowed.
+ * ----------------------------------------------------------------
+ */
+static Datum
+ExecForPortionOfSaveRange(ModifyTableContext *context,
+						  ResultRelInfo *resultRelInfo,
+						  TupleTableSlot *slot,
+						  bool *isNull)
+{
+	ModifyTableState *mtstate = context->mtstate;
+	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
+	ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
+	EState	   *estate = mtstate->ps.state;
+	ForPortionOfState *fpoState;
+	TypeCacheEntry *typcache;
+	MemoryContext oldcontext;
+	Datum		saved;
+
+	/*
+	 * Lazily initialize the partition child's ForPortionOfState, like
+	 * ExecForPortionOfLeftovers. The check will read fp_rangeAttno and the
+	 * typcache from the same struct.
+	 */
+	if (!resultRelInfo->ri_forPortionOf)
+		ExecInitForPortionOf(mtstate, estate, resultRelInfo);
+
+	fpoState = resultRelInfo->ri_forPortionOf;
+
+	slot_getallattrs(slot);
+
+	/*
+	 * Look up the range's type cache entry, requesting the equality operator
+	 * the check needs later. This is worth caching for the whole UPDATE.
+	 */
+	typcache = fpoState->fp_leftoverstypcache;
+	if (typcache == NULL)
+	{
+		typcache = lookup_type_cache(forPortionOf->rangeType,
+									 TYPECACHE_EQ_OPR_FINFO);
+		fpoState->fp_leftoverstypcache = typcache;
+	}
+
+	*isNull = slot->tts_isnull[fpoState->fp_rangeAttno - 1];
+	if (*isNull)
+		return (Datum) 0;
+
+	/*
+	 * Copy the value into the query memory context so it survives the trigger
+	 * invocation. The caller must release it after the check.
+	 */
+	oldcontext = MemoryContextSwitchTo(estate->es_query_cxt);
+	saved = datumCopy(slot->tts_values[fpoState->fp_rangeAttno - 1],
+					  typcache->typbyval, typcache->typlen);
+	MemoryContextSwitchTo(oldcontext);
+	return saved;
+}
+
+/* ----------------------------------------------------------------
+ *		ExecForPortionOfCheckRange
+ *
+ *		Verify that BEFORE UPDATE triggers did not change the FOR PORTION OF
+ *		range column. ExecForPortionOfSaveRange captured the value just before
+ *		the triggers ran; here, right after they finish, we compare it against
+ *		the current value and raise an error if a trigger altered it.
+ * ----------------------------------------------------------------
+ */
+static void
+ExecForPortionOfCheckRange(ModifyTableContext *context,
+						   ResultRelInfo *resultRelInfo,
+						   TupleTableSlot *slot,
+						   Datum origRange, bool origIsNull)
+{
+	ModifyTableState *mtstate = context->mtstate;
+	ModifyTable *node = (ModifyTable *) mtstate->ps.plan;
+	ForPortionOfExpr *forPortionOf = (ForPortionOfExpr *) node->forPortionOf;
+	ForPortionOfState *fpoState = resultRelInfo->ri_forPortionOf;
+	TypeCacheEntry *typcache = fpoState->fp_leftoverstypcache;
+	bool		newIsNull;
+	Datum		newRange;
+
+	/*
+	 * ExecForPortionOfSaveRange always runs just before the triggers and
+	 * populates the type cache entry, so it must be set by the time we get
+	 * here.
+	 */
+	Assert(typcache != NULL);
+
+	slot_getallattrs(slot);
+	newIsNull = slot->tts_isnull[fpoState->fp_rangeAttno - 1];
+	newRange = slot->tts_values[fpoState->fp_rangeAttno - 1];
+
+	/* Compare with the default btree equality operator. */
+	if (!OidIsValid(typcache->eq_opr_finfo.fn_oid))
+		ereport(ERROR,
+				errcode(ERRCODE_UNDEFINED_FUNCTION),
+				errmsg("could not identify an equality operator for type %s",
+					   format_type_be(forPortionOf->rangeType)));
+
+	if (newIsNull != origIsNull ||
+		(!newIsNull &&
+		 !DatumGetBool(FunctionCall2Coll(&typcache->eq_opr_finfo,
+										 InvalidOid,
+										 newRange,
+										 origRange))))
+		ereport(ERROR,
+				errcode(ERRCODE_TRIGGERED_DATA_CHANGE_VIOLATION),
+				errmsg("cannot change column \"%s\" from a BEFORE trigger because it is used in FOR PORTION OF",
+					   forPortionOf->range_name));
 }

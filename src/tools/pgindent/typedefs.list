@@ -430,6 +430,7 @@ CatalogId
 CatalogIdMapEntry
 CatalogIndexState
 ChangeContext
+ChangeContextBackup
 ChangeVarNodes_callback
 ChangeVarNodes_context
 ChannelName
@@ -1324,6 +1325,7 @@ IndexAttachInfo
 IndexAttrBitmapKind
 IndexBuildCallback
 IndexBuildResult
+IndexBuildSecurity
 IndexBulkDeleteCallback
 IndexBulkDeleteResult
 IndexClause
@@ -2604,6 +2606,7 @@ RelMapping
 RelOptInfo
 RelOptKind
 RelPathStr
+RelReopenInfo
 RelStatsInfo
 RelSyncCallbackFunction
 RelToCheck
@@ -2658,6 +2661,7 @@ ReorderBufferTupleCidKey
 ReorderBufferUpdateProgressTxnCB
 ReorderTuple
 RepackCommand
+RepackDest
 RepackDecodingState
 RepackStmt
 ReparameterizeForeignPathByChild_function

@@ -46,6 +46,7 @@ tests += {
       'basic',
       'inplace',
       'repack',
+      'repack_snapshots',
       'repack_temporal',
       'repack_temporal_multirange',
       'repack_toast',

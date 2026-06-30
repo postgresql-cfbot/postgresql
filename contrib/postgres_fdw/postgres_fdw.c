@@ -2304,7 +2304,15 @@ postgresGetForeignModifyBatchSize(ResultRelInfo *resultRelInfo)
 	 * don't exceed this limit by using the maximum batch_size possible.
 	 */
 	if (fmstate && fmstate->p_nums > 0)
+	{
+		int			configured = batch_size;
+
 		batch_size = Min(batch_size, PQ_QUERY_PARAM_MAX_LIMIT / fmstate->p_nums);
+		if (batch_size < configured)
+			elog(DEBUG1, "postgres_fdw: batch_size reduced from %d to %d "
+				 "to stay within the libpq %d-parameter limit",
+				 configured, batch_size, PQ_QUERY_PARAM_MAX_LIMIT);
+	}
 
 	return batch_size;
 }
@@ -8829,6 +8837,10 @@ get_batch_size_option(Relation rel)
 		if (strcmp(def->defname, "batch_size") == 0)
 		{
 			(void) parse_int(defGetString(def), &batch_size, 0, NULL);
+			if (batch_size > PQ_QUERY_PARAM_MAX_LIMIT)
+				ereport(WARNING,
+						errmsg("%s of %d exceeds protocol limit of %d", "batch_size", batch_size, PQ_QUERY_PARAM_MAX_LIMIT),
+						errdetail("The %s for a query will be reduced to protocol limit divided by the number of columns in the query.", "batch_size"));
 			break;
 		}
 	}

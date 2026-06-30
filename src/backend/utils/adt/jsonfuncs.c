@@ -506,6 +506,8 @@ static JsonParseErrorType transform_string_values_object_field_start(void *state
 static JsonParseErrorType transform_string_values_array_element_start(void *state, bool isnull);
 static JsonParseErrorType transform_string_values_scalar(void *state, char *token, JsonTokenType tokentype);
 
+/* function supporting json_categorize_type/json_check_mutability */
+static Oid get_json_cast_for_type(Oid typoid);
 
 /*
  * pg_parse_json_or_errsave
@@ -5959,25 +5961,22 @@ json_get_first_token(text *json, bool throw_error)
 /*
  * Determine how we want to print values of a given type in datum_to_json(b).
  *
- * Given the datatype OID, return its JsonTypeCategory, as well as the type's
- * output function OID.  If the returned category is JSONTYPE_CAST, we return
- * the OID of the type->JSON cast function instead.
+ * Given the datatype OID, return its JsonTypeCategory, as well as an FmgrInfo
+ * for the type's output function or cast function.  For categories that do not
+ * require calling a function, outflinfo is not touched.
  */
 void
 json_categorize_type(Oid typoid, bool is_jsonb,
-					 JsonTypeCategory *tcategory, Oid *outfuncoid)
+					 JsonTypeCategory *tcategory, FmgrInfo *outflinfo)
 {
-	bool		typisvarlena;
+	bool		use_type_output_function = false;
 
 	/* Look through any domain */
 	typoid = getBaseType(typoid);
 
-	*outfuncoid = InvalidOid;
-
 	switch (typoid)
 	{
 		case BOOLOID:
-			*outfuncoid = F_BOOLOUT;
 			*tcategory = JSONTYPE_BOOL;
 			break;
 
@@ -5987,32 +5986,29 @@ json_categorize_type(Oid typoid, bool is_jsonb,
 		case FLOAT4OID:
 		case FLOAT8OID:
 		case NUMERICOID:
-			getTypeOutputInfo(typoid, outfuncoid, &typisvarlena);
+			use_type_output_function = true;
 			*tcategory = JSONTYPE_NUMERIC;
 			break;
 
 		case DATEOID:
-			*outfuncoid = F_DATE_OUT;
 			*tcategory = JSONTYPE_DATE;
 			break;
 
 		case TIMESTAMPOID:
-			*outfuncoid = F_TIMESTAMP_OUT;
 			*tcategory = JSONTYPE_TIMESTAMP;
 			break;
 
 		case TIMESTAMPTZOID:
-			*outfuncoid = F_TIMESTAMPTZ_OUT;
 			*tcategory = JSONTYPE_TIMESTAMPTZ;
 			break;
 
 		case JSONOID:
-			getTypeOutputInfo(typoid, outfuncoid, &typisvarlena);
+			use_type_output_function = !is_jsonb;
 			*tcategory = JSONTYPE_JSON;
 			break;
 
 		case JSONBOID:
-			getTypeOutputInfo(typoid, outfuncoid, &typisvarlena);
+			use_type_output_function = !is_jsonb;
 			*tcategory = is_jsonb ? JSONTYPE_JSONB : JSONTYPE_JSON;
 			break;
 
@@ -6020,49 +6016,34 @@ json_categorize_type(Oid typoid, bool is_jsonb,
 			/* Check for arrays and composites */
 			if (OidIsValid(get_element_type(typoid)) || typoid == ANYARRAYOID
 				|| typoid == ANYCOMPATIBLEARRAYOID || typoid == RECORDARRAYOID)
-			{
-				*outfuncoid = F_ARRAY_OUT;
 				*tcategory = JSONTYPE_ARRAY;
-			}
 			else if (type_is_rowtype(typoid))	/* includes RECORDOID */
-			{
-				*outfuncoid = F_RECORD_OUT;
 				*tcategory = JSONTYPE_COMPOSITE;
-			}
 			else
 			{
-				/*
-				 * It's probably the general case.  But let's look for a cast
-				 * to json (note: not to jsonb even if is_jsonb is true), if
-				 * it's not built-in.
-				 */
-				*tcategory = JSONTYPE_OTHER;
-				if (typoid >= FirstNormalObjectId)
-				{
-					Oid			castfunc;
-					CoercionPathType ctype;
+				Oid			castfunc = get_json_cast_for_type(typoid);
 
-					ctype = find_coercion_pathway(JSONOID, typoid,
-												  COERCION_EXPLICIT,
-												  &castfunc);
-					if (ctype == COERCION_PATH_FUNC && OidIsValid(castfunc))
-					{
-						*outfuncoid = castfunc;
-						*tcategory = JSONTYPE_CAST;
-					}
-					else
-					{
-						/* non builtin type with no cast */
-						getTypeOutputInfo(typoid, outfuncoid, &typisvarlena);
-					}
+				if (OidIsValid(castfunc))
+				{
+					fmgr_info(castfunc, outflinfo);
+					*tcategory = JSONTYPE_CAST;
 				}
 				else
 				{
-					/* any other builtin type */
-					getTypeOutputInfo(typoid, outfuncoid, &typisvarlena);
+					use_type_output_function = true;
+					*tcategory = JSONTYPE_OTHER;
 				}
 			}
 			break;
+	}
+
+	if (use_type_output_function)
+	{
+		Oid			typoutput;
+		bool		typisvarlena;
+
+		getTypeOutputInfo(typoid, &typoutput, &typisvarlena);
+		fmgr_info(typoutput, outflinfo);
 	}
 }
 
@@ -6075,11 +6056,9 @@ json_categorize_type(Oid typoid, bool is_jsonb,
  * If any mutable function is found, *has_mutable is set to true.
  */
 void
-json_check_mutability(Oid typoid, bool is_jsonb, bool *has_mutable)
+json_check_mutability(Oid typoid, bool *has_mutable)
 {
 	char		att_typtype = get_typtype(typoid);
-	JsonTypeCategory tcategory;
-	Oid			outfuncoid;
 
 	/* since this function recurses, it could be driven to stack overflow */
 	check_stack_depth();
@@ -6091,7 +6070,7 @@ json_check_mutability(Oid typoid, bool is_jsonb, bool *has_mutable)
 
 	if (att_typtype == TYPTYPE_DOMAIN)
 	{
-		json_check_mutability(getBaseType(typoid), is_jsonb, has_mutable);
+		json_check_mutability(getBaseType(typoid), has_mutable);
 		return;
 	}
 	else if (att_typtype == TYPTYPE_COMPOSITE)
@@ -6109,7 +6088,7 @@ json_check_mutability(Oid typoid, bool is_jsonb, bool *has_mutable)
 			if (attr->attisdropped)
 				continue;
 
-			json_check_mutability(attr->atttypid, is_jsonb, has_mutable);
+			json_check_mutability(attr->atttypid, has_mutable);
 			if (*has_mutable)
 				break;
 		}
@@ -6118,14 +6097,12 @@ json_check_mutability(Oid typoid, bool is_jsonb, bool *has_mutable)
 	}
 	else if (att_typtype == TYPTYPE_RANGE)
 	{
-		json_check_mutability(get_range_subtype(typoid), is_jsonb,
-							  has_mutable);
+		json_check_mutability(get_range_subtype(typoid), has_mutable);
 		return;
 	}
 	else if (att_typtype == TYPTYPE_MULTIRANGE)
 	{
-		json_check_mutability(get_multirange_range(typoid), is_jsonb,
-							  has_mutable);
+		json_check_mutability(get_multirange_range(typoid), has_mutable);
 		return;
 	}
 	else
@@ -6135,36 +6112,73 @@ json_check_mutability(Oid typoid, bool is_jsonb, bool *has_mutable)
 		if (OidIsValid(att_typelem))
 		{
 			/* recurse into array element type */
-			json_check_mutability(att_typelem, is_jsonb, has_mutable);
+			json_check_mutability(att_typelem, has_mutable);
 			return;
 		}
 	}
 
-	json_categorize_type(typoid, is_jsonb, &tcategory, &outfuncoid);
-
-	switch (tcategory)
+	switch (typoid)
 	{
-		case JSONTYPE_NULL:
-		case JSONTYPE_BOOL:
-		case JSONTYPE_NUMERIC:
+		case BOOLOID:
+		case INT2OID:
+		case INT4OID:
+		case INT8OID:
+		case FLOAT4OID:
+		case FLOAT8OID:
+		case NUMERICOID:
+		case JSONOID:
+		case JSONBOID:
+			/* known immutable */
 			break;
-
-		case JSONTYPE_DATE:
-		case JSONTYPE_TIMESTAMP:
-		case JSONTYPE_TIMESTAMPTZ:
+		case DATEOID:
+		case TIMESTAMPOID:
+		case TIMESTAMPTZOID:
 			*has_mutable = true;
 			break;
-
-		case JSONTYPE_JSON:
-		case JSONTYPE_JSONB:
-		case JSONTYPE_ARRAY:
-		case JSONTYPE_COMPOSITE:
+		case RECORDOID:
+		case ANYARRAYOID:
+		case ANYCOMPATIBLEARRAYOID:
+			/* XXX incorrectly treated as known immutable */
 			break;
 
-		case JSONTYPE_CAST:
-		case JSONTYPE_OTHER:
-			if (func_volatile(outfuncoid) != PROVOLATILE_IMMUTABLE)
-				*has_mutable = true;
+		default:
+			{
+				Oid			castfunc = get_json_cast_for_type(typoid);
+				Oid			funcoid;
+
+				if (OidIsValid(castfunc))
+					funcoid = castfunc;
+				else
+				{
+					bool		typisvarlena;
+
+					getTypeOutputInfo(typoid, &funcoid, &typisvarlena);
+				}
+				if (func_volatile(funcoid) != PROVOLATILE_IMMUTABLE)
+					*has_mutable = true;
+			}
 			break;
 	}
+}
+
+/*
+ * Return the OID of a cast function from typoid to JSON, or InvalidOid if
+ * there is no such cast.  As a matter of policy, we only consider explicit,
+ * user-defined casts.
+ */
+static Oid
+get_json_cast_for_type(Oid typoid)
+{
+	if (typoid >= FirstNormalObjectId)
+	{
+		Oid			castfunc;
+		CoercionPathType ctype;
+
+		ctype = find_coercion_pathway(JSONOID, typoid,
+									  COERCION_EXPLICIT,
+									  &castfunc);
+		if (ctype == COERCION_PATH_FUNC && OidIsValid(castfunc))
+			return castfunc;
+	}
+	return InvalidOid;
 }

@@ -2437,13 +2437,12 @@ ExecInitExprRec(Expr *node, ExprState *state,
 						for (int i = 0; i < nargs; i++)
 						{
 							JsonTypeCategory category;
-							Oid			outfuncid;
 							Oid			typid = jcstate->arg_types[i];
 
 							json_categorize_type(typid, is_jsonb,
-												 &category, &outfuncid);
+												 &category,
+												 &jcstate->arg_type_cache[i].outflinfo);
 
-							jcstate->arg_type_cache[i].outfuncid = outfuncid;
 							jcstate->arg_type_cache[i].category = (int) category;
 						}
 					}

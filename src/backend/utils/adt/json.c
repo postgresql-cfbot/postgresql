@@ -80,21 +80,21 @@ typedef struct JsonAggState
 {
 	StringInfo	str;
 	JsonTypeCategory key_category;
-	Oid			key_output_func;
+	FmgrInfo	key_flinfo;
 	JsonTypeCategory val_category;
-	Oid			val_output_func;
+	FmgrInfo	val_flinfo;
 	JsonUniqueBuilderState unique_check;
 } JsonAggState;
 
 static void array_dim_to_json(StringInfo result, int dim, int ndims, int *dims,
 							  const Datum *vals, const bool *nulls, int *valcount,
-							  JsonTypeCategory tcategory, Oid outfuncoid,
+							  JsonTypeCategory tcategory, FmgrInfo *flinfo,
 							  bool use_line_feeds);
 static void array_to_json_internal(Datum array, StringInfo result,
 								   bool use_line_feeds);
 static void datum_to_json_internal(Datum val, bool is_null, StringInfo result,
-								   JsonTypeCategory tcategory, Oid outfuncoid,
-								   bool key_scalar);
+								   JsonTypeCategory tcategory,
+								   FmgrInfo *outflinfo, bool key_scalar);
 static void add_json(Datum val, bool is_null, StringInfo result,
 					 Oid val_type, bool key_scalar);
 static text *catenate_stringinfo_string(StringInfo buffer, const char *addon);
@@ -168,15 +168,19 @@ json_recv(PG_FUNCTION_ARGS)
 /*
  * Turn a Datum into JSON text, appending the string to "result".
  *
- * tcategory and outfuncoid are from a previous call to json_categorize_type,
- * except that if is_null is true then they can be invalid.
+ * tcategory is from a previous call to json_categorize_type, except that if
+ * is_null is true then it can be invalid.
+ *
+ * outflinfo is a pointer to an FmgrInfo populated by the same call to
+ * json_categorize_type, but it is only needed for categories where
+ * json_categorize_type actually populates it.
  *
  * If key_scalar is true, the value is being printed as a key, so insist
  * it's of an acceptable type, and force it to be quoted.
  */
 static void
 datum_to_json_internal(Datum val, bool is_null, StringInfo result,
-					   JsonTypeCategory tcategory, Oid outfuncoid,
+					   JsonTypeCategory tcategory, FmgrInfo *outflinfo,
 					   bool key_scalar)
 {
 	char	   *outputstr;
@@ -221,7 +225,7 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 				appendStringInfoChar(result, '"');
 			break;
 		case JSONTYPE_NUMERIC:
-			outputstr = OidOutputFunctionCall(outfuncoid, val);
+			outputstr = OutputFunctionCall(outflinfo, val);
 
 			/*
 			 * Don't quote a non-key if it's a valid JSON number (i.e., not
@@ -274,25 +278,26 @@ datum_to_json_internal(Datum val, bool is_null, StringInfo result,
 			break;
 		case JSONTYPE_JSON:
 			/* JSON and JSONB output will already be escaped */
-			outputstr = OidOutputFunctionCall(outfuncoid, val);
+			outputstr = OutputFunctionCall(outflinfo, val);
 			appendStringInfoString(result, outputstr);
 			pfree(outputstr);
 			break;
 		case JSONTYPE_CAST:
-			/* outfuncoid refers to a cast function, not an output function */
-			jsontext = DatumGetTextPP(OidFunctionCall1(outfuncoid, val));
+			/* outflinfo refers to a cast function, not an output function */
+			jsontext = DatumGetTextPP(FunctionCall1(outflinfo, val));
 			appendBinaryStringInfo(result, VARDATA_ANY(jsontext),
 								   VARSIZE_ANY_EXHDR(jsontext));
 			pfree(jsontext);
 			break;
 		default:
 			/* special-case text types to save useless palloc/memcpy cycles */
-			if (outfuncoid == F_TEXTOUT || outfuncoid == F_VARCHAROUT ||
-				outfuncoid == F_BPCHAROUT)
+			if (outflinfo->fn_oid == F_TEXTOUT ||
+				outflinfo->fn_oid == F_VARCHAROUT ||
+				outflinfo->fn_oid == F_BPCHAROUT)
 				escape_json_text(result, (text *) DatumGetPointer(val));
 			else
 			{
-				outputstr = OidOutputFunctionCall(outfuncoid, val);
+				outputstr = OutputFunctionCall(outflinfo, val);
 				escape_json(result, outputstr);
 				pfree(outputstr);
 			}
@@ -429,7 +434,7 @@ JsonEncodeDateTime(char *buf, Datum value, Oid typid, const int *tzp)
 static void
 array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum *vals,
 				  const bool *nulls, int *valcount, JsonTypeCategory tcategory,
-				  Oid outfuncoid, bool use_line_feeds)
+				  FmgrInfo *outflinfo, bool use_line_feeds)
 {
 	int			i;
 	const char *sep;
@@ -448,8 +453,7 @@ array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum 
 		if (dim + 1 == ndims)
 		{
 			datum_to_json_internal(vals[*valcount], nulls[*valcount],
-								   result, tcategory,
-								   outfuncoid, false);
+								   result, tcategory, outflinfo, false);
 			(*valcount)++;
 		}
 		else
@@ -459,7 +463,7 @@ array_dim_to_json(StringInfo result, int dim, int ndims, int *dims, const Datum 
 			 * we'll say no.
 			 */
 			array_dim_to_json(result, dim + 1, ndims, dims, vals, nulls,
-							  valcount, tcategory, outfuncoid, false);
+							  valcount, tcategory, outflinfo, false);
 		}
 	}
 
@@ -484,7 +488,7 @@ array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds)
 	bool		typbyval;
 	char		typalign;
 	JsonTypeCategory tcategory;
-	Oid			outfuncoid;
+	FmgrInfo	outflinfo;
 
 	ndim = ARR_NDIM(v);
 	dim = ARR_DIMS(v);
@@ -500,14 +504,14 @@ array_to_json_internal(Datum array, StringInfo result, bool use_line_feeds)
 						 &typlen, &typbyval, &typalign);
 
 	json_categorize_type(element_type, false,
-						 &tcategory, &outfuncoid);
+						 &tcategory, &outflinfo);
 
 	deconstruct_array(v, element_type, typlen, typbyval,
 					  typalign, &elements, &nulls,
 					  &nitems);
 
 	array_dim_to_json(result, 0, ndim, dim, elements, nulls, &count, tcategory,
-					  outfuncoid, use_line_feeds);
+					  &outflinfo, use_line_feeds);
 
 	pfree(elements);
 	pfree(nulls);
@@ -558,7 +562,7 @@ composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
 		bool		isnull;
 		char	   *attname;
 		JsonTypeCategory tcategory;
-		Oid			outfuncoid;
+		FmgrInfo	outflinfo;
 		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
 
 		if (att->attisdropped)
@@ -575,16 +579,13 @@ composite_to_json(Datum composite, StringInfo result, bool use_line_feeds)
 		val = heap_getattr(tuple, i + 1, tupdesc, &isnull);
 
 		if (isnull)
-		{
 			tcategory = JSONTYPE_NULL;
-			outfuncoid = InvalidOid;
-		}
 		else
 			json_categorize_type(att->atttypid, false, &tcategory,
-								 &outfuncoid);
+								 &outflinfo);
 
-		datum_to_json_internal(val, isnull, result, tcategory, outfuncoid,
-							   false);
+		datum_to_json_internal(val, isnull, result,
+							   tcategory, &outflinfo, false);
 	}
 
 	appendStringInfoChar(result, '}');
@@ -603,7 +604,7 @@ add_json(Datum val, bool is_null, StringInfo result,
 		 Oid val_type, bool key_scalar)
 {
 	JsonTypeCategory tcategory;
-	Oid			outfuncoid;
+	FmgrInfo	outflinfo;
 
 	if (val_type == InvalidOid)
 		ereport(ERROR,
@@ -611,15 +612,12 @@ add_json(Datum val, bool is_null, StringInfo result,
 				 errmsg("could not determine input data type")));
 
 	if (is_null)
-	{
 		tcategory = JSONTYPE_NULL;
-		outfuncoid = InvalidOid;
-	}
 	else
 		json_categorize_type(val_type, false,
-							 &tcategory, &outfuncoid);
+							 &tcategory, &outflinfo);
 
-	datum_to_json_internal(val, is_null, result, tcategory, outfuncoid,
+	datum_to_json_internal(val, is_null, result, tcategory, &outflinfo,
 						   key_scalar);
 }
 
@@ -697,7 +695,7 @@ to_json_is_immutable(Oid typoid)
 {
 	bool		has_mutable = false;
 
-	json_check_mutability(typoid, false, &has_mutable);
+	json_check_mutability(typoid, &has_mutable);
 	return !has_mutable;
 }
 
@@ -710,7 +708,7 @@ to_json(PG_FUNCTION_ARGS)
 	Datum		val = PG_GETARG_DATUM(0);
 	Oid			val_type = get_fn_expr_argtype(fcinfo->flinfo, 0);
 	JsonTypeCategory tcategory;
-	Oid			outfuncoid;
+	FmgrInfo	outflinfo;
 
 	if (val_type == InvalidOid)
 		ereport(ERROR,
@@ -718,24 +716,27 @@ to_json(PG_FUNCTION_ARGS)
 				 errmsg("could not determine input data type")));
 
 	json_categorize_type(val_type, false,
-						 &tcategory, &outfuncoid);
+						 &tcategory, &outflinfo);
 
-	PG_RETURN_DATUM(datum_to_json(val, tcategory, outfuncoid));
+	PG_RETURN_DATUM(datum_to_json(val, tcategory, &outflinfo));
 }
 
 /*
  * Turn a Datum into JSON text.
  *
- * tcategory and outfuncoid are from a previous call to json_categorize_type.
+ * tcategory is from a previous call to json_categorize_type.
+ *
+ * outflinfo is a pointer to an FmgrInfo populated by the same call to
+ * json_categorize_type, but it is only needed for categories where
+ * json_categorize_type actually populates it.
  */
 Datum
-datum_to_json(Datum val, JsonTypeCategory tcategory, Oid outfuncoid)
+datum_to_json(Datum val, JsonTypeCategory tcategory, FmgrInfo *outflinfo)
 {
 	StringInfoData result;
 
 	initStringInfo(&result);
-	datum_to_json_internal(val, false, &result, tcategory, outfuncoid,
-						   false);
+	datum_to_json_internal(val, false, &result, tcategory, outflinfo, false);
 
 	return PointerGetDatum(cstring_to_text_with_len(result.data, result.len));
 }
@@ -772,16 +773,19 @@ json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 		 * Make this state object in a context where it will persist for the
 		 * duration of the aggregate call.  MemoryContextSwitchTo is only
 		 * needed the first time, as the StringInfo routines make sure they
-		 * use the right context to enlarge the object if necessary.
+		 * use the right context to enlarge the object if necessary, and
+		 * val_flinfo will also keep track of the context used to initialize
+		 * it.
 		 */
 		oldcontext = MemoryContextSwitchTo(aggcontext);
 		state = palloc_object(JsonAggState);
 		state->str = makeStringInfo();
+
+		json_categorize_type(arg_type, false, &state->val_category,
+							 &state->val_flinfo);
 		MemoryContextSwitchTo(oldcontext);
 
 		appendStringInfoChar(state->str, '[');
-		json_categorize_type(arg_type, false, &state->val_category,
-							 &state->val_output_func);
 	}
 	else
 	{
@@ -798,7 +802,7 @@ json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 	if (PG_ARGISNULL(1))
 	{
 		datum_to_json_internal((Datum) 0, true, state->str, JSONTYPE_NULL,
-							   InvalidOid, false);
+							   NULL, false);
 		PG_RETURN_POINTER(state);
 	}
 
@@ -813,7 +817,7 @@ json_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 	}
 
 	datum_to_json_internal(val, false, state->str, state->val_category,
-						   state->val_output_func, false);
+						   &state->val_flinfo, false);
 
 	/*
 	 * The transition type for json_agg() is declared to be "internal", which
@@ -991,10 +995,15 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 		Oid			arg_type;
 
 		/*
-		 * Make the StringInfo in a context where it will persist for the
-		 * duration of the aggregate call. Switching context is only needed
-		 * for this initial step, as the StringInfo and dynahash routines make
-		 * sure they use the right context to enlarge the object if necessary.
+		 * For this initial call, we need to switch to aggcontext. That's
+		 * important for the StringInfo, for the dynahash created by the call
+		 * to json_unique_builder_init(), and for the calls to
+		 * json_categorize_type, which set up state->key_flinfo and
+		 * state->val_flinfo.
+		 *
+		 * (It won't be necessary to switch contexts on subsequent calls to
+		 * this function, since all of these objects are careful to make sure
+		 * that subsequent allocations use the correct context.)
 		 */
 		oldcontext = MemoryContextSwitchTo(aggcontext);
 		state = palloc_object(JsonAggState);
@@ -1003,7 +1012,6 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 			json_unique_builder_init(&state->unique_check);
 		else
 			memset(&state->unique_check, 0, sizeof(state->unique_check));
-		MemoryContextSwitchTo(oldcontext);
 
 		arg_type = get_fn_expr_argtype(fcinfo->flinfo, 1);
 
@@ -1013,7 +1021,7 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 					 errmsg("could not determine data type for argument %d", 1)));
 
 		json_categorize_type(arg_type, false, &state->key_category,
-							 &state->key_output_func);
+							 &state->key_flinfo);
 
 		arg_type = get_fn_expr_argtype(fcinfo->flinfo, 2);
 
@@ -1023,7 +1031,8 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 					 errmsg("could not determine data type for argument %d", 2)));
 
 		json_categorize_type(arg_type, false, &state->val_category,
-							 &state->val_output_func);
+							 &state->val_flinfo);
+		MemoryContextSwitchTo(oldcontext);
 
 		appendStringInfoString(state->str, "{ ");
 	}
@@ -1077,7 +1086,7 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 	key_offset = out->len;
 
 	datum_to_json_internal(arg, false, out, state->key_category,
-						   state->key_output_func, true);
+						   &state->key_flinfo, true);
 
 	if (unique_keys)
 	{
@@ -1107,8 +1116,8 @@ json_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 		arg = PG_GETARG_DATUM(2);
 
 	datum_to_json_internal(arg, PG_ARGISNULL(2), state->str,
-						   state->val_category,
-						   state->val_output_func, false);
+						   state->val_category, &state->val_flinfo,
+						   false);
 
 	PG_RETURN_POINTER(state);
 }

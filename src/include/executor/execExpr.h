@@ -831,7 +831,7 @@ typedef struct JsonConstructorExprState
 	struct
 	{
 		int			category;
-		Oid			outfuncid;
+		FmgrInfo	outflinfo;
 	}		   *arg_type_cache; /* cache for datum_to_json[b]() */
 	int			nargs;
 } JsonConstructorExprState;

@@ -60,8 +60,10 @@
 #include "catalog/toasting.h"
 #include "commands/comment.h"
 #include "commands/defrem.h"
+#include "commands/matview.h"
 #include "commands/event_trigger.h"
 #include "commands/extension.h"
+#include "commands/matview.h"
 #include "commands/repack.h"
 #include "commands/sequence.h"
 #include "commands/tablecmds.h"
@@ -1810,6 +1812,9 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 	/* Pass back some data to save lookups in RemoveRelations */
 	state->actual_relkind = classform->relkind;
 	state->actual_relpersistence = classform->relpersistence;
+
+	if (classform->relkind == RELKIND_MATVIEW && classform->relisivm)
+		removeImmv(relOid);
 
 	/*
 	 * Both RELKIND_RELATION and RELKIND_PARTITIONED_TABLE are OBJECT_TABLE,
@@ -3925,6 +3930,14 @@ renameatt_internal(Oid myrelid,
 	 */
 	targetrelation = relation_open(myrelid, AccessExclusiveLock);
 	renameatt_check(myrelid, RelationGetForm(targetrelation), recursing);
+
+	/*
+	 * Don't rename IVM columns.
+	 */
+	if (RelationIsIVM(targetrelation) && isIvmName(oldattname))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("IVM column can not be renamed")));
 
 	/*
 	 * if the 'recurse' flag is set then we are supposed to rename this

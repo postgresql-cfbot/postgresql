@@ -955,14 +955,14 @@ endif
 
 icuopt = get_option('icu')
 if not icuopt.disabled()
-  icu = dependency('icu-uc', required: false)
+  icu = dependency('icu-uc', required: false, version: '>= 55')
   if icu.found()
     icu_i18n = dependency('icu-i18n', required: true)
   endif
 
   # Unfortunately the dependency is named differently with cmake
   if not icu.found() # combine with above once meson 0.60.0 is required
-    icu = dependency('ICU', required: icuopt,
+    icu = dependency('ICU', required: icuopt, version: '>= 55',
                      components: ['uc'], modules: ['ICU::uc'], method: 'cmake')
     if icu.found()
       icu_i18n = dependency('ICU', required: true,
@@ -2060,21 +2060,6 @@ foreach builtin : builtins
     cdata.set('HAVE@0@'.format(fname.to_upper()), 1)
   endif
 endforeach
-
-
-# Check if the C compiler understands __builtin_types_compatible_p,
-# and define HAVE__BUILTIN_TYPES_COMPATIBLE_P if so.
-#
-# We check usage with __typeof__, though it's unlikely any compiler would
-# have the former and not the latter.
-if cc.compiles('''
-    static int x;
-    static int y[__builtin_types_compatible_p(__typeof__(x), int)];
-    ''',
-    name: '__builtin_types_compatible_p',
-    args: test_c_args)
-  cdata.set('HAVE__BUILTIN_TYPES_COMPATIBLE_P', 1)
-endif
 
 
 # Check if the C compiler understands __builtin_$op_overflow(),

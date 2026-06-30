@@ -168,20 +168,22 @@
 
     <listitem>
      <para>
-      The ICU library is used by default. If you don't want to use it then you must specify the <option>--without-icu</option> option to <filename>configure</filename>. Using this option disables support for ICU collation features (see <xref linkend="collation"/>).
+      The ICU library is used by default. If you don't want to use it then you
+      must specify the <option>--without-icu</option> option to
+      <filename>configure</filename>. Using this option disables support for
+      ICU collation features (see <xref linkend="collation"/>).
      </para>
      <para>
       ICU support requires the <productname>ICU4C</productname> package to be
       installed.  The minimum required version of
-      <productname>ICU4C</productname> is currently 4.2.
+      <productname>ICU4C</productname> is currently 55.
      </para>
 
      <para>
       By default,
       <productname>pkg-config</productname><indexterm><primary>pkg-config</primary></indexterm>
-      will be used to find the required compilation options.  This is
-      supported for <productname>ICU4C</productname> version 4.6 and later.
-      For older versions, or if <productname>pkg-config</productname> is not
+      will be used to find the required compilation options.
+      If <productname>pkg-config</productname> is not
       available, the variables <envar>ICU_CFLAGS</envar> and
       <envar>ICU_LIBS</envar> can be specified to
       <filename>configure</filename>, like in this example:
@@ -265,7 +267,7 @@
       To build the <application>PL/Tcl</application>
       procedural language, you of course need a <productname>Tcl</productname>
       installation.  The minimum required version is
-      <productname>Tcl</productname> 8.4.
+      <productname>Tcl</productname> 8.6.
      </para>
     </listitem>
 
@@ -1936,8 +1938,7 @@ build-postgresql:
          Tcl interpreter program.  This will be used to
          determine the dependencies for building PL/Tcl.
          If this is not set, the following are probed in this
-         order: <literal>tclsh tcl tclsh8.6 tclsh86 tclsh8.5 tclsh85
-         tclsh8.4 tclsh84</literal>.
+         order: <literal>tclsh tcl tclsh8.6 tclsh86</literal>.
         </para>
        </listitem>
       </varlistentry>
@@ -2436,7 +2437,7 @@ ninja install
         library, enabling use of ICU collation features (see <xref
         linkend="collation"/>).  Defaults to auto and requires the
         <productname>ICU4C</productname> package to be installed.  The minimum
-        required version of <productname>ICU4C</productname> is currently 4.2.
+        required version of <productname>ICU4C</productname> is currently 55.
        </para>
       </listitem>
      </varlistentry>
@@ -3841,17 +3842,16 @@ configure ... LDFLAGS="-R /usr/sfw/lib:/opt/sfw/lib:/usr/local/lib"
    <para>
     Both 32-bit and 64-bit builds are possible with the Microsoft Compiler suite.
     32-bit PostgreSQL builds are possible with
-    <productname>Visual Studio 2019</productname> to
     <productname>Visual Studio 2022</productname>,
     as well as standalone Windows SDK releases 10 and above.
     64-bit PostgreSQL builds are supported with
     <productname>Microsoft Windows SDK</productname> version 10 and above or
-    <productname>Visual Studio 2019</productname> and above.
+    <productname>Visual Studio 2022</productname> and above.
     <!--
-        For 2019 requirements:
-        https://docs.microsoft.com/en-us/visualstudio/releases/2019/system-requirements
         For 2022 requirements:
-        https://docs.microsoft.com/en-us/visualstudio/releases/2022/system-requirements
+        https://learn.microsoft.com/en-us/visualstudio/releases/2022/system-requirements
+        For 2026 requirements:
+        https://learn.microsoft.com/en-us/visualstudio/releases/2026/vs-system-requirements
     -->
    </para>
 

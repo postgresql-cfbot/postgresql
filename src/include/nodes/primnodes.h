@@ -2367,6 +2367,8 @@ typedef struct JoinExpr
 	Alias	   *join_using_alias pg_node_attr(query_jumble_ignore);
 	/* KEY clause, if any */
 	Node	   *keyJoin pg_node_attr(query_jumble_ignore);
+	/* FILTER clause (transformed); for deparsing only, actual expr is in quals */
+	Node	   *joinFilter pg_node_attr(query_jumble_ignore);
 	/* qualifiers on join, if any */
 	Node	   *quals;
 	/* user-written alias clause, if any */

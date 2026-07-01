@@ -1178,6 +1178,7 @@ checkWellFormedRecursionWalker(Node *node, CteState *cstate)
 				elog(ERROR, "unrecognized join type: %d",
 					 (int) j->jointype);
 		}
+		checkWellFormedRecursionWalker(j->joinFilter, cstate);
 		return false;
 	}
 	if (IsA(node, SubLink))

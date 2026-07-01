@@ -2350,7 +2350,7 @@ typedef struct JsonArrayAgg
  * KeyJoinClause -
  *	  raw parser representation of a FOR KEY join clause
  *
- * Produced by the grammar for "FOR KEY (cols) <- alias (cols)"
+ * Produced by the grammar for "FOR KEY (cols) <- alias (cols) [FILTER ...]"
  * and the matching "->" form, used as the condition of a JOIN.  The first
  * name list is unqualified and resolves against the JOIN's right operand;
  * the alias after the arrow must name a table reference visible inside the
@@ -2367,6 +2367,7 @@ typedef struct KeyJoinClause
 	KeyJoinDirection direction; /* arrow direction; selects which side is FK */
 	char	   *refAlias;		/* table alias in left operand */
 	List	   *refCols;		/* column names to resolve with refAlias */
+	Node	   *filter;			/* raw FILTER (WHERE ...) expr, or NULL */
 	ParseLoc	location;		/* location of the FOR KEY token, or -1 */
 } KeyJoinClause;
 

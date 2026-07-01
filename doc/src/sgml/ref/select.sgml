@@ -64,6 +64,7 @@ SELECT [ ALL | DISTINCT [ ON ( <replaceable class="parameter">expression</replac
     <replaceable class="parameter">from_item</replaceable> <replaceable class="parameter">join_type</replaceable> <replaceable class="parameter">from_item</replaceable> USING ( <replaceable class="parameter">join_column</replaceable> [, ...] ) [ AS <replaceable class="parameter">join_using_alias</replaceable> ]
     <replaceable class="parameter">from_item</replaceable> <replaceable class="parameter">join_type</replaceable> <replaceable class="parameter">from_item</replaceable>
         FOR KEY ( <replaceable class="parameter">right_join_column</replaceable> [, ...] ) { -&gt; | &lt;- } <replaceable class="parameter">left_from_reference</replaceable> ( <replaceable class="parameter">left_join_column</replaceable> [, ...] )
+        [ FILTER (WHERE <replaceable class="parameter">join_filter</replaceable>) ]
     <replaceable class="parameter">from_item</replaceable> NATURAL <replaceable class="parameter">join_type</replaceable> <replaceable class="parameter">from_item</replaceable>
     <replaceable class="parameter">from_item</replaceable> CROSS JOIN <replaceable class="parameter">from_item</replaceable>
 
@@ -744,7 +745,7 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
      </varlistentry>
 
      <varlistentry>
-      <term><literal>FOR KEY ( <replaceable class="parameter">right_join_column</replaceable> [, ...] ) { -&gt; | &lt;- } <replaceable class="parameter">left_from_reference</replaceable> ( <replaceable class="parameter">left_join_column</replaceable> [, ...] )</literal></term>
+      <term><literal>FOR KEY ( <replaceable class="parameter">right_join_column</replaceable> [, ...] ) { -&gt; | &lt;- } <replaceable class="parameter">left_from_reference</replaceable> ( <replaceable class="parameter">left_join_column</replaceable> [, ...] ) [ FILTER (WHERE <replaceable class="parameter">join_filter</replaceable>) ]</literal></term>
       <listitem>
        <para>
         A <literal>FOR KEY</literal> clause requests an equality join that can
@@ -818,6 +819,26 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
         referenced uniqueness.  <literal>FOR KEY</literal> does not suppress
         duplicate output columns; its output column behavior is like
         <literal>JOIN ON</literal>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
+      <term><literal>FILTER (WHERE <replaceable class="parameter">join_filter</replaceable>)</literal></term>
+      <listitem>
+       <para>
+        A <literal>FILTER</literal> clause can be written after a
+        <literal>FOR KEY</literal> join condition to add a Boolean condition
+        to the join.  The filter can reference columns from both join inputs
+        and has the same match-determining semantics as a condition written
+        in an <literal>ON</literal> clause.  For outer joins, rows preserved
+        by the join type are still emitted with nulls for the nonmatching or
+        filtered side.
+       </para>
+
+       <para>
+        This join-local filter is applied after the key-join relationship has
+        been proven.
        </para>
       </listitem>
      </varlistentry>

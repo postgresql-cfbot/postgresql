@@ -107,6 +107,7 @@ test: key_join
 test: key_join_overview
 test: key_join_mcdc
 test: key_join_icu
+test: key_join_filter
 
 # ----------
 # Another group of parallel tests (JSON related)

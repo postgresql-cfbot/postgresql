@@ -249,6 +249,8 @@ static Var *direct_var_from_node(Node *node);
 static List **build_join_attrmap(RangeTblEntry *joinrte, bool leftside,
 								 int nattrs);
 static bool join_null_extends_side(JoinType jointype, bool leftside);
+static Node *join_filter_for_side(JoinType jointype, bool leftside,
+								  Node *filter);
 static KeyJoinFact *add_fact(KeyJoinSurfaceFacts *set,
 							 KeyJoinFactKind kind);
 static void add_paired_row_coverage(KeyJoinSurfaceFacts *set,
@@ -400,6 +402,10 @@ transformAndValidateKeyJoin(ParseState *pstate, JoinExpr *j,
 
 	ensure_key_join_surface_facts(&pk_context, pk_surface->p_rte);
 
+	/*
+	 * Deliberately ignore j->joinFilter here: the proof is about the two
+	 * operand surfaces before any join-local FILTER is applied.
+	 */
 	if (!find_key_join_match(fk_surface->p_rte, pk_surface->p_rte,
 							 referencing_attnums, referenced_attnums,
 							 !join_preserves_side(j->jointype, referencing_left),
@@ -2988,7 +2994,9 @@ compute_join_output_facts(JoinExpr *j,
 									preserve_referencing_notnull,
 									KJI_NULL_EXTENDING_JOIN,
 									true, KJI_NONE, true,
-									false,
+									join_filter_for_side(j->jointype,
+														 referencing_left,
+														 j->joinFilter) != NULL,
 									NIL,
 									KJI_NONE);
 	project_key_join_facts_from_rte(result, referenced_rte, referenced_map,
@@ -2997,7 +3005,9 @@ compute_join_output_facts(JoinExpr *j,
 									referencing_unique,
 									KJI_JOIN_FANOUT,
 									referenced_preserved,
-									false,
+									join_filter_for_side(j->jointype,
+														 referenced_left,
+														 j->joinFilter) != NULL,
 									NIL,
 									KJI_JOIN_NOT_PRESERVED);
 
@@ -3043,6 +3053,26 @@ join_null_extends_side(JoinType jointype, bool leftside)
 {
 	return jointype == JOIN_FULL ||
 		(leftside ? jointype == JOIN_RIGHT : jointype == JOIN_LEFT);
+}
+
+/*
+ * join_filter_for_side
+ *
+ *		Return the join filter applicable to facts projected from one side.
+ */
+static Node *
+join_filter_for_side(JoinType jointype, bool leftside, Node *filter)
+{
+	Assert(jointype == JOIN_INNER || jointype == JOIN_LEFT ||
+		   jointype == JOIN_RIGHT || jointype == JOIN_FULL);
+
+	if (jointype == JOIN_INNER)
+		return filter;
+	if (jointype == JOIN_LEFT)
+		return leftside ? NULL : filter;
+	if (jointype == JOIN_RIGHT)
+		return leftside ? filter : NULL;
+	return NULL;
 }
 
 static KeyJoinFact *

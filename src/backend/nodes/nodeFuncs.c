@@ -2632,10 +2632,13 @@ expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(join->quals))
 					return true;
+				if (WALK(join->joinFilter))
+					return true;
 
 				/*
-				 * Key-join proof metadata is not expression semantics.  Alias
-				 * clause, using list are deemed uninteresting.
+				 * Key-join proof metadata is not expression semantics, but the
+				 * join-local filter is.  Alias clause, using list are deemed
+				 * uninteresting.
 				 */
 			}
 			break;
@@ -3744,6 +3747,7 @@ expression_tree_mutator_impl(Node *node,
 				 * varno rewrites a mutator makes.
 				 */
 				newnode->keyJoin = copyObject(join->keyJoin);
+				MUTATE(newnode->joinFilter, join->joinFilter, Node *);
 				/* We do not mutate alias or using by default */
 				return (Node *) newnode;
 			}
@@ -4356,7 +4360,9 @@ raw_expression_tree_walker_impl(Node *node,
 
 				if (WALK(kjc->localCols))
 					return true;
-				return WALK(kjc->refCols);
+				if (WALK(kjc->refCols))
+					return true;
+				return WALK(kjc->filter);
 			}
 		case T_JoinExpr:
 			{
@@ -4369,6 +4375,8 @@ raw_expression_tree_walker_impl(Node *node,
 				if (WALK(join->quals))
 					return true;
 				if (WALK(join->keyJoin))
+					return true;
+				if (WALK(join->joinFilter))
 					return true;
 				if (WALK(join->alias))
 					return true;

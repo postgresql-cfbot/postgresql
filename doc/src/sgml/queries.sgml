@@ -253,6 +253,7 @@ FROM <replaceable>table_reference</replaceable> <optional>, <replaceable>table_r
 <replaceable>T1</replaceable> { <optional>INNER</optional> | { LEFT | RIGHT | FULL } <optional>OUTER</optional> } JOIN <replaceable>T2</replaceable> USING ( <replaceable>join column list</replaceable> )
 <replaceable>T1</replaceable> { <optional>INNER</optional> | { LEFT | RIGHT | FULL } <optional>OUTER</optional> } JOIN <replaceable>T2</replaceable>
     FOR KEY ( <replaceable>right column list</replaceable> ) { -&gt; | &lt;- } <replaceable>T1 relation</replaceable> ( <replaceable>left column list</replaceable> )
+    <optional> FILTER (WHERE <replaceable>boolean_expression</replaceable>) </optional>
 <replaceable>T1</replaceable> NATURAL { <optional>INNER</optional> | { LEFT | RIGHT | FULL } <optional>OUTER</optional> } JOIN <replaceable>T2</replaceable>
 </synopsis>
 

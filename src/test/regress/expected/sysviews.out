@@ -129,6 +129,13 @@ select count(*) > 0 as ok from pg_stat_slru;
  t
 (1 row)
 
+-- There should be at least one statistics kind loaded
+select count(*) > 0 as ok from pg_stat_kind_info;
+ ok 
+----
+ t
+(1 row)
+
 -- There must be only one record
 select count(*) = 1 as ok from pg_stat_wal;
  ok 

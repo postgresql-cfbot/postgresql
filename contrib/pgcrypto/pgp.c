@@ -63,6 +63,7 @@ struct cipher_info
 	const char *int_name;
 	int			key_len;
 	int			block_len;
+	bool		fips_allowed;
 };
 
 static const struct digest_info digest_list[] = {
@@ -77,16 +78,16 @@ static const struct digest_info digest_list[] = {
 };
 
 static const struct cipher_info cipher_list[] = {
-	{"3des", PGP_SYM_DES3, "3des-ecb", 192 / 8, 64 / 8},
-	{"cast5", PGP_SYM_CAST5, "cast5-ecb", 128 / 8, 64 / 8},
-	{"bf", PGP_SYM_BLOWFISH, "bf-ecb", 128 / 8, 64 / 8},
-	{"blowfish", PGP_SYM_BLOWFISH, "bf-ecb", 128 / 8, 64 / 8},
-	{"aes", PGP_SYM_AES_128, "aes-ecb", 128 / 8, 128 / 8},
-	{"aes128", PGP_SYM_AES_128, "aes-ecb", 128 / 8, 128 / 8},
-	{"aes192", PGP_SYM_AES_192, "aes-ecb", 192 / 8, 128 / 8},
-	{"aes256", PGP_SYM_AES_256, "aes-ecb", 256 / 8, 128 / 8},
-	{"twofish", PGP_SYM_TWOFISH, "twofish-ecb", 256 / 8, 128 / 8},
-	{NULL, 0, NULL}
+	{"3des", PGP_SYM_DES3, "3des-ecb", 192 / 8, 64 / 8, false},
+	{"cast5", PGP_SYM_CAST5, "cast5-ecb", 128 / 8, 64 / 8, false},
+	{"bf", PGP_SYM_BLOWFISH, "bf-ecb", 128 / 8, 64 / 8, false},
+	{"blowfish", PGP_SYM_BLOWFISH, "bf-ecb", 128 / 8, 64 / 8, false},
+	{"aes", PGP_SYM_AES_128, "aes-ecb", 128 / 8, 128 / 8, true},
+	{"aes128", PGP_SYM_AES_128, "aes-ecb", 128 / 8, 128 / 8, true},
+	{"aes192", PGP_SYM_AES_192, "aes-ecb", 192 / 8, 128 / 8, true},
+	{"aes256", PGP_SYM_AES_256, "aes-ecb", 256 / 8, 128 / 8, true},
+	{"twofish", PGP_SYM_TWOFISH, "twofish-ecb", 256 / 8, 128 / 8, false},
+	{NULL, 0, NULL, 0, 0, false}
 };
 
 static const struct cipher_info *
@@ -161,6 +162,17 @@ pgp_load_cipher(int code, PX_Cipher **res)
 
 	if (i == NULL)
 		return PXE_PGP_CORRUPT_DATA;
+
+	CheckBuiltinCryptoMode();
+
+	/*
+	 * In FIPS mode, only allow ciphers that are FIPS approved.
+	 */
+	if (builtin_crypto_enabled == BC_FIPS &&
+		CheckFIPSMode() &&
+		!i->fips_allowed)
+		ereport(ERROR,
+				errmsg("cipher %s is not FIPS approved", i->name));
 
 	err = px_find_cipher(i->int_name, res);
 	if (err == 0)

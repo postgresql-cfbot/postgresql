@@ -1236,12 +1236,17 @@ fips_mode() returns boolean
     <listitem>
      <para>
       <varname>pgcrypto.builtin_crypto_enabled</varname> determines if the
-      built in crypto functions <function>gen_salt()</function>, and
-      <function>crypt()</function> are available for use. Setting this to
+      built in crypto functions <function>gen_salt()</function>,
+      <function>crypt()</function>, <function>pgp_sym_encrypt()</function>
+      and <function>pgp_pub_encrypt()</function> are available for use.
+      Setting this to
       <literal>off</literal> disables these functions. <literal>on</literal>
       (the default) enables these functions to work normally.
       <literal>fips</literal> disables these functions if
       <productname>OpenSSL</productname> is detected to operate in FIPS mode.
+      <function>pgp_sym_encrypt()</function> and
+      <function>pgp_pub_encrypt()</function> are disabled for ciphers that
+      are not FIPS-approved.
      </para>
     </listitem>
    </varlistentry>

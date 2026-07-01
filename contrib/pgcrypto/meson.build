@@ -54,7 +54,8 @@ pgcrypto_regress = [
   'pgp-pubkey-encrypt',
   'pgp-pubkey-session',
   'pgp-info',
-  'crypt-shacrypt'
+  'crypt-shacrypt',
+  'pgp-fips-cipher',
 ]
 
 pgcrypto_openssl_sources = files(

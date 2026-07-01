@@ -790,13 +790,26 @@ cleanup:
  * Deadlocks are extremely rare, and relatively expensive to check for,
  * so we don't do a deadlock check right away ... only if we have had to wait
  * at least deadlock_timeout.
+ *
+ * Parameters waitStart and logged_recovery_conflict are forwarded from the
+ * caller (LockBufferForCleanup) so that, when this function emits the
+ * "recovery still waiting" log after the deadlock-check signal, it uses the
+ * caller's wait-start timestamp and gate.  When log_recovery_conflict_waits
+ * is disabled, waitStart is 0 and the in-function emission is skipped.
+ * logged_recovery_conflict must be a valid (non-NULL) pointer; the function
+ * sets *logged_recovery_conflict to true after emission so that neither the
+ * caller's loop-top branch nor a later entry re-emits the same conflict.
+ * The caller's "waiting" ps-display suffix remains active across the second
+ * ProcWaitForSignal until UnpinBuffer() wakes us up.
  */
 void
-ResolveRecoveryConflictWithBufferPin(void)
+ResolveRecoveryConflictWithBufferPin(TimestampTz waitStart,
+									 bool *logged_recovery_conflict)
 {
 	TimestampTz ltime;
 
 	Assert(InHotStandby);
+	Assert(logged_recovery_conflict != NULL);
 
 	ltime = GetStandbyLimitTime();
 
@@ -818,6 +831,7 @@ ResolveRecoveryConflictWithBufferPin(void)
 
 		if (ltime != 0)
 		{
+			got_standby_delay_timeout = false;
 			timeouts[cnt].id = STANDBY_TIMEOUT;
 			timeouts[cnt].type = TMPARAM_AT;
 			timeouts[cnt].fin_time = ltime;
@@ -851,17 +865,56 @@ ResolveRecoveryConflictWithBufferPin(void)
 		/*
 		 * Send out a request for hot-standby backends to check themselves for
 		 * deadlocks.
-		 *
-		 * XXX The subsequent ResolveRecoveryConflictWithBufferPin() will wait
-		 * to be signaled by UnpinBuffer() again and send a request for
-		 * deadlocks check if deadlock_timeout happens. This causes the
-		 * request to continue to be sent every deadlock_timeout until the
-		 * buffer is unpinned or ltime is reached. This would increase the
-		 * workload in the startup process and backends. In practice it may
-		 * not be so harmful because the period that the buffer is kept pinned
-		 * is basically no so long. But we should fix this?
 		 */
 		SendRecoveryConflictWithBufferPin(RECOVERY_CONFLICT_BUFFERPIN_DEADLOCK);
+
+		/*
+		 * Emit the "still waiting" log here, because the second
+		 * ProcWaitForSignal() below keeps control inside this function until
+		 * the buffer is unpinned, so the caller's loop-top log emission would
+		 * otherwise be skipped.  The caller passes its own waitStart and
+		 * logged_recovery_conflict so the emission semantics match what the
+		 * caller would have produced on its next iteration.
+		 *
+		 * The caller's loop-top branch additionally guards on
+		 * TimestampDifferenceExceeds(waitStart, now, DeadlockTimeout) before
+		 * logging.  That extra guard is redundant here: we just woke from
+		 * STANDBY_DEADLOCK_TIMEOUT, so DeadlockTimeout has elapsed since
+		 * waitStart by construction.  The caller-side waitStart != 0 check
+		 * is a shorthand for log_recovery_conflict_waits=on (the caller
+		 * sets waitStart only when that GUC is true), so this branch
+		 * stays a no-op when conflict-wait logging is disabled.
+		 */
+		if (waitStart != 0 && !*logged_recovery_conflict)
+		{
+			LogRecoveryConflict(RECOVERY_CONFLICT_BUFFERPIN,
+								waitStart, GetCurrentTimestamp(),
+								NULL, true);
+			*logged_recovery_conflict = true;
+		}
+
+		/*
+		 * Wait here to be signaled by UnpinBuffer(), to prevent the
+		 * subsequent ResolveRecoveryConflictWithBufferPin() call (from the
+		 * caller's loop) from firing another deadlock_timeout and re-sending
+		 * the deadlock-check signal.  Without this, the signal would be sent
+		 * every deadlock_timeout interval until the buffer is unpinned or
+		 * ltime is reached.
+		 *
+		 * The same wakeup assumption as the first wait above applies: only
+		 * UnpinBuffer() and STANDBY_TIMEOUT (if armed) can wake us here
+		 * (STANDBY_DEADLOCK_TIMEOUT was one-shot and has already fired).
+		 *
+		 * If STANDBY_TIMEOUT fires during this wait, control returns to the
+		 * caller (LockBufferForCleanup), which re-enters this function on
+		 * its next iteration; the GetCurrentTimestamp() >= ltime fast-path
+		 * at the top then sends the cancel signal.  We intentionally do not
+		 * check got_standby_delay_timeout here because the cancel is one
+		 * caller-loop iteration away, and adding the check would duplicate
+		 * logic with the fast-path branch.
+		 */
+		got_standby_deadlock_timeout = false;
+		ProcWaitForSignal(WAIT_EVENT_BUFFER_CLEANUP);
 	}
 
 	/*

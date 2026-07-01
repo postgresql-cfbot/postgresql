@@ -62,6 +62,7 @@ tests += {
       't/051_effective_wal_level.pl',
       't/052_checkpoint_segment_missing.pl',
       't/053_standby_login_event_trigger.pl',
+      't/054_bufferpin_conflict_log_timing.pl',
     ],
   },
 }

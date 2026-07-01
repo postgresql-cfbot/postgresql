@@ -6789,7 +6789,8 @@ LockBufferForCleanup(Buffer buffer)
 			/* Publish the bufid that Startup process waits on */
 			SetStartupBufferPinWaitBufId(buffer - 1);
 			/* Set alarm and then wait to be signaled by UnpinBuffer() */
-			ResolveRecoveryConflictWithBufferPin();
+			ResolveRecoveryConflictWithBufferPin(waitStart,
+												 &logged_recovery_conflict);
 			/* Reset the published bufid */
 			SetStartupBufferPinWaitBufId(-1);
 		}

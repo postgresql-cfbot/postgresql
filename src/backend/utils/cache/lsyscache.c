@@ -3709,7 +3709,7 @@ get_namespace_name_or_temp(Oid nspid)
  *		object for the given namespace ID and object name.
  */
 char *
-get_qualified_objname(Oid nspid, char *objname)
+get_qualified_objname(Oid nspid, const char *objname)
 {
 	char	   *nspname;
 	char	   *result;

@@ -252,14 +252,39 @@ MatchText(const char *t, int tlen, const char *p, int plen, pg_locale_t locale)
 			if (found_escape)
 			{
 				char	   *b;
+				const char *c = p;
+				const char *start;	/* used in the loop whenever we are copying a
+									 * multibyte character */
+				int			clen = p1 - p;
+				bool		afterescape = false;
 
-				b = buf = palloc(p1 - p);
-				for (const char *c = p; c < p1; c++)
+				b = buf = palloc(clen);
+
+				/*
+				 * Remove occurrences of a single '\'. And if we have a '\\',
+				 * keep one '\'.
+				 */
+				while (clen > 0)
 				{
-					if (*c == '\\')
-						;
-					else
-						*(b++) = *c;
+					if (*c == '\\' && !afterescape)
+					{
+						afterescape = true;
+						NextByte(c, clen);
+						continue;
+					}
+
+					/*
+					 * Copy the entire character (1-4 bytes) and advance. This
+					 * ensures we stay aligned on character boundaries for
+					 * multibyte encodings.
+					 */
+					start = c;
+
+					NextChar(c, clen);
+					while (start < c)
+						*(b++) = *(start++);
+
+					afterescape = false;
 				}
 
 				subpat = buf;

@@ -138,6 +138,14 @@
 #define SH_INSERT_HASH_INTERNAL SH_MAKE_NAME(insert_hash_internal)
 #define SH_LOOKUP_HASH_INTERNAL SH_MAKE_NAME(lookup_hash_internal)
 
+#ifdef SH_RAW_ALLOCATOR
+/* <prefix>_hash <prefix>_create(uint32 nelements, void *private_data) */
+#define SH_CREATE_PARAMETERS uint32 nelements, void *private_data
+#else
+/*  <prefix>_hash <prefix>_create(MemoryContext ctx, uint32 nelements, void *private_data) */
+#define SH_CREATE_PARAMETERS MemoryContext ctx, uint32 nelements, void *private_data
+#endif
+
 /* generate forward declarations necessary to use the hash table */
 #ifdef SH_DECLARE
 
@@ -186,17 +194,7 @@ typedef struct SH_ITERATOR
 }			SH_ITERATOR;
 
 /* externally visible function prototypes */
-#ifdef SH_RAW_ALLOCATOR
-/* <prefix>_hash <prefix>_create(uint32 nelements, void *private_data) */
-SH_SCOPE	SH_TYPE *SH_CREATE(uint32 nelements, void *private_data);
-#else
-/*
- * <prefix>_hash <prefix>_create(MemoryContext ctx, uint32 nelements,
- *								 void *private_data)
- */
-SH_SCOPE	SH_TYPE *SH_CREATE(MemoryContext ctx, uint32 nelements,
-							   void *private_data);
-#endif
+SH_SCOPE	SH_TYPE *SH_CREATE(SH_CREATE_PARAMETERS);
 
 /* void <prefix>_destroy(<prefix>_hash *tb) */
 SH_SCOPE void SH_DESTROY(SH_TYPE * tb);
@@ -442,13 +440,8 @@ SH_FREE(SH_TYPE * type, void *pointer)
  * Memory other than for the array of elements will still be allocated from
  * the passed-in context.
  */
-#ifdef SH_RAW_ALLOCATOR
 SH_SCOPE	SH_TYPE *
-SH_CREATE(uint32 nelements, void *private_data)
-#else
-SH_SCOPE	SH_TYPE *
-SH_CREATE(MemoryContext ctx, uint32 nelements, void *private_data)
-#endif
+SH_CREATE(SH_CREATE_PARAMETERS)
 {
 	SH_TYPE    *tb;
 	uint64		size;
@@ -1217,6 +1210,7 @@ SH_STAT(SH_TYPE * tb)
 #undef SH_GROW_MAX_MOVE
 #undef SH_GROW_MIN_FILLFACTOR
 #undef SH_MAX_SIZE
+#undef SH_CREATE_PARAMETERS
 
 /* types */
 #undef SH_TYPE

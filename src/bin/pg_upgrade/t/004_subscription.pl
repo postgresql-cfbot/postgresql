@@ -42,7 +42,7 @@ my $connstr = $publisher->connstr . ' dbname=postgres';
 
 # ------------------------------------------------------
 # Check that pg_upgrade fails when max_active_replication_origins configured
-# in the new cluster is less than the number of subscriptions in the old
+# in the new cluster is less than the number of replication origins in the old
 # cluster.
 # ------------------------------------------------------
 # It is sufficient to use disabled subscription to test upgrade failure.
@@ -74,7 +74,7 @@ command_checks_all(
 	],
 	1,
 	[
-		qr/"max_active_replication_origins" \(0\) must be greater than or equal to the number of subscriptions \(1\) in the old cluster/
+		qr/"max_active_replication_origins" \(0\) must be greater than or equal to the number of replication origins \(1\) in the old cluster/
 	],
 	[qr//],
 	'run of pg_upgrade where the new cluster has insufficient max_active_replication_origins'
@@ -301,8 +301,38 @@ is($result, qq(t), "Check that the table is in init state");
 
 # Get the replication origin's remote_lsn of the old subscriber
 my $remote_lsn = $old_sub->safe_psql('postgres',
-	"SELECT remote_lsn FROM pg_replication_origin_status os, pg_subscription s WHERE os.external_id = 'pg_' || s.oid AND s.subname = 'regress_sub4'"
+    "SELECT os.remote_lsn
+     FROM pg_replication_origin_status os
+     JOIN pg_replication_origin o ON o.roident = os.local_id
+     JOIN pg_subscription s ON o.roname = 'pg_' || s.oid::text
+     WHERE s.subname = 'regress_sub4'"
 );
+
+# Get the replication origin ids (roident) for all subscriptions, keyed by
+# subscription name (which is stable across upgrade, unlike suboid). These
+# must be preserved after upgrade. A mismatch would cause spurious
+# update_origin_differs conflicts.
+my %pre_upgrade_roident;
+my $roident_rows = $old_sub->safe_psql('postgres',
+    "SELECT s.subname, o.roident
+     FROM pg_subscription s
+     JOIN pg_replication_origin o ON o.roname = 'pg_' || s.oid::text
+     ORDER BY s.subname"
+);
+for my $row (split /\n/, $roident_rows)
+{
+    my ($subname, $roident) = split /\|/, $row;
+    $pre_upgrade_roident{$subname} = $roident;
+}
+
+# Create a user created replication origin, which should also be preserved after upgrade.
+my $user_origin_name = 'regress_user_origin';
+$old_sub->safe_psql('postgres',
+    "SELECT pg_replication_origin_create('$user_origin_name')");
+$pre_upgrade_roident{$user_origin_name} = $old_sub->safe_psql('postgres',
+    "SELECT roident FROM pg_replication_origin WHERE roname = '$user_origin_name'"
+);
+
 # Have the subscription in disabled state before upgrade
 $old_sub->safe_psql('postgres', "ALTER SUBSCRIPTION regress_sub5 DISABLE");
 
@@ -312,6 +342,9 @@ my $tab_upgraded1_oid = $old_sub->safe_psql('postgres',
 	"SELECT oid FROM pg_class WHERE relname = 'tab_upgraded1'");
 my $tab_upgraded2_oid = $old_sub->safe_psql('postgres',
 	"SELECT oid FROM pg_class WHERE relname = 'tab_upgraded2'");
+
+$sub_oid = $old_sub->safe_psql('postgres',
+	"SELECT oid FROM pg_subscription ORDER BY subname");
 
 $old_sub->stop;
 
@@ -359,6 +392,10 @@ $publisher->safe_psql(
 
 $new_sub->start;
 
+# The subscription oid should be preserved
+$result = $new_sub->safe_psql('postgres', "SELECT oid FROM pg_subscription ORDER BY subname");
+is($result, qq($sub_oid), "subscription oid should have been preserved");
+
 # The subscription's running status, failover option, and retain_dead_tuples
 # option should be preserved in the upgraded instance. So regress_sub4 should
 # still have subenabled, subfailover, and subretaindeadtuples set to true,
@@ -369,6 +406,39 @@ $result = $new_sub->safe_psql('postgres',
 is( $result, qq(regress_sub4|t|t|t
 regress_sub5|f|f|f),
 	"check that the subscription's running status, failover, and retain_dead_tuples are preserved"
+);
+
+# Verify that the subscription related replication origins are preserved after upgrade.
+my $post_roident_rows = $new_sub->safe_psql('postgres',
+    "SELECT s.subname, o.roident
+     FROM pg_subscription s
+     JOIN pg_replication_origin o ON o.roname = 'pg_' || s.oid::text
+     ORDER BY s.subname"
+);
+
+my %post_upgrade_roident;
+for my $row (split /\n/, $post_roident_rows)
+{
+    my ($subname, $roident) = split /\|/, $row;
+	$post_upgrade_roident{$subname} = $roident;
+}
+
+# Iterate over the union of pre- and post-upgrade keys so a missing or
+# unexpected entry on either side is caught.
+my %all_subnames = (%pre_upgrade_roident, %post_upgrade_roident);
+for my $subname (sort keys %all_subnames)
+{
+    next if $subname eq $user_origin_name;
+    is($post_upgrade_roident{$subname}, $pre_upgrade_roident{$subname},
+        "roident preserved for subscription '$subname' after upgrade");
+}
+
+# Verify that user created replication origins are preserved after upgrade.
+my $post_user_roident = $new_sub->safe_psql('postgres',
+    "SELECT roident FROM pg_replication_origin WHERE roname = '$user_origin_name'"
+);
+is($post_user_roident, $pre_upgrade_roident{$user_origin_name},
+    "roident preserved for user-created origin '$user_origin_name' after upgrade"
 );
 
 # Subscription relations should be preserved

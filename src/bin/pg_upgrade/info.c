@@ -833,6 +833,30 @@ count_old_cluster_logical_slots(void)
 }
 
 /*
+ * get_replication_origin_info()
+ *
+ * Gets the information of replication origins in the cluster.
+ */
+void
+get_replication_origin_info(ClusterInfo *cluster)
+{
+	PGconn	   *conn;
+	PGresult   *res;
+
+	conn = connectToServer(cluster, "template1");
+	res = executeQueryOrDie(conn, "SELECT count(*) AS norigins "
+								   "FROM pg_catalog.pg_replication_origin");
+
+	if (PQntuples(res) != 1)
+		pg_fatal("could not get the number of replication origins");
+
+	cluster->nrepl_origins = atoi(PQgetvalue(res, 0, 0));
+	PQclear(res);
+
+	PQfinish(conn);
+}
+
+/*
  * get_subscription_info()
  *
  * Gets the information of subscriptions in the cluster.
@@ -842,23 +866,20 @@ get_subscription_info(ClusterInfo *cluster)
 {
 	PGconn	   *conn;
 	PGresult   *res;
-	int			i_nsub;
 	int			i_retain_dead_tuples;
 
 	conn = connectToServer(cluster, "template1");
 	if (GET_MAJOR_VERSION(cluster->major_version) >= 1900)
-		res = executeQueryOrDie(conn, "SELECT count(*) AS nsub,"
-								"COUNT(CASE WHEN subretaindeadtuples THEN 1 END) > 0 AS retain_dead_tuples "
+		res = executeQueryOrDie(conn,
+								"SELECT COUNT(CASE WHEN subretaindeadtuples THEN 1 END) > 0 AS retain_dead_tuples "
 								"FROM pg_catalog.pg_subscription");
 	else
-		res = executeQueryOrDie(conn, "SELECT count(*) AS nsub,"
-								"'f' AS retain_dead_tuples "
+		res = executeQueryOrDie(conn,
+								"SELECT 'f' AS retain_dead_tuples "
 								"FROM pg_catalog.pg_subscription");
 
-	i_nsub = PQfnumber(res, "nsub");
 	i_retain_dead_tuples = PQfnumber(res, "retain_dead_tuples");
 
-	cluster->nsubs = atoi(PQgetvalue(res, 0, i_nsub));
 	cluster->sub_retain_dead_tuples = (strcmp(PQgetvalue(res, 0, i_retain_dead_tuples), "t") == 0);
 
 	PQclear(res);

@@ -43,8 +43,22 @@
 
 static int	lo_initialize(PGconn *conn);
 static Oid	lo_import_internal(PGconn *conn, const char *filename, Oid oid);
-static int64_t lo_hton64(int64_t host64);
-static int64_t lo_ntoh64(int64_t net64);
+
+static inline void
+lo_set_int_arg(PQArgBlock *arg, int value)
+{
+	arg->isint = 1;
+	arg->len = 4;
+	arg->u.integer = value;
+}
+
+static inline void
+lo_set_ptr_arg(PQArgBlock *arg, const void *ptr, int len)
+{
+	arg->isint = 0;
+	arg->len = len;
+	arg->u.ptr = (int *) unconstify(void *, ptr);
+}
 
 /*
  * lo_open
@@ -64,15 +78,10 @@ lo_open(PGconn *conn, Oid lobjId, int mode)
 	if (lo_initialize(conn) < 0)
 		return -1;
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = lobjId;
+	lo_set_int_arg(&argv[0], lobjId);
+	lo_set_int_arg(&argv[1], mode);
 
-	argv[1].isint = 1;
-	argv[1].len = 4;
-	argv[1].u.integer = mode;
-
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_open, &fd, &result_len, 1, argv, 2);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_open, &fd, -1, &result_len, 1, argv, 2);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -103,11 +112,9 @@ lo_close(PGconn *conn, int fd)
 	if (lo_initialize(conn) < 0)
 		return -1;
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_close,
-			   &retval, &result_len, 1, argv, 1);
+	lo_set_int_arg(&argv[0], fd);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_close,
+				&retval, -1, &result_len, 1, argv, 1);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -161,16 +168,11 @@ lo_truncate(PGconn *conn, int fd, size_t len)
 		return -1;
 	}
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
+	lo_set_int_arg(&argv[0], fd);
+	lo_set_int_arg(&argv[1], (int) len);
 
-	argv[1].isint = 1;
-	argv[1].len = 4;
-	argv[1].u.integer = (int) len;
-
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_truncate,
-			   &retval, &result_len, 1, argv, 2);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_truncate,
+				&retval, -1, &result_len, 1, argv, 2);
 
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
@@ -209,17 +211,13 @@ lo_truncate64(PGconn *conn, int fd, int64_t len)
 		return -1;
 	}
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
+	lo_set_int_arg(&argv[0], fd);
 
-	len = lo_hton64(len);
-	argv[1].isint = 0;
-	argv[1].len = 8;
-	argv[1].u.ptr = (int *) &len;
+	len = pg_hton64(len);
+	lo_set_ptr_arg(&argv[1], &len, 8);
 
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_truncate64,
-			   &retval, &result_len, 1, argv, 2);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_truncate64,
+				&retval, -1, &result_len, 1, argv, 2);
 
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
@@ -263,13 +261,8 @@ lo_read(PGconn *conn, int fd, char *buf, size_t len)
 		return -1;
 	}
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
-
-	argv[1].isint = 1;
-	argv[1].len = 4;
-	argv[1].u.integer = (int) len;
+	lo_set_int_arg(&argv[0], fd);
+	lo_set_int_arg(&argv[1], (int) len);
 
 	res = PQnfn(conn, conn->lobjfuncs->fn_lo_read,
 				(void *) buf, len, &result_len, 0, argv, 2);
@@ -314,16 +307,11 @@ lo_write(PGconn *conn, int fd, const char *buf, size_t len)
 		return -1;
 	}
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
+	lo_set_int_arg(&argv[0], fd);
+	lo_set_ptr_arg(&argv[1], buf, (int) len);
 
-	argv[1].isint = 0;
-	argv[1].len = (int) len;
-	argv[1].u.ptr = (int *) unconstify(char *, buf);
-
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_write,
-			   &retval, &result_len, 1, argv, 2);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_write,
+				&retval, -1, &result_len, 1, argv, 2);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -351,20 +339,12 @@ lo_lseek(PGconn *conn, int fd, int offset, int whence)
 	if (lo_initialize(conn) < 0)
 		return -1;
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
+	lo_set_int_arg(&argv[0], fd);
+	lo_set_int_arg(&argv[1], offset);
+	lo_set_int_arg(&argv[2], whence);
 
-	argv[1].isint = 1;
-	argv[1].len = 4;
-	argv[1].u.integer = offset;
-
-	argv[2].isint = 1;
-	argv[2].len = 4;
-	argv[2].u.integer = whence;
-
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_lseek,
-			   &retval, &result_len, 1, argv, 3);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_lseek,
+				&retval, -1, &result_len, 1, argv, 3);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -399,25 +379,19 @@ lo_lseek64(PGconn *conn, int fd, int64_t offset, int whence)
 		return -1;
 	}
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
+	lo_set_int_arg(&argv[0], fd);
 
-	offset = lo_hton64(offset);
-	argv[1].isint = 0;
-	argv[1].len = 8;
-	argv[1].u.ptr = (int *) &offset;
+	offset = pg_hton64(offset);
+	lo_set_ptr_arg(&argv[1], &offset, 8);
 
-	argv[2].isint = 1;
-	argv[2].len = 4;
-	argv[2].u.integer = whence;
+	lo_set_int_arg(&argv[2], whence);
 
 	res = PQnfn(conn, conn->lobjfuncs->fn_lo_lseek64,
 				(void *) &retval, sizeof(retval), &result_len, 0, argv, 3);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK && result_len == 8)
 	{
 		PQclear(res);
-		return lo_ntoh64(retval);
+		return pg_ntoh64(retval);
 	}
 	else
 	{
@@ -445,11 +419,9 @@ lo_creat(PGconn *conn, int mode)
 	if (lo_initialize(conn) < 0)
 		return InvalidOid;
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = mode;
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_creat,
-			   &retval, &result_len, 1, argv, 1);
+	lo_set_int_arg(&argv[0], mode);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_creat,
+				&retval, -1, &result_len, 1, argv, 1);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -489,11 +461,9 @@ lo_create(PGconn *conn, Oid lobjId)
 		return InvalidOid;
 	}
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = lobjId;
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_create,
-			   &retval, &result_len, 1, argv, 1);
+	lo_set_int_arg(&argv[0], lobjId);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_create,
+				&retval, -1, &result_len, 1, argv, 1);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -522,12 +492,10 @@ lo_tell(PGconn *conn, int fd)
 	if (lo_initialize(conn) < 0)
 		return -1;
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
+	lo_set_int_arg(&argv[0], fd);
 
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_tell,
-			   &retval, &result_len, 1, argv, 1);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_tell,
+				&retval, -1, &result_len, 1, argv, 1);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -562,16 +530,14 @@ lo_tell64(PGconn *conn, int fd)
 		return -1;
 	}
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = fd;
+	lo_set_int_arg(&argv[0], fd);
 
 	res = PQnfn(conn, conn->lobjfuncs->fn_lo_tell64,
 				(void *) &retval, sizeof(retval), &result_len, 0, argv, 1);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK && result_len == 8)
 	{
 		PQclear(res);
-		return lo_ntoh64(retval);
+		return pg_ntoh64(retval);
 	}
 	else
 	{
@@ -596,12 +562,10 @@ lo_unlink(PGconn *conn, Oid lobjId)
 	if (lo_initialize(conn) < 0)
 		return -1;
 
-	argv[0].isint = 1;
-	argv[0].len = 4;
-	argv[0].u.integer = lobjId;
+	lo_set_int_arg(&argv[0], lobjId);
 
-	res = PQfn(conn, conn->lobjfuncs->fn_lo_unlink,
-			   &retval, &result_len, 1, argv, 1);
+	res = PQnfn(conn, conn->lobjfuncs->fn_lo_unlink,
+				&retval, -1, &result_len, 1, argv, 1);
 	if (PQresultStatus(res) == PGRES_COMMAND_OK)
 	{
 		PQclear(res);
@@ -1013,52 +977,4 @@ lo_initialize(PGconn *conn)
 	 */
 	conn->lobjfuncs = lobjfuncs;
 	return 0;
-}
-
-/*
- * lo_hton64
- *	  converts a 64-bit integer from host byte order to network byte order
- */
-static int64_t
-lo_hton64(int64_t host64)
-{
-	union
-	{
-		int64		i64;
-		uint32		i32[2];
-	}			swap;
-	uint32		t;
-
-	/* High order half first, since we're doing MSB-first */
-	t = (uint32) (host64 >> 32);
-	swap.i32[0] = pg_hton32(t);
-
-	/* Now the low order half */
-	t = (uint32) host64;
-	swap.i32[1] = pg_hton32(t);
-
-	return swap.i64;
-}
-
-/*
- * lo_ntoh64
- *	  converts a 64-bit integer from network byte order to host byte order
- */
-static int64_t
-lo_ntoh64(int64_t net64)
-{
-	union
-	{
-		int64		i64;
-		uint32		i32[2];
-	}			swap;
-	int64		result;
-
-	swap.i64 = net64;
-
-	result = (uint32) pg_ntoh32(swap.i32[0]);
-	result <<= 32;
-	result |= (uint32) pg_ntoh32(swap.i32[1]);
-
-	return result;
 }

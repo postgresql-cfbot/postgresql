@@ -503,6 +503,14 @@ is($result, qq(0),
 	'the physical replication slot used as primary_slot_name has been removed'
 );
 
+# Verify that the publication is configured to publish all tables and
+# all sequences.
+$result = $node_p->safe_psql($db2,
+	"SELECT puballtables, puballsequences FROM pg_publication");
+is($result, qq(t|t),
+	"publication is created with both all-tables and all-sequences enabled"
+);
+
 # Insert rows on P
 $node_p->safe_psql($db1, "INSERT INTO tbl1 VALUES('third row')");
 $node_p->safe_psql($db2, "INSERT INTO tbl2 VALUES('row 1')");

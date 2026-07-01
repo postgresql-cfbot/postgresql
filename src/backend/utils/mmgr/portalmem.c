@@ -839,12 +839,40 @@ AtAbort_Portals(void)
 		 * PortalDrop.
 		 */
 		portal->resowner = NULL;
+	}
+}
+
+/*
+ * Release subsidiary memory for aborted portals.
+ *
+ * This is called after ResourceOwnerRelease, so that any resources still
+ * referencing portal memory have been cleaned up first.
+ */
+void
+AtAbort_Portals_ReleaseMemory(void)
+{
+	HASH_SEQ_STATUS status;
+	PortalHashEnt *hentry;
+
+	hash_seq_init(&status, PortalHashTable);
+
+	while ((hentry = (PortalHashEnt *) hash_seq_search(&status)) != NULL)
+	{
+		Portal		portal = hentry->portal;
+
+		/* Do nothing to cursors held over from a previous transaction. */
+		if (portal->createSubid == InvalidSubTransactionId)
+			continue;
+
+		/* Do nothing to auto-held cursors. */
+		if (portal->autoHeld)
+			continue;
 
 		/*
 		 * Although we can't delete the portal data structure proper, we can
 		 * release any memory in subsidiary contexts, such as executor state.
-		 * The cleanup hook was the last thing that might have needed data
-		 * there.  But leave active portals alone.
+		 * The portal cleanup hook or ResourceOwnerRelease were the last thing
+		 * that might have needed data there.  But leave active portals alone.
 		 */
 		if (portal->status != PORTAL_ACTIVE)
 			MemoryContextDeleteChildren(portal->portalContext);
@@ -1074,11 +1102,35 @@ AtSubAbort_Portals(SubTransactionId mySubid,
 		 */
 		portal->resowner = NULL;
 
+	}
+}
+
+/*
+ * Release subsidiary memory for portals aborted in a subtransaction.
+ *
+ * This is called after ResourceOwnerRelease, so that any resources still
+ * referencing portal memory have been cleaned up first.
+ */
+void
+AtSubAbort_Portals_ReleaseMemory(SubTransactionId mySubid)
+{
+	HASH_SEQ_STATUS status;
+	PortalHashEnt *hentry;
+
+	hash_seq_init(&status, PortalHashTable);
+
+	while ((hentry = (PortalHashEnt *) hash_seq_search(&status)) != NULL)
+	{
+		Portal		portal = hentry->portal;
+
+		if (portal->createSubid != mySubid)
+			continue;
+
 		/*
 		 * Although we can't delete the portal data structure proper, we can
 		 * release any memory in subsidiary contexts, such as executor state.
-		 * The cleanup hook was the last thing that might have needed data
-		 * there.
+		 * The portal cleanup hook or ResourceOwnerRelease were the last thing
+		 * that might have needed data there.
 		 */
 		MemoryContextDeleteChildren(portal->portalContext);
 	}

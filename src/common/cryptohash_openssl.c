@@ -34,12 +34,11 @@
 #endif
 
 /*
- * In the backend, use an allocation in TopMemoryContext to count for
- * resowner cleanup handling.  In the frontend, use malloc to be able
- * to return a failure status back to the caller.
+ * In backends, use an allocation in the current memory context.  In frontend,
+ * use malloc to be able to return a failure status back to the caller.
  */
 #ifndef FRONTEND
-#define ALLOC(size) MemoryContextAlloc(TopMemoryContext, size)
+#define ALLOC(size) palloc(size)
 #define FREE(ptr) pfree(ptr)
 #else
 #define ALLOC(size) malloc(size)

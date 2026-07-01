@@ -389,9 +389,14 @@ CreateWaitEventSet(ResourceOwner resowner, int nevents)
 #endif
 
 	if (resowner != NULL)
+	{
 		ResourceOwnerEnlarge(resowner);
-
-	data = (char *) MemoryContextAllocZero(TopMemoryContext, sz);
+		data = (char *) palloc0(sz);
+	}
+	else
+	{
+		data = (char *) MemoryContextAllocZero(TopMemoryContext, sz);
+	}
 
 	set = (WaitEventSet *) data;
 	data += MAXALIGN(sizeof(WaitEventSet));

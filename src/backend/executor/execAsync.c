@@ -57,7 +57,7 @@ ExecAsyncRequest(AsyncRequest *areq)
  * for which it wishes to wait.  We expect the node-type specific callback to
  * make a single call of the following form:
  *
- * AddWaitEventToSet(set, WL_SOCKET_READABLE, fd, NULL, areq);
+ * AddWaitEventToSet(set, WL_SOCKET_READABLE, fd, NULL, NULL, areq);
  */
 void
 ExecAsyncConfigureWait(AsyncRequest *areq)

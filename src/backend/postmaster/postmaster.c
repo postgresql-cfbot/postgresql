@@ -1661,13 +1661,13 @@ ConfigurePostmasterWaitSet(bool accept_connections)
 	pm_wait_set = CreateWaitEventSet(NULL,
 									 accept_connections ? (1 + NumListenSockets) : 1);
 	AddWaitEventToSet(pm_wait_set, WL_LATCH_SET, PGINVALID_SOCKET, MyLatch,
-					  NULL);
+					  NULL, NULL);
 
 	if (accept_connections)
 	{
 		for (int i = 0; i < NumListenSockets; i++)
 			AddWaitEventToSet(pm_wait_set, WL_SOCKET_ACCEPT, ListenSockets[i],
-							  NULL, NULL);
+							  NULL, NULL, NULL);
 	}
 }
 

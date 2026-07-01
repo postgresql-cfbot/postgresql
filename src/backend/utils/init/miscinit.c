@@ -222,7 +222,7 @@ SwitchToSharedLatch(void)
 
 	if (FeBeWaitSet)
 		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET,
-						MyLatch);
+						MyLatch, NULL);
 
 	/*
 	 * Set the shared latch as the local one might have been set. This
@@ -249,7 +249,7 @@ SwitchBackToLocalLatch(void)
 
 	if (FeBeWaitSet)
 		ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetLatchPos, WL_LATCH_SET,
-						MyLatch);
+						MyLatch, NULL);
 
 	SetLatch(MyLatch);
 }

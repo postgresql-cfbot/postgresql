@@ -515,6 +515,8 @@ ConditionalStack
 ConditionalStackData
 ConfigData
 ConfigVariable
+ConflictLogColumnDef
+ConflictLogDest
 ConflictTupleInfo
 ConflictType
 ConnCacheEntry

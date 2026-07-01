@@ -11823,12 +11823,14 @@ INSERT INTO join_tbl SELECT * FROM async_pt t1, async_pt t2 WHERE t1.a = t2.a AN
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.b = t1_3.b))
                ->  Seq Scan on public.async_p3 t2_3
                      Output: t2_3.a, t2_3.b, t2_3.c
+                     Bloom Filter 1: keys=(t2_3.a, t2_3.b)
                ->  Hash
                      Output: t1_3.a, t1_3.b, t1_3.c
+                     Bloom Filter 1
                      ->  Seq Scan on public.async_p3 t1_3
                            Output: t1_3.a, t1_3.b, t1_3.c
                            Filter: ((t1_3.b % 100) = 0)
-(20 rows)
+(22 rows)
 
 INSERT INTO join_tbl SELECT * FROM async_pt t1, async_pt t2 WHERE t1.a = t2.a AND t1.b = t2.b AND t1.b % 100 = 0;
 SELECT * FROM join_tbl ORDER BY a1;
@@ -11886,12 +11888,14 @@ INSERT INTO join_tbl SELECT t1.a, t1.b, 'AAA' || t1.c, t2.a, t2.b, 'AAA' || t2.c
                Hash Cond: ((t2_3.a = t1_3.a) AND (t2_3.b = t1_3.b))
                ->  Seq Scan on public.async_p3 t2_3
                      Output: t2_3.a, t2_3.b, t2_3.c
+                     Bloom Filter 1: keys=(t2_3.a, t2_3.b)
                ->  Hash
                      Output: t1_3.a, t1_3.b, t1_3.c
+                     Bloom Filter 1
                      ->  Seq Scan on public.async_p3 t1_3
                            Output: t1_3.a, t1_3.b, t1_3.c
                            Filter: ((t1_3.b % 100) = 0)
-(20 rows)
+(22 rows)
 
 INSERT INTO join_tbl SELECT t1.a, t1.b, 'AAA' || t1.c, t2.a, t2.b, 'AAA' || t2.c FROM async_pt t1, async_pt t2 WHERE t1.a = t2.a AND t1.b = t2.b AND t1.b % 100 = 0;
 SELECT * FROM join_tbl ORDER BY a1;

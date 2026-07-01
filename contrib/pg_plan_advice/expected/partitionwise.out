@@ -60,7 +60,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_1.id = pt3_1.id)
                ->  Seq Scan on pt2a pt2_1
                      Filter: (val2 = 1)
+                     Bloom Filter 1: keys=(id)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on pt3a pt3_1
                            Filter: (val3 = 1)
          ->  Index Scan using pt1a_pkey on pt1a pt1_1
@@ -71,7 +73,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_2.id = pt3_2.id)
                ->  Seq Scan on pt2b pt2_2
                      Filter: (val2 = 1)
+                     Bloom Filter 2: keys=(id)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on pt3b pt3_2
                            Filter: (val3 = 1)
          ->  Index Scan using pt1b_pkey on pt1b pt1_2
@@ -82,7 +86,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_3.id = pt3_3.id)
                ->  Seq Scan on pt2c pt2_3
                      Filter: (val2 = 1)
+                     Bloom Filter 3: keys=(id)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on pt3c pt3_3
                            Filter: (val3 = 1)
          ->  Index Scan using pt1c_pkey on pt1c pt1_3
@@ -101,7 +107,7 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
    PARTITIONWISE((pt1 pt2 pt3))
    NO_GATHER(pt1/public.pt1a pt1/public.pt1b pt1/public.pt1c pt2/public.pt2a
     pt2/public.pt2b pt2/public.pt2c pt3/public.pt3a pt3/public.pt3b pt3/public.pt3c)
-(47 rows)
+(53 rows)
 
 -- Suppress partitionwise join, or do it just partially.
 BEGIN;
@@ -169,21 +175,27 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt1_1.id = pt2_1.id)
                ->  Seq Scan on pt1a pt1_1
                      Filter: (val1 = 1)
+                     Bloom Filter 1: keys=(id)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on pt2a pt2_1
                            Filter: (val2 = 1)
          ->  Hash Join
                Hash Cond: (pt1_2.id = pt2_2.id)
                ->  Seq Scan on pt1b pt1_2
                      Filter: (val1 = 1)
+                     Bloom Filter 2: keys=(id)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on pt2b pt2_2
                            Filter: (val2 = 1)
          ->  Hash Join
                Hash Cond: (pt1_3.id = pt2_3.id)
                ->  Seq Scan on pt1c pt1_3
                      Filter: (val1 = 1)
+                     Bloom Filter 3: keys=(id)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on pt2c pt2_3
                            Filter: (val2 = 1)
    ->  Hash
@@ -209,7 +221,7 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
    PARTITIONWISE((pt1 pt2) pt3)
    NO_GATHER(pt1/public.pt1a pt1/public.pt1b pt1/public.pt1c pt2/public.pt2a
     pt2/public.pt2b pt2/public.pt2c pt3/public.pt3a pt3/public.pt3b pt3/public.pt3c)
-(47 rows)
+(53 rows)
 
 COMMIT;
 -- Test conflicting advice.
@@ -227,7 +239,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_1.id = pt3_1.id)
                ->  Seq Scan on pt2a pt2_1
                      Filter: (val2 = 1)
+                     Bloom Filter 1: keys=(id)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on pt3a pt3_1
                            Filter: (val3 = 1)
          ->  Index Scan using pt1a_pkey on pt1a pt1_1
@@ -238,7 +252,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_2.id = pt3_2.id)
                ->  Seq Scan on pt2b pt2_2
                      Filter: (val2 = 1)
+                     Bloom Filter 2: keys=(id)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on pt3b pt3_2
                            Filter: (val3 = 1)
          ->  Index Scan using pt1b_pkey on pt1b pt1_2
@@ -249,7 +265,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_3.id = pt3_3.id)
                ->  Seq Scan on pt2c pt2_3
                      Filter: (val2 = 1)
+                     Bloom Filter 3: keys=(id)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on pt3c pt3_3
                            Filter: (val3 = 1)
          ->  Index Scan using pt1c_pkey on pt1c pt1_3
@@ -271,7 +289,7 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
    PARTITIONWISE((pt1 pt2 pt3))
    NO_GATHER(pt1/public.pt1a pt1/public.pt1b pt1/public.pt1c pt2/public.pt2a
     pt2/public.pt2b pt2/public.pt2c pt3/public.pt3a pt3/public.pt3b pt3/public.pt3c)
-(51 rows)
+(57 rows)
 
 COMMIT;
 -- Can't force a partitionwise join with a mismatched table.
@@ -321,7 +339,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt3_1.id = pt2_1.id)
                ->  Seq Scan on pt3a pt3_1
                      Filter: (val3 = 1)
+                     Bloom Filter 1: keys=(id)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on pt2a pt2_1
                            Filter: (val2 = 1)
          ->  Index Scan using pt1a_pkey on pt1a pt1_1
@@ -332,7 +352,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_2.id = pt3_2.id)
                ->  Seq Scan on pt2b pt2_2
                      Filter: (val2 = 1)
+                     Bloom Filter 2: keys=(id)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on pt3b pt3_2
                            Filter: (val3 = 1)
          ->  Index Scan using pt1b_pkey on pt1b pt1_2
@@ -343,7 +365,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_3.id = pt3_3.id)
                ->  Seq Scan on pt2c pt2_3
                      Filter: (val2 = 1)
+                     Bloom Filter 3: keys=(id)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on pt3c pt3_3
                            Filter: (val3 = 1)
          ->  Index Scan using pt1c_pkey on pt1c pt1_3
@@ -364,7 +388,7 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
    PARTITIONWISE((pt1 pt2 pt3))
    NO_GATHER(pt1/public.pt1a pt1/public.pt1b pt1/public.pt1c pt2/public.pt2a
     pt2/public.pt2b pt2/public.pt2c pt3/public.pt3a pt3/public.pt3b pt3/public.pt3c)
-(49 rows)
+(55 rows)
 
 SET LOCAL pg_plan_advice.advice = 'JOIN_ORDER(pt3/pt3a pt2/pt2a pt1/pt1a)';
 EXPLAIN (PLAN_ADVICE, COSTS OFF)
@@ -378,7 +402,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt3_1.id = pt2_1.id)
                ->  Seq Scan on pt3a pt3_1
                      Filter: (val3 = 1)
+                     Bloom Filter 1: keys=(id)
                ->  Hash
+                     Bloom Filter 1
                      ->  Seq Scan on pt2a pt2_1
                            Filter: (val2 = 1)
          ->  Index Scan using pt1a_pkey on pt1a pt1_1
@@ -389,7 +415,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_2.id = pt3_2.id)
                ->  Seq Scan on pt2b pt2_2
                      Filter: (val2 = 1)
+                     Bloom Filter 2: keys=(id)
                ->  Hash
+                     Bloom Filter 2
                      ->  Seq Scan on pt3b pt3_2
                            Filter: (val3 = 1)
          ->  Index Scan using pt1b_pkey on pt1b pt1_2
@@ -400,7 +428,9 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
                Hash Cond: (pt2_3.id = pt3_3.id)
                ->  Seq Scan on pt2c pt2_3
                      Filter: (val2 = 1)
+                     Bloom Filter 3: keys=(id)
                ->  Hash
+                     Bloom Filter 3
                      ->  Seq Scan on pt3c pt3_3
                            Filter: (val3 = 1)
          ->  Index Scan using pt1c_pkey on pt1c pt1_3
@@ -421,6 +451,6 @@ SELECT * FROM pt1, pt2, pt3 WHERE pt1.id = pt2.id AND pt2.id = pt3.id
    PARTITIONWISE((pt1 pt2 pt3))
    NO_GATHER(pt1/public.pt1a pt1/public.pt1b pt1/public.pt1c pt2/public.pt2a
     pt2/public.pt2b pt2/public.pt2c pt3/public.pt3a pt3/public.pt3b pt3/public.pt3c)
-(49 rows)
+(55 rows)
 
 COMMIT;

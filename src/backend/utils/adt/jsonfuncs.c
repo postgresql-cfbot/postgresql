@@ -6135,12 +6135,6 @@ json_check_mutability(Oid typoid, bool *has_mutable)
 		case TIMESTAMPTZOID:
 			*has_mutable = true;
 			break;
-		case RECORDOID:
-		case ANYARRAYOID:
-		case ANYCOMPATIBLEARRAYOID:
-			/* XXX incorrectly treated as known immutable */
-			break;
-
 		default:
 			{
 				Oid			castfunc = get_json_cast_for_type(typoid);

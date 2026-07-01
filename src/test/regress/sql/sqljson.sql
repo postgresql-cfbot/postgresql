@@ -709,5 +709,4 @@ DROP FUNCTION volatile_one, stable_one;
 
 -- JSON_ARRAY(ROW(...)) is not immutable, so it should be impossible to
 -- create a generated column.
--- XXX: Currently, this is erroneously allowed.
 CREATE TABLE json_array_of_row (a int, j json GENERATED ALWAYS AS (JSON_ARRAY(ROW(a))) STORED);

@@ -3179,12 +3179,26 @@ sendCommand(CState *st, Command *command)
 	{
 		const char *params[MAX_ARGS];
 
-		prepareCommand(st, st->command);
 		getQueryParams(&st->variables, command, params);
 
-		pg_log_debug("client %d sending %s", st->id, command->prepname);
-		r = PQsendQueryPrepared(st->con, command->prepname, command->argc - 1,
-								params, NULL, NULL, 0);
+		if (!st->prepared)
+			allocCStatePrepared(st);
+
+		if (!st->prepared[st->use_file][st->command])
+		{
+			r = PQsendPBES(st->con, command->prepname,
+						   command->argv[0], command->argc - 1, NULL,
+						   params, NULL, NULL, 0);
+			if (!r)
+				pg_log_error("%s", PQerrorMessage(st->con));
+			st->prepared[st->use_file][st->command] = true;
+		}
+		else
+		{
+			pg_log_debug("client %d sending %s", st->id, command->prepname);
+			r = PQsendQueryPrepared(st->con, command->prepname, command->argc - 1,
+									params, NULL, NULL, 0);
+		}
 	}
 	else						/* unknown sql mode */
 		r = 0;

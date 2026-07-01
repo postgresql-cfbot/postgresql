@@ -1682,6 +1682,52 @@ PQsendQueryPrepared(PGconn *conn,
 						   resultFormat);
 }
 
+/* PQsendPBES
+ *		Like PQsendQueryPrepared, but it also prepares a query
+ */
+int
+PQsendPBES(PGconn *conn,
+		   const char *stmtName,
+		   const char *query,
+		   int nParams,
+		   const Oid *paramTypes,
+		   const char *const *paramValues,
+		   const int *paramLengths,
+		   const int *paramFormats,
+		   int resultFormat)
+{
+	if (!PQsendQueryStart(conn, true))
+		return 0;
+
+	/* check the arguments */
+	if (!stmtName)
+	{
+		libpq_append_conn_error(conn, "statement name is a null pointer");
+		return 0;
+	}
+	if (!query)
+	{
+		libpq_append_conn_error(conn, "command string is a null pointer");
+		return 0;
+	}
+	if (nParams < 0 || nParams > PQ_QUERY_PARAM_MAX_LIMIT)
+	{
+		libpq_append_conn_error(conn, "number of parameters must be between 0 and %d",
+								PQ_QUERY_PARAM_MAX_LIMIT);
+		return 0;
+	}
+
+	return PQsendQueryGuts(conn,
+						   query,
+						   stmtName,
+						   nParams,
+						   paramTypes,
+						   paramValues,
+						   paramLengths,
+						   paramFormats,
+						   resultFormat);
+}
+
 /*
  * PQsendQueryStart
  *	Common startup code for PQsendQuery and sibling routines

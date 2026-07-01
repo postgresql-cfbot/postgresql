@@ -73,6 +73,7 @@ typedef struct ExplainState
 								 * entry */
 	/* state related to the current plan node */
 	ExplainWorkersState *workers_state; /* needed if parallel plan */
+	bool		signaled;		/* whether explain is called by signal */
 	/* extensions */
 	void	  **extension_state;
 	int			extension_state_allocated;

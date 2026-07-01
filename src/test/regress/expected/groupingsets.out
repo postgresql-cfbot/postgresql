@@ -1009,19 +1009,20 @@ select v.c, (select count(*) from gstest2 group by () having v.c)
 explain (costs off)
   select v.c, (select count(*) from gstest2 group by () having v.c)
     from (values (false),(true)) v(c) order by v.c;
-                        QUERY PLAN                         
------------------------------------------------------------
- Sort
-   Sort Key: "*VALUES*".column1
-   ->  Values Scan on "*VALUES*"
-         SubPlan expr_1
-           ->  Aggregate
-                 Group Key: ()
-                 Filter: "*VALUES*".column1
-                 ->  Result
-                       One-Time Filter: "*VALUES*".column1
-                       ->  Seq Scan on gstest2
-(10 rows)
+                     QUERY PLAN                      
+-----------------------------------------------------
+ Result
+   ->  Sort
+         Sort Key: "*VALUES*".column1
+         ->  Values Scan on "*VALUES*"
+   SubPlan expr_1
+     ->  Aggregate
+           Group Key: ()
+           Filter: "*VALUES*".column1
+           ->  Result
+                 One-Time Filter: "*VALUES*".column1
+                 ->  Seq Scan on gstest2
+(11 rows)
 
 -- test pushdown of non-degenerate HAVING clause that does not reference any
 -- columns that are nullable by grouping sets
@@ -2435,24 +2436,26 @@ order by case when grouping((select t1.v from gstest5 t2 where id = t1.id)) = 0
               then (select t1.v from gstest5 t2 where id = t1.id)
               else null end
          nulls first;
-                                                                           QUERY PLAN                                                                            
------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Sort
+                                                                              QUERY PLAN                                                                               
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result
    Output: (GROUPING((SubPlan expr_1))), ((SubPlan expr_3)), (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END), t1.v
-   Sort Key: (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END) NULLS FIRST
-   ->  HashAggregate
-         Output: GROUPING((SubPlan expr_1)), ((SubPlan expr_3)), CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END, t1.v
-         Hash Key: t1.v
-         Hash Key: (SubPlan expr_3)
-         ->  Seq Scan on pg_temp.gstest5 t1
-               Output: (SubPlan expr_3), t1.v, t1.id
-               SubPlan expr_3
-                 ->  Bitmap Heap Scan on pg_temp.gstest5 t2
-                       Output: t1.v
-                       Recheck Cond: (t2.id = t1.id)
-                       ->  Bitmap Index Scan on gstest5_pkey
-                             Index Cond: (t2.id = t1.id)
-(15 rows)
+   ->  Sort
+         Output: ((SubPlan expr_3)), (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END), t1.v, (GROUPING((SubPlan expr_1)))
+         Sort Key: (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END) NULLS FIRST
+         ->  HashAggregate
+               Output: ((SubPlan expr_3)), CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END, t1.v, GROUPING((SubPlan expr_1))
+               Hash Key: t1.v
+               Hash Key: (SubPlan expr_3)
+               ->  Seq Scan on pg_temp.gstest5 t1
+                     Output: (SubPlan expr_3), t1.v, t1.id
+                     SubPlan expr_3
+                       ->  Bitmap Heap Scan on pg_temp.gstest5 t2
+                             Output: t1.v
+                             Recheck Cond: (t2.id = t1.id)
+                             ->  Bitmap Index Scan on gstest5_pkey
+                                   Index Cond: (t2.id = t1.id)
+(17 rows)
 
 select grouping((select t1.v from gstest5 t2 where id = t1.id)),
        (select t1.v from gstest5 t2 where id = t1.id) as s
@@ -2485,24 +2488,26 @@ select grouping((select t1.v from gstest5 t2 where id = t1.id)),
 from gstest5 t1
 group by grouping sets(v, s)
 order by o nulls first;
-                                                                           QUERY PLAN                                                                            
------------------------------------------------------------------------------------------------------------------------------------------------------------------
- Sort
+                                                                              QUERY PLAN                                                                               
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Result
    Output: (GROUPING((SubPlan expr_1))), ((SubPlan expr_3)), (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END), t1.v
-   Sort Key: (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END) NULLS FIRST
-   ->  HashAggregate
-         Output: GROUPING((SubPlan expr_1)), ((SubPlan expr_3)), CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END, t1.v
-         Hash Key: t1.v
-         Hash Key: (SubPlan expr_3)
-         ->  Seq Scan on pg_temp.gstest5 t1
-               Output: (SubPlan expr_3), t1.v, t1.id
-               SubPlan expr_3
-                 ->  Bitmap Heap Scan on pg_temp.gstest5 t2
-                       Output: t1.v
-                       Recheck Cond: (t2.id = t1.id)
-                       ->  Bitmap Index Scan on gstest5_pkey
-                             Index Cond: (t2.id = t1.id)
-(15 rows)
+   ->  Sort
+         Output: ((SubPlan expr_3)), (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END), t1.v, (GROUPING((SubPlan expr_1)))
+         Sort Key: (CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END) NULLS FIRST
+         ->  HashAggregate
+               Output: ((SubPlan expr_3)), CASE WHEN (GROUPING((SubPlan expr_2)) = 0) THEN ((SubPlan expr_3)) ELSE NULL::integer END, t1.v, GROUPING((SubPlan expr_1))
+               Hash Key: t1.v
+               Hash Key: (SubPlan expr_3)
+               ->  Seq Scan on pg_temp.gstest5 t1
+                     Output: (SubPlan expr_3), t1.v, t1.id
+                     SubPlan expr_3
+                       ->  Bitmap Heap Scan on pg_temp.gstest5 t2
+                             Output: t1.v
+                             Recheck Cond: (t2.id = t1.id)
+                             ->  Bitmap Index Scan on gstest5_pkey
+                                   Index Cond: (t2.id = t1.id)
+(17 rows)
 
 select grouping((select t1.v from gstest5 t2 where id = t1.id)),
        (select t1.v from gstest5 t2 where id = t1.id) as s,

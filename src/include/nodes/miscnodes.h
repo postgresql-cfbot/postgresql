@@ -49,9 +49,17 @@ typedef struct ErrorSaveContext
 	ErrorData  *error_data;		/* details of error, if so */
 } ErrorSaveContext;
 
-/* Often-useful macro for checking if a soft error was reported */
-#define SOFT_ERROR_OCCURRED(escontext) \
-	((escontext) != NULL && IsA(escontext, ErrorSaveContext) && \
-	 ((ErrorSaveContext *) (escontext))->error_occurred)
+/* Often-useful function for checking if a soft error was reported */
+static inline bool
+SOFT_ERROR_OCCURRED(const Node *escontext)
+{
+	if (escontext == NULL)
+		return false;
+
+	if (!IsA(escontext, ErrorSaveContext))
+		return false;
+
+	return ((const ErrorSaveContext *) escontext)->error_occurred;
+}
 
 #endif							/* MISCNODES_H */

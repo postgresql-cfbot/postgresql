@@ -259,6 +259,30 @@ ALTER TABLE ctl_table ALTER COLUMN b SET STORAGE MAIN;
 
 \d+ ctl_table
 
+CREATE OR REPLACE FUNCTION trigger_func() RETURNS trigger LANGUAGE plpgsql AS '
+BEGIN
+	RAISE NOTICE ''trigger_func(%) called: action = %, when = %, level = %'', TG_ARGV[0], TG_OP, TG_WHEN, TG_LEVEL;
+	RETURN NULL;
+END;';
+CREATE TRIGGER trigtest_before_stmt BEFORE DELETE OR UPDATE ON ctl_table
+FOR EACH ROW WHEN (OLD.a > 0)
+EXECUTE PROCEDURE trigger_func('trigtest_before_stmt');
+
+CREATE TRIGGER trigtest_after_stmt AFTER UPDATE OF a, b ON ctl_table
+FOR EACH STATEMENT
+EXECUTE PROCEDURE trigger_func('trigtest_before_stmt');
+
+-- CREATE FOREIGN TABLE LIKE should not copy triggers that have transition tables
+CREATE TRIGGER trigtest_after_stmt1 AFTER INSERT ON ctl_table
+REFERENCING NEW TABLE AS new_table
+FOR EACH STATEMENT
+EXECUTE PROCEDURE trigger_func('trigtest_after_stmt1');
+
+-- CREATE FOREIGN TABLE LIKE should not copy source table cosntraint trigger
+CREATE CONSTRAINT TRIGGER constr_trig
+    AFTER INSERT ON ctl_table DEFERRABLE INITIALLY DEFERRED enforced FOR EACH ROW
+    EXECUTE PROCEDURE trigger_func ();
+
 -- Test EXCLUDING ALL
 CREATE FOREIGN TABLE ctl_foreign_table1(LIKE ctl_table EXCLUDING ALL) SERVER ctl_s0;
 \d+ ctl_foreign_table1

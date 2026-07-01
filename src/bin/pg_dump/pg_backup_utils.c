@@ -13,10 +13,9 @@
  */
 #include "postgres_fe.h"
 
-#ifdef WIN32
 #include "parallel.h"
-#endif
 #include "pg_backup_utils.h"
+#include "port/pg_threads.h"
 
 /* Globals exported by this file */
 const char *progname = NULL;
@@ -75,18 +74,13 @@ on_exit_nicely(on_exit_nicely_callback function, void *arg)
  * Run accumulated on_exit_nicely callbacks in reverse order and then exit
  * without printing any message.
  *
- * If running in a parallel worker thread on Windows, we only exit the thread,
- * not the whole process.
+ * If running in a parallel worker thread, we only exit the thread, not the
+ * whole process.
  *
- * Note that in parallel operation on Windows, the callback(s) will be run
- * by each thread since the list state is necessarily shared by all threads;
- * each callback must contain logic to ensure it does only what's appropriate
- * for its thread.  On Unix, callbacks are also run by each process, but only
- * for callbacks established before we fork off the child processes.  (It'd
- * be cleaner to reset the list after fork(), and let each child establish
- * its own callbacks; but then the behavior would be completely inconsistent
- * between Windows and Unix.  For now, just be sure to establish callbacks
- * before forking to avoid inconsistency.)
+ * Note that in parallel operation, the callback(s) will be run by each thread
+ * since the list state is necessarily shared by all threads; each callback
+ * must contain logic to ensure it does only what's appropriate for its
+ * thread.
  */
 void
 exit_nicely(int code)
@@ -97,10 +91,8 @@ exit_nicely(int code)
 		on_exit_nicely_list[i].function(code,
 										on_exit_nicely_list[i].arg);
 
-#ifdef WIN32
-	if (parallel_init_done && GetCurrentThreadId() != mainThreadId)
-		_endthreadex(code);
-#endif
+	if (am_parallel_worker_thread())
+		pg_thrd_exit(code);
 
 	exit(code);
 }

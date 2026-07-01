@@ -19,6 +19,7 @@
 #include <limits.h>
 
 #include "pg_backup_archiver.h"
+#include "port/pg_threads.h"
 
 /* Function to call in leader process on completion of a worker task */
 typedef void (*ParallelCompletionPtr) (ArchiveHandle *AH,
@@ -60,12 +61,8 @@ typedef struct ParallelState
 	ParallelSlot *parallelSlot; /* private info about each worker */
 } ParallelState;
 
-#ifdef WIN32
-extern bool parallel_init_done;
-extern DWORD mainThreadId;
-#endif
-
 extern void init_parallel_dump_utils(void);
+extern bool am_parallel_worker_thread(void);
 
 extern bool IsEveryWorkerIdle(ParallelState *pstate);
 extern void WaitForWorkers(ArchiveHandle *AH, ParallelState *pstate,

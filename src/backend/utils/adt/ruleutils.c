@@ -2650,6 +2650,9 @@ pg_get_constraintdef_worker(Oid constraintId, bool fullCommand,
 
 				appendStringInfoChar(&buf, ')');
 
+				if (conForm->conflockkeyindex)
+					appendStringInfoString(&buf, " LOCK KEY INDEX");
+
 				/* Add match type */
 				switch (conForm->confmatchtype)
 				{

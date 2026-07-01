@@ -3471,6 +3471,7 @@ WindowStatePerFunc
 WindowStatePerFuncData
 WithCheckOption
 WithClause
+WithDataOption
 WordBoundaryNext
 WordEntry
 WordEntryIN

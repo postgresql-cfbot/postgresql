@@ -359,6 +359,34 @@ typedef struct HashJoinTableData
 	BufFile   **innerBatchFile; /* buffered virtual temp file per batch */
 	BufFile   **outerBatchFile; /* buffered virtual temp file per batch */
 
+	/*
+	 * Per-batch pre-filter bitmaps, one bit per bucket, populated as inner
+	 * tuples are written to their batch file during the inner build.
+	 * During outer partitioning, an outer tuple whose bucket is empty
+	 * cannot match. So for inner and semi joins it can be dropped before
+	 * being spilled, saving the outerBatchFile write and the later read.
+	 *
+	 * prefilter_active is an adaptive runtime guard: it starts true and is
+	 * cleared if the sampled eviction rate over a window of routed probe tuples
+	 * is below break-even.
+	 */
+	uint8	  **batch_bitmap;	/* per-batch occupancy bitmaps, or NULL */
+	bool		prefilter_active;	/* adaptive: still consulting the bitmap? */
+	uint64		prefilter_win_checks;	/* routed probes seen in current window */
+	uint64		prefilter_win_drops;	/* drops in current window */
+	uint64		outer_prefiltered;	/* outer tuples dropped before spilling */
+
+	/*
+	 * Probe-time empty-bucket skip (single-batch joins only).  After the build,
+	 * MultiExecHash records every occupied bucket in batch_bitmap[0]; while
+	 * probing, an empty bucket cannot match, so the chain walk is skipped.  A
+	 * one-shot adaptive guard disables it if the skip rate is below break-even.
+	 */
+	bool		probe_filter_active;	/* still consulting at probe time? */
+	uint64		probe_filter_win_checks;	/* probes seen in current window */
+	uint64		probe_filter_win_skips; /* skips in current window */
+	uint64		probe_filter_skips; /* total empty buckets skipped at probe */
+
 	Size		spaceUsed;		/* memory space currently used by tuples */
 	Size		spaceAllowed;	/* upper limit for space used */
 	Size		spacePeak;		/* peak space used */

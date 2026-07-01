@@ -1833,6 +1833,11 @@ typedef struct PlanInvalItem
  * than the previous call.  A monotonically decreasing function cannot yield a
  * higher value on subsequent calls, and a function which is both must return
  * the same value on each call.
+ *
+ * Used both for window function run conditions (SupportRequestWFuncMonotonic)
+ * and for per-argument monotonicity of scalar functions
+ * (SupportRequestMonotonic), where it enables the planner to use an index
+ * on 'x' to satisfy ORDER BY / GROUP BY on 'f(x)'.
  */
 typedef enum MonotonicFunction
 {
@@ -1840,6 +1845,12 @@ typedef enum MonotonicFunction
 	MONOTONICFUNC_INCREASING = (1 << 0),
 	MONOTONICFUNC_DECREASING = (1 << 1),
 	MONOTONICFUNC_BOTH = MONOTONICFUNC_INCREASING | MONOTONICFUNC_DECREASING,
+
+	/*
+	 * Planner-internal sentinel: pk_slope has not yet been computed.
+	 * Not returned by prosupport functions.
+	 */
+	MONOTONICFUNC_UNKNOWN = (1 << 2),
 } MonotonicFunction;
 
 /*

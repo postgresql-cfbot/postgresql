@@ -164,6 +164,8 @@ ParseExplainOptionList(ExplainState *es, List *options, ParseState *pstate)
 		}
 		else if (strcmp(opt->defname, "io") == 0)
 			es->io = defGetBoolean(opt);
+		else if (strcmp(opt->defname, "waits") == 0)
+			es->waits = defGetBoolean(opt);
 		else if (!ApplyExtensionExplainOption(es, opt, pstate))
 			ereport(ERROR,
 					(errcode(ERRCODE_SYNTAX_ERROR),
@@ -195,6 +197,12 @@ ParseExplainOptionList(ExplainState *es, List *options, ParseState *pstate)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("EXPLAIN option %s requires ANALYZE", "IO")));
+
+	/* check that WAITS is used with EXPLAIN ANALYZE */
+	if (es->waits && !es->analyze)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+				 errmsg("EXPLAIN option %s requires ANALYZE", "WAITS")));
 
 	/* check that serialize is used with EXPLAIN ANALYZE */
 	if (es->serialize != EXPLAIN_SERIALIZE_NONE && !es->analyze)

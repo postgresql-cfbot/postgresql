@@ -20,6 +20,7 @@
 #include "utils/dsa.h"
 
 typedef struct SharedExecutorInstrumentation SharedExecutorInstrumentation;
+typedef struct SharedWaitEventUsage SharedWaitEventUsage;
 
 typedef struct ParallelExecutorInfo
 {
@@ -27,6 +28,7 @@ typedef struct ParallelExecutorInfo
 	ParallelContext *pcxt;		/* parallel context we're using */
 	BufferUsage *buffer_usage;	/* points to bufusage area in DSM */
 	WalUsage   *wal_usage;		/* walusage area in DSM */
+	SharedWaitEventUsage *wait_event_usage;	/* optional */
 	SharedExecutorInstrumentation *instrumentation; /* optional */
 	struct SharedJitInstrumentation *jit_instrumentation;	/* optional */
 	dsa_area   *area;			/* points to DSA area in DSM */

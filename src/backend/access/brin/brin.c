@@ -19,6 +19,7 @@
 #include "access/brin_page.h"
 #include "access/brin_pageops.h"
 #include "access/brin_xlog.h"
+#include "access/parallel_index_build.h"
 #include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -51,8 +52,7 @@
 #define PARALLEL_KEY_BRIN_SHARED		UINT64CONST(0xB000000000000001)
 #define PARALLEL_KEY_TUPLESORT			UINT64CONST(0xB000000000000002)
 #define PARALLEL_KEY_QUERY_TEXT			UINT64CONST(0xB000000000000003)
-#define PARALLEL_KEY_WAL_USAGE			UINT64CONST(0xB000000000000004)
-#define PARALLEL_KEY_BUFFER_USAGE		UINT64CONST(0xB000000000000005)
+#define PARALLEL_KEY_INSTRUMENTATION	UINT64CONST(0xB000000000000004)
 
 /*
  * Status for index builds performed in parallel.  This is allocated in a
@@ -60,49 +60,13 @@
  */
 typedef struct BrinShared
 {
+	/* Common parallel index build state (must be first) */
+	ParallelIndexBuildShared base;
+
 	/*
-	 * These fields are not modified during the build.  They primarily exist
-	 * for the benefit of worker processes that need to create state
-	 * corresponding to that used by the leader.
+	 * BRIN-specific immutable state, not modified during the build.
 	 */
-	Oid			heaprelid;
-	Oid			indexrelid;
-	bool		isconcurrent;
 	BlockNumber pagesPerRange;
-	int			scantuplesortstates;
-
-	/* Query ID, for report in worker processes */
-	int64		queryid;
-
-	/*
-	 * workersdonecv is used to monitor the progress of workers.  All parallel
-	 * participants must indicate that they are done before leader can use
-	 * results built by the workers (and before leader can write the data into
-	 * the index).
-	 */
-	ConditionVariable workersdonecv;
-
-	/*
-	 * mutex protects all fields before heapdesc.
-	 *
-	 * These fields contain status information of interest to BRIN index
-	 * builds that must work just the same when an index is built in parallel.
-	 */
-	slock_t		mutex;
-
-	/*
-	 * Mutable state that is maintained by workers, and reported back to
-	 * leader at end of the scans.
-	 *
-	 * nparticipantsdone is number of worker processes finished.
-	 *
-	 * reltuples is the total number of input heap tuples.
-	 *
-	 * indtuples is the total number of tuples that made it into the index.
-	 */
-	int			nparticipantsdone;
-	double		reltuples;
-	double		indtuples;
 
 	/*
 	 * ParallelTableScanDescData data follows. Can't directly embed here, as
@@ -148,8 +112,7 @@ typedef struct BrinLeader
 	BrinShared *brinshared;
 	Sharedsort *sharedsort;
 	Snapshot	snapshot;
-	WalUsage   *walusage;
-	BufferUsage *bufferusage;
+	Instrumentation *instr;
 } BrinLeader;
 
 /*
@@ -235,7 +198,6 @@ static void brin_fill_empty_ranges(BrinBuildState *state,
 static void _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 								 bool isconcurrent, int request);
 static void _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state);
-static Size _brin_parallel_estimate_shared(Relation heap, Snapshot snapshot);
 static double _brin_parallel_heapscan(BrinBuildState *state);
 static double _brin_parallel_merge(BrinBuildState *state);
 static void _brin_leader_participate_as_worker(BrinBuildState *buildstate,
@@ -2387,10 +2349,8 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	BrinShared *brinshared;
 	Sharedsort *sharedsort;
 	BrinLeader *brinleader = palloc0_object(BrinLeader);
-	WalUsage   *walusage;
-	BufferUsage *bufferusage;
+	Instrumentation *instr;
 	bool		leaderparticipates = true;
-	int			querylen;
 
 #ifdef DISABLE_LEADER_PARTICIPATION
 	leaderparticipates = false;
@@ -2400,59 +2360,29 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	 * Enter parallel mode, and create context for parallel build of brin
 	 * index
 	 */
-	EnterParallelMode();
-	Assert(request > 0);
-	pcxt = CreateParallelContext("postgres", "_brin_parallel_build_main",
-								 request);
+	pcxt = ParallelIndexBuildCreateContext("_brin_parallel_build_main", request);
 
 	scantuplesortstates = leaderparticipates ? request + 1 : request;
 
-	/*
-	 * Prepare for scan of the base relation.  In a normal index build, we use
-	 * SnapshotAny because we must retrieve all tuples and do our own time
-	 * qual checks (because we have to index RECENTLY_DEAD tuples).  In a
-	 * concurrent build, we take a regular MVCC snapshot and index whatever's
-	 * live according to that.
-	 */
-	if (!isconcurrent)
-		snapshot = SnapshotAny;
-	else
-		snapshot = RegisterSnapshot(GetTransactionSnapshot());
+	/* Prepare for scan of the base relation. */
+	snapshot = ParallelIndexBuildGetSnapshot(isconcurrent);
 
 	/*
 	 * Estimate size for our own PARALLEL_KEY_BRIN_SHARED workspace.
 	 */
-	estbrinshared = _brin_parallel_estimate_shared(heap, snapshot);
+	estbrinshared = ParallelIndexBuildEstimateShared(heap, snapshot,
+													 sizeof(BrinShared));
 	shm_toc_estimate_chunk(&pcxt->estimator, estbrinshared);
 	estsort = tuplesort_estimate_shared(scantuplesortstates);
 	shm_toc_estimate_chunk(&pcxt->estimator, estsort);
 
 	shm_toc_estimate_keys(&pcxt->estimator, 2);
 
-	/*
-	 * Estimate space for WalUsage and BufferUsage -- PARALLEL_KEY_WAL_USAGE
-	 * and PARALLEL_KEY_BUFFER_USAGE.
-	 *
-	 * If there are no extensions loaded that care, we could skip this.  We
-	 * have no way of knowing whether anyone's looking at pgWalUsage or
-	 * pgBufferUsage, so do it unconditionally.
-	 */
-	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(WalUsage), pcxt->nworkers));
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
-	shm_toc_estimate_chunk(&pcxt->estimator,
-						   mul_size(sizeof(BufferUsage), pcxt->nworkers));
-	shm_toc_estimate_keys(&pcxt->estimator, 1);
+	/* Estimate space for the per-worker Instrumentation array. */
+	EstimateParallelInstrumentation(pcxt);
 
 	/* Finally, estimate PARALLEL_KEY_QUERY_TEXT space */
-	if (debug_query_string)
-	{
-		querylen = strlen(debug_query_string);
-		shm_toc_estimate_chunk(&pcxt->estimator, querylen + 1);
-		shm_toc_estimate_keys(&pcxt->estimator, 1);
-	}
-	else
-		querylen = 0;			/* keep compiler quiet */
+	EstimateParallelQueryText(pcxt);
 
 	/* Everyone's had a chance to ask for space, so now create the DSM */
 	InitializeParallelDSM(pcxt);
@@ -2469,24 +2399,13 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 
 	/* Store shared build state, for which we reserved space */
 	brinshared = (BrinShared *) shm_toc_allocate(pcxt->toc, estbrinshared);
-	/* Initialize immutable state */
-	brinshared->heaprelid = RelationGetRelid(heap);
-	brinshared->indexrelid = RelationGetRelid(index);
-	brinshared->isconcurrent = isconcurrent;
-	brinshared->scantuplesortstates = scantuplesortstates;
+	/* Initialize BRIN-specific immutable state */
 	brinshared->pagesPerRange = buildstate->bs_pagesPerRange;
-	brinshared->queryid = pgstat_get_my_query_id();
-	ConditionVariableInit(&brinshared->workersdonecv);
-	SpinLockInit(&brinshared->mutex);
-
-	/* Initialize mutable state */
-	brinshared->nparticipantsdone = 0;
-	brinshared->reltuples = 0.0;
-	brinshared->indtuples = 0.0;
-
-	table_parallelscan_initialize(heap,
-								  ParallelTableScanFromBrinShared(brinshared),
-								  snapshot);
+	/* Initialize common state, and the parallel scan that follows the struct */
+	ParallelIndexBuildInitShared(&brinshared->base, heap, index, isconcurrent,
+								 scantuplesortstates,
+								 ParallelTableScanFromBrinShared(brinshared),
+								 snapshot);
 
 	/*
 	 * Store shared tuplesort-private state, for which we reserved space.
@@ -2504,25 +2423,10 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	shm_toc_insert(pcxt->toc, PARALLEL_KEY_TUPLESORT, sharedsort);
 
 	/* Store query string for workers */
-	if (debug_query_string)
-	{
-		char	   *sharedquery;
+	StoreParallelQueryText(pcxt, PARALLEL_KEY_QUERY_TEXT);
 
-		sharedquery = (char *) shm_toc_allocate(pcxt->toc, querylen + 1);
-		memcpy(sharedquery, debug_query_string, querylen + 1);
-		shm_toc_insert(pcxt->toc, PARALLEL_KEY_QUERY_TEXT, sharedquery);
-	}
-
-	/*
-	 * Allocate space for each worker's WalUsage and BufferUsage; no need to
-	 * initialize.
-	 */
-	walusage = shm_toc_allocate(pcxt->toc,
-								mul_size(sizeof(WalUsage), pcxt->nworkers));
-	shm_toc_insert(pcxt->toc, PARALLEL_KEY_WAL_USAGE, walusage);
-	bufferusage = shm_toc_allocate(pcxt->toc,
-								   mul_size(sizeof(BufferUsage), pcxt->nworkers));
-	shm_toc_insert(pcxt->toc, PARALLEL_KEY_BUFFER_USAGE, bufferusage);
+	/* Allocate space for each worker's Instrumentation. */
+	instr = StoreParallelInstrumentation(pcxt, PARALLEL_KEY_INSTRUMENTATION);
 
 	/* Launch workers, saving status for leader/caller */
 	LaunchParallelWorkers(pcxt);
@@ -2533,8 +2437,7 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 	brinleader->brinshared = brinshared;
 	brinleader->sharedsort = sharedsort;
 	brinleader->snapshot = snapshot;
-	brinleader->walusage = walusage;
-	brinleader->bufferusage = bufferusage;
+	brinleader->instr = instr;
 
 	/* If no workers were successfully launched, back out (do serial build) */
 	if (pcxt->nworkers_launched == 0)
@@ -2563,23 +2466,8 @@ _brin_begin_parallel(BrinBuildState *buildstate, Relation heap, Relation index,
 static void
 _brin_end_parallel(BrinLeader *brinleader, BrinBuildState *state)
 {
-	int			i;
-
-	/* Shutdown worker processes */
-	WaitForParallelWorkersToFinish(brinleader->pcxt);
-
-	/*
-	 * Next, accumulate WAL usage.  (This must wait for the workers to finish,
-	 * or we might get incomplete data.)
-	 */
-	for (i = 0; i < brinleader->pcxt->nworkers_launched; i++)
-		InstrAccumParallelQuery(&brinleader->bufferusage[i], &brinleader->walusage[i]);
-
-	/* Free last reference to MVCC snapshot, if one was used */
-	if (IsMVCCSnapshot(brinleader->snapshot))
-		UnregisterSnapshot(brinleader->snapshot);
-	DestroyParallelContext(brinleader->pcxt);
-	ExitParallelMode();
+	ParallelIndexBuildEnd(brinleader->pcxt, brinleader->instr,
+						  brinleader->snapshot);
 }
 
 /*
@@ -2595,28 +2483,12 @@ static double
 _brin_parallel_heapscan(BrinBuildState *state)
 {
 	BrinShared *brinshared = state->bs_leader->brinshared;
-	int			nparticipanttuplesorts;
 
-	nparticipanttuplesorts = state->bs_leader->nparticipanttuplesorts;
-	for (;;)
-	{
-		SpinLockAcquire(&brinshared->mutex);
-		if (brinshared->nparticipantsdone == nparticipanttuplesorts)
-		{
-			/* copy the data into leader state */
-			state->bs_reltuples = brinshared->reltuples;
-			state->bs_numtuples = brinshared->indtuples;
-
-			SpinLockRelease(&brinshared->mutex);
-			break;
-		}
-		SpinLockRelease(&brinshared->mutex);
-
-		ConditionVariableSleep(&brinshared->workersdonecv,
-							   WAIT_EVENT_PARALLEL_CREATE_INDEX_SCAN);
-	}
-
-	ConditionVariableCancelSleep();
+	/* Wait for all participants to finish, and collect their results */
+	ParallelIndexBuildWaitForWorkers(&brinshared->base,
+									 state->bs_leader->nparticipanttuplesorts,
+									 &state->bs_reltuples, &state->bs_numtuples,
+									 NULL, NULL);
 
 	return state->bs_reltuples;
 }
@@ -2776,18 +2648,6 @@ _brin_parallel_merge(BrinBuildState *state)
 }
 
 /*
- * Returns size of shared memory required to store state for a parallel
- * brin index build based on the snapshot its parallel scan will use.
- */
-static Size
-_brin_parallel_estimate_shared(Relation heap, Snapshot snapshot)
-{
-	/* c.f. shm_toc_allocate as to why BUFFERALIGN is used */
-	return add_size(BUFFERALIGN(sizeof(BrinShared)),
-					table_parallelscan_estimate(heap, snapshot));
-}
-
-/*
  * Within leader, participate as a parallel worker.
  */
 static void
@@ -2841,7 +2701,7 @@ _brin_parallel_scan_and_build(BrinBuildState *state,
 
 	/* Join parallel scan */
 	indexInfo = BuildIndexInfo(index);
-	indexInfo->ii_Concurrent = brinshared->isconcurrent;
+	indexInfo->ii_Concurrent = brinshared->base.isconcurrent;
 
 	scan = table_beginscan_parallel(heap,
 									ParallelTableScanFromBrinShared(brinshared),
@@ -2858,17 +2718,9 @@ _brin_parallel_scan_and_build(BrinBuildState *state,
 
 	state->bs_reltuples += reltuples;
 
-	/*
-	 * Done.  Record ambuild statistics.
-	 */
-	SpinLockAcquire(&brinshared->mutex);
-	brinshared->nparticipantsdone++;
-	brinshared->reltuples += state->bs_reltuples;
-	brinshared->indtuples += state->bs_numtuples;
-	SpinLockRelease(&brinshared->mutex);
-
-	/* Notify leader */
-	ConditionVariableSignal(&brinshared->workersdonecv);
+	/* Done.  Record ambuild statistics, and notify leader. */
+	ParallelIndexBuildReportScanDone(&brinshared->base, state->bs_reltuples,
+									 state->bs_numtuples, false, false);
 
 	tuplesort_end(state->bs_sortstate);
 }
@@ -2879,7 +2731,6 @@ _brin_parallel_scan_and_build(BrinBuildState *state,
 void
 _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 {
-	char	   *sharedquery;
 	BrinShared *brinshared;
 	Sharedsort *sharedsort;
 	BrinBuildState *buildstate;
@@ -2887,8 +2738,7 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	Relation	indexRel;
 	LOCKMODE	heapLockmode;
 	LOCKMODE	indexLockmode;
-	WalUsage   *walusage;
-	BufferUsage *bufferusage;
+	Instrumentation *worker_instr;
 	int			sortmem;
 
 	/*
@@ -2898,34 +2748,15 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	Assert((MyProc->statusFlags == 0) ||
 		   (MyProc->statusFlags == PROC_IN_SAFE_IC));
 
-	/* Set debug_query_string for individual workers first */
-	sharedquery = shm_toc_lookup(toc, PARALLEL_KEY_QUERY_TEXT, true);
-	debug_query_string = sharedquery;
-
-	/* Report the query string from leader */
-	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+	/* Set debug_query_string and report the query string from leader */
+	RestoreParallelQueryText(toc, PARALLEL_KEY_QUERY_TEXT);
 
 	/* Look up brin shared state */
 	brinshared = shm_toc_lookup(toc, PARALLEL_KEY_BRIN_SHARED, false);
 
-	/* Open relations using lock modes known to be obtained by index.c */
-	if (!brinshared->isconcurrent)
-	{
-		heapLockmode = ShareLock;
-		indexLockmode = AccessExclusiveLock;
-	}
-	else
-	{
-		heapLockmode = ShareUpdateExclusiveLock;
-		indexLockmode = RowExclusiveLock;
-	}
-
-	/* Track query ID */
-	pgstat_report_query_id(brinshared->queryid, false);
-
-	/* Open relations within worker */
-	heapRel = table_open(brinshared->heaprelid, heapLockmode);
-	indexRel = index_open(brinshared->indexrelid, indexLockmode);
+	/* Open relations within worker, using the leader's lock modes */
+	ParallelIndexBuildOpenRelations(&brinshared->base, &heapRel, &indexRel,
+									&heapLockmode, &indexLockmode);
 
 	buildstate = initialize_brin_buildstate(indexRel, NULL,
 											brinshared->pagesPerRange,
@@ -2943,19 +2774,17 @@ _brin_parallel_build_main(dsm_segment *seg, shm_toc *toc)
 	 * (when requested number of workers were not launched, this will be
 	 * somewhat higher than it is for other workers).
 	 */
-	sortmem = maintenance_work_mem / brinshared->scantuplesortstates;
+	sortmem = maintenance_work_mem / brinshared->base.scantuplesortstates;
 
 	_brin_parallel_scan_and_build(buildstate, brinshared, sharedsort,
 								  heapRel, indexRel, sortmem, false);
 
 	/* Report WAL/buffer usage during parallel execution */
-	bufferusage = shm_toc_lookup(toc, PARALLEL_KEY_BUFFER_USAGE, false);
-	walusage = shm_toc_lookup(toc, PARALLEL_KEY_WAL_USAGE, false);
-	InstrEndParallelQuery(&bufferusage[ParallelWorkerNumber],
-						  &walusage[ParallelWorkerNumber]);
+	worker_instr = shm_toc_lookup(toc, PARALLEL_KEY_INSTRUMENTATION, false);
+	InstrEndParallelQuery(&worker_instr[ParallelWorkerNumber]);
 
-	index_close(indexRel, indexLockmode);
-	table_close(heapRel, heapLockmode);
+	ParallelIndexBuildCloseRelations(heapRel, indexRel, heapLockmode,
+									 indexLockmode);
 }
 
 /*

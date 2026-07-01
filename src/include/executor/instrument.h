@@ -148,8 +148,8 @@ extern void InstrStartTrigger(TriggerInstrumentation *tginstr);
 extern void InstrStopTrigger(TriggerInstrumentation *tginstr, int64 firings);
 
 extern void InstrStartParallelQuery(void);
-extern void InstrEndParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
-extern void InstrAccumParallelQuery(BufferUsage *bufusage, WalUsage *walusage);
+extern void InstrEndParallelQuery(Instrumentation *instr);
+extern void InstrAccumParallelQuery(Instrumentation *instr, int nworkers);
 extern void BufferUsageAccumDiff(BufferUsage *dst,
 								 const BufferUsage *add, const BufferUsage *sub);
 extern void WalUsageAccumDiff(WalUsage *dst, const WalUsage *add,

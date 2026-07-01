@@ -281,6 +281,18 @@ INSERT INTO mcdc_varchar_parent VALUES ('aa'), ('bb');
 INSERT INTO mcdc_varchar_child VALUES (901, 'aa'), (902, 'bb');
 INSERT INTO mcdc_varchar_sig_parent VALUES ('aa'), ('bb');
 INSERT INTO mcdc_varchar_sig_child VALUES (911, 'aa'), (912, 'bb');
+CREATE VIEW mcdc_text_cast_filter_v AS
+SELECT *
+FROM mcdc_text_cast_parent
+WHERE id::varchar === 'a'::varchar;
+CREATE VIEW mcdc_varchar_typmod_filter_v AS
+SELECT *
+FROM mcdc_varchar_parent
+WHERE id::varchar === 'aa'::varchar;
+CREATE VIEW mcdc_numdom_typmod_filter_v AS
+SELECT *
+FROM mcdc_numdom_parent
+WHERE id::numeric = 1;
 -- Live parse path: single-column and multi-column key quals.
 SELECT p.id, c.id
 FROM mcdc_parent p
@@ -371,6 +383,14 @@ FROM mcdc_dupe_active_v v
 JOIN mcdc_dupe_nullable_reader n FOR KEY (parent_id) -> v (id)
 ORDER BY n.id, v.id;
 ERROR:  key join from referencing relation n to referenced relation v cannot be proven at character 78
+CREATE VIEW mcdc_duplicate_filter_parent_v AS
+SELECT *
+FROM mcdc_parent
+WHERE id = 1 AND id = 1;
+CREATE VIEW mcdc_duplicate_filter_reader_v AS
+SELECT *
+FROM mcdc_reader
+WHERE parent_id = 1;
 CREATE VIEW mcdc_group_inactive_rowcov_v AS
 SELECT p.id, p.tenant_id, p.code
 FROM mcdc_parent p
@@ -379,10 +399,63 @@ CREATE VIEW mcdc_reader_parent_1_v AS
 SELECT *
 FROM mcdc_reader
 WHERE parent_id = 1;
+CREATE VIEW mcdc_expr_filter_v AS
+SELECT *
+FROM mcdc_parent
+WHERE id + 0 = 1;
+CREATE VIEW mcdc_relabel_expr_filter_v AS
+SELECT *
+FROM mcdc_parent
+WHERE (id::text)::varchar = '1';
+CREATE VIEW mcdc_stable_filter_v AS
+SELECT *
+FROM mcdc_parent
+WHERE id === 1;
+CREATE VIEW mcdc_hash_filter_parent_v AS
+SELECT *
+FROM mcdc_parent
+WHERE id =## 1::bigint;
+CREATE VIEW mcdc_hash_filter_reader_v AS
+SELECT *
+FROM mcdc_reader
+WHERE parent_id =## 1::bigint;
 CREATE VIEW mcdc_second_cte_v AS
 WITH unused AS (SELECT id FROM mcdc_parent WHERE false),
      parents AS (SELECT id FROM mcdc_parent)
 SELECT id FROM parents;
+SELECT r.id, v.id
+FROM mcdc_duplicate_filter_parent_v v
+JOIN mcdc_duplicate_filter_reader_v r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+ id  | id 
+-----+----
+ 101 |  1
+(1 row)
+
+SELECT r.id, v.id
+FROM mcdc_expr_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+ERROR:  key join from referencing relation r to referenced relation v cannot be proven at character 64
+SELECT r.id, v.id
+FROM mcdc_relabel_expr_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+ERROR:  key join from referencing relation r to referenced relation v cannot be proven at character 72
+SELECT r.id, v.id
+FROM mcdc_stable_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+ERROR:  key join from referencing relation r to referenced relation v cannot be proven at character 66
+SELECT r.id, v.id
+FROM mcdc_hash_filter_parent_v v
+JOIN mcdc_hash_filter_reader_v r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+ id  | id 
+-----+----
+ 101 |  1
+(1 row)
+
 SELECT r.id, v.id
 FROM mcdc_second_cte_v v
 JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
@@ -477,6 +550,24 @@ FROM (
 JOIN mcdc_regclass_reader rr FOR KEY (parent_id) -> g (id)
 ORDER BY rr.id;
 ERROR:  key join from referencing relation rr to referenced relation g cannot be proven at character 148
+-- Non-domain relabel filters are not canonical key filters.
+SELECT vr.id, v.id
+FROM mcdc_text_cast_filter_v v
+JOIN mcdc_text_cast_reader vr FOR KEY (parent_id) -> v (id)
+ORDER BY vr.id;
+ERROR:  key join from referencing relation vr to referenced relation v cannot be proven at character 81
+-- Varchar typmod relabel filters are not canonical key filters.
+SELECT vc.id, v.id
+FROM mcdc_varchar_typmod_filter_v v
+JOIN mcdc_varchar_child vc FOR KEY (parent_id) -> v (id)
+ORDER BY vc.id;
+ERROR:  key join from referencing relation vc to referenced relation v cannot be proven at character 83
+-- Domain relabel filters must keep the normalized base typmod.
+SELECT nr.id, v.id
+FROM mcdc_numdom_typmod_filter_v v
+JOIN mcdc_numdom_reader nr FOR KEY (parent_id) -> v (id)
+ORDER BY nr.id;
+ERROR:  key join from referencing relation nr to referenced relation v cannot be proven at character 82
 -- Varchar opclasses can use either varchar or text equality input.
 SELECT c.id, g.id
 FROM (
@@ -510,10 +601,15 @@ AS $$ SELECT $1 $$;
 ALTER FUNCTION mcdc_support_func(internal) STABLE;
 DROP FUNCTION mcdc_support_subject(int);
 DROP FUNCTION mcdc_support_func(internal);
+DROP VIEW mcdc_duplicate_filter_reader_v;
+DROP VIEW mcdc_duplicate_filter_parent_v;
 DROP VIEW mcdc_reader_parent_1_v;
 DROP VIEW mcdc_group_inactive_rowcov_v;
+DROP VIEW mcdc_stable_filter_v;
 DROP OPERATOR === (int, int);
 DROP FUNCTION mcdc_stable_int_eq(int, int);
+DROP VIEW mcdc_hash_filter_reader_v;
+DROP VIEW mcdc_hash_filter_parent_v;
 DROP OPERATOR CLASS mcdc_hash_bridge_int_ops USING hash;
 DROP OPERATOR FAMILY mcdc_hash_bridge_ops USING hash;
 DROP OPERATOR FAMILY mcdc_btree_bridge_ops USING btree;
@@ -532,8 +628,10 @@ DROP CAST (int4 AS mcdc_nonstrict_eq_type);
 SET client_min_messages = warning;
 DROP TYPE mcdc_nonstrict_eq_type CASCADE;
 RESET client_min_messages;
+DROP VIEW mcdc_text_cast_filter_v;
 DROP TABLE mcdc_text_cast_reader, mcdc_text_cast_parent;
 DROP TABLE mcdc_regclass_reader, mcdc_regclass_parent;
+DROP VIEW mcdc_varchar_typmod_filter_v;
 DROP TABLE mcdc_varchar_child, mcdc_varchar_parent;
 DROP OPERATOR CLASS mcdc_varchar_ops USING btree;
 DROP OPERATOR FAMILY mcdc_varchar_ops USING btree;
@@ -549,6 +647,7 @@ DROP FUNCTION mcdc_varchar_sig_dom_cmp(mcdc_varchar_sig_dom,
 DROP FUNCTION mcdc_varchar_sig_dom_eq(mcdc_varchar_sig_dom,
                                       mcdc_varchar_sig_dom);
 DROP DOMAIN mcdc_varchar_sig_dom;
+DROP VIEW mcdc_numdom_typmod_filter_v;
 DROP TABLE mcdc_numdom_reader, mcdc_numdom_parent;
 DROP DOMAIN mcdc_num_dom;
 DROP TABLE mcdc_sig_child, mcdc_sig_parent;
@@ -559,4 +658,4 @@ DROP FUNCTION mcdc_sig_dom_cmp(mcdc_sig_dom, mcdc_sig_dom);
 DROP FUNCTION mcdc_sig_dom_eq(mcdc_sig_dom, mcdc_sig_dom);
 DROP DOMAIN mcdc_sig_dom;
 DROP SCHEMA key_join_mcdc CASCADE;
-NOTICE:  drop cascades to 12 other objects
+NOTICE:  drop cascades to 14 other objects

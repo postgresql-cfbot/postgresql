@@ -40,6 +40,41 @@ JOIN query_unique_nondet_child c FOR KEY (parent_id) -> p (id);
 DROP TABLE query_unique_nondet_child, query_unique_nondet_parent;
 DROP COLLATION query_unique_nondet;
 
+-- A nondeterministic filter collation may disagree on equality, so a filtered
+-- referenced relation cannot be proven covered (originally in key_join.sql).
+CREATE TABLE filter_collation_parent
+(
+    code text COLLATE "C" PRIMARY KEY
+);
+CREATE TABLE filter_collation_child
+(
+    code text COLLATE "C" NOT NULL
+        REFERENCES filter_collation_parent (code)
+);
+
+INSERT INTO filter_collation_parent VALUES ('a'), ('b');
+INSERT INTO filter_collation_child VALUES ('a'), ('b');
+
+CREATE COLLATION filter_collation_nondet (provider = icu, locale = 'und',
+    deterministic = false);
+
+CREATE VIEW filter_collation_parent_nondet AS
+SELECT code FROM filter_collation_parent
+WHERE code = 'a'::text COLLATE filter_collation_nondet;
+
+CREATE VIEW filter_collation_child_nondet AS
+SELECT code FROM filter_collation_child
+WHERE code = 'a'::text COLLATE filter_collation_nondet;
+
+-- rejected, reason: nondeterministic filter collation may disagree on equality
+SELECT *
+FROM filter_collation_parent_nondet p
+JOIN filter_collation_child_nondet c FOR KEY (code) -> p (code);
+
+DROP VIEW filter_collation_child_nondet, filter_collation_parent_nondet;
+DROP COLLATION filter_collation_nondet;
+DROP TABLE filter_collation_child, filter_collation_parent;
+
 -- GROUP BY over a nondeterministic-collation key projects no key facts, so the
 -- key join cannot be proven (originally in key_join_mcdc.sql, which runs with
 -- terse error verbosity).

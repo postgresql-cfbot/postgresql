@@ -45,6 +45,7 @@
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/parsenodes.h"
+#include "optimizer/clauses.h"
 #include "optimizer/optimizer.h"
 #include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
@@ -90,6 +91,7 @@ typedef enum KeyJoinReq
 	REQ_UNIQUE,					/* referenced unique fact for the FK target */
 	REQ_COVERAGE,				/* referenced row-coverage fact */
 	REQ_FKPAIR,					/* FK pairs the named columns (cond. 2a) */
+	REQ_FILTER,					/* referenced filters remap (cond. 2c) */
 	REQ_NOTNULL,				/* referencing not-null evidence (cond. 3) */
 } KeyJoinReq;
 
@@ -171,6 +173,11 @@ static bool find_key_join_match(RangeTblEntry *referencing_rte,
 								List *referencing_attnums,
 								List *referenced_attnums,
 								bool need_notnull, KeyJoinMatch *match);
+static Node *remap_filter_conjunct(Node *conjunct, List *position_map);
+static bool filter_conjunct_can_remap(Node *conjunct, List *position_map);
+static bool filter_conjunct_matches_key_positions(Node *conjunct,
+												  List *keyPositions);
+static bool filter_value_allowed(Node *node);
 static void ensure_key_join_surface_facts(KeyJoinFactContext *context,
 										  RangeTblEntry *rte);
 static void compute_key_join_relation_facts(KeyJoinFactContext *context,
@@ -187,16 +194,25 @@ static void project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst,
 											bool preserve_unique,
 											KeyJoinInactiveReason unique_inact_reason,
 											bool preserve_rowcoverage,
-											bool filter_present,
+											Node *filter_qual, Query *filter_query,
+											Node *filter_jtnode, Index filter_rtindex,
 											List *rowcoverage_key_position_sets,
 											KeyJoinInactiveReason inact_reason);
 static List *make_rowcollapse_key_positions(Query *query, List *clauses);
+static bool add_filter_conjuncts(List **dst, List *keyPositions,
+								 Node *qual, Query *filter_query,
+								 Node *filter_jtnode, Index filter_rtindex,
+								 List **filter_attrmap, int filter_natts,
+								 bool reject_lossy_filter);
 static bool key_join_contains_volatile_after_planning(Node *node);
 static bool key_join_expression_contains_volatile_after_planning(Node *node);
 static bool key_join_after_planning_query_walker(Node *node, void *context);
 static bool key_join_nested_query_walker(Node *node, void *context);
 static List *map_var_to_jtnode_surface(Query *query, Node *jtnode,
 									   Index varno, AttrNumber attno);
+static bool collect_filter_expr_dependencies_walker(Node *node,
+													void *context_arg);
+static bool filter_function_dependency_checker(Oid func_id, void *context_arg);
 static void compute_join_output_facts(JoinExpr *j, Index left_rtindex,
 									  RangeTblEntry *left_rte,
 									  Index right_rtindex,
@@ -230,9 +246,25 @@ static int	key_position_index_for_attnum(List *keyPositions, int attno);
 static bool key_position_identity_lists_equal(List *left, List *right);
 static bool key_position_identity_equal(KeyJoinKeyPosition *left,
 										KeyJoinKeyPosition *right);
-#ifdef USE_ASSERT_CHECKING
 static bool int_lists_same_members(List *a, List *b);
-#endif
+static List *make_filter_position_map(List *src_base_attnums,
+									  List *src_selected_base,
+									  List *dst_base_attnums,
+									  List *dst_selected_base);
+static Node *remap_filter_param_mutator(Node *node, void *context_arg);
+static bool filter_conjunct_unremappable_param_walker(Node *node,
+													  void *context_arg);
+static Node *make_canonical_filter_conjunct(KeyJoinKeyPosition *keypos,
+											int pos, OpExpr *op,
+											Node *value);
+static bool filter_operator_matches_key_position(OpExpr *op,
+												 KeyJoinKeyPosition *keypos,
+												 bool lock_operator);
+static bool filter_operator_is_compatible_equality(Oid opno, Oid keyop);
+static bool list_contains_equal_node(List *list, Node *node);
+static ObjectAddress *make_filter_lock_target(Oid classId, Oid objectId);
+static void lock_key_join_dependency_or_error(const ObjectAddress *dep);
+static void lock_key_join_dependencies_or_error(List *dependencies);
 static HeapTuple lock_and_fetch_key_join_constraint(Oid constraintOid);
 static HeapTuple lock_and_fetch_key_join_operator(Oid opno);
 static HeapTuple lock_and_fetch_key_join_proc(Oid procid);
@@ -246,6 +278,8 @@ static List *append_join_input_mapping(RangeTblEntry *joinrte, bool leftside,
 static int	join_output_attno_for_input(RangeTblEntry *joinrte,
 										bool leftside, int input_colno);
 static Var *direct_var_from_node(Node *node);
+static Var *direct_filter_var_from_node(Node *node);
+static Node *make_filter_param(KeyJoinKeyPosition *keypos, int pos);
 static List **build_join_attrmap(RangeTblEntry *joinrte, bool leftside,
 								 int nattrs);
 static bool join_null_extends_side(JoinType jointype, bool leftside);
@@ -643,7 +677,8 @@ build_key_join_quals(List *referenced_args,
  * The proof has three pieces:
  *	  1. The referenced side has a unique fact covering the selected columns.
  *	  2. The referencing side has a foreign-key fact pointing at that unique
- *		 fact.
+ *		 fact, and any filter quals on the referenced side remap into matching
+ *		 filter quals on the referencing side.
  *	  3. If the join type does not preserve the referencing side, each
  *		 referencing column has not-null evidence.
  *
@@ -942,8 +977,44 @@ find_key_join_match(RangeTblEntry *referencing_rte,
 													   fk_key_positions))
 					continue;
 
-				if (reached < REQ_NOTNULL)
-					reached = REQ_NOTNULL;
+				/* ---- Condition 2c: referenced filters remap into FK ---- */
+				if (coverage->filterConjuncts != NIL)
+				{
+					List	   *position_map;
+					bool		filters_match = true;
+
+					position_map =
+						make_filter_position_map(coverage->baseAttnums,
+												 coverage_base,
+												 fkfact->baseAttnums,
+												 referencing_base);
+
+					foreach_ptr(Node, needed, coverage->filterConjuncts)
+					{
+						Node	   *remapped;
+
+						/*
+						 * The selected key-join columns cover both complete
+						 * key lists, so every canonical coverage filter has
+						 * a target FK key position.
+						 */
+						Assert(filter_conjunct_can_remap(needed,
+														 position_map));
+						remapped = remap_filter_conjunct(needed, position_map);
+						Assert(filter_conjunct_matches_key_positions(remapped,
+																	 fkfact->keyPositions));
+						if (!list_contains_equal_node(fkfact->filterConjuncts,
+													  remapped))
+						{
+							filters_match = false;
+							break;
+						}
+					}
+					if (!filters_match)
+						continue;
+				}
+				if (reached < REQ_FILTER)
+					reached = REQ_FILTER;
 
 				/* ---- Condition 3: not-null evidence on referencing side ---- */
 				if (need_notnull)
@@ -1008,10 +1079,10 @@ find_key_join_match(RangeTblEntry *referencing_rte,
 		match->failReq = REQ_UNIQUE;
 	else if (reached < REQ_COVERAGE)
 		match->failReq = REQ_COVERAGE;
-	else if (reached < REQ_NOTNULL)
+	else if (reached < REQ_FILTER)
 	{
 		Assert(reached >= REQ_FKPAIR);
-		match->failReq = REQ_COVERAGE;
+		match->failReq = REQ_FILTER;
 	}
 	else
 		match->failReq = REQ_NOTNULL;
@@ -1224,7 +1295,6 @@ key_position_identity_equal(KeyJoinKeyPosition *left, KeyJoinKeyPosition *right)
 	return left->eqOperator == right->eqOperator;
 }
 
-#ifdef USE_ASSERT_CHECKING
 static bool
 int_lists_same_members(List *a, List *b)
 {
@@ -1237,7 +1307,365 @@ int_lists_same_members(List *a, List *b)
 	}
 	return true;
 }
+
+/*
+ * make_filter_position_map
+ *
+ *		Build a Param-position map between source and target key lists.
+ *
+ *		Entries of -1 mark source filters outside the selected key join.
+ */
+static List *
+make_filter_position_map(List *src_base_attnums, List *src_selected_base,
+						 List *dst_base_attnums, List *dst_selected_base)
+{
+	List	   *result = NIL;
+
+	Assert(list_length(src_selected_base) == list_length(dst_selected_base));
+
+	foreach_int(srcbase, src_base_attnums)
+	{
+		int			dstpos = -1;
+		ListCell   *lcsrc;
+		ListCell   *lcdst;
+
+		forboth(lcsrc, src_selected_base, lcdst, dst_selected_base)
+		{
+			if (lfirst_int(lcsrc) == srcbase)
+			{
+				int			dstbase = lfirst_int(lcdst);
+
+				foreach_int(baseattno, dst_base_attnums)
+				{
+					if (baseattno == dstbase)
+					{
+						dstpos = foreach_current_index(baseattno);
+						break;
+					}
+				}
+				break;
+			}
+		}
+		result = lappend_int(result, dstpos);
+	}
+	return result;
+}
+
+/*
+ * remap_filter_conjunct
+ *
+ *		Remap proof-filter Params through a position map.
+ */
+static Node *
+remap_filter_conjunct(Node *conjunct, List *position_map)
+{
+	return remap_filter_param_mutator(conjunct, position_map);
+}
+
+/*
+ * filter_conjunct_can_remap
+ *
+ *		Return true if every proof-filter Param used by this conjunct has a
+ *		target key position in the supplied map.
+ */
+static bool
+filter_conjunct_can_remap(Node *conjunct, List *position_map)
+{
+	return !filter_conjunct_unremappable_param_walker(conjunct, position_map);
+}
+
+/*
+ * remap_filter_param_mutator
+ *
+ *		Mutator callback for remapping key-join proof filter Params.
+ */
+static Node *
+remap_filter_param_mutator(Node *node, void *context_arg)
+{
+	List	   *position_map = (List *) context_arg;
+
+	if (node == NULL)
+		return NULL;
+
+	if (IsA(node, Param))
+	{
+		Param	   *param = castNode(Param, node);
+		Param	   *newparam;
+		int			oldpos;
+		int			newpos;
+
+		Assert(param->paramkind == PARAM_KEYJOIN);
+
+		/*
+		 * paramid is a 1-based position into the key-position list that the
+		 * caller already sized.  These two conditions are therefore
+		 * programmer invariants, not user-reachable errors.
+		 */
+		oldpos = param->paramid - 1;
+		Assert(oldpos >= 0);
+		Assert(oldpos < list_length(position_map));
+
+		newpos = list_nth_int(position_map, oldpos);
+		Assert(newpos >= 0);
+		newparam = copyObject(param);
+		newparam->paramid = newpos + 1;
+		return (Node *) newparam;
+	}
+
+	return expression_tree_mutator(node, remap_filter_param_mutator, position_map);
+}
+
+/*
+ * filter_conjunct_unremappable_param_walker
+ *
+ *		Walker callback for finding proof-filter Params that cannot remap.
+ */
+static bool
+filter_conjunct_unremappable_param_walker(Node *node, void *context_arg)
+{
+	List	   *position_map = (List *) context_arg;
+
+	Assert(node != NULL);
+
+	if (IsA(node, Param))
+	{
+		Param	   *param = castNode(Param, node);
+		int			oldpos;
+
+		Assert(param->paramkind == PARAM_KEYJOIN);
+
+		oldpos = param->paramid - 1;
+		Assert(oldpos >= 0);
+		Assert(oldpos < list_length(position_map));
+		return list_nth_int(position_map, oldpos) < 0;
+	}
+
+	return expression_tree_walker(node,
+								  filter_conjunct_unremappable_param_walker,
+								  position_map);
+}
+
+/*
+ * filter_conjunct_matches_key_positions
+ *
+ *		Check that a key-join proof filter matches key identity.
+ */
+static bool
+filter_conjunct_matches_key_positions(Node *conjunct, List *keyPositions)
+{
+	OpExpr	   *op;
+	Param	   *param;
+	KeyJoinKeyPosition *keypos;
+	int			pos;
+#ifdef USE_ASSERT_CHECKING
+	Node	   *value;
 #endif
+
+	Assert(conjunct != NULL);
+	op = castNode(OpExpr, conjunct);
+	Assert(list_length(op->args) == 2);
+	param = castNode(Param, linitial(op->args));
+	Assert(param->paramkind == PARAM_KEYJOIN);
+
+	pos = param->paramid - 1;
+	Assert(pos >= 0);
+	Assert(pos < list_length(keyPositions));
+	keypos = list_nth_node(KeyJoinKeyPosition, keyPositions, pos);
+
+	/*
+	 * add_filter_conjuncts() stores only canonical key = value filters.
+	 * Remapping changes only Param ids; the original filter operator and
+	 * value expression must remain compatible with the destination key.
+	 */
+	Assert(param->paramtype == keypos->eqTypeOid);
+	Assert(param->paramtypmod == keypos->eqTypmod);
+	Assert(param->paramcollid == keypos->collationOid);
+	if (!filter_operator_matches_key_position(op, keypos, false))
+		return false;
+
+#ifdef USE_ASSERT_CHECKING
+	value = lsecond(op->args);
+	Assert(filter_value_allowed(value));
+#endif
+	return true;
+}
+
+/*
+ * filter_value_allowed
+ *
+ *		Return true if a filter value can be stored in proof-filter form.
+ *		Proof filters use a strict allowlist: constants, SQL value functions,
+ *		non-volatile scalar functions, and transparent type/collation wrappers
+ *		whose arguments are also allowed.  The full after-planning volatility
+ *		check runs on the canonical filter after locking its dependencies.
+ */
+static bool
+filter_value_allowed(Node *node)
+{
+	Assert(node != NULL);
+
+	if (IsA(node, Const))
+		return true;
+
+	if (IsA(node, SQLValueFunction))
+		return true;
+
+	if (IsA(node, FuncExpr))
+	{
+		FuncExpr   *expr = castNode(FuncExpr, node);
+
+		Assert(!expr->funcretset);
+		if (func_volatile(expr->funcid) == PROVOLATILE_VOLATILE)
+			return false;
+		foreach_ptr(Node, arg, expr->args)
+		{
+			if (!filter_value_allowed(arg))
+				return false;
+		}
+		return true;
+	}
+
+	if (IsA(node, RelabelType))
+		return filter_value_allowed((Node *) castNode(RelabelType, node)->arg);
+
+	if (IsA(node, CoerceViaIO))
+		return filter_value_allowed((Node *) castNode(CoerceViaIO, node)->arg);
+
+	if (IsA(node, CollateExpr))
+		return filter_value_allowed((Node *) castNode(CollateExpr, node)->arg);
+
+	return false;
+}
+
+/*
+ * make_canonical_filter_conjunct
+ *
+ *		Build the stored proof-filter representation for a direct key filter.
+ */
+static Node *
+make_canonical_filter_conjunct(KeyJoinKeyPosition *keypos, int pos, OpExpr *op,
+							   Node *value)
+{
+	OpExpr	   *newop;
+
+	Assert(op != NULL);
+	Assert(value != NULL);
+	Assert(filter_value_allowed(value));
+	Assert(filter_operator_matches_key_position(op, keypos, false));
+
+	newop = copyObject(op);
+	set_opfuncid(newop);
+	Assert(OidIsValid(newop->opfuncid));
+	newop->args = list_make2(make_filter_param(keypos, pos),
+							 copyObject(value));
+	newop->location = -1;
+	return (Node *) newop;
+}
+
+/*
+ * filter_operator_matches_key_position
+ *
+ *		Check whether a direct key-filter operator is compatible with keypos.
+ */
+static bool
+filter_operator_matches_key_position(OpExpr *op, KeyJoinKeyPosition *keypos,
+									 bool lock_operator)
+{
+	Node	   *left;
+	Node	   *right;
+	RegProcedure funcid;
+	Oid			lefttype;
+	Oid			righttype;
+	Oid			rettype;
+	bool		result;
+
+	Assert(op != NULL);
+	Assert(keypos != NULL);
+	Assert(list_length(op->args) == 2);
+
+	left = linitial(op->args);
+	right = lsecond(op->args);
+
+	Assert(OidIsValid(op->opno));
+
+	if (lock_operator)
+	{
+		HeapTuple	optup;
+		HeapTuple	proctup;
+		Form_pg_operator opform;
+		Form_pg_proc procform;
+
+		optup = lock_and_fetch_key_join_operator(op->opno);
+		opform = (Form_pg_operator) GETSTRUCT(optup);
+		funcid = opform->oprcode;
+		lefttype = opform->oprleft;
+		righttype = opform->oprright;
+		rettype = opform->oprresult;
+		ReleaseSysCache(optup);
+
+		Assert(OidIsValid(funcid));
+
+		proctup = lock_and_fetch_key_join_proc((Oid) funcid);
+		procform = (Form_pg_proc) GETSTRUCT(proctup);
+		Assert(!procform->proretset);
+		result = procform->proisstrict &&
+			procform->provolatile == PROVOLATILE_IMMUTABLE;
+		ReleaseSysCache(proctup);
+	}
+	else
+	{
+		funcid = get_opcode(op->opno);
+		op_input_types(op->opno, &lefttype, &righttype);
+		rettype = get_op_rettype(op->opno);
+		Assert(OidIsValid(funcid));
+		Assert(func_strict(funcid));
+		Assert(func_volatile(funcid) == PROVOLATILE_IMMUTABLE);
+		Assert(!get_func_retset(funcid));
+		result = true;
+	}
+
+	result &= lefttype == keypos->eqTypeOid;
+	result &= righttype == exprType(right);
+	result &= rettype == BOOLOID;
+	result &= !op->opretset;
+	result &= op->opresulttype == BOOLOID;
+	result &= exprType(left) == keypos->eqTypeOid;
+	result &= exprTypmod(left) == keypos->eqTypmod;
+	result &= exprCollation(left) == keypos->collationOid;
+	result &= filter_operator_is_compatible_equality(op->opno,
+													 keypos->eqOperator);
+	result &= collations_agree_on_equality(op->inputcollid,
+										   keypos->collationOid);
+
+	return result;
+}
+
+/*
+ * filter_operator_is_compatible_equality
+ *
+ *		Check whether opno is itself an equality operator compatible with keyop.
+ */
+static bool
+filter_operator_is_compatible_equality(Oid opno, Oid keyop)
+{
+	RegProcedure hash_proc;
+
+	if (opno == keyop)
+		return true;
+	if (!equality_ops_are_compatible(opno, keyop))
+		return false;
+
+	foreach_ptr(OpIndexInterpretation, interpretation,
+				get_op_index_interpretation(opno))
+	{
+		if (interpretation->cmptype != COMPARE_EQ)
+			continue;
+		if (op_in_opfamily(keyop, interpretation->opfamily_id))
+			return true;
+	}
+
+	return get_op_hash_functions(opno, &hash_proc, NULL);
+}
 
 /*
  * key_join_contains_volatile_after_planning
@@ -1304,6 +1732,78 @@ key_join_nested_query_walker(Node *node, void *context)
 	 * that nested Query nodes get their own after-planning pass.
 	 */
 	return expression_tree_walker(node, key_join_nested_query_walker, context);
+}
+
+static bool
+list_contains_equal_node(List *list, Node *node)
+{
+	foreach_ptr(Node, oldnode, list)
+	{
+		if (equal(node, oldnode))
+			return true;
+	}
+	return false;
+}
+
+/*
+ * make_filter_lock_target
+ *
+ *		Build one catalog-object entry for a filter-expression lock list.
+ */
+static ObjectAddress *
+make_filter_lock_target(Oid classId, Oid objectId)
+{
+	ObjectAddress *dep = palloc(sizeof(ObjectAddress));
+
+	Assert(OidIsValid(objectId));
+	ObjectAddressSet(*dep, classId, objectId);
+	return dep;
+}
+
+/*
+ * lock_key_join_dependency_or_error
+ *
+ *		Lock one filter expression dependency with the same object-lock family
+ *		used by dependency deletion, then verify the locked object still
+ *		exists.  Filter expressions can depend on operators and functions only.
+ *		Relation and constraint objects a fact relies on are locked by their
+ *		fact builders.
+ */
+static void
+lock_key_join_dependency_or_error(const ObjectAddress *dep)
+{
+	Assert(dep->classId == OperatorRelationId ||
+		   dep->classId == ProcedureRelationId);
+
+	if (dep->classId == OperatorRelationId)
+	{
+		HeapTuple	optup;
+
+		optup = lock_and_fetch_key_join_operator(dep->objectId);
+		ReleaseSysCache(optup);
+	}
+	else
+	{
+		HeapTuple	proctup;
+
+		Assert(dep->classId == ProcedureRelationId);
+		proctup = lock_and_fetch_key_join_proc(dep->objectId);
+		ReleaseSysCache(proctup);
+	}
+}
+
+/*
+ * lock_key_join_dependencies_or_error
+ *
+ *		Block until every dependency is locked and known to still exist.  The
+ *		proof may rely on a filter expression only after its objects have
+ *		passed through this helper or an equivalent lock-and-fetch path.
+ */
+static void
+lock_key_join_dependencies_or_error(List *dependencies)
+{
+	foreach_ptr(ObjectAddress, dep, dependencies)
+		lock_key_join_dependency_or_error(dep);
 }
 
 /*
@@ -2176,9 +2676,9 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
 		return NULL;
 
 	/*
-	 * Volatile expressions can change the state a proof relies on while the
-	 * executor evaluates later operands.  Treat them as a complete proof
-	 * barrier for computed query facts.
+	 * Volatile expressions can change state that matched-filter proofs read
+	 * while the executor evaluates later operands.  Treat them as a complete
+	 * proof barrier for computed query facts.
 	 */
 	if (key_join_contains_volatile_after_planning((Node *) query))
 		return NULL;
@@ -2355,7 +2855,8 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
 										query->groupingSets == NIL,
 										KJI_GROUP_BY,
 										!block_rowcoverage,
-										query->jointree->quals != NULL,
+										query->jointree->quals,
+										query, topjtnode, top_rtindex,
 										rowcoverage_key_position_sets,
 										KJI_ROW_REMOVING_CLAUSE);
 		pfree(attrmap);
@@ -2461,8 +2962,8 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
  *
  *		The preservation flags describe which proof meanings the caller preserved.
  *		Foreign-key containment projects whenever its key columns survive;
- *		row-coverage projection ends at any filter because filters define the
- *		referenced multiset.
+ *		row-coverage projection rejects lossy filter handling because filters
+ *		define the referenced multiset.
  */
 static void
 project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst, RangeTblEntry *src,
@@ -2471,12 +2972,13 @@ project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst, RangeTblEntry *src,
 								bool preserve_unique,
 								KeyJoinInactiveReason unique_inact_reason,
 								bool preserve_rowcoverage,
-								bool filter_present,
+								Node *filter_qual, Query *filter_query,
+								Node *filter_jtnode, Index filter_rtindex,
 								List *rowcoverage_key_position_sets,
 								KeyJoinInactiveReason inact_reason)
 {
 	bool		tablesample;
-	int			natts PG_USED_FOR_ASSERTS_ONLY;
+	int			natts;
 
 	Assert(src != NULL);
 	Assert(src->keyJoinFacts != NULL);
@@ -2583,19 +3085,22 @@ project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst, RangeTblEntry *src,
 						continue;
 					}
 
-					/*
-					 * Row coverage must account for every filter: a filtered
-					 * referenced input may have dropped rows the join still
-					 * needs, so any filter on this surface ends coverage here.
-					 */
-					if (filter_present)
-					{
-						add_inactive_projected(dst, old, attrmap,
-											   KJI_REFERENCED_FILTER);
-						continue;
-					}
 					new = copyObject(old);
 					new->keyPositions = newpositions;
+					/*
+					 * Row coverage must account for every filter.  Dropping
+					 * one would claim coverage for rows no longer visible.
+					 */
+					if (!add_filter_conjuncts(&new->filterConjuncts,
+											  new->keyPositions, filter_qual,
+											  filter_query, filter_jtnode,
+											  filter_rtindex, attrmap, natts,
+											  true))
+					{
+						add_inactive_projected(dst, old, attrmap,
+											   KJI_UNACCOUNTED_FILTER);
+						continue;
+					}
 					dst->facts = lappend(dst->facts, new);
 					continue;
 				}
@@ -2609,6 +3114,15 @@ project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst, RangeTblEntry *src,
 					continue;
 				new = copyObject(old);
 				new->keyPositions = newpositions;
+				/*
+				 * FK-side filters are optional precision; unrecognized
+				 * conjuncts only remove referencing rows.
+				 */
+				(void) add_filter_conjuncts(&new->filterConjuncts,
+											new->keyPositions, filter_qual,
+											filter_query, filter_jtnode,
+											filter_rtindex, attrmap, natts,
+											false);
 				dst->facts = lappend(dst->facts, new);
 				continue;
 		}
@@ -2701,6 +3215,171 @@ make_rowcollapse_key_positions(Query *query, List *clauses)
 		}
 	}
 	return result;
+}
+
+/*
+ * add_filter_conjuncts
+ *
+ *		Canonicalize filter conjuncts for a projected proof fact.
+ *
+ *		Only direct key = value filters matching the key's equality-input
+ *		identity are retained.  If reject_lossy_filter is true, failure to
+ *		retain any conjunct makes the whole projection fail; otherwise such
+ *		conjuncts are ignored.
+ */
+static bool
+add_filter_conjuncts(List **dst, List *keyPositions,
+					 Node *qual, Query *filter_query, Node *filter_jtnode,
+					 Index filter_rtindex, List **filter_attrmap,
+					 int filter_natts, bool reject_lossy_filter)
+{
+	if (qual == NULL)
+		return true;
+	Assert(filter_attrmap != NULL);
+
+	foreach_ptr(Node, conjunct, make_ands_implicit((Expr *) qual))
+	{
+		Node	   *canon = NULL;
+
+		Assert(conjunct != NULL);
+		if (IsA(conjunct, OpExpr))
+		{
+			OpExpr	   *op = castNode(OpExpr, conjunct);
+
+			if (list_length(op->args) == 2)
+			{
+				Node	   *left = linitial(op->args);
+				Node	   *right = lsecond(op->args);
+				Var		   *leftvar = direct_filter_var_from_node(left);
+				int			pos = -1;
+
+				if (leftvar != NULL &&
+					!contain_vars_of_level(right, 0))
+				{
+					List	   *surface_attnums = NIL;
+
+					/*
+					 * Map the filter Var through the optional query,
+					 * jointree, and attrmap context before matching a
+					 * projected key position.
+					 */
+					Assert(leftvar->varlevelsup == 0);
+					Assert(leftvar->varattno > 0);
+					if (filter_query != NULL)
+					{
+						Assert(filter_jtnode != NULL);
+
+						/*
+						 * A filter attached above a join tree names an RTE
+						 * below that tree.  Map it to the visible surface
+						 * column(s) of the filtered jointree.
+						 */
+						surface_attnums =
+							map_var_to_jtnode_surface(filter_query,
+													  filter_jtnode,
+													  leftvar->varno,
+													  leftvar->varattno);
+					}
+					else
+					{
+						Assert(filter_rtindex != 0);
+						if (leftvar->varno == filter_rtindex)
+						{
+							/*
+							 * A base-relation filter already names its
+							 * surface directly.
+							 */
+							surface_attnums =
+								list_make1_int(leftvar->varattno);
+						}
+					}
+
+					foreach_int(srcattno, surface_attnums)
+					{
+						List	   *dst_attnums;
+
+						Assert(srcattno > 0);
+						Assert(srcattno <= filter_natts);
+
+						/*
+						 * Projection may duplicate or drop source columns.
+						 * Follow every surviving output attnum.
+						 */
+						dst_attnums = filter_attrmap[srcattno];
+
+						foreach_int(dstattno, dst_attnums)
+						{
+							int			keypos =
+								key_position_index_for_attnum(keyPositions,
+															  dstattno);
+
+							if (keypos < 0)
+								continue;
+							Assert(pos < 0 || pos == keypos);
+							pos = keypos;
+						}
+					}
+				}
+
+				if (pos >= 0)
+				{
+					List	   *value_deps = NIL;
+
+					/*
+					 * The RHS must be inspected only after locking objects that
+					 * could change filter proof semantics, such as functions.
+					 */
+					(void) collect_filter_expr_dependencies_walker(right,
+																   &value_deps);
+					lock_key_join_dependencies_or_error(value_deps);
+
+					if (filter_value_allowed(right))
+					{
+						KeyJoinKeyPosition *keypos =
+							list_nth_node(KeyJoinKeyPosition, keyPositions,
+										  pos);
+
+						Assert(leftvar->vartype == keypos->typeOid);
+						Assert(leftvar->vartypmod == keypos->typmod);
+						Assert(leftvar->varcollid == keypos->collationOid);
+						Assert(exprType(left) == keypos->eqTypeOid);
+						Assert(exprTypmod(left) == keypos->eqTypmod);
+						if (filter_operator_matches_key_position(op, keypos,
+																 true))
+							canon = make_canonical_filter_conjunct(keypos,
+																   pos,
+																   op, right);
+					}
+				}
+			}
+		}
+
+		if (canon != NULL)
+		{
+			List	   *lockdeps = NIL;
+
+			/*
+			 * Lock filter operators and functions before publishing the
+			 * canonical filter on the fact.
+			 */
+			(void) collect_filter_expr_dependencies_walker(canon,
+														   &lockdeps);
+			lock_key_join_dependencies_or_error(lockdeps);
+			Assert(!contain_subplans(canon));
+			if (key_join_contains_volatile_after_planning(canon))
+			{
+				if (reject_lossy_filter)
+					return false;
+				continue;
+			}
+			if (!list_contains_equal_node(*dst, canon))
+				*dst = lappend(*dst, canon);
+			continue;
+		}
+		if (reject_lossy_filter)
+			return false;
+	}
+	return true;
 }
 
 /*
@@ -2841,6 +3520,126 @@ direct_var_from_node(Node *node)
 }
 
 /*
+ * direct_filter_var_from_node
+ *
+ *		Return a direct current-query Var from a key-filter operand.  Domain
+ *		equality operators are resolved on the base type, so the parser may
+ *		wrap a domain Var in a RelabelType before filter canonicalization sees
+ *		the OpExpr.  Other RelabelType shapes are not direct key filters.
+ */
+static Var *
+direct_filter_var_from_node(Node *node)
+{
+	Var		   *var = direct_var_from_node(node);
+
+	if (var != NULL)
+		return var;
+	Assert(node != NULL);
+	if (!IsA(node, RelabelType))
+		return NULL;
+
+	{
+		RelabelType *relabel = castNode(RelabelType, node);
+		int32		baseTypmod;
+		Oid			baseType;
+
+		var = direct_var_from_node((Node *) relabel->arg);
+		if (var == NULL)
+			return NULL;
+
+		baseTypmod = var->vartypmod;
+		baseType = key_join_equality_type(var->vartype, var->vartypmod,
+										  &baseTypmod);
+		Assert(relabel->resultcollid == var->varcollid);
+		if (relabel->resulttype == baseType &&
+			relabel->resulttypmod == baseTypmod)
+			return var;
+		if (baseType == VARCHAROID &&
+			relabel->resulttype == TEXTOID)
+		{
+			Assert(relabel->resulttypmod == -1);
+			Assert(IsBinaryCoercible(var->vartype, relabel->resulttype));
+			return var;
+		}
+		return NULL;
+	}
+}
+
+/*
+ * make_filter_param
+ *
+ *		Build the placeholder Param for a key-join proof filter.
+ *
+ *		These PARAM_KEYJOIN nodes are parser-private placeholders that may
+ *		appear only inside transient KeyJoinSurfaceFacts.filterConjuncts;
+ *		they never reach a stored query tree.
+ */
+static Node *
+make_filter_param(KeyJoinKeyPosition *keypos, int pos)
+{
+	Param	   *param = makeNode(Param);
+
+	param->paramkind = PARAM_KEYJOIN;
+	param->paramid = pos + 1;
+	param->paramtype = keypos->eqTypeOid;
+	param->paramtypmod = keypos->eqTypmod;
+	param->paramcollid = keypos->collationOid;
+	param->location = -1;
+	return (Node *) param;
+}
+
+/*
+ * collect_filter_expr_dependencies_walker
+ *
+ *		Walker callback for collecting filter expression dependencies, as a
+ *		list of ObjectAddress lock targets for
+ *		lock_key_join_dependencies_or_error.
+ */
+static bool
+collect_filter_expr_dependencies_walker(Node *node, void *context_arg)
+{
+	List	  **dependencies = (List **) context_arg;
+
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, OpExpr))
+	{
+		OpExpr	   *expr = castNode(OpExpr, node);
+
+		set_opfuncid(expr);
+		*dependencies = lappend(*dependencies,
+								make_filter_lock_target(OperatorRelationId,
+														expr->opno));
+		*dependencies = lappend(*dependencies,
+								make_filter_lock_target(ProcedureRelationId,
+														expr->opfuncid));
+	}
+	else
+		(void) check_functions_in_node(node, filter_function_dependency_checker,
+									   context_arg);
+
+	return expression_tree_walker(node, collect_filter_expr_dependencies_walker,
+								  context_arg);
+}
+
+/*
+ * filter_function_dependency_checker
+ *
+ *		check_functions_in_node callback for collecting procedure dependencies.
+ */
+static bool
+filter_function_dependency_checker(Oid func_id, void *context_arg)
+{
+	List	  **dependencies = (List **) context_arg;
+
+	*dependencies = lappend(*dependencies,
+							make_filter_lock_target(ProcedureRelationId,
+													func_id));
+	return false;
+}
+
+/*
  * compute_join_output_facts
  *
  *		Project still-valid surface facts into a join result RTE.
@@ -2864,6 +3663,8 @@ compute_join_output_facts(JoinExpr *j,
 	RangeTblEntry *referenced_rte;
 	List	  **referencing_map;
 	List	  **referenced_map;
+	Index		referencing_rtindex;
+	Index		referenced_rtindex;
 	bool		referenced_preserved;
 	bool		preserve_referencing_notnull;
 	bool		preserve_referenced_notnull;
@@ -2890,6 +3691,8 @@ compute_join_output_facts(JoinExpr *j,
 	referenced_rte = referenced_left ? left_rte : right_rte;
 	referencing_map = referencing_left ? lmap : rmap;
 	referenced_map = referenced_left ? lmap : rmap;
+	referencing_rtindex = referencing_left ? left_rtindex : right_rtindex;
+	referenced_rtindex = referenced_left ? left_rtindex : right_rtindex;
 	referenced_preserved = join_preserves_side(j->jointype, referenced_left);
 	preserve_referencing_notnull =
 		!join_null_extends_side(j->jointype, referencing_left);
@@ -2996,8 +3799,8 @@ compute_join_output_facts(JoinExpr *j,
 									true, KJI_NONE, true,
 									join_filter_for_side(j->jointype,
 														 referencing_left,
-														 j->joinFilter) != NULL,
-									NIL,
+														 j->joinFilter),
+									NULL, NULL, referencing_rtindex, NIL,
 									KJI_NONE);
 	project_key_join_facts_from_rte(result, referenced_rte, referenced_map,
 									preserve_referenced_notnull,
@@ -3007,10 +3810,132 @@ compute_join_output_facts(JoinExpr *j,
 									referenced_preserved,
 									join_filter_for_side(j->jointype,
 														 referenced_left,
-														 j->joinFilter) != NULL,
-									NIL,
+														 j->joinFilter),
+									NULL, NULL, referenced_rtindex, NIL,
 									KJI_JOIN_NOT_PRESERVED);
 
+	/*
+	 * Filter propagation: only safe when referenced side is fully
+	 * matched.  Filters may move only onto facts rooted in the FK's
+	 * referenced relation; FK output facts additionally match their own
+	 * constraint OID below.
+	 */
+	if (!referenced_preserved)
+	{
+		KeyJoinSurfaceFacts *rfacts = referencing_rte->keyJoinFacts;
+		KeyJoinSurfaceFacts *pfacts = referenced_rte->keyJoinFacts;
+
+		foreach_node(KeyJoinFact, source, rfacts->facts)
+		{
+			List	   *source_selected_base;
+			List	   *target_selected_base = NIL;
+
+			if (source->kind != KJF_FOREIGN_KEY)
+				continue;
+			Assert(source->active);
+			if (source->constraint != key_join_node->constraint ||
+				source->filterConjuncts == NIL)
+				continue;
+			Assert(list_length(source->baseAttnums) ==
+				   list_length(source->referencedAttnums));
+			if (!select_key_position_parts(key_join_node->referencingAttnums,
+										   source->keyPositions,
+										   source->baseAttnums,
+										   &source_selected_base, NULL))
+				continue;
+			foreach_int(srcbase, source_selected_base)
+			{
+				ListCell   *lcbase;
+				ListCell   *lcref;
+
+				forboth(lcbase, source->baseAttnums,
+						lcref, source->referencedAttnums)
+				{
+					if (lfirst_int(lcbase) == srcbase)
+					{
+						target_selected_base =
+							lappend_int(target_selected_base,
+										lfirst_int(lcref));
+						break;
+					}
+				}
+			}
+
+			Assert(list_length(target_selected_base) == list_length(source_selected_base));
+
+			/*
+			 * Match FK and RowCoverage targets to out-facts; the FK case
+			 * also requires constraint match so canonical filters can't
+			 * cross distinct FKs.
+			 */
+			foreach_node(KeyJoinFact, target, pfacts->facts)
+			{
+				List	   *projected_positions;
+				List	   *position_map;
+
+				if (target->kind != KJF_FOREIGN_KEY &&
+					target->kind != KJF_ROW_COVERAGE)
+					continue;
+				if (!target->active)
+					continue;
+				if (target->relid != source->referencedRelid)
+					continue;
+				projected_positions =
+					project_key_positions(target->keyPositions,
+										  referenced_map);
+				Assert(projected_positions != NIL);
+				position_map =
+					make_filter_position_map(source->baseAttnums,
+											 source_selected_base,
+											 target->baseAttnums,
+											 target_selected_base);
+
+				foreach_node(KeyJoinFact, out, result->facts)
+				{
+					if (out->kind != target->kind)
+						continue;
+					if (!out->active)
+						continue;
+					if (out->kind == KJF_FOREIGN_KEY)
+					{
+						if (out->constraint != target->constraint)
+							continue;
+					}
+					if (out->relid != target->relid)
+						continue;
+					if (!int_lists_same_members(out->baseAttnums,
+												target->baseAttnums))
+						continue;
+					if (!equal(out->keyPositions, projected_positions))
+						continue;
+
+					/*
+					 * Remap each canonical FK-side filter onto the output
+					 * fact.  Keep only filters that still constrain the
+					 * output key positions after projection.
+					 */
+					foreach_ptr(Node, conjunct, source->filterConjuncts)
+					{
+						Node	   *remapped;
+
+						if (!filter_conjunct_can_remap(conjunct,
+													   position_map))
+							continue;
+						remapped = remap_filter_conjunct(conjunct,
+														 position_map);
+						if (!filter_conjunct_matches_key_positions(remapped,
+																   out->keyPositions))
+							continue;
+
+						if (!list_contains_equal_node(out->filterConjuncts,
+													  remapped))
+							out->filterConjuncts =
+								lappend(out->filterConjuncts, remapped);
+					}
+				}
+			}
+		}
+	}
 	Assert(result->facts != NIL);
 	joinrte->keyJoinFacts = result;
 
@@ -3383,6 +4308,7 @@ key_join_failure_detail(KeyJoinReq req, bool inactivated,
 				psprintf(_("The matching foreign key for %s references different columns than %s."),
 						 referencing_relcols, referenced_relcols);
 			break;
+		case REQ_FILTER:
 		case REQ_COVERAGE:
 			requirement_sentence =
 				psprintf(_("Not every %s value can be proven to have a matching %s row."),
@@ -3405,6 +4331,11 @@ key_join_failure_detail(KeyJoinReq req, bool inactivated,
 	{
 		case REQ_FK:
 		case REQ_FKPAIR:
+			break;
+		case REQ_FILTER:
+			reason_sentence =
+				psprintf(_("Referenced relation %s has a filter that is not matched by referencing relation %s."),
+						 referenced_relation, referencing_relation);
 			break;
 		case REQ_UNIQUE:
 			if (inactivated)
@@ -3429,7 +4360,7 @@ key_join_failure_detail(KeyJoinReq req, bool inactivated,
 			{
 				switch (reason)
 				{
-					case KJI_REFERENCED_FILTER:
+					case KJI_UNACCOUNTED_FILTER:
 						reason_sentence =
 							psprintf(_("Referenced relation %s is filtered before this key join."),
 									 referenced_relation);

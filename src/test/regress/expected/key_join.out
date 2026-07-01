@@ -3493,6 +3493,973 @@ DETAIL:  drop cascades to table key_join_diag.kd_parent
 drop cascades to table key_join_diag.kd_child
 drop cascades to table key_join_diag.kd_fanout_child
 drop cascades to table key_join_diag.kd_unique_child
+-- ============================================================================
+-- Matched referenced-side filters: key joins whose referenced input is
+-- filtered but provable because the referencing side applies the same
+-- canonical filter, and canonicalization of the proof-filter terms.
+-- ============================================================================
+CREATE TABLE scalar_array_filter_parent (id boolean PRIMARY KEY);
+CREATE TABLE scalar_array_filter_child
+(
+    id int PRIMARY KEY,
+    parent_id boolean NOT NULL REFERENCES scalar_array_filter_parent (id)
+);
+INSERT INTO scalar_array_filter_parent VALUES (false), (true);
+INSERT INTO scalar_array_filter_child VALUES (1, true), (2, false);
+CREATE VIEW scalar_array_filter_parent_v AS
+SELECT id
+FROM scalar_array_filter_parent
+WHERE id = (true = ANY (ARRAY[false, length('x') = 1]));
+CREATE VIEW scalar_array_filter_child_v AS
+SELECT parent_id
+FROM scalar_array_filter_child
+WHERE parent_id = (true = ANY (ARRAY[false, length('x') = 1]));
+SELECT count(*) AS scalar_array_filter_rows
+FROM scalar_array_filter_parent_v p
+-- rejected, reason: ScalarArrayOpExpr filter values are not proof-filter terms
+JOIN scalar_array_filter_child_v c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN scalar_array_filter_child_v c FOR KEY (parent_id) -> p ...
+                                           ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.scalar_array_filter_parent_v.
+DROP VIEW scalar_array_filter_child_v, scalar_array_filter_parent_v;
+DROP TABLE scalar_array_filter_child, scalar_array_filter_parent;
+-- FILTER1b: strict proof-filter value allowlist accepts constants
+CREATE TABLE filter_const_parent (id int PRIMARY KEY);
+CREATE TABLE filter_const_child
+(
+    parent_id int NOT NULL REFERENCES filter_const_parent (id)
+);
+INSERT INTO filter_const_parent VALUES (1), (2);
+INSERT INTO filter_const_child VALUES (1);
+CREATE VIEW filter_const_parent_v AS
+SELECT id FROM filter_const_parent WHERE id = 1::integer;
+CREATE VIEW filter_const_child_v AS
+SELECT parent_id FROM filter_const_child WHERE parent_id = 1::integer;
+SELECT count(*) AS const_filter_rows
+FROM filter_const_parent_v p
+JOIN filter_const_child_v c FOR KEY (parent_id) -> p (id);
+ const_filter_rows 
+-------------------
+                 1
+(1 row)
+
+DROP VIEW filter_const_child_v, filter_const_parent_v;
+DROP TABLE filter_const_child, filter_const_parent;
+-- FILTER1c: strict proof-filter value allowlist accepts SQL value functions
+CREATE TABLE filter_sqlvalue_parent (id name PRIMARY KEY);
+CREATE TABLE filter_sqlvalue_child
+(
+    parent_id name NOT NULL REFERENCES filter_sqlvalue_parent (id)
+);
+INSERT INTO filter_sqlvalue_parent VALUES (CURRENT_USER);
+INSERT INTO filter_sqlvalue_child VALUES (CURRENT_USER);
+CREATE VIEW filter_sqlvalue_parent_v AS
+SELECT id FROM filter_sqlvalue_parent WHERE id = CURRENT_USER;
+CREATE VIEW filter_sqlvalue_child_v AS
+SELECT parent_id FROM filter_sqlvalue_child WHERE parent_id = CURRENT_USER;
+SELECT count(*) AS sqlvalue_filter_rows
+FROM filter_sqlvalue_parent_v p
+JOIN filter_sqlvalue_child_v c FOR KEY (parent_id) -> p (id);
+ sqlvalue_filter_rows 
+----------------------
+                    1
+(1 row)
+
+DROP VIEW filter_sqlvalue_child_v, filter_sqlvalue_parent_v;
+DROP TABLE filter_sqlvalue_child, filter_sqlvalue_parent;
+-- FILTER1c-2: SQL value function filters on varchar keys use text = name
+CREATE TABLE filter_varchar_tenant_customers
+(
+    tenant_id varchar(128),
+    id int,
+    name varchar(100),
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE filter_varchar_tenant_orders
+(
+    tenant_id varchar(128),
+    id int,
+    customer_id int NOT NULL,
+    amount numeric(10,2),
+    PRIMARY KEY (tenant_id, id),
+    FOREIGN KEY (tenant_id, customer_id)
+        REFERENCES filter_varchar_tenant_customers (tenant_id, id)
+);
+INSERT INTO filter_varchar_tenant_customers
+VALUES (CURRENT_USER, 1, 'Alice'), ('other_tenant', 1, 'Other');
+INSERT INTO filter_varchar_tenant_orders
+VALUES (CURRENT_USER, 10, 1, 5.00), ('other_tenant', 20, 1, 7.00);
+CREATE VIEW filter_varchar_tenant_customers_v AS
+SELECT * FROM filter_varchar_tenant_customers
+WHERE tenant_id = CURRENT_USER;
+CREATE VIEW filter_varchar_tenant_orders_v AS
+SELECT * FROM filter_varchar_tenant_orders
+WHERE tenant_id = CURRENT_USER;
+SELECT o.id, c.name
+FROM filter_varchar_tenant_orders_v o
+JOIN filter_varchar_tenant_customers_v c FOR KEY (tenant_id, id) <- o (tenant_id, customer_id)
+ORDER BY o.id, c.name;
+ id | name  
+----+-------
+ 10 | Alice
+(1 row)
+
+SELECT count(*) AS varchar_sqlvalue_filter_unmatched_rows
+FROM filter_varchar_tenant_orders o
+-- rejected, reason: the referenced-side CURRENT_USER filter is not matched on the FK side
+JOIN filter_varchar_tenant_customers_v c FOR KEY (tenant_id, id) <- o (tenant_id, customer_id);
+ERROR:  key join from referencing relation o to referenced relation c cannot be proven
+LINE 4: JOIN filter_varchar_tenant_customers_v c FOR KEY (tenant_id,...
+                                                 ^
+DETAIL:  Not every o (tenant_id, customer_id) value can be proven to have a matching c row. Referenced relation c has a filter that is not matched by referencing relation o.
+DROP VIEW filter_varchar_tenant_orders_v, filter_varchar_tenant_customers_v;
+DROP TABLE filter_varchar_tenant_orders, filter_varchar_tenant_customers;
+-- FILTER1d: strict proof-filter value allowlist accepts relabel casts
+CREATE TABLE filter_relabel_parent (id text PRIMARY KEY);
+CREATE TABLE filter_relabel_child
+(
+    parent_id text NOT NULL REFERENCES filter_relabel_parent (id)
+);
+INSERT INTO filter_relabel_parent VALUES ('a'), ('b');
+INSERT INTO filter_relabel_child VALUES ('a');
+CREATE VIEW filter_relabel_parent_v AS
+SELECT id FROM filter_relabel_parent
+WHERE id = ('a'::varchar)::text;
+CREATE VIEW filter_relabel_child_v AS
+SELECT parent_id FROM filter_relabel_child
+WHERE parent_id = ('a'::varchar)::text;
+SELECT count(*) AS relabel_filter_rows
+FROM filter_relabel_parent_v p
+JOIN filter_relabel_child_v c FOR KEY (parent_id) -> p (id);
+ relabel_filter_rows 
+---------------------
+                   1
+(1 row)
+
+DROP VIEW filter_relabel_child_v, filter_relabel_parent_v;
+DROP TABLE filter_relabel_child, filter_relabel_parent;
+-- FILTER1e: strict proof-filter value allowlist accepts stable functions
+CREATE FUNCTION filter_stable_identity(v int) RETURNS int
+LANGUAGE sql STABLE AS $$ SELECT v $$;
+CREATE TABLE filter_func_parent (id int PRIMARY KEY);
+CREATE TABLE filter_func_child
+(
+    parent_id int NOT NULL REFERENCES filter_func_parent (id)
+);
+INSERT INTO filter_func_parent VALUES (1), (2);
+INSERT INTO filter_func_child VALUES (1);
+CREATE VIEW filter_func_parent_v AS
+SELECT id FROM filter_func_parent WHERE id = filter_stable_identity(1);
+CREATE VIEW filter_func_child_v AS
+SELECT parent_id FROM filter_func_child WHERE parent_id = filter_stable_identity(1);
+SELECT count(*) AS func_filter_rows
+FROM filter_func_parent_v p
+JOIN filter_func_child_v c FOR KEY (parent_id) -> p (id);
+ func_filter_rows 
+------------------
+                1
+(1 row)
+
+DROP VIEW filter_func_child_v, filter_func_parent_v;
+CREATE VIEW filter_func_arg_parent_v AS
+SELECT id FROM filter_func_parent
+WHERE id = filter_stable_identity(LEAST(1, 2));
+CREATE VIEW filter_func_arg_child_v AS
+SELECT parent_id FROM filter_func_child
+WHERE parent_id = filter_stable_identity(LEAST(1, 2));
+SELECT count(*) AS func_arg_filter_rows
+FROM filter_func_arg_parent_v p
+-- rejected, reason: function arguments must be proof-filter terms
+JOIN filter_func_arg_child_v c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_func_arg_child_v c FOR KEY (parent_id) -> p (id)...
+                                       ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_func_arg_parent_v.
+DROP VIEW filter_func_arg_child_v, filter_func_arg_parent_v;
+DROP TABLE filter_func_child, filter_func_parent;
+DROP FUNCTION filter_stable_identity(int);
+-- FILTER1f: strict proof-filter value allowlist rejects volatile functions
+CREATE FUNCTION filter_volatile_identity(v int) RETURNS int
+LANGUAGE sql VOLATILE AS $$ SELECT v $$;
+CREATE TABLE filter_volatile_parent (id int PRIMARY KEY);
+CREATE TABLE filter_volatile_child
+(
+    parent_id int NOT NULL REFERENCES filter_volatile_parent (id)
+);
+INSERT INTO filter_volatile_parent VALUES (1), (2);
+INSERT INTO filter_volatile_child VALUES (1);
+CREATE VIEW filter_volatile_parent_v AS
+SELECT id FROM filter_volatile_parent WHERE id = filter_volatile_identity(1);
+CREATE VIEW filter_volatile_child_v AS
+SELECT parent_id FROM filter_volatile_child WHERE parent_id = filter_volatile_identity(1);
+SELECT count(*) AS volatile_filter_rows
+FROM filter_volatile_parent_v p
+-- rejected, reason: volatile function filter values are not proof-filter terms
+JOIN filter_volatile_child_v c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_volatile_child_v c FOR KEY (parent_id) -> p (id)...
+                                       ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_volatile_parent_v.
+DROP VIEW filter_volatile_child_v, filter_volatile_parent_v;
+DROP TABLE filter_volatile_child, filter_volatile_parent;
+DROP FUNCTION filter_volatile_identity(int);
+-- FILTER1f2: strict proof-filter allowlist rejects volatile defaults
+CREATE SEQUENCE filter_volatile_default_seq;
+CREATE FUNCTION filter_volatile_default_identity(v int DEFAULT nextval('filter_volatile_default_seq')::int)
+RETURNS int
+LANGUAGE sql STABLE AS $$ SELECT v $$;
+CREATE TABLE filter_volatile_default_parent (id int PRIMARY KEY);
+CREATE TABLE filter_volatile_default_child
+(
+    parent_id int NOT NULL REFERENCES filter_volatile_default_parent (id)
+);
+INSERT INTO filter_volatile_default_parent VALUES (1), (2);
+INSERT INTO filter_volatile_default_child VALUES (1);
+CREATE VIEW filter_volatile_default_parent_v AS
+SELECT id FROM filter_volatile_default_parent
+WHERE id = filter_volatile_default_identity();
+CREATE VIEW filter_volatile_default_child_v AS
+SELECT parent_id FROM filter_volatile_default_child
+WHERE parent_id = filter_volatile_default_identity();
+SELECT count(*) AS volatile_default_filter_rows
+FROM filter_volatile_default_parent_v p
+-- rejected, reason: volatile default function filter values are not proof terms
+JOIN filter_volatile_default_child_v c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_volatile_default_child_v c FOR KEY (parent_id) -...
+                                               ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+DROP VIEW filter_volatile_default_child_v, filter_volatile_default_parent_v;
+DROP TABLE filter_volatile_default_child, filter_volatile_default_parent;
+DROP FUNCTION filter_volatile_default_identity(int);
+DROP SEQUENCE filter_volatile_default_seq;
+-- FILTER1g: strict proof-filter value allowlist rejects volatile CoerceViaIO
+-- input/output functions before row-coverage propagation.
+SET client_min_messages = warning;
+CREATE TYPE filter_coerce_io_type;
+CREATE FUNCTION filter_coerce_io_type_in(cstring)
+RETURNS filter_coerce_io_type
+LANGUAGE internal STRICT IMMUTABLE AS 'int4in';
+CREATE FUNCTION filter_coerce_io_type_out(filter_coerce_io_type)
+RETURNS cstring
+LANGUAGE internal STRICT IMMUTABLE AS 'int4out';
+CREATE TYPE filter_coerce_io_type (
+    input = filter_coerce_io_type_in,
+    output = filter_coerce_io_type_out,
+    like = int4
+);
+RESET client_min_messages;
+CREATE CAST (filter_coerce_io_type AS integer) WITH INOUT;
+CREATE TABLE filter_coerce_io_parent (id int PRIMARY KEY);
+CREATE TABLE filter_coerce_io_child
+(
+    id int NOT NULL UNIQUE REFERENCES filter_coerce_io_parent (id)
+);
+CREATE TABLE filter_coerce_io_grandchild
+(
+    id int NOT NULL REFERENCES filter_coerce_io_child (id)
+);
+INSERT INTO filter_coerce_io_parent VALUES (1), (2);
+INSERT INTO filter_coerce_io_child VALUES (1), (2);
+INSERT INTO filter_coerce_io_grandchild VALUES (1), (1), (2);
+ALTER FUNCTION filter_coerce_io_type_out(filter_coerce_io_type) VOLATILE;
+SELECT count(*) AS volatile_coerceviaio_filter_rows
+FROM (
+    filter_coerce_io_parent p
+    JOIN filter_coerce_io_child c FOR KEY (id) -> p (id)
+    FILTER (WHERE c.id = ('1'::filter_coerce_io_type)::integer)
+)
+-- rejected, reason: CoerceViaIO output function is volatile
+JOIN filter_coerce_io_grandchild g FOR KEY (id) -> c (id);
+ERROR:  key join from referencing relation g to referenced relation c cannot be proven
+LINE 8: JOIN filter_coerce_io_grandchild g FOR KEY (id) -> c (id);
+                                           ^
+DETAIL:  Not every g (id) value can be proven to have a matching c row. Referenced relation c is filtered before this key join.
+DROP TABLE filter_coerce_io_grandchild, filter_coerce_io_child,
+           filter_coerce_io_parent;
+DROP CAST (filter_coerce_io_type AS integer);
+SET client_min_messages = warning;
+DROP TYPE filter_coerce_io_type CASCADE;
+RESET client_min_messages;
+-- ORDER BY collation relabels do not change projected key identity.
+CREATE COLLATION relabel_key_join_c_copy FROM "C";
+CREATE TABLE relabel_collation_parent (id text COLLATE "C" PRIMARY KEY);
+CREATE TABLE relabel_collation_child
+(
+    id text COLLATE "C" NOT NULL REFERENCES relabel_collation_parent (id)
+);
+INSERT INTO relabel_collation_parent VALUES ('a');
+INSERT INTO relabel_collation_child VALUES ('a');
+SELECT *
+FROM relabel_collation_parent p
+JOIN (
+    SELECT id
+    FROM relabel_collation_child
+    ORDER BY id COLLATE relabel_key_join_c_copy
+) q FOR KEY (id) -> p (id);
+ id | id 
+----+----
+ a  | a
+(1 row)
+
+DROP TABLE relabel_collation_child, relabel_collation_parent;
+DROP COLLATION relabel_key_join_c_copy;
+-- FILTER5: a filtered key-join result must not export unfiltered rowCoverage
+CREATE TABLE filter_parent (id int PRIMARY KEY);
+CREATE TABLE filter_bridge
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES filter_parent (id),
+    keep boolean NOT NULL
+);
+CREATE TABLE filter_detail
+(
+    id int PRIMARY KEY,
+    bridge_id int NOT NULL REFERENCES filter_bridge (id)
+);
+INSERT INTO filter_parent VALUES (1), (2);
+INSERT INTO filter_bridge VALUES (10, 1, true), (20, 2, false);
+INSERT INTO filter_detail VALUES (100, 10), (200, 20);
+SELECT d.id AS detail_id, q.bridge_id
+FROM filter_detail d
+JOIN (
+    SELECT b.id AS bridge_id
+    FROM filter_parent p
+    JOIN filter_bridge b FOR KEY (parent_id) -> p (id)
+      FILTER (WHERE b.keep)
+) q FOR KEY (bridge_id) <- d (bridge_id);
+ERROR:  key join from referencing relation d to referenced relation q cannot be proven
+LINE 8: ) q FOR KEY (bridge_id) <- d (bridge_id);
+            ^
+DETAIL:  Not every d (bridge_id) value can be proven to have a matching q row. Referenced relation q is filtered before this key join.
+SELECT d.id AS detail_id, q.bridge_id
+FROM filter_detail d
+JOIN (
+    SELECT b.id AS bridge_id
+    FROM filter_parent p
+    JOIN filter_bridge b FOR KEY (parent_id) -> p (id)
+      FILTER (WHERE b.id = 10)
+) q FOR KEY (bridge_id) <- d (bridge_id);
+ERROR:  key join from referencing relation d to referenced relation q cannot be proven
+LINE 8: ) q FOR KEY (bridge_id) <- d (bridge_id);
+            ^
+DETAIL:  Not every d (bridge_id) value can be proven to have a matching q row. Referenced relation q has a filter that is not matched by referencing relation d.
+DROP TABLE filter_detail, filter_bridge, filter_parent;
+CREATE TABLE filter_sibling_fk_grand (id int PRIMARY KEY);
+CREATE TABLE filter_sibling_fk_parent
+(
+    id int PRIMARY KEY,
+    grand_id int NOT NULL REFERENCES filter_sibling_fk_grand (id)
+);
+CREATE TABLE filter_sibling_fk_child
+(
+    parent_id int NOT NULL UNIQUE REFERENCES filter_sibling_fk_parent (id),
+    payload int PRIMARY KEY
+);
+INSERT INTO filter_sibling_fk_grand VALUES (1), (2);
+INSERT INTO filter_sibling_fk_parent VALUES (1, 1), (2, 2);
+INSERT INTO filter_sibling_fk_child VALUES (1, 10), (2, 20);
+SELECT count(*) AS sibling_fk_rows
+FROM (
+    SELECT c1.parent_id AS c1_parent, c2.parent_id AS c2_parent
+    FROM filter_sibling_fk_parent p
+    LEFT JOIN filter_sibling_fk_child c1
+        FOR KEY (parent_id) -> p (id)
+    LEFT JOIN filter_sibling_fk_child c2
+        FOR KEY (parent_id) -> p (id)
+) q
+LEFT JOIN filter_sibling_fk_parent p2
+    FOR KEY (id) <- q (c1_parent)
+LEFT JOIN filter_sibling_fk_parent p3
+    FOR KEY (id) <- q (c2_parent);
+ sibling_fk_rows 
+-----------------
+               2
+(1 row)
+
+SELECT count(*) AS sibling_filtered_fk_rows
+FROM (
+    SELECT c1.parent_id AS c1_parent, c2.parent_id AS c2_parent
+    FROM filter_sibling_fk_parent p
+    LEFT JOIN filter_sibling_fk_child c1
+        FOR KEY (parent_id) -> p (id)
+    LEFT JOIN filter_sibling_fk_child c2
+        FOR KEY (parent_id) -> p (id)
+        FILTER (WHERE c2.parent_id = 1)
+) q
+LEFT JOIN filter_sibling_fk_parent p2
+    FOR KEY (id) <- q (c1_parent)
+LEFT JOIN filter_sibling_fk_parent p3
+    FOR KEY (id) <- q (c2_parent);
+ sibling_filtered_fk_rows 
+--------------------------
+                        2
+(1 row)
+
+SELECT count(*) AS sibling_unrelated_target_rows
+FROM (
+    SELECT c1.parent_id AS c1_parent, c2.parent_id AS c2_parent
+    FROM filter_sibling_fk_parent p
+    LEFT JOIN filter_sibling_fk_child c1
+        FOR KEY (parent_id) -> p (id)
+    LEFT JOIN filter_sibling_fk_child c2
+        FOR KEY (parent_id) -> p (id)
+        FILTER (WHERE c2.parent_id = 1)
+) q
+LEFT JOIN filter_sibling_fk_parent p2
+    FOR KEY (id) <- q (c1_parent)
+LEFT JOIN filter_sibling_fk_parent p3
+    FOR KEY (id) <- q (c2_parent)
+LEFT JOIN filter_sibling_fk_grand g
+    FOR KEY (id) <- p3 (grand_id);
+ sibling_unrelated_target_rows 
+-------------------------------
+                             2
+(1 row)
+
+DROP TABLE filter_sibling_fk_child, filter_sibling_fk_parent,
+    filter_sibling_fk_grand;
+-- FILTER5b: matched-filter evidence must not propagate to unrelated FK facts
+CREATE TABLE filter_crossprop_a (aid int PRIMARY KEY);
+CREATE TABLE filter_crossprop_c (cid int PRIMARY KEY);
+CREATE TABLE filter_crossprop_b
+(
+    c_id int NOT NULL REFERENCES filter_crossprop_c (cid),
+    a_id int NOT NULL UNIQUE REFERENCES filter_crossprop_a (aid),
+    bid int PRIMARY KEY
+);
+CREATE TABLE filter_crossprop_r
+(
+    r_aid int NOT NULL REFERENCES filter_crossprop_a (aid),
+    rid int PRIMARY KEY
+);
+INSERT INTO filter_crossprop_a VALUES (1);
+INSERT INTO filter_crossprop_c VALUES (1), (2);
+INSERT INTO filter_crossprop_b VALUES (2, 1, 10);
+INSERT INTO filter_crossprop_r VALUES (1, 100);
+CREATE VIEW filter_crossprop_r_filtered AS
+SELECT r_aid, rid FROM filter_crossprop_r WHERE r_aid = 1::int;
+CREATE VIEW filter_crossprop_c_filtered AS
+SELECT cid FROM filter_crossprop_c WHERE cid = 1::int;
+WITH q AS (
+    SELECT ab.aid, ab.c_id, rf.rid
+    FROM (
+        SELECT a.aid, b.c_id, b.bid
+        FROM filter_crossprop_a a
+        LEFT JOIN filter_crossprop_b b FOR KEY (a_id) -> a (aid)
+    ) ab
+    JOIN filter_crossprop_r_filtered rf FOR KEY (r_aid) -> ab (aid)
+)
+SELECT q.aid, q.c_id, cf.cid AS matched_cid
+FROM q
+LEFT JOIN filter_crossprop_c_filtered cf FOR KEY (cid) <- q (c_id);
+ERROR:  key join from referencing relation q to referenced relation cf cannot be proven
+LINE 12: LEFT JOIN filter_crossprop_c_filtered cf FOR KEY (cid) <- q ...
+                                                  ^
+DETAIL:  Not every q (c_id) value can be proven to have a matching cf row. Referenced relation cf has a filter that is not matched by referencing relation q.
+DROP VIEW filter_crossprop_c_filtered, filter_crossprop_r_filtered;
+DROP TABLE filter_crossprop_r, filter_crossprop_b,
+           filter_crossprop_c, filter_crossprop_a;
+-- FILTER5c: boolean proof-filter values must be simple expressions
+CREATE TABLE filter_bool_parent (id boolean PRIMARY KEY);
+CREATE TABLE filter_bool_child
+(
+    parent_id boolean NOT NULL REFERENCES filter_bool_parent (id)
+);
+INSERT INTO filter_bool_parent VALUES (true), (false);
+INSERT INTO filter_bool_child VALUES (true);
+CREATE VIEW filter_bool_parent_or AS
+SELECT id FROM filter_bool_parent WHERE id = (true OR false);
+CREATE VIEW filter_bool_child_or AS
+SELECT parent_id FROM filter_bool_child WHERE parent_id = (true OR false);
+SELECT *
+FROM filter_bool_parent_or p
+-- rejected, reason: BoolExpr filter values are not proof-filter terms
+JOIN filter_bool_child_or c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_bool_child_or c FOR KEY (parent_id) -> p (id);
+                                    ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_bool_parent_or.
+CREATE VIEW filter_bool_parent_test AS
+SELECT id FROM filter_bool_parent WHERE id = (true IS TRUE);
+CREATE VIEW filter_bool_child_test AS
+SELECT parent_id FROM filter_bool_child WHERE parent_id = (true IS TRUE);
+SELECT *
+FROM filter_bool_parent_test p
+-- rejected, reason: BooleanTest filter values are not proof-filter terms
+JOIN filter_bool_child_test c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_bool_child_test c FOR KEY (parent_id) -> p (id);
+                                      ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_bool_parent_test.
+DROP VIEW filter_bool_child_test, filter_bool_parent_test,
+          filter_bool_child_or, filter_bool_parent_or;
+DROP TABLE filter_bool_child, filter_bool_parent;
+-- FILTER5d: pseudo-function filter values are not proof-filter terms
+CREATE TABLE filter_pseudo_parent (id int PRIMARY KEY);
+CREATE TABLE filter_pseudo_child
+(
+    parent_id int NOT NULL REFERENCES filter_pseudo_parent (id)
+);
+INSERT INTO filter_pseudo_parent VALUES (1), (2);
+INSERT INTO filter_pseudo_child VALUES (1);
+CREATE VIEW filter_case_parent_v AS
+SELECT id FROM filter_pseudo_parent
+WHERE id = CASE WHEN true THEN 1 ELSE 2 END;
+CREATE VIEW filter_case_child_v AS
+SELECT parent_id FROM filter_pseudo_child
+WHERE parent_id = CASE WHEN true THEN 1 ELSE 2 END;
+SELECT *
+FROM filter_case_parent_v p
+-- rejected, reason: CaseExpr filter values are not proof-filter terms
+JOIN filter_case_child_v c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_case_child_v c FOR KEY (parent_id) -> p (id)
+                                   ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_case_parent_v.
+DROP VIEW filter_case_child_v, filter_case_parent_v;
+CREATE VIEW filter_minmax_parent_v AS
+SELECT id FROM filter_pseudo_parent WHERE id = LEAST(1, 2);
+CREATE VIEW filter_minmax_child_v AS
+SELECT parent_id FROM filter_pseudo_child WHERE parent_id = LEAST(1, 2);
+SELECT count(*) AS minmax_filter_rows
+FROM filter_minmax_parent_v p
+-- rejected, reason: MinMaxExpr filter values are not proof-filter terms
+JOIN filter_minmax_child_v c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_minmax_child_v c FOR KEY (parent_id) -> p (id);
+                                     ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_minmax_parent_v.
+DROP VIEW filter_minmax_child_v, filter_minmax_parent_v;
+CREATE VIEW filter_coalesce_parent_v AS
+SELECT id FROM filter_pseudo_parent WHERE id = COALESCE(1, 2);
+CREATE VIEW filter_coalesce_child_v AS
+SELECT parent_id FROM filter_pseudo_child WHERE parent_id = COALESCE(1, 2);
+SELECT count(*) AS coalesce_filter_rows
+FROM filter_coalesce_parent_v p
+-- rejected, reason: CoalesceExpr filter values are not proof-filter terms
+JOIN filter_coalesce_child_v c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_coalesce_child_v c FOR KEY (parent_id) -> p (id)...
+                                       ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_coalesce_parent_v.
+DROP VIEW filter_coalesce_child_v, filter_coalesce_parent_v;
+CREATE VIEW filter_nullif_parent_v AS
+SELECT id FROM filter_pseudo_parent WHERE id = NULLIF(1, 2);
+CREATE VIEW filter_nullif_child_v AS
+SELECT parent_id FROM filter_pseudo_child WHERE parent_id = NULLIF(1, 2);
+SELECT count(*) AS nullif_filter_rows
+FROM filter_nullif_parent_v p
+-- rejected, reason: NullIfExpr filter values are not proof-filter terms
+JOIN filter_nullif_child_v c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN filter_nullif_child_v c FOR KEY (parent_id) -> p (id);
+                                     ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_nullif_parent_v.
+DROP VIEW filter_nullif_child_v, filter_nullif_parent_v;
+DROP TABLE filter_pseudo_child, filter_pseudo_parent;
+-- FILTER5e: matched-filter propagation skips other same-relation keys
+CREATE TABLE filter_self_rowcov
+(
+    id int PRIMARY KEY,
+    parent_id int UNIQUE NOT NULL REFERENCES filter_self_rowcov (id)
+);
+CREATE TABLE filter_self_rowcov_ref
+(
+    parent_id int NOT NULL REFERENCES filter_self_rowcov (parent_id)
+);
+INSERT INTO filter_self_rowcov VALUES (1, 1), (2, 2);
+INSERT INTO filter_self_rowcov_ref VALUES (1);
+CREATE VIEW filter_self_rowcov_ref_v AS
+SELECT parent_id FROM filter_self_rowcov_ref WHERE parent_id = 1;
+SELECT count(*) AS self_rowcov_rows
+FROM (
+    SELECT c.parent_id
+    FROM filter_self_rowcov p
+    JOIN (
+        SELECT id, parent_id
+        FROM filter_self_rowcov
+        WHERE parent_id = 1
+    ) c FOR KEY (parent_id) -> p (id)
+) q
+JOIN filter_self_rowcov_ref_v r FOR KEY (parent_id) -> q (parent_id);
+ self_rowcov_rows 
+------------------
+                1
+(1 row)
+
+DROP VIEW filter_self_rowcov_ref_v;
+DROP TABLE filter_self_rowcov_ref, filter_self_rowcov;
+-- FILTER5f: matched-filter propagation skips different key arities
+CREATE TABLE filter_len_rowcov
+(
+    id int UNIQUE NOT NULL,
+    a int NOT NULL,
+    b int NOT NULL,
+    parent_a int NOT NULL,
+    parent_b int NOT NULL,
+    UNIQUE (a, b),
+    UNIQUE (parent_a, parent_b),
+    FOREIGN KEY (parent_a, parent_b) REFERENCES filter_len_rowcov (a, b)
+);
+CREATE TABLE filter_len_ref
+(
+    parent_a int NOT NULL,
+    parent_b int NOT NULL,
+    FOREIGN KEY (parent_a, parent_b)
+        REFERENCES filter_len_rowcov (parent_a, parent_b)
+);
+INSERT INTO filter_len_rowcov
+VALUES (100, 1, 1, 1, 1), (200, 2, 2, 2, 2);
+INSERT INTO filter_len_ref VALUES (1, 1);
+CREATE VIEW filter_len_ref_v AS
+SELECT parent_a, parent_b
+FROM filter_len_ref
+WHERE parent_a = 1 AND parent_b = 1;
+SELECT count(*) AS length_mismatch_rows
+FROM (
+    SELECT c.parent_a, c.parent_b
+    FROM filter_len_rowcov p
+    JOIN (
+        SELECT id, a, b, parent_a, parent_b
+        FROM filter_len_rowcov
+        WHERE parent_a = 1 AND parent_b = 1
+    ) c FOR KEY (parent_a, parent_b) -> p (a, b)
+) q
+JOIN filter_len_ref_v r FOR KEY (parent_a, parent_b) -> q (parent_a, parent_b);
+ length_mismatch_rows 
+----------------------
+                    1
+(1 row)
+
+DROP VIEW filter_len_ref_v;
+DROP TABLE filter_len_ref, filter_len_rowcov;
+-- FILTER5g: matched-filter propagation skips different key identities
+CREATE FUNCTION filter_identity_eq(a int, b int) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT a = b $$;
+CREATE OPERATOR ===
+(
+    LEFTARG = int,
+    RIGHTARG = int,
+    PROCEDURE = filter_identity_eq,
+    COMMUTATOR = ===,
+    RESTRICT = eqsel,
+    JOIN = eqjoinsel,
+    MERGES
+);
+CREATE OPERATOR CLASS filter_identity_int4_ops
+FOR TYPE int USING btree AS
+    OPERATOR 1 < (int, int),
+    OPERATOR 2 <= (int, int),
+    OPERATOR 3 === (int, int),
+    OPERATOR 4 >= (int, int),
+    OPERATOR 5 > (int, int),
+    FUNCTION 1 btint4cmp(int, int);
+CREATE TABLE filter_identity_grand (id int);
+CREATE UNIQUE INDEX filter_identity_grand_idx
+    ON filter_identity_grand USING btree (id filter_identity_int4_ops);
+CREATE TABLE filter_identity_parent
+(
+    id int PRIMARY KEY REFERENCES filter_identity_grand (id)
+);
+CREATE TABLE filter_identity_child
+(
+    parent_id int NOT NULL REFERENCES filter_identity_parent (id)
+);
+INSERT INTO filter_identity_grand VALUES (1), (2);
+INSERT INTO filter_identity_parent VALUES (1), (2);
+INSERT INTO filter_identity_child VALUES (1);
+CREATE VIEW filter_identity_child_v AS
+SELECT parent_id FROM filter_identity_child WHERE parent_id = 1;
+SELECT count(*) AS identity_mismatch_rows
+FROM (
+    SELECT p.id
+    FROM filter_identity_parent p
+    JOIN filter_identity_child_v c FOR KEY (parent_id) -> p (id)
+) q
+JOIN filter_identity_grand g FOR KEY (id) <- q (id);
+ identity_mismatch_rows 
+------------------------
+                      1
+(1 row)
+
+DROP VIEW filter_identity_child_v;
+DROP TABLE filter_identity_child, filter_identity_parent, filter_identity_grand;
+DROP OPERATOR CLASS filter_identity_int4_ops USING btree;
+DROP OPERATOR FAMILY filter_identity_int4_ops USING btree;
+DROP OPERATOR === (int, int);
+DROP FUNCTION filter_identity_eq(int, int);
+-- FILTER6: key join predicate uses the FK equality operator, not search_path "="
+CREATE SCHEMA key_join_shadow;
+SET search_path = key_join_shadow, pg_catalog;
+CREATE FUNCTION int4_always_true(int4, int4) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT true $$;
+CREATE OPERATOR = (
+  LEFTARG = int4,
+  RIGHTARG = int4,
+  FUNCTION = int4_always_true,
+  COMMUTATOR = OPERATOR(key_join_shadow.=)
+);
+CREATE TABLE shadow_parent (id int PRIMARY KEY);
+CREATE TABLE shadow_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES shadow_parent (id)
+);
+INSERT INTO shadow_parent VALUES (1), (2);
+INSERT INTO shadow_child VALUES (10, 1);
+SELECT p.id AS parent_id, c.id AS child_id, c.parent_id AS child_parent_id
+FROM shadow_parent p
+-- accepted
+JOIN shadow_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+ parent_id | child_id | child_parent_id 
+-----------+----------+-----------------
+         1 |       10 |               1
+(1 row)
+
+CREATE VIEW shadow_parent_filter AS
+SELECT id FROM shadow_parent WHERE id = 1;
+CREATE VIEW shadow_child_filter AS
+SELECT parent_id FROM shadow_child WHERE parent_id = 1;
+-- rejected, reason: filter "=" is not the exact key equality operator
+SELECT *
+FROM shadow_parent_filter p
+JOIN shadow_child_filter c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 3: JOIN shadow_child_filter c FOR KEY (parent_id) -> p (id);
+                                   ^
+DETAIL:  Not every c (parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view key_join_shadow.shadow_parent_filter.
+DROP VIEW shadow_child_filter, shadow_parent_filter;
+DROP TABLE shadow_child, shadow_parent;
+DROP OPERATOR = (int4, int4);
+DROP FUNCTION int4_always_true(int4, int4);
+DROP SCHEMA key_join_shadow;
+RESET search_path;
+-- FILTER7: matched filters may use compatible cross-type equality
+CREATE TABLE filter_opfamily_parent
+(
+    tenant_id bigint NOT NULL,
+    id bigint NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE filter_opfamily_child
+(
+    tenant_id bigint NOT NULL,
+    parent_id bigint NOT NULL,
+    FOREIGN KEY (tenant_id, parent_id)
+        REFERENCES filter_opfamily_parent (tenant_id, id)
+);
+INSERT INTO filter_opfamily_parent VALUES (1, 10), (2, 20);
+INSERT INTO filter_opfamily_child VALUES (1, 10), (2, 20);
+CREATE VIEW filter_opfamily_parent_small AS
+SELECT tenant_id, id
+FROM filter_opfamily_parent
+WHERE tenant_id = 1::smallint;
+CREATE VIEW filter_opfamily_child_small AS
+SELECT tenant_id, parent_id
+FROM filter_opfamily_child
+WHERE tenant_id = 1::smallint;
+CREATE VIEW filter_opfamily_child_big AS
+SELECT tenant_id, parent_id
+FROM filter_opfamily_child
+WHERE tenant_id = 1::bigint;
+CREATE VIEW filter_opfamily_parent_big AS
+SELECT tenant_id, id
+FROM filter_opfamily_parent
+WHERE tenant_id = 1::bigint;
+CREATE VIEW filter_opfamily_parent_int AS
+SELECT tenant_id, id
+FROM filter_opfamily_parent
+WHERE tenant_id = 1::integer;
+CREATE VIEW filter_opfamily_child_int AS
+SELECT tenant_id, parent_id
+FROM filter_opfamily_child
+WHERE tenant_id = 1::integer;
+CREATE VIEW filter_opfamily_parent_right_big AS
+SELECT tenant_id, id
+FROM filter_opfamily_parent
+WHERE 1::bigint = tenant_id;
+-- accepted, reason: both filters use the same compatible bigint = smallint equality
+SELECT *
+FROM filter_opfamily_parent_small p
+JOIN filter_opfamily_child_small c FOR KEY (tenant_id, parent_id) -> p (tenant_id, id)
+ORDER BY p.tenant_id, p.id;
+ tenant_id | id | tenant_id | parent_id 
+-----------+----+-----------+-----------
+         1 | 10 |         1 |        10
+(1 row)
+
+-- accepted, reason: both filters use exact canonical tenant_id = 1::bigint
+SELECT *
+FROM filter_opfamily_parent_big p
+JOIN filter_opfamily_child_big c FOR KEY (tenant_id, parent_id) -> p (tenant_id, id)
+ORDER BY p.tenant_id, p.id;
+ tenant_id | id | tenant_id | parent_id 
+-----------+----+-----------+-----------
+         1 | 10 |         1 |        10
+(1 row)
+
+-- rejected, reason: filter value trees do not match exactly
+SELECT *
+FROM filter_opfamily_parent_small p
+JOIN filter_opfamily_child_big c FOR KEY (tenant_id, parent_id) -> p (tenant_id, id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 3: JOIN filter_opfamily_child_big c FOR KEY (tenant_id, parent_...
+                                         ^
+DETAIL:  Not every c (tenant_id, parent_id) value can be proven to have a matching p row. Referenced relation p has a filter that is not matched by referencing relation c.
+-- accepted, reason: both filters use the same compatible bigint = integer equality
+SELECT *
+FROM filter_opfamily_parent_int p
+JOIN filter_opfamily_child_int c FOR KEY (tenant_id, parent_id) -> p (tenant_id, id);
+ tenant_id | id | tenant_id | parent_id 
+-----------+----+-----------+-----------
+         1 | 10 |         1 |        10
+(1 row)
+
+-- rejected, reason: key-on-right filters are not canonical proof evidence
+SELECT *
+FROM filter_opfamily_parent_right_big p
+JOIN filter_opfamily_child_big c FOR KEY (tenant_id, parent_id) -> p (tenant_id, id)
+ORDER BY p.tenant_id, p.id;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 3: JOIN filter_opfamily_child_big c FOR KEY (tenant_id, parent_...
+                                         ^
+DETAIL:  Not every c (tenant_id, parent_id) value can be proven to have a matching p row. Referenced relation p is filtered before this key join. The relevant operation occurs inside view public.filter_opfamily_parent_right_big.
+DROP VIEW filter_opfamily_parent_right_big, filter_opfamily_child_int,
+          filter_opfamily_parent_int, filter_opfamily_parent_big,
+          filter_opfamily_child_big,
+          filter_opfamily_child_small, filter_opfamily_parent_small;
+DROP TABLE filter_opfamily_child, filter_opfamily_parent;
+CREATE TABLE filter_opfamily_cross_parent
+(
+    tenant_id bigint NOT NULL,
+    id bigint NOT NULL,
+    PRIMARY KEY (tenant_id, id)
+);
+CREATE TABLE filter_opfamily_cross_child
+(
+    tenant_id integer NOT NULL,
+    parent_id bigint NOT NULL,
+    FOREIGN KEY (tenant_id, parent_id)
+        REFERENCES filter_opfamily_cross_parent (tenant_id, id)
+);
+INSERT INTO filter_opfamily_cross_parent VALUES (1, 10), (2, 20);
+INSERT INTO filter_opfamily_cross_child VALUES (1, 10), (2, 20);
+CREATE VIEW filter_opfamily_cross_parent_small AS
+SELECT tenant_id, id
+FROM filter_opfamily_cross_parent
+WHERE tenant_id = 1::smallint;
+CREATE VIEW filter_opfamily_cross_child_small AS
+SELECT tenant_id, parent_id
+FROM filter_opfamily_cross_child
+WHERE tenant_id = 1::smallint;
+-- rejected, reason: FK and PK key types differ
+SELECT *
+FROM filter_opfamily_cross_parent_small p
+JOIN filter_opfamily_cross_child_small c FOR KEY (tenant_id, parent_id) -> p (tenant_id, id)
+ORDER BY p.tenant_id, p.id;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 3: JOIN filter_opfamily_cross_child_small c FOR KEY (tenant_id,...
+                                                 ^
+DETAIL:  There is no matching foreign key constraint for c (tenant_id, parent_id) referencing p (tenant_id, id).
+DROP VIEW filter_opfamily_cross_child_small,
+          filter_opfamily_cross_parent_small;
+DROP TABLE filter_opfamily_cross_child, filter_opfamily_cross_parent;
+-- FILTER8: matched filters preserve value typmods structurally
+CREATE TABLE filter_typmod_parent
+(
+    amount numeric(10,2) PRIMARY KEY
+);
+CREATE TABLE filter_typmod_child
+(
+    amount numeric(10,2) NOT NULL REFERENCES filter_typmod_parent (amount)
+);
+INSERT INTO filter_typmod_parent VALUES (1.00), (2.00);
+INSERT INTO filter_typmod_child VALUES (1.00), (2.00);
+CREATE VIEW filter_typmod_parent_short AS
+SELECT amount FROM filter_typmod_parent
+WHERE amount = 1.00::numeric(5,2);
+CREATE VIEW filter_typmod_child_short AS
+SELECT amount FROM filter_typmod_child
+WHERE amount = 1.00::numeric(5,2);
+CREATE VIEW filter_typmod_parent_exact AS
+SELECT amount FROM filter_typmod_parent
+WHERE amount = 1.00::numeric(10,2);
+CREATE VIEW filter_typmod_child_exact AS
+SELECT amount FROM filter_typmod_child
+WHERE amount = 1.00::numeric(10,2);
+-- accepted, reason: both filters use identical value expression typmods
+SELECT *
+FROM filter_typmod_parent_short p
+JOIN filter_typmod_child_short c FOR KEY (amount) -> p (amount);
+ amount | amount 
+--------+--------
+   1.00 |   1.00
+(1 row)
+
+-- accepted, reason: both filters use identical key value typmods
+SELECT *
+FROM filter_typmod_parent_exact p
+JOIN filter_typmod_child_exact c FOR KEY (amount) -> p (amount)
+ORDER BY p.amount;
+ amount | amount 
+--------+--------
+   1.00 |   1.00
+(1 row)
+
+DROP VIEW filter_typmod_child_exact, filter_typmod_parent_exact,
+          filter_typmod_child_short, filter_typmod_parent_short;
+DROP TABLE filter_typmod_child, filter_typmod_parent;
+-- FILTER9: matched filters may use compatible deterministic collations
+CREATE TABLE filter_collation_parent
+(
+    code text COLLATE "C" PRIMARY KEY
+);
+CREATE TABLE filter_collation_child
+(
+    code text COLLATE "C" NOT NULL
+        REFERENCES filter_collation_parent (code)
+);
+INSERT INTO filter_collation_parent VALUES ('a'), ('b');
+INSERT INTO filter_collation_child VALUES ('a'), ('b');
+CREATE VIEW filter_collation_parent_posix AS
+SELECT code FROM filter_collation_parent
+WHERE code = 'a'::text COLLATE "POSIX";
+CREATE VIEW filter_collation_child_posix AS
+SELECT code FROM filter_collation_child
+WHERE code = 'a'::text COLLATE "POSIX";
+CREATE VIEW filter_collation_parent_exact AS
+SELECT code FROM filter_collation_parent
+WHERE code = 'a'::text COLLATE "C";
+CREATE VIEW filter_collation_child_exact AS
+SELECT code FROM filter_collation_child
+WHERE code = 'a'::text COLLATE "C";
+-- accepted, reason: deterministic collations agree on equality
+SELECT *
+FROM filter_collation_parent_posix p
+JOIN filter_collation_child_posix c FOR KEY (code) -> p (code);
+ code | code 
+------+------
+ a    | a
+(1 row)
+
+-- accepted, reason: filter value collations exactly match the key collation
+SELECT *
+FROM filter_collation_parent_exact p
+JOIN filter_collation_child_exact c FOR KEY (code) -> p (code)
+ORDER BY p.code;
+ code | code 
+------+------
+ a    | a
+(1 row)
+
+-- Nondeterministic filter collations are exercised in key_join_icu.
+DROP VIEW filter_collation_child_exact, filter_collation_parent_exact,
+          filter_collation_child_posix, filter_collation_parent_posix;
+DROP TABLE filter_collation_child, filter_collation_parent;
 -- Final cleanup: drop all remaining objects
 DROP VIEW v1, v2;
 DROP TABLE shipments, orders, order_items, packages CASCADE;

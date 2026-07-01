@@ -83,8 +83,9 @@ surface
 
 row coverage (KJF_ROW_COVERAGE)
     Evidence that every all-non-null referenced key value still reaches a
-    given point -- that is, needed referenced rows have not been filtered
-    away by a clause below.
+    given point.  A filter below may drop referenced rows with the fact still
+    active only when the fact captures that filter and the proof makes the
+    referencing side drop the same rows; otherwise the fact goes inactive.
 
 active / inactive fact
     Whether a fact survived propagation.  An invalidated fact is not dropped

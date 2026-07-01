@@ -839,6 +839,7 @@ FDWCollateState
 FD_SET
 FILE
 FILETIME
+FKFilterRemapContext
 FPI
 FSMAddress
 FSMPage

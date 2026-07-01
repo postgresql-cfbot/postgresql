@@ -379,6 +379,11 @@ typedef struct Const
  *				of the `paramid' field contain the SubLink's subLinkId, and
  *				the low-order 16 bits contain the column number.  (This type
  *				of Param is also converted to PARAM_EXEC during planning.)
+ *
+ *		PARAM_KEYJOIN:  The parameter represents a key position in a transient
+ *				key-join proof filter.  It is parser-private scratch data and
+ *				must not reach planning or execution.  Such parameters are
+ *				numbered from 1 to n.
  */
 typedef enum ParamKind
 {
@@ -386,6 +391,7 @@ typedef enum ParamKind
 	PARAM_EXEC,
 	PARAM_SUBLINK,
 	PARAM_MULTIEXPR,
+	PARAM_KEYJOIN,
 } ParamKind;
 
 typedef struct Param

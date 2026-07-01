@@ -1133,7 +1133,7 @@ typedef enum KeyJoinInactiveReason
 	KJI_ROW_REMOVING_CLAUSE,	/* HAVING / LIMIT / OFFSET / FOR UPDATE / TABLESAMPLE */
 	KJI_GROUP_BY,				/* row coverage lost by GROUP BY */
 	KJI_DISTINCT,				/* row coverage lost by DISTINCT */
-	KJI_REFERENCED_FILTER,		/* the referenced input carries a filter */
+	KJI_UNACCOUNTED_FILTER,		/* a filter could not be carried with the fact */
 } KeyJoinInactiveReason;
 
 /*
@@ -1167,6 +1167,9 @@ typedef struct KeyJoinFact
 	Oid			referencedRelid;
 	List	   *referencedAttnums;
 	Oid			constraint;
+
+	/* KJF_FOREIGN_KEY and KJF_ROW_COVERAGE: */
+	List	   *filterConjuncts;	/* list of expression trees */
 
 	/*
 	 * Diagnostic carry-over of discarded facts.  A fact starts active; if a

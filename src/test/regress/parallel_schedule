@@ -104,6 +104,7 @@ test: publication subscription
 # ----------
 test: select_views portals_p2 foreign_key dependency guc bitmapops combocid tsearch tsdicts foreign_data window xmlmap functional_deps advisory_lock indirect_toast equivclass stats_rewrite graph_table
 test: key_join
+test: key_join_matched_filter
 test: key_join_overview
 test: key_join_mcdc
 test: key_join_icu

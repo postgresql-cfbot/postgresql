@@ -3903,3 +3903,311 @@ SELECT COUNT(*) FROM onek t1 LEFT JOIN tenk1 t2
     ON (t2.thousand = t1.tenthous OR t2.thousand = t1.thousand);
 SELECT COUNT(*) FROM onek t1 LEFT JOIN tenk1 t2
     ON (t2.thousand = t1.tenthous OR t2.thousand = t1.thousand);
+
+--
+-- Test useless inner join removal for foreign key referenced relations
+--
+
+CREATE TABLE fk_parent1 (id int PRIMARY KEY, val text);
+CREATE TABLE fk_parent2 (id int PRIMARY KEY, val text);
+CREATE TABLE fk_parent_text (id text PRIMARY KEY);
+CREATE TABLE fk_multi_parent (id1 int, id2 int, val text, PRIMARY KEY (id1, id2));
+
+CREATE TABLE fk_child (
+    id int PRIMARY KEY,
+    p1_id int NOT NULL REFERENCES fk_parent1(id),
+    p2_id int REFERENCES fk_parent2(id),
+    p_text text REFERENCES fk_parent_text(id),
+    p_m1 int,
+    p_m2 int,
+    val text,
+    FOREIGN KEY (p_m1, p_m2) REFERENCES fk_multi_parent(id1, id2)
+);
+
+INSERT INTO fk_parent1 VALUES (1, 'p1_1'), (2, 'p1_2');
+INSERT INTO fk_parent2 VALUES (1, 'p2_1'), (2, 'p2_2');
+INSERT INTO fk_parent_text VALUES ('t1'), ('t2');
+INSERT INTO fk_multi_parent VALUES (1, 1, 'm1'), (2, 2, 'm2');
+
+INSERT INTO fk_child VALUES
+    (1, 1, 1, 't1', 1, 1, 'c1'),
+    (2, 2, NULL, 't2', 2, 2, 'c2'),
+    (3, 1, 1, 't1', 1, 1, 'c3');
+
+ANALYZE fk_parent1;
+ANALYZE fk_parent2;
+ANALYZE fk_parent_text;
+ANALYZE fk_multi_parent;
+ANALYZE fk_child;
+
+-- Ensure that fk_parent1 is removed
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id
+ORDER BY c.id;
+
+-- Ensure that it returns all 3 rows
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id
+ORDER BY c.id;
+
+-- Ensure that fk_parent2 is removed, and an IS NOT NULL qual is injected
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent2 p ON c.p2_id = p.id
+ORDER BY c.id;
+
+-- Ensure that it returns row 1 and row 3
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent2 p ON c.p2_id = p.id
+ORDER BY c.id;
+
+-- Ensure we do not have redundant IS NOT NULL qual
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent2 p ON c.p2_id = p.id
+WHERE c.p2_id IS NOT NULL
+ORDER BY c.id;
+
+-- Ensure that it returns row 1 and row 3
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent2 p ON c.p2_id = p.id
+WHERE c.p2_id IS NOT NULL
+ORDER BY c.id;
+
+-- Ensure that both fk_parent1 and fk_parent2 are removed
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c
+  JOIN fk_parent1 p1 ON c.p1_id = p1.id
+  JOIN fk_parent2 p2 ON c.p2_id = p2.id
+ORDER BY c.id;
+
+-- Ensure that it returns rows 1 and 3
+SELECT c.id
+FROM fk_child c
+  JOIN fk_parent1 p1 ON c.p1_id = p1.id
+  JOIN fk_parent2 p2 ON c.p2_id = p2.id
+ORDER BY c.id;
+
+-- Ensure that fk_parent1 is removed, leaving c1 joined to c2
+EXPLAIN (COSTS OFF)
+SELECT c1.id, c2.id
+FROM fk_child c1
+  JOIN fk_parent1 p ON c1.p1_id = p.id
+  JOIN fk_child c2 ON p.id = c2.p1_id
+ORDER BY c1.id, c2.id;
+
+-- Ensure that we get 1x1, 1x3, 3x1, 3x3, 2x2
+SELECT c1.id, c2.id
+FROM fk_child c1
+  JOIN fk_parent1 p ON c1.p1_id = p.id
+  JOIN fk_child c2 ON p.id = c2.p1_id
+ORDER BY c1.id, c2.id;
+
+-- Multi-column FK, ensure that fk_multi_parent is removed
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c
+  JOIN fk_multi_parent p ON c.p_m1 = p.id1 AND c.p_m2 = p.id2
+ORDER BY c.id;
+
+-- Ensure that we get all 3 rows
+SELECT c.id
+FROM fk_child c
+  JOIN fk_multi_parent p ON c.p_m1 = p.id1 AND c.p_m2 = p.id2
+ORDER BY c.id;
+
+-- Chain-shaped FK removal: c -> p1 -> p2
+ALTER TABLE fk_parent1
+  ADD COLUMN p2_id int NOT NULL DEFAULT 1 REFERENCES fk_parent2(id);
+
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c
+  JOIN fk_parent1 p1 ON c.p1_id = p1.id
+  JOIN fk_parent2 p2 ON p1.p2_id = p2.id
+ORDER BY c.id;
+
+-- Ensure that we get all 3 rows
+SELECT c.id
+FROM fk_child c
+  JOIN fk_parent1 p1 ON c.p1_id = p1.id
+  JOIN fk_parent2 p2 ON p1.p2_id = p2.id
+ORDER BY c.id;
+
+ALTER TABLE fk_parent1 DROP COLUMN p2_id;
+
+-- LEFT JOIN ON-clause in joininfo does not reference fk_parent2, so FK-removal
+-- should still fire
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_parent1 p1
+  LEFT JOIN (fk_child c JOIN fk_parent2 p2 ON c.p2_id = p2.id)
+    ON p1.id = c.id
+ORDER BY c.id;
+
+SELECT c.id
+FROM fk_parent1 p1
+  LEFT JOIN (fk_child c JOIN fk_parent2 p2 ON c.p2_id = p2.id)
+    ON p1.id = c.id
+ORDER BY c.id;
+
+-- fk_parent1 cannot be removed because p.val is selected
+EXPLAIN (COSTS OFF)
+SELECT c.id, p.val
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id;
+
+-- fk_parent1 cannot be removed because p.val is filtered
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id
+WHERE p.val = 'p1_1';
+
+-- fk_parent1 cannot be removed because of TABLESAMPLE on the referenced
+-- relation
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent1 p TABLESAMPLE BERNOULLI(50) REPEATABLE(1)
+  ON c.p1_id = p.id;
+
+-- fk_parent1 cannot be removed because p.id is in the targetlist
+EXPLAIN (COSTS OFF)
+SELECT c.id, p.id
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id;
+
+-- fk_parent1 cannot be removed because p.id is in the filter
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id
+WHERE p.id > 1;
+
+-- fk_parent1 cannot be removed because p.id is in the join clause
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id
+WHERE c.id > p.id;
+
+-- fk_multi_parent cannot be removed because not all foreign key columns are
+-- matched
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c
+  JOIN fk_multi_parent p ON c.p_m1 = p.id1;
+
+-- fk_parent2 cannot be removed because the LEFT JOIN ON-clause references
+-- p2.id
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_parent1 p1
+  LEFT JOIN (fk_child c JOIN fk_parent2 p2 ON c.p2_id = p2.id)
+    ON p1.id = p2.id;
+
+-- fk_parent1 cannot be removed because p.id is referenced in lateral_vars
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c
+  JOIN fk_parent1 p ON c.p1_id = p.id
+  CROSS JOIN LATERAL (SELECT p.id OFFSET 0);
+
+-- fk_parent2 cannot be removed because p2.id is referenced in the semi-join
+-- RHS expressions
+EXPLAIN (COSTS OFF)
+SELECT * FROM fk_parent1 p1
+WHERE p1.id IN
+  (SELECT p2.id FROM fk_child c JOIN fk_parent2 p2 ON c.p2_id = p2.id);
+
+-- fk_parent_text cannot be removed due to the COLLATE "C" mismatch splitting
+-- the EC
+EXPLAIN (COSTS OFF)
+SELECT c1.id, c2.id
+FROM fk_child c1
+  JOIN fk_parent_text p ON c1.p_text = p.id
+  JOIN fk_child c2 ON p.id COLLATE "C" = c2.p_text COLLATE "C";
+
+-- fk_parent1 cannot be removed because p.id + 0 splits the EC
+EXPLAIN (COSTS OFF)
+SELECT c1.id, c2.id
+FROM fk_child c1
+  JOIN fk_parent1 p ON c1.p1_id = p.id
+  JOIN fk_child c2 ON (p.id + 0) = c2.p1_id;
+
+-- fk_parent1 cannot be removed due to the multi-rel EM (p.id + c2.p1_id)
+EXPLAIN (COSTS OFF)
+SELECT c1.id, c2.id
+FROM fk_child c1
+  JOIN fk_parent1 p ON c1.p1_id = p.id
+  JOIN fk_child c2 ON c1.p1_id = (p.id + c2.p1_id);
+
+-- Ensure that the right join is not removed
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c RIGHT JOIN fk_parent1 p ON c.p1_id = p.id;
+
+-- Ensure that the full join is not removed
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c FULL JOIN fk_parent1 p ON c.p1_id = p.id;
+
+-- fk_parent1 cannot be removed because it is separated with fk_child by the
+-- outer join boundary
+EXPLAIN (COSTS OFF)
+SELECT c.id
+FROM fk_child c
+  JOIN (fk_parent1 p1
+          LEFT JOIN fk_parent2 p2 ON TRUE)
+  ON c.p1_id = p1.id;
+
+-- Deferrable FK: fk_parent1 cannot be removed because constraint is deferrable
+ALTER TABLE fk_child DROP CONSTRAINT fk_child_p1_id_fkey;
+ALTER TABLE fk_child ADD CONSTRAINT fk_child_p1_id_fkey
+  FOREIGN KEY (p1_id) REFERENCES fk_parent1(id) DEFERRABLE;
+
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id;
+
+-- NOT VALID FK: fk_parent1 cannot be removed because constraint is NOT VALID
+ALTER TABLE fk_child DROP CONSTRAINT fk_child_p1_id_fkey;
+ALTER TABLE fk_child ADD CONSTRAINT fk_child_p1_id_fkey
+  FOREIGN KEY (p1_id) REFERENCES fk_parent1(id) NOT VALID;
+
+EXPLAIN (COSTS OFF)
+SELECT c.id, c.val
+FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id;
+
+-- Trigger gap: fk_parent1 cannot be removed when RowExclusiveLock is held
+-- during active DML on a FK-related table
+ALTER TABLE fk_child DROP CONSTRAINT fk_child_p1_id_fkey;
+ALTER TABLE fk_child ADD CONSTRAINT fk_child_p1_id_fkey
+  FOREIGN KEY (p1_id) REFERENCES fk_parent1(id) ON DELETE CASCADE;
+
+CREATE FUNCTION trigger_gap_test_fn() RETURNS int LANGUAGE plpgsql AS $$
+DECLARE
+    join_count int;
+    plan_line text;
+BEGIN
+    SELECT count(*) INTO join_count
+    FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id;
+    RAISE NOTICE 'Join Count: %', join_count;
+
+    RAISE NOTICE '--- EXPLAIN PLAN ---';
+    FOR plan_line IN
+        EXPLAIN (COSTS OFF)
+        SELECT count(*) FROM fk_child c JOIN fk_parent1 p ON c.p1_id = p.id
+    LOOP
+        RAISE NOTICE '%', plan_line;
+    END LOOP;
+
+    RETURN join_count;
+END;
+$$;
+
+DELETE FROM fk_parent1 WHERE id = 1 RETURNING trigger_gap_test_fn();
+DROP FUNCTION trigger_gap_test_fn();
+
+DROP TABLE fk_child;
+DROP TABLE fk_multi_parent;
+DROP TABLE fk_parent_text;
+DROP TABLE fk_parent2;
+DROP TABLE fk_parent1;

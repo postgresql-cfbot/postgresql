@@ -2701,14 +2701,14 @@ exprs_known_equal(PlannerInfo *root, Node *item1, Node *item2, Oid opfamily)
  * we ignore that fine point here.)  This is much like exprs_known_equal,
  * except for the format of the input.
  *
- * On success, we also set fkinfo->eclass[colno] to the matching eclass,
- * and set fkinfo->fk_eclass_member[colno] to the eclass member for the
- * referencing Var.
+ * If fk_eclass_member is not NULL, *fk_eclass_member is set to the eclass
+ * member for the referencing Var.
  */
 EquivalenceClass *
 match_eclasses_to_foreign_key_col(PlannerInfo *root,
 								  ForeignKeyOptInfo *fkinfo,
-								  int colno)
+								  int colno,
+								  EquivalenceMember **fk_eclass_member)
 {
 	Index		var1varno = fkinfo->con_relid;
 	AttrNumber	var1attno = fkinfo->conkey[colno];
@@ -2778,8 +2778,8 @@ match_eclasses_to_foreign_key_col(PlannerInfo *root,
 					opfamilies = get_mergejoin_opfamilies(eqop);
 				if (equal(opfamilies, ec->ec_opfamilies))
 				{
-					fkinfo->eclass[colno] = ec;
-					fkinfo->fk_eclass_member[colno] = item2_em;
+					if (fk_eclass_member)
+						*fk_eclass_member = item2_em;
 					return ec;
 				}
 				/* Otherwise, done with this EC, move on to the next */

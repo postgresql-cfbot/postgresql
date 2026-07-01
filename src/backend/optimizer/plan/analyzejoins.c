@@ -23,16 +23,19 @@
 #include "postgres.h"
 
 #include "catalog/pg_class.h"
+#include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "optimizer/joininfo.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
 #include "optimizer/placeholder.h"
+#include "optimizer/plancat.h"
 #include "optimizer/planmain.h"
 #include "optimizer/restrictinfo.h"
 #include "parser/parse_agg.h"
 #include "rewrite/rewriteManip.h"
+#include "storage/lmgr.h"
 #include "utils/lsyscache.h"
 
 /*
@@ -52,6 +55,7 @@ typedef struct
 } SelfJoinCandidate;
 
 bool		enable_self_join_elimination;
+bool		enable_fk_inner_join_removal;
 
 /* local functions */
 static bool join_is_removable(PlannerInfo *root, SpecialJoinInfo *sjinfo);
@@ -81,6 +85,10 @@ static bool is_innerrel_unique_for(PlannerInfo *root,
 static int	self_join_candidates_cmp(const void *a, const void *b);
 static bool replace_relid_callback(Node *node,
 								   ChangeVarNodes_context *context);
+static bool inner_join_is_removable(PlannerInfo *root, ForeignKeyOptInfo *fkinfo);
+static void inject_fk_not_null_quals(PlannerInfo *root, ForeignKeyOptInfo *fkinfo);
+static void remove_referenced_rel_from_query(PlannerInfo *root,
+											 ForeignKeyOptInfo *fkinfo);
 
 
 /*
@@ -436,16 +444,18 @@ remove_leftjoinrel_from_query(PlannerInfo *root, int relid,
  * to include them in the query.  Optionally replace references to the
  * removed relid with subst if this is a self-join removal.
  *
- * This function serves as the common infrastructure for left-join removal
- * and self-join elimination.  It is intentionally scoped to update only the
- * shared planner data structures that are universally affected by relation
- * removal.  Each specific caller remains responsible for updating any
- * remaining data structures required by its unique removal logic.
+ * This function serves as the common infrastructure for three distinct
+ * optimization passes: left-join removal, inner-join removal, and self-join
+ * elimination.  It is intentionally scoped to update only the shared planner
+ * data structures that are universally affected by relation removal.  Each
+ * specific caller remains responsible for updating any remaining data
+ * structures required by its unique removal logic.
  *
  * The specific type of removal being performed is dictated by the combination
  * of the sjinfo and subst parameters.  A non-NULL sjinfo indicates left-join
  * removal.  When sjinfo is NULL, a positive subst value indicates self-join
- * elimination (where references are replaced with subst).
+ * elimination (where references are replaced with subst), while a negative
+ * subst value indicates inner-join removal.
  */
 static void
 remove_rel_from_query(PlannerInfo *root, int relid,
@@ -457,10 +467,11 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 	ListCell   *l;
 	bool		is_outer_join = (sjinfo != NULL);
 	bool		is_self_join = (!is_outer_join && subst > 0);
+	bool		is_inner_join = (!is_outer_join && subst < 0);
 
-	Assert(is_outer_join || is_self_join);
+	Assert(is_outer_join || is_self_join || is_inner_join);
 	Assert(!is_outer_join || ojrelid > 0);
-	Assert(!is_outer_join || joinrelids != NULL);
+	Assert(is_self_join || joinrelids != NULL);
 
 	/*
 	 * Update all_baserels and related relid sets.
@@ -517,7 +528,7 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 			sjinf->commute_below_l = bms_del_member(sjinf->commute_below_l, ojrelid);
 			sjinf->commute_below_r = bms_del_member(sjinf->commute_below_r, ojrelid);
 		}
-		else
+		else if (is_self_join)
 		{
 			/*
 			 * For self-join removal, replace relid references in
@@ -526,16 +537,24 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 			ChangeVarNodesExtended((Node *) sjinf->semi_rhs_exprs, relid, subst,
 								   0, replace_relid_callback);
 		}
+		else if (is_inner_join)
+		{
+			/*
+			 * For inner-join removal, no additional modifications are needed.
+			 * inner_join_is_removable() has already guaranteed that the
+			 * target relation's columns do not leak into semi_rhs_exprs.
+			 */
+		}
 	}
 
 	/*
 	 * Likewise remove references from PlaceHolderVar data structures,
-	 * removing any no-longer-needed placeholders entirely.  We only remove
-	 * PHVs for left-join removal.  With self-join elimination, PHVs already
-	 * get moved to the remaining relation, where they might still be needed.
-	 * It might also happen that we skip the removal of some PHVs that could
-	 * be removed.  However, the overhead of extra PHVs is small compared to
-	 * the complexity of analysis needed to remove them.
+	 * removing any no-longer-needed placeholders entirely.  We remove PHVs
+	 * for left-join and inner-join removal.  With self-join elimination, PHVs
+	 * already get moved to the remaining relation, where they might still be
+	 * needed.  It might also happen that we skip the removal of some PHVs
+	 * that could be removed.  However, the overhead of extra PHVs is small
+	 * compared to the complexity of analysis needed to remove them.
 	 *
 	 * Removal is a bit trickier than it might seem: we can remove PHVs that
 	 * are used at the target rel and/or in the join qual, but not those that
@@ -544,19 +563,20 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 	 * since they will both have ph_needed sets that are subsets of
 	 * joinrelids.  However, a PHV used at a partner rel could not have the
 	 * target rel in ph_eval_at, so we check that while deciding whether to
-	 * remove or just update the PHV.  There is no corresponding test in
-	 * join_is_removable because it doesn't need to distinguish those cases.
+	 * remove or just update the PHV.  There are no corresponding tests in the
+	 * callers (like join_is_removable or inner_join_is_removable) because
+	 * they don't need to distinguish those cases.
 	 */
 	foreach(l, root->placeholder_list)
 	{
 		PlaceHolderInfo *phinfo = (PlaceHolderInfo *) lfirst(l);
 
-		Assert(!is_outer_join || !bms_is_member(relid, phinfo->ph_lateral));
+		Assert(is_self_join || !bms_is_member(relid, phinfo->ph_lateral));
 
-		if (is_outer_join &&
+		if (!is_self_join &&
 			bms_is_subset(phinfo->ph_needed, joinrelids) &&
 			bms_is_member(relid, phinfo->ph_eval_at) &&
-			!bms_is_member(ojrelid, phinfo->ph_eval_at))
+			(is_inner_join || !bms_is_member(ojrelid, phinfo->ph_eval_at)))
 		{
 			root->placeholder_list = foreach_delete_current(root->placeholder_list,
 															l);
@@ -585,10 +605,11 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 			/*
 			 * For self-join removal, update Var nodes within the PHV's
 			 * expression to reference the replacement relid, and adjust
-			 * ph_lateral for the relid substitution.  (For left-join removal,
-			 * we're removing rather than replacing, and any surviving PHV
-			 * shouldn't reference the removed rel in its expression.  Also,
-			 * relid can't appear in ph_lateral for outer joins.)
+			 * ph_lateral for the relid substitution.  (For left-join and
+			 * inner-join removal, we're removing rather than replacing, and
+			 * any surviving PHV shouldn't reference the removed rel in its
+			 * expression.  Also, relid can't appear in ph_lateral for outer
+			 * joins and inner joins.)
 			 */
 			if (is_self_join)
 			{
@@ -614,7 +635,7 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 	 * For self-join removal, the caller has already updated the
 	 * EquivalenceClasses, so we can skip this step.
 	 */
-	if (is_outer_join)
+	if (is_outer_join || is_inner_join)
 	{
 		foreach(l, root->eq_classes)
 		{
@@ -643,10 +664,10 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 	 * replace references to the removed relid with subst within the
 	 * lateral_vars lists.
 	 *
-	 * Also, for left-join removal, we strip the removed rel and join from any
-	 * PlaceHolderVar embedded in the surviving rels' restriction clauses (see
-	 * remove_rel_from_phvs); we needn't bother with the rel being removed,
-	 * nor when the query has no PlaceHolderVars.
+	 * Also, for left-join and inner-join removal, we strip the removed rel
+	 * and join from any PlaceHolderVar embedded in the surviving rels'
+	 * restriction clauses (see remove_rel_from_phvs); we needn't bother with
+	 * the rel being removed, nor when the query has no PlaceHolderVars.
 	 */
 	for (rti = 1; rti < root->simple_rel_array_size; rti++)
 	{
@@ -673,7 +694,9 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 			ChangeVarNodesExtended((Node *) otherrel->lateral_vars, relid,
 								   subst, 0, replace_relid_callback);
 
-		if (is_outer_join && rti != relid && root->glob->lastPHId != 0)
+		if ((is_outer_join || is_inner_join) &&
+			rti != relid &&
+			root->glob->lastPHId != 0)
 		{
 			foreach_node(RestrictInfo, rinfo, otherrel->baserestrictinfo)
 			{
@@ -685,7 +708,8 @@ remove_rel_from_query(PlannerInfo *root, int relid,
 }
 
 /*
- * Remove any references to relid or ojrelid from the RestrictInfo.
+ * Remove any references to relid or ojrelid from the RestrictInfo.  If
+ * ojrelid is <= 0, it is ignored (used for inner-join removal).
  *
  * We only bother to clean out bits in the RestrictInfo's various relid sets,
  * not nullingrel bits in contained Vars and PHVs.  (This might have to be
@@ -704,27 +728,33 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
 	 */
 	rinfo->clause_relids = bms_copy(rinfo->clause_relids);
 	rinfo->clause_relids = bms_del_member(rinfo->clause_relids, relid);
-	rinfo->clause_relids = bms_del_member(rinfo->clause_relids, ojrelid);
+	if (ojrelid > 0)
+		rinfo->clause_relids = bms_del_member(rinfo->clause_relids, ojrelid);
 	/* Likewise for required_relids */
 	rinfo->required_relids = bms_copy(rinfo->required_relids);
 	rinfo->required_relids = bms_del_member(rinfo->required_relids, relid);
-	rinfo->required_relids = bms_del_member(rinfo->required_relids, ojrelid);
+	if (ojrelid > 0)
+		rinfo->required_relids = bms_del_member(rinfo->required_relids, ojrelid);
 	/* Likewise for incompatible_relids */
 	rinfo->incompatible_relids = bms_copy(rinfo->incompatible_relids);
 	rinfo->incompatible_relids = bms_del_member(rinfo->incompatible_relids, relid);
-	rinfo->incompatible_relids = bms_del_member(rinfo->incompatible_relids, ojrelid);
+	if (ojrelid > 0)
+		rinfo->incompatible_relids = bms_del_member(rinfo->incompatible_relids, ojrelid);
 	/* Likewise for outer_relids */
 	rinfo->outer_relids = bms_copy(rinfo->outer_relids);
 	rinfo->outer_relids = bms_del_member(rinfo->outer_relids, relid);
-	rinfo->outer_relids = bms_del_member(rinfo->outer_relids, ojrelid);
+	if (ojrelid > 0)
+		rinfo->outer_relids = bms_del_member(rinfo->outer_relids, ojrelid);
 	/* Likewise for left_relids */
 	rinfo->left_relids = bms_copy(rinfo->left_relids);
 	rinfo->left_relids = bms_del_member(rinfo->left_relids, relid);
-	rinfo->left_relids = bms_del_member(rinfo->left_relids, ojrelid);
+	if (ojrelid > 0)
+		rinfo->left_relids = bms_del_member(rinfo->left_relids, ojrelid);
 	/* Likewise for right_relids */
 	rinfo->right_relids = bms_copy(rinfo->right_relids);
 	rinfo->right_relids = bms_del_member(rinfo->right_relids, relid);
-	rinfo->right_relids = bms_del_member(rinfo->right_relids, ojrelid);
+	if (ojrelid > 0)
+		rinfo->right_relids = bms_del_member(rinfo->right_relids, ojrelid);
 
 	/* If it's an OR, recurse to clean up sub-clauses */
 	if (restriction_is_or_clause(rinfo))
@@ -760,7 +790,8 @@ remove_rel_from_restrictinfo(RestrictInfo *rinfo, int relid, int ojrelid)
 }
 
 /*
- * Remove any references to relid or ojrelid from the EquivalenceClass.
+ * Remove any references to relid or ojrelid from the EquivalenceClass.  If
+ * ojrelid is <= 0, it is ignored (used for inner-join removal).
  *
  * We fix the EC and EM relid sets to ensure that implied join equalities will
  * be generated at the appropriate join level(s).  We also strip the removed
@@ -792,12 +823,13 @@ remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
 	}
 
 	if (!bms_is_member(relid, ec->ec_relids) &&
-		!bms_is_member(ojrelid, ec->ec_relids))
+		(ojrelid == 0 || !bms_is_member(ojrelid, ec->ec_relids)))
 		return;
 
 	/* Fix up the EC's overall relids */
 	ec->ec_relids = bms_del_member(ec->ec_relids, relid);
-	ec->ec_relids = bms_del_member(ec->ec_relids, ojrelid);
+	if (ojrelid > 0)
+		ec->ec_relids = bms_del_member(ec->ec_relids, ojrelid);
 
 	/*
 	 * We don't expect any EC child members to exist at this point.  Ensure
@@ -816,13 +848,14 @@ remove_rel_from_eclass(PlannerInfo *root, EquivalenceClass *ec,
 		EquivalenceMember *cur_em = (EquivalenceMember *) lfirst(lc);
 
 		if (bms_is_member(relid, cur_em->em_relids) ||
-			bms_is_member(ojrelid, cur_em->em_relids))
+			(ojrelid > 0 && bms_is_member(ojrelid, cur_em->em_relids)))
 		{
 			Assert(!cur_em->em_is_const);
 			/* em_relids is likely to be shared with some RestrictInfo */
 			cur_em->em_relids = bms_copy(cur_em->em_relids);
 			cur_em->em_relids = bms_del_member(cur_em->em_relids, relid);
-			cur_em->em_relids = bms_del_member(cur_em->em_relids, ojrelid);
+			if (ojrelid > 0)
+				cur_em->em_relids = bms_del_member(cur_em->em_relids, ojrelid);
 			if (bms_is_empty(cur_em->em_relids))
 				ec->ec_members = foreach_delete_current(ec->ec_members, lc);
 		}
@@ -2137,7 +2170,6 @@ remove_self_join_rel(PlannerInfo *root, PlanRowMark *kmark, PlanRowMark *rmark,
 	/* And nuke the RelOptInfo, just in case there's another access path. */
 	pfree(toRemove);
 
-
 	/*
 	 * Now repeat construction of attr_needed bits coming from all other
 	 * sources.
@@ -2665,4 +2697,616 @@ remove_useless_self_joins(PlannerInfo *root, List *joinlist)
 	}
 
 	return joinlist;
+}
+
+/*
+ * remove_useless_inner_joins
+ *	  Scans all foreign keys in the query to find and remove referenced
+ *	  relations that act only to duplicate referential integrity guarantees.
+ *
+ * We are passed the current joinlist and return the updated list.  Other
+ * data structures that have to be updated are accessible via "root".
+ */
+List *
+remove_useless_inner_joins(PlannerInfo *root, List *joinlist)
+{
+	Relids		removed_relids = NULL;
+
+restart:
+	foreach_node(ForeignKeyOptInfo, fkinfo, root->fkey_list)
+	{
+		int			nremoved;
+
+		/*
+		 * Skip if either the referencing or the referenced relation has
+		 * already been removed by a prior FK removal in this loop.
+		 */
+		if (bms_is_member(fkinfo->con_relid, removed_relids) ||
+			bms_is_member(fkinfo->ref_relid, removed_relids))
+			continue;
+
+		/* Skip if not removable */
+		if (!inner_join_is_removable(root, fkinfo))
+			continue;
+
+		/*
+		 * Record the OIDs of both sides of the FK so that the plan cache can
+		 * detect when a cached plan with FK-based join removal needs
+		 * replanning due to the trigger gap becoming possible.
+		 */
+		root->glob->fkRemovedRelOids =
+			list_append_unique_oid(root->glob->fkRemovedRelOids,
+								   root->simple_rte_array[fkinfo->con_relid]->relid);
+		root->glob->fkRemovedRelOids =
+			list_append_unique_oid(root->glob->fkRemovedRelOids,
+								   root->simple_rte_array[fkinfo->ref_relid]->relid);
+
+		/* Inject IS NOT NULL clauses for nullable foreign key columns */
+		inject_fk_not_null_quals(root, fkinfo);
+
+		/* Remove the referenced relation */
+		remove_referenced_rel_from_query(root, fkinfo);
+
+		/* We verify that exactly one reference gets removed from joinlist */
+		nremoved = 0;
+		joinlist = remove_rel_from_joinlist(joinlist, fkinfo->ref_relid, &nremoved);
+		if (nremoved != 1)
+			elog(ERROR, "failed to find relation %d in joinlist", fkinfo->ref_relid);
+
+		removed_relids = bms_add_member(removed_relids, fkinfo->ref_relid);
+
+		/*
+		 * Restart the scan.  This is necessary to ensure we find all
+		 * removable joins independently of ordering of the fkey_list: a just-
+		 * completed removal can collapse another EC to a single rel, which
+		 * makes a previously-rejected FK pass inner_join_is_removable's
+		 * multi-rel-EC count check.
+		 */
+		goto restart;
+	}
+
+	bms_free(removed_relids);
+
+	return joinlist;
+}
+
+/*
+ * inner_join_is_removable
+ *	  Check whether an inner join to the referenced relation of a foreign key
+ *	  can be safely removed from the query tree.
+ *
+ * To be removable, the referenced relation must act only as a structural
+ * anchor.  The inner join must be mathematically guaranteed to produce exactly
+ * one matching row for each referencing relation's row.  The foreign key
+ * constraint guarantees existence (at least one match), and the referenced
+ * relation's unique constraint guarantees non-duplication (at most one match).
+ *
+ * The referenced relation's non-key columns cannot be used anywhere in the
+ * query.  Because the referenced relation will be removed, we would have no
+ * way to read their values.  Even if used strictly within the join condition,
+ * they would act as local filters, violating the exact-match guarantee.
+ *
+ * Theoretically, the referenced relation's key columns represent the exact
+ * same logical values as the referencing relation's columns due to the foreign
+ * key equality.  However, they are not strictly interchangeable in the query
+ * tree.  Substituting them requires preserving exact data types, collations,
+ * and operator family semantics.  Because the planner currently lacks a
+ * mechanism to safely perform this variable substitution across differing
+ * schemas, their usage is strictly limited.  They cannot be used in contexts
+ * that require rewriting Var references, such as targetlist, restriction
+ * clauses, lateral_vars, or righthand-side expressions of semijoins.  They
+ * are, however, permitted to bridge multi-hop joins via EquivalenceClasses.
+ * Removing the relation safely drops its members from the ECs, and the planner
+ * natively deduces the remaining transitive equalities.
+ *
+ * NOTE: This function assumes the caller will inject IS NOT NULL filters for
+ * the referencing relation's FK columns if they are not strictly enforced by
+ * the schema to prevent partial-match ghost rows.
+ */
+static bool
+inner_join_is_removable(PlannerInfo *root, ForeignKeyOptInfo *fkinfo)
+{
+	RelOptInfo *con_rel;
+	RelOptInfo *ref_rel;
+	Oid			con_reloid;
+	Oid			ref_reloid;
+	int			attroff;
+	Relids		inputrelids;
+	Bitmapset  *fk_attnums = NULL;
+	int			colno;
+	int			multirel_ec_count = 0;
+	int			i;
+
+	/* User has disabled this optimization. */
+	if (!enable_fk_inner_join_removal)
+		return false;
+
+	/*
+	 * If the constraint is deferrable, the physical tables may temporarily
+	 * violate the FK during an active transaction.  The inner join must be
+	 * executed to filter out uncommitted orphaned rows.
+	 */
+	if (fkinfo->con_deferrable)
+		return false;
+
+	/*
+	 * If the constraint is not validated (NOT VALID), existing data may
+	 * violate the FK even though new modifications are enforced.  We cannot
+	 * rely on such a constraint for join removal.
+	 */
+	if (!fkinfo->con_validated)
+		return false;
+
+	/*
+	 * Never try to eliminate the query's result relation.  UPDATE, DELETE,
+	 * and MERGE can all build a join tree where the target relation appears
+	 * as the FK referenced rel.
+	 */
+	if (fkinfo->ref_relid == root->parse->resultRelation)
+		return false;
+
+	/*
+	 * Either relid might identify a rel that is in the query's rtable but
+	 * isn't referenced by the jointree, or has been removed by join removal,
+	 * so that it won't have a RelOptInfo.  Hence we use find_base_rel_noerr()
+	 * here.  We can ignore such FKs.
+	 */
+	con_rel = find_base_rel_noerr(root, fkinfo->con_relid);
+	if (con_rel == NULL)
+		return false;
+	ref_rel = find_base_rel_noerr(root, fkinfo->ref_relid);
+	if (ref_rel == NULL)
+		return false;
+
+	/*
+	 * Ignore FK unless both rels are baserels.  This gets rid of FKs that
+	 * link to inheritance child rels (otherrels).
+	 */
+	if (con_rel->reloptkind != RELOPT_BASEREL ||
+		ref_rel->reloptkind != RELOPT_BASEREL)
+		return false;
+
+	con_reloid = root->simple_rte_array[fkinfo->con_relid]->relid;
+	ref_reloid = root->simple_rte_array[fkinfo->ref_relid]->relid;
+
+	/*
+	 * FK constraints are enforced via AFTER ROW triggers, creating a window
+	 * (the "trigger gap") between when a row is physically modified and when
+	 * the FK enforcement trigger fires.  Within this window the FK invariant
+	 * is locally false in the heap.  It becomes user-observable through any
+	 * query that runs against a snapshot captured inside the window -- for
+	 * example, a SELECT inside a plpgsql function invoked from RETURNING, a
+	 * query inside an AFTER ROW trigger body, or a fetch from a cursor opened
+	 * inside the window.
+	 *
+	 * The predicate guarding the optimization must remain positive at least
+	 * as long as any snapshot in this transaction could still be referenced,
+	 * because a snapshot captured during the gap can outlive the gap's
+	 * closure -- for example, a cursor frozen via CopySnapshot inside the
+	 * window, or a cached plan reused at execution time against a snapshot
+	 * that was captured inside the window.  Any FK-removed plan executed
+	 * against such a stale snapshot would observe the inconsistent state and
+	 * produce wrong results, even if the trigger queue has long since
+	 * drained.  Predicates tied to the active DML's own lifetime, such as a
+	 * per-statement counter or AfterTriggerPendingOnRel(), go silent once the
+	 * gap closes and would leave stale-snapshot executions unguarded.
+	 *
+	 * RowExclusiveLock has exactly the right lifetime: it is acquired during
+	 * parse analysis of any DML on the rel and released only at end of
+	 * transaction, which trivially exceeds the lifetime of any in-transaction
+	 * snapshot.  The pessimism this introduces -- skipping the optimization
+	 * for the rest of the transaction after the DML completes, or when
+	 * RowExclusiveLock is held for other reasons such as LOCK TABLE -- is the
+	 * price of that lifetime guarantee.  In those cases the query falls back
+	 * to executing the join normally.
+	 */
+	if (CheckRelationOidLockedByMe(con_reloid, RowExclusiveLock, true) ||
+		CheckRelationOidLockedByMe(ref_reloid, RowExclusiveLock, true))
+		return false;
+
+	/*
+	 * If the referenced relation has any restriction clauses, they act as
+	 * explicit filters.  Since we cannot perform variable substitution to
+	 * rewrite these clauses, we must abort.
+	 */
+	if (ref_rel->baserestrictinfo)
+		return false;
+
+	/*
+	 * If the referenced relation is being sampled via TABLESAMPLE, the join
+	 * would normally restrict the result to child rows whose parent landed in
+	 * the sample.  Removing the join would lose that restriction and return
+	 * all child rows with a non-null FK, which is more than the joined form
+	 * would return.  Since we have no way to preserve the sampling effect
+	 * when the referenced rel is removed, we must skip the optimization.
+	 */
+	if (root->simple_rte_array[fkinfo->ref_relid]->tablesample != NULL)
+		return false;
+
+	/*
+	 * For joininfo, we look at clause_relids rather than at the joininfo list
+	 * itself.  required_relids may exceed clause_relids when an outer join ON
+	 * clause needs to be forced to evaluate exactly at the level of the outer
+	 * join; that can place a clause on ref_rel->joininfo even though ref_rel
+	 * doesn't appear in the clause's expression at all.  Reject only when a
+	 * join clause actually references ref_rel.
+	 */
+	foreach_node(RestrictInfo, rinfo, ref_rel->joininfo)
+	{
+		if (bms_is_member(ref_rel->relid, rinfo->clause_relids))
+			return false;
+	}
+
+	/*
+	 * Build a fast lookup bitmap for the referenced relation's foreign key
+	 * attributes to optimize the subsequent attribute usage checks.
+	 */
+	for (colno = 0; colno < fkinfo->nkeys; colno++)
+	{
+		fk_attnums = bms_add_member(fk_attnums,
+									fkinfo->confkey[colno] - ref_rel->min_attr);
+	}
+
+	/*
+	 * Verify attribute usage against the substitution constraints.
+	 *
+	 * As a micro-optimization, it seems better to start with max_attr and
+	 * count down rather than starting with min_attr and counting up, on the
+	 * theory that the system attributes are somewhat less likely to be wanted
+	 * and should be tested last.
+	 */
+	for (attroff = ref_rel->max_attr - ref_rel->min_attr;
+		 attroff >= 0;
+		 attroff--)
+	{
+		if (bms_is_member(attroff, fk_attnums))
+		{
+			/*
+			 * The specific columns involved in the foreign key are allowed to
+			 * bridge multi-hop joins via EquivalenceClasses.  However, they
+			 * must not be needed in the final targetlist, which would require
+			 * variable substitution.
+			 */
+			if (bms_is_member(0, ref_rel->attr_needed[attroff]))
+				return false;
+
+			continue;
+		}
+
+		/*
+		 * The non-key columns must not be used anywhere.  See comments above.
+		 */
+		if (!bms_is_empty(ref_rel->attr_needed[attroff]))
+			return false;
+	}
+
+	/* Compute the relid set for the join we are considering */
+	inputrelids = bms_make_singleton(fkinfo->con_relid);
+	inputrelids = bms_add_member(inputrelids, fkinfo->ref_relid);
+
+	/*
+	 * Similarly check that the referenced rel isn't needed by any
+	 * PlaceHolderVars that will be used above the join.  The PHV case is a
+	 * little bit more complicated, because PHVs may have been assigned a
+	 * ph_eval_at location that includes the ref_rel, yet their contained
+	 * expression might not actually reference the ref_rel (it could be just a
+	 * constant, for instance).  If such a PHV is due to be evaluated above
+	 * the join then it needn't prevent inner join removal.
+	 */
+	foreach_node(PlaceHolderInfo, phinfo, root->placeholder_list)
+	{
+		if (bms_overlap(phinfo->ph_lateral, ref_rel->relids))
+			return false;		/* it references ref_rel laterally */
+		if (!bms_overlap(phinfo->ph_eval_at, ref_rel->relids))
+			continue;			/* it definitely doesn't reference ref_rel */
+		if (bms_is_subset(phinfo->ph_needed, inputrelids))
+			continue;			/* PHV is not used above the join */
+
+		/*
+		 * We need to be sure there will still be a place to evaluate the PHV
+		 * if we remove the join, ie that ph_eval_at wouldn't become empty.
+		 * We've established above that ph_eval_at overlaps ref_rel->relids,
+		 * so the only way removal empties it is if ref_rel is the sole
+		 * member.
+		 */
+		if (bms_membership(phinfo->ph_eval_at) == BMS_SINGLETON)
+			return false;		/* there isn't any other place to eval PHV */
+		/* Check contained expression last, since this is a bit expensive */
+		if (bms_overlap(pull_varnos(root, (Node *) phinfo->ph_var->phexpr),
+						ref_rel->relids))
+			return false;		/* contained expression references ref_rel */
+	}
+
+	/*
+	 * If the referencing and referenced relations are separated by an outer
+	 * join boundary, removing the inner join alters the null-padding
+	 * semantics of the query.
+	 *
+	 * Additionally, if the referenced relation's columns are referenced in
+	 * the RHS expressions of any semi-join, we must punt.  We do not have a
+	 * way to rewrite those references.
+	 */
+	foreach_node(SpecialJoinInfo, sjinfo, root->join_info_list)
+	{
+		if ((bms_is_member(fkinfo->con_relid, sjinfo->syn_lefthand) ^
+			 bms_is_member(fkinfo->ref_relid, sjinfo->syn_lefthand)) ||
+			(bms_is_member(fkinfo->con_relid, sjinfo->syn_righthand) ^
+			 bms_is_member(fkinfo->ref_relid, sjinfo->syn_righthand)))
+			return false;
+
+		if (sjinfo->semi_rhs_exprs != NIL)
+		{
+			if (bms_is_member(fkinfo->ref_relid,
+							  pull_varnos(root, (Node *) sjinfo->semi_rhs_exprs)))
+				return false;
+		}
+	}
+
+	/*
+	 * If the referenced relation is referenced laterally by any other
+	 * relation, punt.  We do not have a way to rewrite those references.
+	 */
+	if (root->hasLateralRTEs)
+	{
+		Index		rti;
+
+		for (rti = 1; rti < root->simple_rel_array_size; rti++)
+		{
+			RelOptInfo *otherrel = root->simple_rel_array[rti];
+
+			if (otherrel == NULL || otherrel->relid == fkinfo->ref_relid)
+				continue;
+
+			if (otherrel->lateral_vars != NIL)
+			{
+				if (bms_is_member(fkinfo->ref_relid,
+								  pull_varnos(root, (Node *) otherrel->lateral_vars)))
+					return false;
+			}
+		}
+	}
+
+	/*
+	 * We must mathematically prove that every column in the referenced
+	 * relation's foreign key is bound to the referencing relation's foreign
+	 * key via a valid equality operator within an equivalence class.
+	 */
+	for (colno = 0; colno < fkinfo->nkeys; colno++)
+	{
+		EquivalenceClass *ec;
+
+		ec = match_eclasses_to_foreign_key_col(root, fkinfo, colno, NULL);
+
+		if (ec == NULL)
+			return false;
+	}
+
+	/*
+	 * We must also prove the inverse: the referenced relation must not
+	 * participate in any EquivalenceClasses other than the ones that bridge
+	 * it to the referencing relation's foreign key, and within those ECs no
+	 * EquivalenceMember may mix ref_rel with other relations.
+	 *
+	 * We have already verified that the relation participates in 'nkeys'
+	 * valid ECs bridging to the referencing relation.  If it appears in more
+	 * multi-rel ECs than that, it means a referenced key column is involved
+	 * in an equality that the planner refused to merge with the foreign key's
+	 * EC.  This split occurs during collation mismatches, incompatible
+	 * operator families, or if the key is wrapped in an expression more
+	 * complex than a simple Var (e.g., ref_rel.pk + 1 = c.val).  In those
+	 * scenarios, removing the referenced relation would silently destroy the
+	 * join condition of that separate EC, because the referencing relation's
+	 * column is not present in it to take over the transitive equality.
+	 *
+	 * Single-rel ECs (sort/group expressions, or ECs left degenerate by a
+	 * prior FK removal stripping their other side) are skipped: their
+	 * surviving members all reference ref_rel exclusively and will be dropped
+	 * during remove_rel_from_eclass.  Skipping them is what lets a chain of
+	 * FK removals succeed once the caller re-runs the scan.
+	 *
+	 * Within the bridging ECs, we also need to reject any EM that mentions
+	 * ref_rel together with other relations (e.g., ref_rel.pk + other_rel.x).
+	 * Such an EM would survive remove_rel_from_eclass with a non-empty
+	 * em_relids, yet its expression still embeds a Var on the now-removed
+	 * ref_rel.
+	 */
+	i = -1;
+	while ((i = bms_next_member(ref_rel->eclass_indexes, i)) >= 0)
+	{
+		EquivalenceClass *ec = (EquivalenceClass *) list_nth(root->eq_classes, i);
+
+		if (bms_membership(ec->ec_relids) == BMS_MULTIPLE)
+			multirel_ec_count++;
+
+		foreach_node(EquivalenceMember, em, ec->ec_members)
+		{
+			if (bms_is_member(fkinfo->ref_relid, em->em_relids) &&
+				bms_membership(em->em_relids) == BMS_MULTIPLE)
+				return false;
+		}
+	}
+	if (multirel_ec_count != fkinfo->nkeys)
+		return false;
+
+	/* All checks passed */
+	return true;
+}
+
+/*
+ * inject_fk_not_null_quals
+ *	  Injects IS NOT NULL clauses into the referencing relation's restriction
+ *	  list for any foreign key columns that are not enforced as NOT NULL by the
+ *	  schema.
+ *
+ * When we remove a referenced relation (the inner join target) based on a
+ * foreign key, we lose the implicit filtering of NULLs that a standard inner
+ * join performs.  To preserve mathematical equivalence, we must ensure the
+ * referencing relation does not emit rows with NULL foreign keys.
+ */
+static void
+inject_fk_not_null_quals(PlannerInfo *root, ForeignKeyOptInfo *fkinfo)
+{
+	RelOptInfo *con_rel;
+	RangeTblEntry *con_rte;
+	Bitmapset  *notnullattnums;
+	Bitmapset  *already_injected = NULL;
+	int			i;
+
+	con_rel = find_base_rel(root, fkinfo->con_relid);
+	con_rte = root->simple_rte_array[fkinfo->con_relid];
+	Assert(con_rte->rtekind == RTE_RELATION);
+	Assert(!con_rte->inh);
+
+	/*
+	 * Get the column not-null constraint information for the referencing
+	 * relation.
+	 */
+	notnullattnums = find_relation_notnullatts(root, con_rte->relid);
+
+	/*
+	 * Collect attnos already covered by an IS NOT NULL clause on con_rel in
+	 * baserestrictinfo, so we don't append a redundant qual.  Such clauses
+	 * may come from a prior FK removal for another FK on the same con_rel, a
+	 * user-written IS NOT NULL clause, or other planner transformations that
+	 * inject NullTest restrictions.
+	 */
+	foreach_node(RestrictInfo, r, con_rel->baserestrictinfo)
+	{
+		NullTest   *ntest;
+		Var		   *var;
+
+		if (!IsA(r->clause, NullTest))
+			continue;
+		ntest = (NullTest *) r->clause;
+		if (ntest->nulltesttype != IS_NOT_NULL ||
+			ntest->argisrow ||
+			!IsA(ntest->arg, Var))
+			continue;
+		var = (Var *) ntest->arg;
+		Assert(var->varno == fkinfo->con_relid);
+		if (var->varattno > 0)
+			already_injected = bms_add_member(already_injected, var->varattno);
+	}
+
+	for (i = 0; i < fkinfo->nkeys; i++)
+	{
+		AttrNumber	con_attno = fkinfo->conkey[i];
+		Var		   *var;
+		NullTest   *ntest;
+		RestrictInfo *rinfo;
+		Oid			vartype;
+		int32		vartypmod;
+		Oid			varcollid;
+
+		/* System columns are implicitly NOT NULL */
+		if (con_attno < 0)
+			continue;
+
+		/* Schema already guarantees the column is NOT NULL */
+		if (bms_is_member(con_attno, notnullattnums))
+			continue;
+
+		/* Already covered by an existing IS NOT NULL on con_rel */
+		if (bms_is_member(con_attno, already_injected))
+			continue;
+
+		get_atttypetypmodcoll(con_rte->relid,
+							  con_attno,
+							  &vartype,
+							  &vartypmod,
+							  &varcollid);
+
+		var = makeVar(fkinfo->con_relid,
+					  con_attno,
+					  vartype,
+					  vartypmod,
+					  varcollid,
+					  0);
+
+		ntest = makeNode(NullTest);
+		ntest->arg = (Expr *) var;
+		ntest->nulltesttype = IS_NOT_NULL;
+		ntest->argisrow = false;
+		ntest->location = -1;
+
+		rinfo = make_restrictinfo(root,
+								  (Expr *) ntest,
+								  true,
+								  false,
+								  false,
+								  false,
+								  root->qual_security_level,
+								  bms_make_singleton(fkinfo->con_relid),
+								  NULL,
+								  NULL);
+
+		con_rel->baserestrictinfo = lappend(con_rel->baserestrictinfo, rinfo);
+		already_injected = bms_add_member(already_injected, con_attno);
+	}
+
+	bms_free(already_injected);
+}
+
+/*
+ * remove_referenced_rel_from_query
+ *	  Remove the referenced rel of a foreign key and references to it from
+ *	  the planner's data structures, having determined that there is no
+ *	  need to include it in the query.
+ *
+ * We are not terribly thorough here.  We only bother to update parts of
+ * the planner's data structures that will actually be consulted later.
+ */
+static void
+remove_referenced_rel_from_query(PlannerInfo *root, ForeignKeyOptInfo *fkinfo)
+{
+	int			relid = fkinfo->ref_relid;
+	RelOptInfo *ref_rel = find_base_rel(root, relid);
+	Relids		joinrelids;
+
+	/* Compute the relid set for the join we are considering */
+	joinrelids = bms_make_singleton(fkinfo->con_relid);
+	joinrelids = bms_add_member(joinrelids, relid);
+
+	remove_rel_from_query(root, relid, -1, NULL, joinrelids);
+
+	bms_free(joinrelids);
+
+	/*
+	 * Any join clause that survived in ref_rel->joininfo doesn't reference
+	 * ref_rel, but its relid sets may still mention ref_rel because it was
+	 * distributed there based on required_relids.  Strip ref_rel from each
+	 * such clause's relid sets so that surviving rels see a consistent state.
+	 */
+	foreach_node(RestrictInfo, rinfo, ref_rel->joininfo)
+	{
+		Assert(!bms_is_member(ref_rel->relid, rinfo->clause_relids));
+
+		remove_rel_from_restrictinfo(rinfo, relid, 0);
+
+		Assert(bms_membership(rinfo->required_relids) == BMS_MULTIPLE);
+	}
+
+	/*
+	 * There may be references to the rel in root->fkey_list, but if so,
+	 * match_foreign_keys_to_quals() will get rid of them.
+	 */
+
+	/*
+	 * Now remove the rel from the baserel array to prevent it from being
+	 * referenced again.
+	 */
+	root->simple_rel_array[relid] = NULL;
+	root->simple_rte_array[relid] = NULL;
+
+	/* And nuke the RelOptInfo, just in case there's another access path */
+	pfree(ref_rel);
+
+	/*
+	 * Now repeat construction of attr_needed bits coming from all other
+	 * sources.
+	 */
+	rebuild_placeholder_attr_needed(root);
+	rebuild_joinclause_attr_needed(root);
+	rebuild_eclass_attr_needed(root);
+	rebuild_lateral_attr_needed(root);
 }

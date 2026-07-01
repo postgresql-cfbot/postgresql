@@ -42,7 +42,7 @@ typedef struct
 #define LocalBufHdrGetBlock(bufHdr) \
 	LocalBufferBlockPointers[-((bufHdr)->buf_id + 2)]
 
-int			NLocBuffer = 0;		/* until buffers are initialized */
+int			NLocBuffer = 0;		/* until buffers are allocated */
 
 BufferDesc *LocalBufferDescriptors = NULL;
 Block	   *LocalBufferBlockPointers = NULL;
@@ -777,6 +777,9 @@ InitLocalBuffers(void)
 				(errcode(ERRCODE_OUT_OF_MEMORY),
 				 errmsg("out of memory")));
 
+	/* Record the local buffer count now that the arrays are allocated. */
+	NLocBuffer = nbufs;
+
 	nextFreeLocalBufId = 0;
 
 	/* initialize fields that need to start off nonzero */
@@ -813,9 +816,6 @@ InitLocalBuffers(void)
 
 	if (!LocalBufHash)
 		elog(ERROR, "could not initialize local buffer hash table");
-
-	/* Initialization done, mark buffers allocated */
-	NLocBuffer = nbufs;
 }
 
 /*

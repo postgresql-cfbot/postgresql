@@ -35,11 +35,22 @@
 #include "optimizer/restrictinfo.h"
 #include "utils/lsyscache.h"
 #include "utils/selfuncs.h"
+#include "utils/array.h"
 
 
 /* XXX see PartCollMatchesExprColl */
 #define IndexCollMatchesExprColl(idxcollation, exprcollation) \
 	((idxcollation) == InvalidOid || (idxcollation) == (exprcollation))
+
+/*
+ * Proof attempts involving large arrays in ScalarArrayOpExpr nodes are
+ * likely to require O(N^2) time, and more often than not fail anyway.
+ * So we set an arbitrary limit on the number of array elements that
+ * we will allow to be treated as an AND or OR clause.
+ * XXX is it worth exposing this as a GUC knob?
+ * This block was copied verbatim from ../utils/predtest.c
+ */
+#define MAX_SAOP_ARRAY_SIZE		100
 
 /* Whether we are looking for plain indexscan, bitmap scan, or either */
 typedef enum
@@ -112,6 +123,8 @@ static List *build_paths_for_OR(PlannerInfo *root, RelOptInfo *rel,
 								List *clauses, List *other_clauses);
 static List *generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 									  List *clauses, List *other_clauses);
+static List *generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
+										List *clauses, List *indexes);
 static Path *choose_bitmap_and(PlannerInfo *root, RelOptInfo *rel,
 							   List *paths);
 static int	path_usage_comparator(const void *a, const void *b);
@@ -320,6 +333,15 @@ create_index_paths(PlannerInfo *root, RelOptInfo *rel)
 	 */
 	indexpaths = generate_bitmap_or_paths(root, rel,
 										  rel->baserestrictinfo, NIL);
+	bitindexpaths = list_concat(bitindexpaths, indexpaths);
+
+	/*
+	 * Now generate BitmapOrPaths for any suitable SAOP-clauses present in the
+	 * restriction list.  Add these to bitindexpaths.
+	 */
+	indexpaths = generate_bitmap_saop_paths(root, rel,
+											rel->baserestrictinfo,
+											rel->indexlist);
 	bitindexpaths = list_concat(bitindexpaths, indexpaths);
 
 	/*
@@ -1766,6 +1788,370 @@ generate_bitmap_or_paths(PlannerInfo *root, RelOptInfo *rel,
 	}
 
 	return result;
+}
+
+
+/*
+ * generate_bitmap_saop_paths
+ *
+ * Attempt to transform simple ScalarArrayOpExpr (IN/ANY) clauses into
+ * a BitmapOr of per-element bitmap index scans.
+ *
+ * For a clause of the form:
+ *
+ *      var IN (c1, c2, ..., cn) or
+ *      var = ANY(c1, c2, ..., cn)
+ *
+ * where the right-hand side is a non-null constant array, we decompose
+ * the SAOP into n equality clauses:
+ *
+ *      var = c1
+ *      var = c2
+ *      ...
+ *
+ * For each element, we search for bitmap-capable indexes (including partial
+ * indexes - the original motivation for this patch) that can support the
+ * derived equality clause. Note we support this for only up to a maximum
+ * number of elements which must not exceed MAX_SAOP_ARRAY_SIZE.
+ *
+ * All viable index paths for each element are costed, and the cheapest
+ * path is selected.  If and only if every element of the IN list can
+ * be satisfied by some index, the resulting per-element bitmap scans
+ * are combined into a BitmapOrPath and returned.
+ *
+ * If any element cannot be matched to a usable index, the transformation is
+ * abandoned and the SAOP is left to the normal planner machinery.
+ *
+ * Structural index mismatches are pruned during processing to avoid repeated
+ * checks across elements, but value-specific predicate failures do not
+ * eliminate an index globally.
+ */
+static List *
+generate_bitmap_saop_paths(PlannerInfo *root, RelOptInfo *rel,
+                           List *clauses, List *indexes)
+{
+    ListCell   *lc;
+    List       *result = NIL;
+
+    foreach(lc, clauses)
+    {
+        RestrictInfo       *rinfo = lfirst_node(RestrictInfo, lc);
+        ScalarArrayOpExpr  *saop;
+        Node               *leftop;
+        Node               *rightop;
+        const Const        *arrayconst;
+        ArrayType          *arrayval;
+        Datum              *elem_values = NULL;
+        bool               *elem_nulls = NULL;
+        Bitmapset          *suitable_indexes = NULL;
+        List               *per_saop_paths = NIL;
+        List               *base_proof_clauses = NIL;
+        int                 nelems;
+        Oid                 elem_type;
+        int16               elem_typlen;
+        bool                elem_typbyval;
+        char                elem_typalign;
+
+        if (!IsA(rinfo->clause, ScalarArrayOpExpr))
+            continue;
+
+        saop = (ScalarArrayOpExpr *) rinfo->clause;
+
+        /* Only handle IN (ANY), not ALL */
+        if (!saop->useOr)
+            continue;
+
+        leftop = (Node *) linitial(saop->args);
+        rightop = (Node *) lsecond(saop->args);
+
+        if (!rightop || !IsA(rightop, Const) ||
+            ((Const *) rightop)->constisnull)
+            continue;
+
+        arrayconst = (const Const *) rightop;
+        arrayval = DatumGetArrayTypeP(arrayconst->constvalue);
+
+        if (ARR_NDIM(arrayval) != 1)
+            continue;
+
+        nelems = ArrayGetNItems(1, ARR_DIMS(arrayval));
+
+        if (nelems < 1 || nelems > MAX_SAOP_ARRAY_SIZE)
+            continue;
+
+        /*
+         * Pre-filter indexes - structurally only. Note we must check for
+         * indpred (the predicate expression of a partial index) or where
+         * the planner has already proven that the query's WHERE clause
+         * *implies* the index predicate.
+         */
+        {
+            int index_pos = 0;
+            ListCell *idx_lc;
+
+            foreach(idx_lc, indexes)
+            {
+                IndexOptInfo *index = lfirst(idx_lc);
+
+                if (index->amhasgetbitmap &&
+                    (index->indpred != NIL || index->predOK))
+                {
+                    suitable_indexes =
+                        bms_add_member(suitable_indexes, index_pos);
+                }
+                index_pos++;
+            }
+        }
+
+        if (bms_is_empty(suitable_indexes))
+            continue;
+
+        /*
+         * Build the clause set used for partial-index predicate proof.
+         *
+         * We must not attempt to prove a partial index predicate using
+         * only the synthesized equality clause generated from a single
+         * SAOP element.  Partial-index predicates are often implied by
+         * other query restrictions.
+         *
+         * Example:
+         *
+         *      WHERE x IN (1,2,3)
+         *        AND status = 'active'
+         *
+         * with:
+         *
+         *      CREATE INDEX ... WHERE status = 'active';
+         *
+         * Therefore construct a base proof clause list containing all
+         * query restriction clauses except the SAOP currently being
+         * expanded.  The per-element equality clause will be appended
+         * during processing below.
+         */
+        {
+            ListCell *proof_lc;
+
+            foreach(proof_lc, clauses)
+            {
+                RestrictInfo *proof_rinfo =
+                    lfirst_node(RestrictInfo, proof_lc);
+
+                if (proof_rinfo != rinfo)
+                    base_proof_clauses =
+                        lappend(base_proof_clauses,
+                                proof_rinfo);
+            }
+        }
+
+        elem_type = ARR_ELEMTYPE(arrayval);
+        get_typlenbyvalalign(elem_type,
+                            &elem_typlen,
+                            &elem_typbyval,
+                            &elem_typalign);
+
+        deconstruct_array(arrayval,
+                          elem_type,
+                          elem_typlen,
+                          elem_typbyval,
+                          elem_typalign,
+                          &elem_values,
+                          &elem_nulls,
+                          &nelems);
+
+        /*
+         * Create an array to hold the base matched clauses for each index.
+         * We match all query restrictions (except the SAOP itself) against
+         * our candidate indexes just once.
+         */
+        IndexClauseSet *base_clausesets =
+            (IndexClauseSet *) palloc0(list_length(indexes) * sizeof(IndexClauseSet));
+
+        {
+            int idx_pos = -1;
+            while ((idx_pos = bms_next_member(suitable_indexes, idx_pos)) >= 0)
+            {
+                IndexOptInfo *index = list_nth(indexes, idx_pos);
+                ListCell *clc;
+                
+                foreach(clc, clauses)
+                {
+                    RestrictInfo *other_rinfo = lfirst_node(RestrictInfo, clc);
+                    /* Skip the original SAOP clause we are actively decomposing */
+                    if (other_rinfo != rinfo) {
+                        match_clause_to_index(root,
+                                              other_rinfo,
+                                              index,
+                                              &base_clausesets[idx_pos]);
+                    }
+                }
+            }
+        }
+
+        /*
+         * For each IN element, build ALL possible index paths,
+         * not just the first one (avoid greedy choice).
+         */
+        for (int i = 0; i < nelems; i++)
+        {
+            Expr       *elem_const;
+            OpExpr     *opclause;
+            RestrictInfo *new_rinfo;
+            List       *paths_for_elem = NIL;
+            List       *proof_clauses;
+            Bitmapset  *to_remove = NULL;
+            int         index_pos = -1;
+
+            if (elem_nulls[i])
+            {
+                per_saop_paths = NIL;
+                break;
+            }
+
+            elem_const = (Expr *) makeConst(elem_type,
+                                            -1,
+                                            arrayconst->constcollid,
+                                            elem_typlen,
+                                            elem_values[i],
+                                            false,
+                                            elem_typbyval);
+
+            opclause = (OpExpr *) make_opclause(saop->opno,
+                                     BOOLOID,
+                                     false,
+                                     (Expr *) copyObject(leftop),
+                                     elem_const,
+                                     saop->inputcollid,
+                                     saop->inputcollid);
+
+            /*
+             * Partial-index applicability may depend on the synthesized equality
+             * clause for the current SAOP element (e.g. a predicate such as
+             * "x = 1"), so predicate implication must be evaluated per element
+             * rather than once per index.
+             */
+            new_rinfo = make_simple_restrictinfo(root,
+                                                 (Expr *) opclause);
+            proof_clauses = lappend(list_copy(base_proof_clauses),
+                                              new_rinfo);
+
+            while ((index_pos =
+                        bms_next_member(suitable_indexes,
+                                        index_pos)) >= 0)
+            {
+                IndexOptInfo *index =
+                    list_nth(indexes, index_pos);
+                IndexClauseSet clauseset;
+                List *indexpaths;
+
+                /*
+                 * For partial indexes that have not already been proven
+                 * usable by check_index_predicates(), test implication
+                 * against the full restriction environment rather than
+                 * just the synthesized equality clause.
+                 */
+                if (!index->predOK &&
+                    index->indpred != NIL &&
+                    !predicate_implied_by(index->indpred,
+                                          proof_clauses,
+                                          false))
+                    continue;
+
+                memcpy(&clauseset, &base_clausesets[index_pos], sizeof(IndexClauseSet));
+
+                match_clause_to_index(root,
+                                      new_rinfo,
+                                      index,
+                                      &clauseset);
+                indexpaths =
+                    build_index_paths(root,
+                                      rel,
+                                      index,
+                                      &clauseset,
+                                      true,
+                                      ST_BITMAPSCAN,
+                                      NULL);
+
+                if (indexpaths != NIL)
+                    paths_for_elem =
+                        list_concat(paths_for_elem,
+                                    indexpaths);
+            }
+
+            /*
+             * Apply structural pruning after iteration.
+             */
+            if (to_remove != NULL)
+            {
+                suitable_indexes =
+                    bms_del_members(suitable_indexes,
+                                    to_remove);
+                bms_free(to_remove);
+
+                if (bms_is_empty(suitable_indexes))
+                {
+                    per_saop_paths = NIL;
+                    break;
+                }
+            }
+
+            /*
+             * If no index could satisfy this element,
+             * abort entire SAOP transformation.
+             */
+            if (paths_for_elem == NIL)
+            {
+                per_saop_paths = NIL;
+                break;
+            }
+
+            /*
+             * Choose cheapest path for this element.
+             * Avoid path explosion and respect planner costing.
+             */
+            {
+                Path *cheapest = (Path *) linitial(paths_for_elem);
+                ListCell *plc;
+
+                foreach(plc, paths_for_elem)
+                {
+                    Path *p = lfirst(plc);
+
+                    if (compare_path_costs(p, cheapest, TOTAL_COST) < 0)
+                        cheapest = p;
+                }
+
+                per_saop_paths = lappend(per_saop_paths, cheapest);
+            }
+
+            list_free(proof_clauses);
+        }
+
+        pfree(base_clausesets);
+        bms_free(suitable_indexes);
+
+        if (per_saop_paths != NIL)
+        {
+            Path *bitmapqual;
+
+            if (list_length(per_saop_paths) > 1)
+                bitmapqual =
+                    (Path *) create_bitmap_or_path(root,
+                                                   rel,
+                                                   per_saop_paths);
+            else
+                bitmapqual =
+                    (Path *) linitial(per_saop_paths);
+
+            result = lappend(result, bitmapqual);
+        }
+
+        if (elem_values)
+            pfree(elem_values);
+        if (elem_nulls)
+            pfree(elem_nulls);
+    }
+
+    return result;
 }
 
 

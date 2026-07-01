@@ -45,3 +45,65 @@ SELECT count(*) FROM bmscantest WHERE a = 1 OR b = 1;
 
 -- clean up
 DROP TABLE bmscantest;
+
+
+-- Test ScalarArrayOpExpr (SAOP) for partial indexes
+
+-- Generate enough data that we can test the use of an index
+CREATE TABLE ipairs(
+   key INT,
+   value INT
+)
+WITH (autovacuum_enabled = false);
+-- Install the partial index on these values
+CREATE INDEX ipairs_key_idx1 ON ipairs(key) WHERE key = 507;
+CREATE INDEX ipairs_key_idx2 ON ipairs(key) WHERE key = 508;
+CREATE INDEX ipairs_key_idx3 ON ipairs(key) WHERE key = 509;
+CREATE INDEX ipairs_key_idx4 ON ipairs(key) WHERE key <= 508; -- Give planner a choice
+
+-- Dummy data to surround ours
+INSERT INTO ipairs(key, value)
+SELECT n, -n
+FROM generate_series(1, 1000) AS tmp(n);
+
+-- Update statistics
+VACUUM (ANALYZE) ipairs;
+
+-- Our specific test data to force the partial index
+EXPLAIN (ANALYZE, COSTS OFF, BUFFERS OFF, SUMMARY OFF, TIMING OFF)
+UPDATE ipairs
+SET value = 0
+WHERE key IN (507,508,509);
+
+-- We want ensure that an index use is always attempted - just for the test
+SET enable_seqscan=false;
+
+-- Variant 1 (works without the SAOP optimiser patch)
+EXPLAIN (COSTS OFF)
+SELECT value = 0
+FROM ipairs
+WHERE
+   key = 507 OR
+   key = 508 OR
+   key = 509;
+
+-- Variant 2 (works only with the SAOP optimiser patch)
+EXPLAIN (COSTS OFF)
+SELECT value = 0
+FROM ipairs
+WHERE key IN (507, 508, 509);
+
+-- Variant 3 (as above)
+EXPLAIN (COSTS OFF)
+SELECT value = 0
+FROM ipairs
+WHERE key = ANY('{507,508,509}'::INT[]);
+
+-- Variant 5 (should use only ipairs_key_idx4)
+EXPLAIN (COSTS OFF)
+SELECT value = 0
+FROM ipairs
+WHERE key < ANY('{508}'::INT[]);
+
+-- Clean up
+DROP TABLE ipairs;

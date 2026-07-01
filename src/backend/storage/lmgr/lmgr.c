@@ -148,7 +148,7 @@ LockRelationOid(Oid relid, LOCKMODE lockmode)
  * LockXXX routines in this file, but they could easily be added if needed.
  */
 bool
-ConditionalLockRelationOid(Oid relid, LOCKMODE lockmode)
+ConditionalLockRelationOid(Oid relid, LOCKMODE lockmode, bool logLockFailure)
 {
 	LOCKTAG		tag;
 	LOCALLOCK  *locallock;
@@ -157,7 +157,7 @@ ConditionalLockRelationOid(Oid relid, LOCKMODE lockmode)
 	SetLocktagRelationOid(&tag, relid);
 
 	res = LockAcquireExtended(&tag, lockmode, false, true, true, &locallock,
-							  false);
+							  logLockFailure);
 
 	if (res == LOCKACQUIRE_NOT_AVAIL)
 		return false;

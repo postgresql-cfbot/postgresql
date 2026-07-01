@@ -23,6 +23,7 @@
 #include "nodes/nodeFuncs.h"
 #include "rewrite/rewriteHandler.h"
 #include "storage/lmgr.h"
+#include "storage/lock.h"
 #include "utils/acl.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -131,7 +132,8 @@ LockTableRecurse(Oid reloid, LOCKMODE lockmode, bool nowait)
 
 		if (!nowait)
 			LockRelationOid(childreloid, lockmode);
-		else if (!ConditionalLockRelationOid(childreloid, lockmode))
+		else if (!ConditionalLockRelationOid(childreloid, lockmode,
+											 log_lock_failures))
 		{
 			/* try to throw error by name; relation could be deleted... */
 			char	   *relname = get_rel_name(childreloid);
@@ -217,7 +219,8 @@ LockViewRecurse_walker(Node *node, LockViewRecurse_context *context)
 			/* We have enough rights to lock the relation; do so. */
 			if (!context->nowait)
 				LockRelationOid(relid, context->lockmode);
-			else if (!ConditionalLockRelationOid(relid, context->lockmode))
+			else if (!ConditionalLockRelationOid(relid, context->lockmode,
+												 log_lock_failures))
 				ereport(ERROR,
 						(errcode(ERRCODE_LOCK_NOT_AVAILABLE),
 						 errmsg("could not obtain lock on relation \"%s\"",

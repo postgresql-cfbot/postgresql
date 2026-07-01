@@ -12676,6 +12676,49 @@ get_json_table_nested_columns(TableFunc *tf, JsonTablePlan *plan,
 }
 
 /*
+ * get_json_table_plan - Parse back a JSON_TABLE plan
+ */
+static void
+get_json_table_plan(TableFunc *tf, JsonTablePlan *plan, deparse_context *context,
+					bool parenthesize)
+{
+	if (parenthesize)
+		appendStringInfoChar(context->buf, '(');
+
+	if (IsA(plan, JsonTablePathScan))
+	{
+		JsonTablePathScan *s = castNode(JsonTablePathScan, plan);
+
+		appendStringInfoString(context->buf, quote_identifier(s->path->name));
+
+		if (s->child)
+		{
+			appendStringInfoString(context->buf,
+								   s->outerJoin ? " OUTER " : " INNER ");
+			get_json_table_plan(tf, s->child, context,
+								IsA(s->child, JsonTableSiblingJoin));
+		}
+	}
+	else if (IsA(plan, JsonTableSiblingJoin))
+	{
+		JsonTableSiblingJoin *j = (JsonTableSiblingJoin *) plan;
+
+		get_json_table_plan(tf, j->lplan, context,
+							IsA(j->lplan, JsonTableSiblingJoin) ||
+							castNode(JsonTablePathScan, j->lplan)->child);
+
+		appendStringInfoString(context->buf, j->cross ? " CROSS " : " UNION ");
+
+		get_json_table_plan(tf, j->rplan, context,
+							IsA(j->rplan, JsonTableSiblingJoin) ||
+							castNode(JsonTablePathScan, j->rplan)->child);
+	}
+
+	if (parenthesize)
+		appendStringInfoChar(context->buf, ')');
+}
+
+/*
  * get_json_table_columns - Parse back JSON_TABLE columns
  */
 static void
@@ -12684,6 +12727,7 @@ get_json_table_columns(TableFunc *tf, JsonTablePathScan *scan,
 					   bool showimplicit)
 {
 	StringInfo	buf = context->buf;
+	JsonExpr   *jexpr = castNode(JsonExpr, tf->docexpr);
 	ListCell   *lc_colname;
 	ListCell   *lc_coltype;
 	ListCell   *lc_coltypmod;
@@ -12763,6 +12807,9 @@ get_json_table_columns(TableFunc *tf, JsonTablePathScan *scan,
 			default_behavior = JSON_BEHAVIOR_NULL;
 		}
 
+		if (jexpr->on_error->btype == JSON_BEHAVIOR_ERROR)
+			default_behavior = JSON_BEHAVIOR_ERROR;
+
 		appendStringInfoString(buf, " PATH ");
 
 		get_json_path_spec(colexpr->path_spec, context, showimplicit);
@@ -12839,6 +12886,22 @@ get_json_table(TableFunc *tf, deparse_context *context, bool showimplicit)
 
 	get_json_table_columns(tf, castNode(JsonTablePathScan, tf->plan), context,
 						   showimplicit);
+
+	while(IsA((JsonTablePlan *)root, JsonTablePathScan) ||
+		  IsA((JsonTablePlan *)root, JsonTableSiblingJoin))
+	{
+		if (IsA((JsonTablePlan *)root, JsonTablePathScan))
+		{
+			JsonTablePathScan *s = castNode(JsonTablePathScan, (JsonTablePlan *)root);
+			if (!s->child)
+				break;
+		}
+
+		appendStringInfoChar(buf, ' ');
+		appendContextKeyword(context, "PLAN ", 0, 0, 0);
+		get_json_table_plan(tf, (JsonTablePlan *)root, context, true);
+		break;
+	}
 
 	if (jexpr->on_error->btype != JSON_BEHAVIOR_EMPTY_ARRAY)
 		get_json_behavior(jexpr->on_error, context, "ERROR");

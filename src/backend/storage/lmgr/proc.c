@@ -1615,7 +1615,7 @@ ProcSleep(LOCALLOCK *locallock)
 			if (myWaitStatus == PROC_WAIT_STATUS_OK)
 				pgstat_count_lock_waits(locallock->tag.lock.locktag_type, msecs);
 
-			if (log_lock_waits)
+			if (log_lock_waits && message_level_is_interesting(LOG))
 			{
 				StringInfoData buf,
 							lock_waiters_sbuf,

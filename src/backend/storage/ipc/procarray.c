@@ -5267,6 +5267,9 @@ KnownAssignedXidsDisplay(int trace_level)
 	tail = pArray->tailKnownAssignedXids;
 	head = pArray->headKnownAssignedXids;
 
+	if (!message_level_is_interesting(trace_level))
+		return;
+
 	initStringInfo(&buf);
 
 	for (i = tail; i < head; i++)

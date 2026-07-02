@@ -109,10 +109,11 @@ static Query *expand_virtual_generated_columns(PlannerInfo *root, Query *parse,
 											   RangeTblEntry *rte, int rt_index,
 											   Relation relation);
 static Node *pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
-											   Relids *relids);
+											   Relids *relids, List **safe_quals);
 static Node *pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 										   Node **jtlink1, Relids available_rels1,
-										   Node **jtlink2, Relids available_rels2);
+										   Node **jtlink2, Relids available_rels2,
+										   List *nonnullable_quals);
 static Node *pull_up_subqueries_recurse(PlannerInfo *root, Node *jtnode,
 										JoinExpr *lowest_outer_join,
 										AppendRelInfo *containing_appendrel);
@@ -671,11 +672,12 @@ pull_up_sublinks(PlannerInfo *root)
 {
 	Node	   *jtnode;
 	Relids		relids;
+	List	   *safe_quals;
 
 	/* Begin recursion through the jointree */
 	jtnode = pull_up_sublinks_jointree_recurse(root,
 											   (Node *) root->parse->jointree,
-											   &relids);
+											   &relids, &safe_quals);
 
 	/*
 	 * root->parse->jointree must always be a FromExpr, so insert a dummy one
@@ -692,10 +694,14 @@ pull_up_sublinks(PlannerInfo *root)
  *
  * In addition to returning the possibly-modified jointree node, we return
  * a relids set of the contained rels into *relids.
+ *
+ * We also return into *safe_quals the WHERE/ON quals at or below this node
+ * that constrain rels not below the nullable side of any outer join, which can
+ * be used to prove an expression evaluated at our level non-nullable.
  */
 static Node *
 pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
-								  Relids *relids)
+								  Relids *relids, List **safe_quals)
 {
 	/* Since this function recurses, it could be driven to stack overflow. */
 	check_stack_depth();
@@ -703,12 +709,14 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 	if (jtnode == NULL)
 	{
 		*relids = NULL;
+		*safe_quals = NIL;
 	}
 	else if (IsA(jtnode, RangeTblRef))
 	{
 		int			varno = ((RangeTblRef *) jtnode)->rtindex;
 
 		*relids = bms_make_singleton(varno);
+		*safe_quals = NIL;
 		/* jtnode is returned unmodified */
 	}
 	else if (IsA(jtnode, FromExpr))
@@ -716,22 +724,33 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		FromExpr   *f = (FromExpr *) jtnode;
 		List	   *newfromlist = NIL;
 		Relids		frelids = NULL;
+		List	   *fsafequals = NIL;
 		FromExpr   *newf;
 		Node	   *jtlink;
 		ListCell   *l;
 
-		/* First, recurse to process children and collect their relids */
+		/*
+		 * First, recurse to process children and collect their relids and
+		 * safe quals.
+		 */
 		foreach(l, f->fromlist)
 		{
 			Node	   *newchild;
 			Relids		childrelids;
+			List	   *childsafequals;
 
 			newchild = pull_up_sublinks_jointree_recurse(root,
 														 lfirst(l),
-														 &childrelids);
+														 &childrelids,
+														 &childsafequals);
 			newfromlist = lappend(newfromlist, newchild);
 			frelids = bms_join(frelids, childrelids);
+			fsafequals = list_concat(fsafequals, childsafequals);
 		}
+		/* This level's WHERE quals are safe to use as well. */
+		if (f->quals)
+			fsafequals = lappend(fsafequals, f->quals);
+
 		/* Build the replacement FromExpr; no quals yet */
 		newf = makeFromExpr(newfromlist, NULL);
 		/* Set up a link representing the rebuilt jointree */
@@ -739,7 +758,8 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		/* Now process qual --- all children are available for use */
 		newf->quals = pull_up_sublinks_qual_recurse(root, f->quals,
 													&jtlink, frelids,
-													NULL, NULL);
+													NULL, NULL,
+													fsafequals);
 
 		/*
 		 * Note that the result will be either newf, or a stack of JoinExprs
@@ -751,6 +771,7 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		 * outputs anyway.
 		 */
 		*relids = frelids;
+		*safe_quals = fsafequals;
 		jtnode = jtlink;
 	}
 	else if (IsA(jtnode, JoinExpr))
@@ -758,6 +779,9 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		JoinExpr   *j;
 		Relids		leftrelids;
 		Relids		rightrelids;
+		List	   *leftsafequals;
+		List	   *rightsafequals;
+		List	   *passquals;
 		Node	   *jtlink;
 
 		/*
@@ -768,11 +792,13 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		memcpy(j, jtnode, sizeof(JoinExpr));
 		jtlink = (Node *) j;
 
-		/* Recurse to process children and collect their relids */
+		/* Recurse to process children and collect their relids and quals */
 		j->larg = pull_up_sublinks_jointree_recurse(root, j->larg,
-													&leftrelids);
+													&leftrelids,
+													&leftsafequals);
 		j->rarg = pull_up_sublinks_jointree_recurse(root, j->rarg,
-													&rightrelids);
+													&rightrelids,
+													&rightsafequals);
 
 		/*
 		 * Now process qual, showing appropriate child relids as available,
@@ -789,26 +815,63 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
 		switch (j->jointype)
 		{
 			case JOIN_INNER:
+
+				/*
+				 * For an inner join, both children's quals and the join's own
+				 * quals constrain its output, so all of them are safe here
+				 * and above.
+				 */
+				passquals = list_concat(leftsafequals, rightsafequals);
+				if (j->quals)
+					passquals = lappend(passquals, j->quals);
+
 				j->quals = pull_up_sublinks_qual_recurse(root, j->quals,
 														 &jtlink,
 														 bms_union(leftrelids,
 																   rightrelids),
-														 NULL, NULL);
+														 NULL, NULL,
+														 passquals);
+
+				*safe_quals = passquals;
 				break;
 			case JOIN_LEFT:
+
+				/*
+				 * Above this join only the left child's quals stay safe; the
+				 * join may null-extend the right side, so the right child's
+				 * quals and the ON quals are not safe above us.  But they are
+				 * safe for this node's own quals, since a sublink pulled up
+				 * here goes into the right side.
+				 */
+				passquals = rightsafequals;
+				if (j->quals)
+					passquals = lappend(passquals, j->quals);
+
 				j->quals = pull_up_sublinks_qual_recurse(root, j->quals,
 														 &j->rarg,
 														 rightrelids,
-														 NULL, NULL);
+														 NULL, NULL,
+														 passquals);
+
+				*safe_quals = leftsafequals;
 				break;
 			case JOIN_FULL:
 				/* can't do anything with full-join quals */
+				*safe_quals = NIL;
 				break;
 			case JOIN_RIGHT:
+				/* Mirror of the JOIN_LEFT case */
+				passquals = leftsafequals;
+				if (j->quals)
+					passquals = lappend(passquals, j->quals);
+
 				j->quals = pull_up_sublinks_qual_recurse(root, j->quals,
 														 &j->larg,
 														 leftrelids,
-														 NULL, NULL);
+														 NULL, NULL,
+														 passquals);
+
+				*safe_quals = rightsafequals;
 				break;
 			default:
 				elog(ERROR, "unrecognized join type: %d",
@@ -848,12 +911,21 @@ pull_up_sublinks_jointree_recurse(PlannerInfo *root, Node *jtnode,
  * and/or jtlink2 in the order we encounter them.  We rely on subsequent
  * optimization to rearrange the stack if appropriate.
  *
+ * nonnullable_quals is the qual list we hand to convert_ANY_sublink_to_join
+ * when trying to convert a NOT IN against available_rels1; see there for what
+ * it means.  These quals are known to apply to the rows at this node, so we
+ * pass them down unchanged through AND clauses (whose arms share that
+ * context), but pass NIL when recursing into a just-pulled-up SubLink's quals,
+ * or when converting against available_rels2, since those are evaluated on
+ * different rows that the quals say nothing about.
+ *
  * Returns the replacement qual node, or NULL if the qual should be removed.
  */
 static Node *
 pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 							  Node **jtlink1, Relids available_rels1,
-							  Node **jtlink2, Relids available_rels2)
+							  Node **jtlink2, Relids available_rels2,
+							  List *nonnullable_quals)
 {
 	if (node == NULL)
 		return NULL;
@@ -862,6 +934,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 		SubLink    *sublink = (SubLink *) node;
 		JoinExpr   *j;
 		Relids		child_rels;
+		List	   *child_safequals;
 
 		/* Is it a convertible ANY or EXISTS clause? */
 		if (sublink->subLinkType == ANY_SUBLINK)
@@ -880,7 +953,7 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 			}
 
 			if ((j = convert_ANY_sublink_to_join(root, sublink, false,
-												 available_rels1)) != NULL)
+												 available_rels1, NIL)) != NULL)
 			{
 				/* Yes; insert the new join node into the join tree */
 				j->larg = *jtlink1;
@@ -888,7 +961,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 				/* Recursively process pulled-up jointree nodes */
 				j->rarg = pull_up_sublinks_jointree_recurse(root,
 															j->rarg,
-															&child_rels);
+															&child_rels,
+															&child_safequals);
 
 				/*
 				 * Now recursively process the pulled-up quals.  Any inserted
@@ -900,13 +974,14 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 														 &j->larg,
 														 available_rels1,
 														 &j->rarg,
-														 child_rels);
+														 child_rels,
+														 NIL);
 				/* Return NULL representing constant TRUE */
 				return NULL;
 			}
 			if (available_rels2 != NULL &&
 				(j = convert_ANY_sublink_to_join(root, sublink, false,
-												 available_rels2)) != NULL)
+												 available_rels2, NIL)) != NULL)
 			{
 				/* Yes; insert the new join node into the join tree */
 				j->larg = *jtlink2;
@@ -914,7 +989,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 				/* Recursively process pulled-up jointree nodes */
 				j->rarg = pull_up_sublinks_jointree_recurse(root,
 															j->rarg,
-															&child_rels);
+															&child_rels,
+															&child_safequals);
 
 				/*
 				 * Now recursively process the pulled-up quals.  Any inserted
@@ -926,7 +1002,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 														 &j->larg,
 														 available_rels2,
 														 &j->rarg,
-														 child_rels);
+														 child_rels,
+														 NIL);
 				/* Return NULL representing constant TRUE */
 				return NULL;
 			}
@@ -942,7 +1019,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 				/* Recursively process pulled-up jointree nodes */
 				j->rarg = pull_up_sublinks_jointree_recurse(root,
 															j->rarg,
-															&child_rels);
+															&child_rels,
+															&child_safequals);
 
 				/*
 				 * Now recursively process the pulled-up quals.  Any inserted
@@ -954,7 +1032,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 														 &j->larg,
 														 available_rels1,
 														 &j->rarg,
-														 child_rels);
+														 child_rels,
+														 NIL);
 				/* Return NULL representing constant TRUE */
 				return NULL;
 			}
@@ -968,7 +1047,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 				/* Recursively process pulled-up jointree nodes */
 				j->rarg = pull_up_sublinks_jointree_recurse(root,
 															j->rarg,
-															&child_rels);
+															&child_rels,
+															&child_safequals);
 
 				/*
 				 * Now recursively process the pulled-up quals.  Any inserted
@@ -980,7 +1060,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 														 &j->larg,
 														 available_rels2,
 														 &j->rarg,
-														 child_rels);
+														 child_rels,
+														 NIL);
 				/* Return NULL representing constant TRUE */
 				return NULL;
 			}
@@ -994,13 +1075,15 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 		SubLink    *sublink = (SubLink *) get_notclausearg((Expr *) node);
 		JoinExpr   *j;
 		Relids		child_rels;
+		List	   *child_safequals;
 
 		if (sublink && IsA(sublink, SubLink))
 		{
 			if (sublink->subLinkType == ANY_SUBLINK)
 			{
 				if ((j = convert_ANY_sublink_to_join(root, sublink, true,
-													 available_rels1)) != NULL)
+													 available_rels1,
+													 nonnullable_quals)) != NULL)
 				{
 					/* Yes; insert the new join node into the join tree */
 					j->larg = *jtlink1;
@@ -1008,7 +1091,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 					/* Recursively process pulled-up jointree nodes */
 					j->rarg = pull_up_sublinks_jointree_recurse(root,
 																j->rarg,
-																&child_rels);
+																&child_rels,
+																&child_safequals);
 
 					/*
 					 * Now recursively process the pulled-up quals.  Because
@@ -1020,13 +1104,15 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 															 j->quals,
 															 &j->rarg,
 															 child_rels,
-															 NULL, NULL);
+															 NULL, NULL,
+															 NIL);
 					/* Return NULL representing constant TRUE */
 					return NULL;
 				}
 				if (available_rels2 != NULL &&
 					(j = convert_ANY_sublink_to_join(root, sublink, true,
-													 available_rels2)) != NULL)
+													 available_rels2,
+													 NIL)) != NULL)
 				{
 					/* Yes; insert the new join node into the join tree */
 					j->larg = *jtlink2;
@@ -1034,7 +1120,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 					/* Recursively process pulled-up jointree nodes */
 					j->rarg = pull_up_sublinks_jointree_recurse(root,
 																j->rarg,
-																&child_rels);
+																&child_rels,
+																&child_safequals);
 
 					/*
 					 * Now recursively process the pulled-up quals.  Because
@@ -1046,7 +1133,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 															 j->quals,
 															 &j->rarg,
 															 child_rels,
-															 NULL, NULL);
+															 NULL, NULL,
+															 NIL);
 					/* Return NULL representing constant TRUE */
 					return NULL;
 				}
@@ -1062,7 +1150,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 					/* Recursively process pulled-up jointree nodes */
 					j->rarg = pull_up_sublinks_jointree_recurse(root,
 																j->rarg,
-																&child_rels);
+																&child_rels,
+																&child_safequals);
 
 					/*
 					 * Now recursively process the pulled-up quals.  Because
@@ -1074,7 +1163,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 															 j->quals,
 															 &j->rarg,
 															 child_rels,
-															 NULL, NULL);
+															 NULL, NULL,
+															 NIL);
 					/* Return NULL representing constant TRUE */
 					return NULL;
 				}
@@ -1088,7 +1178,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 					/* Recursively process pulled-up jointree nodes */
 					j->rarg = pull_up_sublinks_jointree_recurse(root,
 																j->rarg,
-																&child_rels);
+																&child_rels,
+																&child_safequals);
 
 					/*
 					 * Now recursively process the pulled-up quals.  Because
@@ -1100,7 +1191,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 															 j->quals,
 															 &j->rarg,
 															 child_rels,
-															 NULL, NULL);
+															 NULL, NULL,
+															 NIL);
 					/* Return NULL representing constant TRUE */
 					return NULL;
 				}
@@ -1125,7 +1217,8 @@ pull_up_sublinks_qual_recurse(PlannerInfo *root, Node *node,
 													  jtlink1,
 													  available_rels1,
 													  jtlink2,
-													  available_rels2);
+													  available_rels2,
+													  nonnullable_quals);
 			if (newclause)
 				newclauses = lappend(newclauses, newclause);
 		}

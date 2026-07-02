@@ -986,7 +986,66 @@ ParallelApplyWorkerMain(Datum main_arg)
 
 	set_apply_error_context_origin(originname);
 
-	LogicalParallelApplyLoop(mqh);
+	PG_TRY();
+	{
+		LogicalParallelApplyLoop(mqh);
+	}
+	PG_CATCH();
+	{
+		MemoryContext oldcontext;
+		ErrorData  *edata;
+
+		/*
+		 * Reset the origin state to prevent the advancement of origin
+		 * progress if we fail to apply. Otherwise, this will result in
+		 * transaction loss as that transaction won't be sent again by the
+		 * server.
+		 */
+		replorigin_xact_clear(true);
+
+		/*
+		 * Copy the error and recover to an idle state so we can insert the
+		 * deferred conflict log tuple (if any) before re-throwing.  Copy the
+		 * error into a longer-lived context first, as it may have been raised
+		 * under ErrorContext.  Also reset the error context stack: the
+		 * callbacks in effect when the error was thrown belong to unwound
+		 * stack frames, and the deferred insert installs its own.
+		 */
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+		edata = CopyErrorData();
+		MemoryContextSwitchTo(oldcontext);
+
+		FlushErrorState();
+		error_context_stack = NULL;
+
+		/*
+		 * Tell the leader we failed and are about to report the error and log
+		 * the conflict.  This must be set before AbortOutOfAnyTransaction()
+		 * below releases the transaction lock that the leader waits on in
+		 * pa_wait_for_xact_finish(); otherwise the leader would see a
+		 * non-finished state, assume the connection was lost, and tear this
+		 * worker down while it is still writing the conflict log tuple.
+		 */
+		pa_set_xact_state(MyParallelShared, PARALLEL_TRANS_ERROR);
+
+		AbortOutOfAnyTransaction();
+
+		/*
+		 * Insert the deferred conflict log tuple before re-throwing.
+		 * Re-throwing is what reports the error to the leader (via the error
+		 * queue set up above), so the insertion must happen first: otherwise
+		 * the leader could start tearing down this worker while it is still
+		 * writing the conflict log tuple.  If the insertion itself fails,
+		 * that error (annotated with the conflict context, see
+		 * InsertConflictLogTuple) propagates to the leader instead of the
+		 * original.
+		 */
+		ProcessPendingConflictLogTuple();
+
+		/* Re-throw the original error, which reports it to the leader. */
+		ReThrowError(edata);
+	}
+	PG_END_TRY();
 
 	/*
 	 * The parallel apply worker must not get here because the parallel apply
@@ -1314,9 +1373,33 @@ pa_wait_for_xact_finish(ParallelApplyWorkerInfo *winfo)
 	 * released.
 	 */
 	if (pa_get_xact_state(winfo->shared) != PARALLEL_TRANS_FINISHED)
+	{
+		/*
+		 * If the worker signalled that it errored (PARALLEL_TRANS_ERROR), it
+		 * is logging the conflict and will report the actual error via the
+		 * error queue before exiting.  Wait for that rather than reporting a
+		 * generic lost connection: CHECK_FOR_INTERRUPTS() drives
+		 * ProcessParallelApplyMessages(), which raises the real error on the
+		 * worker's ErrorResponse (or "lost connection" if the worker died
+		 * without reporting).  Waiting here also keeps the worker alive long
+		 * enough to finish writing the conflict log tuple.
+		 */
+		while (pa_get_xact_state(winfo->shared) == PARALLEL_TRANS_ERROR)
+		{
+			CHECK_FOR_INTERRUPTS();
+
+			(void) WaitLatch(MyLatch,
+							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 10L,
+							 WAIT_EVENT_LOGICAL_PARALLEL_APPLY_STATE_CHANGE);
+
+			ResetLatch(MyLatch);
+		}
+
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("lost connection to the logical replication parallel apply worker")));
+	}
 }
 
 /*

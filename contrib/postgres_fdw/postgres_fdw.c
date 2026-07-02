@@ -336,6 +336,7 @@ typedef struct
 	PGresult   *rel;
 	PGresult   *att;
 	int			server_version_num;
+	double		reltuples;
 } RemoteStatsResults;
 
 /* Column order in relation stats query */
@@ -584,7 +585,8 @@ static bool postgresAnalyzeForeignTable(Relation relation,
 										BlockNumber *totalpages);
 static bool postgresImportForeignStatistics(Relation relation,
 											List *va_cols,
-											int elevel);
+											int elevel,
+											double *totalrows);
 static List *postgresImportForeignSchema(ImportForeignSchemaStmt *stmt,
 										 Oid serverOid);
 static void postgresGetForeignJoinPaths(PlannerInfo *root,
@@ -5588,7 +5590,8 @@ analyze_row_processor(PGresult *res, int row, PgFdwAnalyzeState *astate)
  * 		Attempt to fetch/restore remote statistics instead of sampling.
  */
 static bool
-postgresImportForeignStatistics(Relation relation, List *va_cols, int elevel)
+postgresImportForeignStatistics(Relation relation, List *va_cols, int elevel,
+								double *totalrows)
 {
 	const char *schemaname = NULL;
 	const char *relname = NULL;
@@ -5665,9 +5668,12 @@ postgresImportForeignStatistics(Relation relation, List *va_cols, int elevel)
 									   attrcnt, remattrmap, &remstats);
 
 	if (ok)
+	{
+		*totalrows = remstats.reltuples;
 		ereport(elevel,
 				(errmsg("finished importing statistics for foreign table \"%s.%s\"",
 						schemaname, relname)));
+	}
 
 	PQclear(remstats.rel);
 	PQclear(remstats.att);
@@ -5770,6 +5776,7 @@ fetch_remote_statistics(Relation relation,
 	 * to sampling.
 	 */
 	reltuples = strtod(PQgetvalue(relstats, 0, RELSTATS_RELTUPLES), NULL);
+	remstats->reltuples = reltuples;
 	if (((server_version_num < 140000) && (reltuples == 0)) ||
 		((server_version_num >= 140000) && (reltuples == -1)))
 	{

@@ -159,7 +159,8 @@ typedef bool (*AnalyzeForeignTable_function) (Relation relation,
 
 typedef bool (*ImportForeignStatistics_function) (Relation relation,
 												  List *va_cols,
-												  int elevel);
+												  int elevel,
+												  double *totalrows);
 
 typedef List *(*ImportForeignSchema_function) (ImportForeignSchemaStmt *stmt,
 											   Oid serverOid);

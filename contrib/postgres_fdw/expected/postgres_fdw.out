@@ -12988,9 +12988,29 @@ ANALYZE simport_ftable;                   -- should fail
 WARNING:  could not import statistics for foreign table "public.simport_ftable" --- no attribute statistics found for column "c2" of remote table "public.simport_table"
 ALTER TABLE simport_table ALTER COLUMN c2 SET STATISTICS DEFAULT;
 ANALYZE simport_table;
+SELECT pg_stat_reset_single_table_counters('simport_ftable'::regclass);
+ pg_stat_reset_single_table_counters 
+-------------------------------------
+ 
+(1 row)
+
 ANALYZE VERBOSE simport_ftable;           -- should work
 INFO:  importing statistics for foreign table "public.simport_ftable"
 INFO:  finished importing statistics for foreign table "public.simport_ftable"
+SELECT pg_stat_force_next_flush();
+ pg_stat_force_next_flush 
+--------------------------
+ 
+(1 row)
+
+SELECT pg_stat_get_live_tuples('simport_ftable'::regclass),
+       pg_stat_get_analyze_count('simport_ftable'::regclass),
+       pg_stat_get_last_analyze_time('simport_ftable'::regclass) IS NOT NULL;
+ pg_stat_get_live_tuples | pg_stat_get_analyze_count | ?column? 
+-------------------------+---------------------------+----------
+                       4 |                         1 | t
+(1 row)
+
 ANALYZE VERBOSE simport_ftable (c1);      -- should work
 INFO:  importing statistics for foreign table "public.simport_ftable"
 INFO:  finished importing statistics for foreign table "public.simport_ftable"

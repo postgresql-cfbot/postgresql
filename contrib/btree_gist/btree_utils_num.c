@@ -269,6 +269,12 @@ gbt_num_consistent(const GBT_NUMKEY_R *key,
 {
 	bool		retval;
 
+	/*
+	 * Every comparison callback is invoked as f_xx(query, key): the query
+	 * value is always the left argument and the indexed key bound the right.
+	 * The integer opclasses rely on this fixed order so their cross-type
+	 * callbacks can read each side at its own width.
+	 */
 	switch (*strategy)
 	{
 		case BTLessEqualStrategyNumber:
@@ -284,7 +290,7 @@ gbt_num_consistent(const GBT_NUMKEY_R *key,
 			if (is_leaf)
 				retval = tinfo->f_eq(query, key->lower, flinfo);
 			else
-				retval = (tinfo->f_le(key->lower, query, flinfo) &&
+				retval = (tinfo->f_ge(query, key->lower, flinfo) &&
 						  tinfo->f_le(query, key->upper, flinfo));
 			break;
 		case BTGreaterStrategyNumber:
@@ -307,7 +313,6 @@ gbt_num_consistent(const GBT_NUMKEY_R *key,
 	return retval;
 }
 
-
 /*
  * The GiST distance method (for KNN-Gist)
  */
@@ -324,6 +329,13 @@ gbt_num_distance(const GBT_NUMKEY_R *key,
 	if (tinfo->f_dist == NULL)
 		elog(ERROR, "KNN search is not supported for btree_gist type %d",
 			 (int) tinfo->t);
+
+	/*
+	 * As in gbt_num_consistent(), every callback is invoked as f_xx(query, key):
+	 * the query value is the left argument and the indexed key bound the right.
+	 * The integer opclasses' cross-type callbacks read each side at its own
+	 * width, so keep this argument order if you ever touch the calls below.
+	 */
 	if (tinfo->f_le(query, key->lower, flinfo))
 		retval = tinfo->f_dist(query, key->lower, flinfo);
 	else if (tinfo->f_ge(query, key->upper, flinfo))

@@ -43,6 +43,7 @@
 #include "access/xlog.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
+#include "catalog/global_temp.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
@@ -50,6 +51,8 @@
 #include "catalog/pg_am.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_inherits.h"
+#include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_index.h"
 #include "catalog/toasting.h"
 #include "commands/defrem.h"
 #include "commands/progress.h"
@@ -254,6 +257,7 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 	bool		verbose = false;
 	bool		analyze = false;
 	bool		concurrently = false;
+	bool		have_gtrs;
 
 	/* Parse option list */
 	foreach_node(DefElem, opt, stmt->params)
@@ -443,6 +447,7 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 
 	/* Cluster the tables, each in a separate transaction */
 	Assert(rel == NULL);
+	have_gtrs = false;
 	foreach_ptr(RelToCluster, rtc, rtcs)
 	{
 		/* Start a new transaction for each relation. */
@@ -458,6 +463,8 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 			CommitTransactionCommand();
 			continue;
 		}
+		if (RELATION_IS_GLOBAL_TEMP(rel))
+			have_gtrs = true;
 
 		/* functions in indexes may want a snapshot set */
 		PushActiveSnapshot(GetTransactionSnapshot());
@@ -472,6 +479,13 @@ ExecRepack(ParseState *pstate, RepackStmt *stmt, bool isTopLevel)
 
 	/* Start a new transaction for the cleanup work. */
 	StartTransactionCommand();
+
+	/*
+	 * Update our PGPROC struct's tempfrozenxid and tempminmxid, if we
+	 * processed any global temporary relations.
+	 */
+	if (have_gtrs)
+		vac_update_tempfrozenxids();
 
 	/* Clean up working storage */
 	MemoryContextDelete(repack_context);
@@ -853,8 +867,7 @@ mark_index_clustered(Relation rel, Oid indexOid, bool is_internal)
 	{
 		Oid			thisIndexOid = lfirst_oid(index);
 
-		indexTuple = SearchSysCacheCopy1(INDEXRELID,
-										 ObjectIdGetDatum(thisIndexOid));
+		indexTuple = GetEffectivePgIndexTuple(thisIndexOid);
 		if (!HeapTupleIsValid(indexTuple))
 			elog(ERROR, "cache lookup failed for index %u", thisIndexOid);
 		indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
@@ -1286,7 +1299,9 @@ copy_table_data(Relation NewHeap, Relation OldHeap, Relation OldIndex,
 {
 	Relation	relRelation;
 	HeapTuple	reltup;
+	HeapTuple	temp_reltup;
 	Form_pg_class relform;
+	Form_pg_temp_class temp_relform;
 	TupleDesc	oldTupDesc PG_USED_FOR_ASSERTS_ONLY;
 	TupleDesc	newTupDesc PG_USED_FOR_ASSERTS_ONLY;
 	VacuumParams params;
@@ -1327,11 +1342,17 @@ copy_table_data(Relation NewHeap, Relation OldHeap, Relation OldIndex,
 	 * are only RECENTLY_DEAD.  Then we'd fail while trying to copy those
 	 * tuples.
 	 *
-	 * We don't need to open the toast relation here, just lock it.  The lock
-	 * will be held till end of transaction.
+	 * If it's a global temporary relation, we must open it, to ensure that it
+	 * is properly initialized, so we might as well do that for all relation
+	 * types.  Keep the relation locked till end of transaction.
 	 */
 	if (OldHeap->rd_rel->reltoastrelid)
-		LockRelationOid(OldHeap->rd_rel->reltoastrelid, lmode);
+	{
+		Relation	toastRel;
+
+		toastRel = relation_open(OldHeap->rd_rel->reltoastrelid, lmode);
+		relation_close(toastRel, NoLock);
+	}
 
 	/*
 	 * If both tables have TOAST tables, perform toast swap by content.  It is
@@ -1472,21 +1493,30 @@ copy_table_data(Relation NewHeap, Relation OldHeap, Relation OldIndex,
 					   tups_recently_dead,
 					   pg_rusage_show(&ru0))));
 
-	/* Update pg_class to reflect the correct values of pages and tuples. */
+	/*
+	 * Update pg_class / pg_temp_class to reflect the correct values of pages
+	 * and tuples.
+	 */
 	relRelation = table_open(RelationRelationId, RowExclusiveLock);
 
-	reltup = SearchSysCacheCopy1(RELOID,
-								 ObjectIdGetDatum(RelationGetRelid(NewHeap)));
+	reltup = GetPgClassAndPgTempClassTuples(RelationGetRelid(NewHeap), false,
+											&temp_reltup, true);
 	if (!HeapTupleIsValid(reltup))
 		elog(ERROR, "cache lookup failed for relation %u",
 			 RelationGetRelid(NewHeap));
 	relform = (Form_pg_class) GETSTRUCT(reltup);
+	temp_relform = (Form_pg_temp_class) GETSTRUCT_SAFE(temp_reltup);
 
-	relform->relpages = num_pages;
-	relform->reltuples = num_tuples;
+	SetEffective_relpages(relform, temp_relform, num_pages, NULL, NULL);
+	SetEffective_reltuples(relform, temp_relform, num_tuples, NULL, NULL);
 
 	/* Don't update the stats for pg_class.  See swap_relation_files. */
-	if (RelationGetRelid(OldHeap) != RelationRelationId)
+	if (HeapTupleIsValid(temp_reltup))
+	{
+		UpdatePgTempClassTuple(RelationGetRelid(NewHeap), temp_reltup);
+		heap_freetuple(temp_reltup);
+	}
+	else if (RelationGetRelid(OldHeap) != RelationRelationId)
 		CatalogTupleUpdate(relRelation, &reltup->t_self, reltup);
 	else
 		CacheInvalidateRelcacheByTuple(reltup);
@@ -1535,9 +1565,13 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 {
 	Relation	relRelation;
 	HeapTuple	reltup1,
-				reltup2;
+				reltup2,
+				temp_reltup1,
+				temp_reltup2;
 	Form_pg_class relform1,
 				relform2;
+	Form_pg_temp_class temp_relform1,
+				temp_relform2;
 	RelFileNumber relfilenumber1,
 				relfilenumber2;
 	RelFileNumber swaptemp;
@@ -1545,21 +1579,28 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	Oid			relam1,
 				relam2;
 
-	/* We need writable copies of both pg_class tuples. */
+	/*
+	 * We need writable copies of both pg_class tuples, and the corresponding
+	 * pg_temp_class tuples, if they're global temporary relations.
+	 */
 	relRelation = table_open(RelationRelationId, RowExclusiveLock);
 
-	reltup1 = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(r1));
+	reltup1 = GetPgClassAndPgTempClassTuples(r1, false, &temp_reltup1, true);
 	if (!HeapTupleIsValid(reltup1))
 		elog(ERROR, "cache lookup failed for relation %u", r1);
 	relform1 = (Form_pg_class) GETSTRUCT(reltup1);
+	temp_relform1 = (Form_pg_temp_class) GETSTRUCT_SAFE(temp_reltup1);
 
-	reltup2 = SearchSysCacheCopy1(RELOID, ObjectIdGetDatum(r2));
+	reltup2 = GetPgClassAndPgTempClassTuples(r2, false, &temp_reltup2, true);
 	if (!HeapTupleIsValid(reltup2))
 		elog(ERROR, "cache lookup failed for relation %u", r2);
 	relform2 = (Form_pg_class) GETSTRUCT(reltup2);
+	temp_relform2 = (Form_pg_temp_class) GETSTRUCT_SAFE(temp_reltup2);
 
-	relfilenumber1 = relform1->relfilenode;
-	relfilenumber2 = relform2->relfilenode;
+	Assert(HeapTupleIsValid(temp_reltup1) == HeapTupleIsValid(temp_reltup2));
+
+	relfilenumber1 = GetEffective_relfilenode(relform1, temp_relform1);
+	relfilenumber2 = GetEffective_relfilenode(relform2, temp_relform2);
 	relam1 = relform1->relam;
 	relam2 = relform2->relam;
 
@@ -1572,13 +1613,14 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		 */
 		Assert(!target_is_pg_class);
 
-		swaptemp = relform1->relfilenode;
-		relform1->relfilenode = relform2->relfilenode;
-		relform2->relfilenode = swaptemp;
+		SetEffective_relfilenode(relform1, temp_relform1, relfilenumber2);
+		SetEffective_relfilenode(relform2, temp_relform2, relfilenumber1);
 
-		swaptemp = relform1->reltablespace;
-		relform1->reltablespace = relform2->reltablespace;
-		relform2->reltablespace = swaptemp;
+		swaptemp = GetEffective_reltablespace(relform1, temp_relform1);
+		SetEffective_reltablespace(relform1, temp_relform1,
+								   GetEffective_reltablespace(relform2,
+															  temp_relform2));
+		SetEffective_reltablespace(relform2, temp_relform2, swaptemp);
 
 		swaptemp = relform1->relam;
 		relform1->relam = relform2->relam;
@@ -1666,6 +1708,15 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		rel2->rd_newRelfilelocatorSubid = rel1->rd_newRelfilelocatorSubid;
 		rel2->rd_firstRelfilelocatorSubid = rel1->rd_firstRelfilelocatorSubid;
 		RelationAssumeNewRelfilelocator(rel1);
+
+		/*
+		 * If they're global temp relations, reassign rel2's storage to rel1.
+		 * NB: We intentionally do not reassign rel1's storage to rel2, since
+		 * that would leave it in an invalid state on rollback.
+		 */
+		if (RELATION_IS_GLOBAL_TEMP(rel1))
+			ReassignGlobalTempRelationStorage(rel2->rd_locator, rel1->rd_id);
+
 		relation_close(rel1, NoLock);
 		relation_close(rel2, NoLock);
 	}
@@ -1678,11 +1729,36 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 	 * and then fail to commit the pg_class update.
 	 */
 
-	/* set rel1's frozen Xid and minimum MultiXid */
+	/*
+	 * Set rel1's frozen Xid and minimum MultiXid.  For a global temporary
+	 * relation, the supplied values are set in pg_temp_class and pg_class,
+	 * except that the values in pg_class are constrained to be no later than
+	 * min_tempfrozenxid and min_tempminmxid from all other backends' global
+	 * temporary relations --- see comments in vac_update_relstats().
+	 */
 	if (relform1->relkind != RELKIND_INDEX)
 	{
 		Assert(!TransactionIdIsValid(frozenXid) ||
 			   TransactionIdIsNormal(frozenXid));
+
+		if (temp_relform1 != NULL)
+		{
+			TransactionId min_tempfrozenxid;
+			MultiXactId min_tempminmxid;
+
+			vac_get_min_tempfrozenxids(&min_tempfrozenxid, &min_tempminmxid);
+
+			temp_relform1->relfrozenxid = frozenXid;
+			temp_relform1->relminmxid = cutoffMulti;
+
+			if (TransactionIdIsValid(min_tempfrozenxid) &&
+				TransactionIdPrecedes(min_tempfrozenxid, frozenXid))
+				frozenXid = min_tempfrozenxid;
+
+			if (MultiXactIdIsValid(min_tempminmxid) &&
+				MultiXactIdPrecedes(min_tempminmxid, cutoffMulti))
+				cutoffMulti = min_tempminmxid;
+		}
 		relform1->relfrozenxid = frozenXid;
 		relform1->relminmxid = cutoffMulti;
 	}
@@ -1694,21 +1770,29 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		int32		swap_allvisible;
 		int32		swap_allfrozen;
 
-		swap_pages = relform1->relpages;
-		relform1->relpages = relform2->relpages;
-		relform2->relpages = swap_pages;
+		swap_pages = GetEffective_relpages(relform1, temp_relform1);
+		SetEffective_relpages(relform1, temp_relform1,
+							  GetEffective_relpages(relform2, temp_relform2),
+							  NULL, NULL);
+		SetEffective_relpages(relform2, temp_relform2, swap_pages, NULL, NULL);
 
-		swap_tuples = relform1->reltuples;
-		relform1->reltuples = relform2->reltuples;
-		relform2->reltuples = swap_tuples;
+		swap_tuples = GetEffective_reltuples(relform1, temp_relform1);
+		SetEffective_reltuples(relform1, temp_relform1,
+							   GetEffective_reltuples(relform2, temp_relform2),
+							   NULL, NULL);
+		SetEffective_reltuples(relform2, temp_relform2, swap_tuples, NULL, NULL);
 
-		swap_allvisible = relform1->relallvisible;
-		relform1->relallvisible = relform2->relallvisible;
-		relform2->relallvisible = swap_allvisible;
+		swap_allvisible = GetEffective_relallvisible(relform1, temp_relform1);
+		SetEffective_relallvisible(relform1, temp_relform1,
+								   GetEffective_relallvisible(relform2, temp_relform2),
+								   NULL, NULL);
+		SetEffective_relallvisible(relform2, temp_relform2, swap_allvisible, NULL, NULL);
 
-		swap_allfrozen = relform1->relallfrozen;
-		relform1->relallfrozen = relform2->relallfrozen;
-		relform2->relallfrozen = swap_allfrozen;
+		swap_allfrozen = GetEffective_relallfrozen(relform1, temp_relform1);
+		SetEffective_relallfrozen(relform1, temp_relform1,
+								  GetEffective_relallfrozen(relform2, temp_relform2),
+								  NULL, NULL);
+		SetEffective_relallfrozen(relform2, temp_relform2, swap_allfrozen, NULL, NULL);
 	}
 
 	/*
@@ -1736,6 +1820,17 @@ swap_relation_files(Oid r1, Oid r2, bool target_is_pg_class,
 		/* no update ... but we do still need relcache inval */
 		CacheInvalidateRelcacheByTuple(reltup1);
 		CacheInvalidateRelcacheByTuple(reltup2);
+	}
+
+	/*
+	 * For global temporary relations, update the tuples in pg_temp_class.
+	 */
+	if (HeapTupleIsValid(temp_reltup1) && HeapTupleIsValid(temp_reltup2))
+	{
+		UpdatePgTempClassTuple(r1, temp_reltup1);
+		UpdatePgTempClassTuple(r2, temp_reltup2);
+		heap_freetuple(temp_reltup1);
+		heap_freetuple(temp_reltup2);
 	}
 
 	/*
@@ -2160,6 +2255,16 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 			index = (Form_pg_index) GETSTRUCT(tuple);
 
 			/*
+			 * Silently skip pg_temp_class --- it does not support relfilenode
+			 * changes, because that would require it to be a mapped relation,
+			 * and the relmapper does not support temporary tables.  It might
+			 * be possible to make this work, but it doesn't seem worth the
+			 * effort.
+			 */
+			if (index->indrelid == TempRelationRelationId)
+				continue;
+
+			/*
 			 * Try to obtain a light lock on the index's table, to ensure it
 			 * doesn't go away while we collect the list.  If we cannot, just
 			 * disregard it.  Be sure to release this if we ultimately decide
@@ -2217,6 +2322,16 @@ get_tables_to_repack(RepackCommand cmd, bool usingindex, MemoryContext permcxt)
 			MemoryContext oldcxt;
 
 			class = (Form_pg_class) GETSTRUCT(tuple);
+
+			/*
+			 * Silently skip pg_temp_class --- it does not support relfilenode
+			 * changes, because that would require it to be a mapped relation,
+			 * and the relmapper does not support temporary tables.  It might
+			 * be possible to make this work, but it doesn't seem worth the
+			 * effort.
+			 */
+			if (class->oid == TempRelationRelationId)
+				continue;
 
 			/*
 			 * Try to obtain a light lock on the table, to ensure it doesn't
@@ -2411,6 +2526,20 @@ process_single_relation(RepackStmt *stmt, LOCKMODE lockmode, bool isTopLevel,
 					   RepackCommandAsString(stmt->command)));
 
 	/*
+	 * Reject clustering pg_temp_class --- it does not support relfilenode
+	 * changes, because that would require it to be a mapped relation, and the
+	 * relmapper does not support temporary tables.  It might be possible to
+	 * make this work, but it doesn't seem worth the effort.
+	 */
+	if (tableOid == TempRelationRelationId)
+		ereport(ERROR,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+		/*- translator: first %s is name of a SQL command, eg. REPACK */
+				errmsg("cannot execute %s on temporary system catalog \"%s\"",
+					   RepackCommandAsString(stmt->command),
+					   RelationGetRelationName(rel)));
+
+	/*
 	 * For partitioned tables, let caller handle this.  Otherwise, process it
 	 * here and we're done.
 	 */
@@ -2419,6 +2548,7 @@ process_single_relation(RepackStmt *stmt, LOCKMODE lockmode, bool isTopLevel,
 	else
 	{
 		Oid			indexOid = InvalidOid;
+		bool		is_gtr = RELATION_IS_GLOBAL_TEMP(rel);
 
 		indexOid = determine_clustered_index(rel, stmt->usingindex,
 											 stmt->indexname);
@@ -2450,6 +2580,13 @@ process_single_relation(RepackStmt *stmt, LOCKMODE lockmode, bool isTopLevel,
 			PopActiveSnapshot();
 			CommandCounterIncrement();
 		}
+
+		/*
+		 * Update our PGPROC struct's tempfrozenxid and tempminmxid, if it was
+		 * a global temporary relation.
+		 */
+		if (is_gtr)
+			vac_update_tempfrozenxids();
 
 		return NULL;
 	}

@@ -1,0 +1,1316 @@
+/*-------------------------------------------------------------------------
+ *
+ * global_temp.c
+ *	  Global temporary relation management.
+ *
+ * This tracks all global temporary relations in use across all backends,
+ * as well as any local storage created for global temporary relations used
+ * in this backend.
+ *
+ * When a global temporary relation is created or first opened, it is
+ * initialized for use, which (for most relkinds) includes creating local
+ * storage for it.  All global temporary relations in use and all local
+ * storage created is tracked, taking into account (sub)transaction
+ * rollback --- a rollback can undo the effects of creating or opening a
+ * global temporary relation, including the creation of local storage.  If
+ * a global temporary relation is first opened in a (sub)transaction which
+ * is then rolled back, it is reinitialized the next time it is opened.
+ * When the backend exits, all locally created storage is deleted.
+ *
+ * Relcache invalidation messages are passed on to code here so that it can
+ * deal with other backends dropping global temporary relations.  If a
+ * global temporary relation in use by this backed is dropped by another
+ * backend, all local storage created for the relation in this backend is
+ * deleted the next time a transaction commits.  (It could perhaps be done
+ * sooner, but it's not crucial, since such storage will be deleted on
+ * backend exit anyway.)
+ *
+ * A shared hash table is used to track all global temporary relations in
+ * use across all databases and all backends.  A "usage count" is kept for
+ * each relation, which is a count of the number of backends using it.
+ * This is used to prevent operations like ALTER TABLE from altering a
+ * global temporary table in a way that would require rewriting its
+ * contents, if it's in use by other backends, which cannot be allowed,
+ * since there is no way to rewrite the local storage of other backends.
+ *
+ * A global temporary relation is regarded as "in use" by a backend from
+ * the time it is created or first opened until the time it is dropped or
+ * the backend exits (or a rollback undoes the creation or opening of the
+ * relation).  This means that a backend that executes CREATE GLOBAL TEMP
+ * TABLE is counted as using it, even if it never opens it.
+ *
+ * When a global temporary relation is not in use by any backend, it has no
+ * physical storage.  Thus a global temporary relation must have a shared
+ * dependency on its tablespace to prevent the tablespace from being
+ * dropped while the relation is not being used.
+ *
+ * Copyright (c) 2026, PostgreSQL Global Development Group
+ *
+ * IDENTIFICATION
+ *	  src/backend/catalog/global_temp.c
+ *
+ *-------------------------------------------------------------------------
+ */
+#include "postgres.h"
+
+#include "access/amapi.h"
+#include "access/genam.h"
+#include "access/multixact.h"
+#include "access/parallel.h"
+#include "access/table.h"
+#include "access/tableam.h"
+#include "access/xact.h"
+#include "access/xlogutils.h"
+#include "catalog/global_temp.h"
+#include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_index.h"
+#include "catalog/storage.h"
+#include "commands/sequence.h"
+#include "commands/tablecmds.h"
+#include "lib/dshash.h"
+#include "miscadmin.h"
+#include "storage/ipc.h"
+#include "storage/lwlock.h"
+#include "storage/proc.h"
+#include "storage/shmem.h"
+#include "storage/subsystems.h"
+#include "utils/lsyscache.h"
+#include "utils/memutils.h"
+#include "utils/syscache.h"
+#include "utils/tuplestore.h"
+
+/*
+ * gtr_local_storage
+ *
+ *	Hash table to track local storage created by this backend for global
+ *	temporary relations.
+ */
+typedef struct GtrStorageEntry
+{
+	RelFileLocator rlocator;	/* lookup key: relfilelocator of storage */
+	Oid			relid;			/* OID of relation owning the storage */
+	SubTransactionId created_subid; /* storage was created in current xact */
+	SubTransactionId dropped_subid; /* dropped with another subid set */
+} GtrStorageEntry;
+
+static HTAB *gtr_local_storage;
+
+/*
+ * eoxact_storage_list[]
+ *
+ *	List of relfilelocators of storage that (might) need AtEOXact cleanup
+ *	work.  As with the relcache's eoxact_list[], this list intentionally has
+ *	limited size, and we switch to a full hash table traversal if the list
+ *	overflows.
+ */
+#define MAX_EOXACT_STORAGE_LIST 32
+static RelFileLocator eoxact_storage_list[MAX_EOXACT_STORAGE_LIST];
+static int	eoxact_storage_list_len = 0;
+static bool eoxact_storage_list_overflowed = false;
+
+#define EOXactStorageListAdd(rlocator) \
+	do { \
+		if (eoxact_storage_list_len < MAX_EOXACT_STORAGE_LIST) \
+			eoxact_storage_list[eoxact_storage_list_len++] = (rlocator); \
+		else \
+			eoxact_storage_list_overflowed = true; \
+	} while (0)
+
+/*
+ * gtr_local_usage
+ *
+ *	Hash table to track global temporary relations in use in this backend.
+ */
+typedef struct GtrUsageEntry
+{
+	Oid			relid;			/* lookup key: OID of relation in use */
+	SubTransactionId started_subid; /* usage started in current xact */
+	SubTransactionId stopped_subid; /* usage ended with another subid set */
+} GtrUsageEntry;
+
+static HTAB *gtr_local_usage;
+
+/*
+ * eoxact_usage_list[]
+ *
+ *	List of OIDs of global temporary relation usage entries that (might) need
+ *	AtEOXact cleanup work.  Cf. eoxact_storage_list[].
+ */
+#define MAX_EOXACT_USAGE_LIST 32
+static Oid	eoxact_usage_list[MAX_EOXACT_USAGE_LIST];
+static int	eoxact_usage_list_len = 0;
+static bool eoxact_usage_list_overflowed = false;
+
+#define EOXactUsageListAdd(relid) \
+	do { \
+		if (eoxact_usage_list_len < MAX_EOXACT_USAGE_LIST) \
+			eoxact_usage_list[eoxact_usage_list_len++] = (relid); \
+		else \
+			eoxact_usage_list_overflowed = true; \
+	} while (0)
+
+/*
+ * Invalidation message handling lists:
+ *
+ *	gtrs_invalidated
+ *		OIDs of global temporary relations that we are using, for which we
+ *		have received an invalidation message.
+ *
+ *	gtrs_dropped
+ *		OIDs of global temporary relations that we were using, which have been
+ *		dropped (by us or another backend).
+ */
+static List *gtrs_invalidated;
+static List *gtrs_dropped;
+
+/*
+ * gtr_shared_usage
+ *
+ *	Shared hash table recording all global temporary relation usage across all
+ *	databases and backends.  For each relation, "usage_count" records the
+ *	number of backends (including us) using the relation.  Entries are
+ *	removed when the usage count hits zero.
+ */
+typedef struct GtrSharedUsageKey
+{
+	Oid			dbid;			/* DB containing global temporary relation */
+	Oid			relid;			/* OID of global temporary relation */
+} GtrSharedUsageKey;
+
+typedef struct GtrSharedUsageEntry
+{
+	GtrSharedUsageKey key;		/* lookup key: (dbid, relid) of relation */
+	int			usage_count;	/* number of backends accessing relation */
+} GtrSharedUsageEntry;
+
+static const dshash_parameters gtr_shared_usage_params = {
+	sizeof(GtrSharedUsageKey),
+	sizeof(GtrSharedUsageEntry),
+	dshash_memcmp,
+	dshash_memhash,
+	dshash_memcpy,
+	LWTRANCHE_GLOBAL_TEMP_REL_HASH
+};
+
+static dsa_area *gtr_shared_usage_dsa;
+static dshash_table *gtr_shared_usage;
+
+/*
+ * gtr_shmem_control
+ *
+ *	Shared memory state for the global temporary relation shared usage table.
+ */
+typedef struct GlobalTempRelShmemControl
+{
+	dsa_handle dsa_handle;		/* usage table's DSA handle */
+	dshash_table_handle dshash_handle;	/* usage table's dshash handle */
+} GlobalTempRelShmemControl;
+
+static GlobalTempRelShmemControl *gtr_shmem_control;
+
+/*
+ * GlobalTempRelShmemCallbacks
+ *
+ *	Callbacks to register our shared memory requirements and initialize it.
+ */
+static void
+gtr_shmem_request(void *arg)
+{
+	ShmemRequestStruct(.name = "Global Temporary Relation Usage Table",
+					   .size = sizeof(GlobalTempRelShmemControl),
+					   .ptr = (void **) &gtr_shmem_control,
+		);
+}
+
+static void
+gtr_shmem_init(void *arg)
+{
+	gtr_shmem_control->dsa_handle = DSA_HANDLE_INVALID;
+	gtr_shmem_control->dshash_handle = DSHASH_HANDLE_INVALID;
+}
+
+const ShmemCallbacks GlobalTempRelShmemCallbacks = {
+	.request_fn = gtr_shmem_request,
+	.init_fn = gtr_shmem_init,
+};
+
+/*
+ * gtr_delete_all_storage_on_exit
+ *
+ *	Backend exit callback to delete all local storage created for global
+ *	temporary relations in this backend.
+ */
+static void
+gtr_delete_all_storage_on_exit(int code, Datum arg)
+{
+	ProcNumber	backend;
+	HASH_SEQ_STATUS status;
+	GtrStorageEntry *entry;
+	SMgrRelation srel;
+
+	/* Loop over all storage created and delete it */
+	backend = ProcNumberForTempRelations();
+	hash_seq_init(&status, gtr_local_storage);
+	while ((entry = hash_seq_search(&status)) != NULL)
+	{
+		srel = smgropen(entry->rlocator, backend);
+		smgrdounlinkall(&srel, 1, false);
+		smgrclose(srel);
+	}
+}
+
+/*
+ * gtr_init_storage_table
+ *
+ *	Initialize the hash table recording local storage created for global
+ *	temporary relations, if not already done.
+ */
+static void
+gtr_init_storage_table(void)
+{
+	if (gtr_local_storage == NULL)
+	{
+		HASHCTL		ctl;
+
+		ctl.keysize = sizeof(RelFileLocator);
+		ctl.entrysize = sizeof(GtrStorageEntry);
+
+		gtr_local_storage =
+			hash_create("Global temporary relation storage table",
+						128, &ctl, HASH_ELEM | HASH_BLOBS);
+
+		/* Register callback to delete all local storage on exit */
+		before_shmem_exit(gtr_delete_all_storage_on_exit, 0);
+	}
+}
+
+/*
+ * gtr_storage_dropped
+ *
+ *	Invalidate a global temporary relation whose storage has been dropped.
+ *
+ *	This is called as part of AtEO(Sub)Xact cleanup if storage creation is
+ *	rolled back, or storage deletion is committed.  This can happen several
+ *	different ways:
+ *
+ *	- The relation was initialized in a transaction which was then rolled
+ *	  back, causing the local storage created during initialization to be
+ *	  dropped.
+ *
+ *	- An operation like REPACK or TRUNCATE committed and the old storage was
+ *	  dropped.
+ *
+ *	- An operation like REPACK or TRUNCATE was rolled back and the new storage
+ *	  was dropped.  The old storage may or may not still exist, depending on
+ *	  when it was created.
+ *
+ *	- The table itself was dropped.
+ *
+ *	Here, we have no way to distinguish between these cases, so we just mark
+ *	the relation's relcache entry as invalid (if it still has one), forcing it
+ *	to be reloaded and reinitialized when it is next opened.  New storage for
+ *	the relation will then be created, if needed.
+ */
+static void
+gtr_storage_dropped(Oid relid, RelFileLocator rlocator)
+{
+	/* If the relation is still in the relcache mark it as invalid */
+	RelationMarkInvalid(relid);
+
+	/*
+	 * Remove the hash entry for the dropped storage, forcing the relation to
+	 * create new storage if its relfilenode points to this storage after it
+	 * is reloaded.
+	 */
+	(void) hash_search(gtr_local_storage, &rlocator, HASH_REMOVE, NULL);
+}
+
+/*
+ * AtEOXact_StorageCleanup
+ *
+ *	Clean up storage records for a single global temporary relation at
+ *	main-transaction commit or abort.
+ *
+ *	NB: this processing must be idempotent, because EOXactStorageListAdd()
+ *	doesn't bother to prevent duplicate entries in eoxact_storage_list[].
+ */
+static void
+AtEOXact_StorageCleanup(GtrStorageEntry *entry, bool isCommit)
+{
+	/*
+	 * If the storage no longer exists after this transaction ends, the global
+	 * temporary relation that was using it may no longer have any storage.
+	 * Mark the relation as invalid and remove the storage hash entry, forcing
+	 * the relation to be reinitialized and have new storage created, if
+	 * necessary, when it is next loaded.  Otherwise, reset the hash entry's
+	 * subids to zero.
+	 */
+	if ((isCommit && entry->dropped_subid != InvalidSubTransactionId) ||
+		(!isCommit && entry->created_subid != InvalidSubTransactionId))
+	{
+		gtr_storage_dropped(entry->relid, entry->rlocator);
+	}
+	else
+	{
+		entry->created_subid = InvalidSubTransactionId;
+		entry->dropped_subid = InvalidSubTransactionId;
+	}
+}
+
+/*
+ * AtEOSubXact_StorageCleanup
+ *
+ *	Clean up storage records for a single global temporary relation at
+ *	subtransaction commit or abort.
+ *
+ *	NB: this processing must be idempotent, because EOXactStorageListAdd()
+ *	doesn't bother to prevent duplicate entries in eoxact_storage_list[].
+ */
+static void
+AtEOSubXact_StorageCleanup(GtrStorageEntry *entry, bool isCommit,
+						   SubTransactionId mySubid,
+						   SubTransactionId parentSubid)
+{
+	/*
+	 * Is it storage created in the current subtransaction?
+	 *
+	 * During subcommit, mark it as belonging to the parent, instead, as long
+	 * as it has not been deleted.  Otherwise, the global temporary relation
+	 * that was using this storage may no longer have any storage; mark the
+	 * relation as invalid and remove the storage hash entry, forcing the
+	 * relation to be reinitialized and have new storage created, if
+	 * necessary.
+	 */
+	if (entry->created_subid == mySubid)
+	{
+		Assert(entry->dropped_subid == mySubid ||
+			   entry->dropped_subid == InvalidSubTransactionId);
+
+		if (isCommit && entry->dropped_subid == InvalidSubTransactionId)
+			entry->created_subid = parentSubid;
+		else
+			gtr_storage_dropped(entry->relid, entry->rlocator);
+	}
+
+	/* Update the storage dropped subid */
+	if (entry->dropped_subid == mySubid)
+	{
+		if (isCommit)
+			entry->dropped_subid = parentSubid;
+		else
+			entry->dropped_subid = InvalidSubTransactionId;
+	}
+}
+
+/*
+ * gtr_remove_all_usage_on_exit
+ *
+ *	Backend exit callback to remove all records of this backend's use of
+ *	global temporary relations from the shared usage hash table.
+ */
+static void
+gtr_remove_all_usage_on_exit(int code, Datum arg)
+{
+	HASH_SEQ_STATUS status;
+	GtrUsageEntry *local_entry;
+	GtrSharedUsageKey key;
+	GtrSharedUsageEntry *shared_entry;
+
+	/* Loop over all the global temporary relations we were using */
+	hash_seq_init(&status, gtr_local_usage);
+	while ((local_entry = hash_seq_search(&status)) != NULL)
+	{
+		/* Find the shared usage entry */
+		key.dbid = MyDatabaseId;
+		key.relid = local_entry->relid;
+		shared_entry = dshash_find(gtr_shared_usage, &key, true);
+
+		if (shared_entry->usage_count > 1)
+		{
+			/* Other backends are still using the relation */
+			shared_entry->usage_count--;
+			dshash_release_lock(gtr_shared_usage, shared_entry);
+		}
+		else
+		{
+			/* No more backends using it */
+			dshash_delete_entry(gtr_shared_usage, shared_entry);
+		}
+
+		/*
+		 * NB: It is possible for gtr_remove_usage() to run after this, so we
+		 * need to remove all local entries too.
+		 */
+		(void) hash_search(gtr_local_usage,
+						   &local_entry->relid, HASH_REMOVE, NULL);
+	}
+}
+
+/*
+ * gtr_init_usage_tables
+ *
+ *	Initialize the local and shared usage hash tables for global temporary
+ *	relations, if not already done.
+ */
+static void
+gtr_init_usage_tables(void)
+{
+	HASHCTL		ctl;
+	MemoryContext oldcontext;
+
+	/* Local usage table */
+	if (gtr_local_usage == NULL)
+	{
+		ctl.keysize = sizeof(Oid);
+		ctl.entrysize = sizeof(GtrUsageEntry);
+
+		gtr_local_usage = hash_create("Global temporary relations in use locally",
+									  128, &ctl, HASH_ELEM | HASH_BLOBS);
+	}
+
+	/* Shared usage table */
+	if (gtr_shared_usage == NULL)
+	{
+		/* Use a lock to ensure only one process creates the table */
+		LWLockAcquire(GlobalTempRelControlLock, LW_EXCLUSIVE);
+
+		/* Be sure any local memory allocated by DSA routines is persistent */
+		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+		if (gtr_shmem_control->dshash_handle == DSA_HANDLE_INVALID)
+		{
+			/* Initialize dynamic shared hash table to track shared usage */
+			gtr_shared_usage_dsa = dsa_create(LWTRANCHE_GLOBAL_TEMP_REL_DSA);
+			dsa_pin(gtr_shared_usage_dsa);
+			dsa_pin_mapping(gtr_shared_usage_dsa);
+
+			gtr_shared_usage = dshash_create(gtr_shared_usage_dsa,
+											 &gtr_shared_usage_params, NULL);
+
+			/* Store handles in shared memory for other backends to use */
+			gtr_shmem_control->dsa_handle = dsa_get_handle(gtr_shared_usage_dsa);
+			gtr_shmem_control->dshash_handle =
+				dshash_get_hash_table_handle(gtr_shared_usage);
+		}
+		else
+		{
+			/* Attach to existing dynamic shared hash table */
+			gtr_shared_usage_dsa = dsa_attach(gtr_shmem_control->dsa_handle);
+			dsa_pin_mapping(gtr_shared_usage_dsa);
+
+			gtr_shared_usage = dshash_attach(gtr_shared_usage_dsa,
+											 &gtr_shared_usage_params,
+											 gtr_shmem_control->dshash_handle,
+											 NULL);
+		}
+
+		MemoryContextSwitchTo(oldcontext);
+		LWLockRelease(GlobalTempRelControlLock);
+
+		/* Register callback to remove all our usage records on exit */
+		before_shmem_exit(gtr_remove_all_usage_on_exit, 0);
+	}
+}
+
+/*
+ * gtr_record_usage
+ *
+ *	Record the fact that we're using a global temporary relation by adding
+ *	entries to the local and shared usage hash tables.
+ *
+ *	Note: This is intentionally idempotent.
+ */
+static void
+gtr_record_usage(Oid relid)
+{
+	GtrUsageEntry *local_entry;
+	GtrSharedUsageKey key;
+	GtrSharedUsageEntry *shared_entry;
+	bool		found;
+
+	/* Initialize the usage tables, if necessary */
+	gtr_init_usage_tables();
+
+	/* Add local usage entry, if not already there */
+	local_entry = hash_search(gtr_local_usage, &relid, HASH_ENTER, &found);
+	if (found)
+		return;					/* already recorded, nothing to do */
+
+	/* Record the usage as starting in the current subtransaction */
+	local_entry->started_subid = GetCurrentSubTransactionId();
+	local_entry->stopped_subid = InvalidSubTransactionId;
+
+	/* Flag the usage entry for eoxact cleanup */
+	EOXactUsageListAdd(relid);
+
+	/* Add/update shared usage entry */
+	key.dbid = MyDatabaseId;
+	key.relid = relid;
+	shared_entry = dshash_find_or_insert(gtr_shared_usage, &key, &found);
+
+	if (found)
+		shared_entry->usage_count++;
+	else
+		shared_entry->usage_count = 1;
+
+	dshash_release_lock(gtr_shared_usage, shared_entry);
+}
+
+/*
+ * gtr_remove_usage
+ *
+ *	Remove our usage records for a global temporary relation that we're no
+ *	longer using.
+ *
+ *	Note: This is intentionally idempotent.
+ */
+static void
+gtr_remove_usage(Oid relid)
+{
+	GtrSharedUsageKey key;
+	GtrSharedUsageEntry *shared_entry;
+
+	/* Initialize the usage tables, if necessary */
+	gtr_init_usage_tables();
+
+	/* Remove local usage entry */
+	if (!hash_search(gtr_local_usage, &relid, HASH_REMOVE, NULL))
+		return;					/* nothing to do */
+
+	/* Update/delete shared usage entry */
+	key.dbid = MyDatabaseId;
+	key.relid = relid;
+	shared_entry = dshash_find(gtr_shared_usage, &key, true);
+
+	if (shared_entry->usage_count > 1)
+	{
+		/* Other backends are still using the relation */
+		shared_entry->usage_count--;
+		dshash_release_lock(gtr_shared_usage, shared_entry);
+	}
+	else
+	{
+		/* No more backends using it */
+		dshash_delete_entry(gtr_shared_usage, shared_entry);
+	}
+}
+
+/*
+ * AtEOXact_UsageCleanup
+ *
+ *	Clean up usage records for a single global temporary relation at
+ *	main-transaction commit or abort.
+ *
+ *	NB: this processing must be idempotent, because EOXactUsageListAdd()
+ *	doesn't bother to prevent duplicate entries in eoxact_usage_list[].
+ */
+static void
+AtEOXact_UsageCleanup(GtrUsageEntry *entry, bool isCommit)
+{
+	/*
+	 * If the relation is no longer in use after this transaction ends, remove
+	 * the usage hash table entries for it.  Otherwise, reset the hash entry's
+	 * subids to zero.
+	 */
+	if ((isCommit && entry->stopped_subid != InvalidSubTransactionId) ||
+		(!isCommit && entry->started_subid != InvalidSubTransactionId))
+	{
+		gtr_remove_usage(entry->relid);
+	}
+	else
+	{
+		entry->started_subid = InvalidSubTransactionId;
+		entry->stopped_subid = InvalidSubTransactionId;
+	}
+}
+
+/*
+ * AtEOSubXact_UsageCleanup
+ *
+ *	Clean up usage records for a single global temporary relation at
+ *	subtransaction commit or abort.
+ *
+ *	NB: this processing must be idempotent, because EOXactUsageListAdd()
+ *	doesn't bother to prevent duplicate entries in eoxact_usage_list[].
+ */
+static void
+AtEOSubXact_UsageCleanup(GtrUsageEntry *entry, bool isCommit,
+						 SubTransactionId mySubid,
+						 SubTransactionId parentSubid)
+{
+	/*
+	 * Did usage start in the current subtransaction?
+	 *
+	 * During subcommit, mark it as starting in the parent, instead, as long
+	 * as it has not been stopped.  Otherwise, the global temporary relation
+	 * is no longer in use.
+	 */
+	if (entry->started_subid == mySubid)
+	{
+		Assert(entry->stopped_subid == mySubid ||
+			   entry->stopped_subid == InvalidSubTransactionId);
+
+		if (isCommit && entry->stopped_subid == InvalidSubTransactionId)
+			entry->started_subid = parentSubid;
+		else
+			gtr_remove_usage(entry->relid);
+	}
+
+	/* Update the usage stopped subid */
+	if (entry->stopped_subid == mySubid)
+	{
+		if (isCommit)
+			entry->stopped_subid = parentSubid;
+		else
+			entry->stopped_subid = InvalidSubTransactionId;
+	}
+}
+
+/*
+ * gtr_process_invalidated_gtrs
+ *
+ *	Process the list of invalidated global temporary relations and work out
+ *	which relations have been dropped.  Note that this will include locally
+ *	dropped relations as well as relations dropped by other backends.
+ */
+static void
+gtr_process_invalidated_gtrs(void)
+{
+	MemoryContext oldcontext;
+	Oid			relid;
+
+	/*
+	 * Scan the gtrs_invalidated list and add any dropped relations to the
+	 * gtrs_dropped list.  Since the transaction might fail later on, we need
+	 * the gtrs_dropped list to persist until we can successfully process it.
+	 */
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+	/*
+	 * As we scan the gtrs_invalidated list, more invalidation messages might
+	 * arrive, so keep going until it is empty.
+	 */
+	while (gtrs_invalidated != NIL)
+	{
+		/* Pop the last relid from the list */
+		relid = llast_oid(gtrs_invalidated);
+		gtrs_invalidated = list_delete_last(gtrs_invalidated);
+
+		/* Ignore relations we've already found */
+		if (list_member_oid(gtrs_dropped, relid))
+			continue;
+
+		/* Ignore relations that still exist */
+		if (SearchSysCacheExists1(RELOID, ObjectIdGetDatum(relid)))
+			continue;
+
+		/* Relation dropped; add it to the gtrs_dropped list */
+		gtrs_dropped = lappend_oid(gtrs_dropped, relid);
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * TrackGlobalTempRelationStorage
+ *
+ *	Track about-to-be-created or scheduled-to-be-deleted storage for a global
+ *	temporary relation, and arrange for all storage created to be deleted on
+ *	backend exit.
+ *
+ *	This is called for global temporary relations whenever storage is created
+ *	using RelationCreateStorage() or deleted using RelationDropStorage().
+ */
+void
+TrackGlobalTempRelationStorage(Oid relid, RelFileLocator rlocator,
+							   ProcNumber backend, bool create)
+{
+	GtrStorageEntry *entry;
+	bool		found;
+	SMgrRelation srel;
+
+	if (create)
+	{
+		/* Initialize the storage table, if necessary */
+		gtr_init_storage_table();
+
+		/* Insert an entry to track the storage */
+		entry = hash_search(gtr_local_storage, &rlocator, HASH_ENTER, &found);
+		if (found)
+			elog(ERROR, "Storage already exists for relation %u", relid);
+
+		/*
+		 * We're about to create storage for a global temporary relation.
+		 * First, check if storage already exists and if so, delete it --- can
+		 * happen if a previous backend with the same ProcNumber crashed, and
+		 * RemovePgTempFiles() didn't delete it.  The old storage is deleted
+		 * non-transactionally, so this is never rolled back.
+		 */
+		srel = smgropen(rlocator, backend);
+		if (smgrexists(srel, MAIN_FORKNUM))
+			smgrdounlinkall(&srel, 1, false);
+		smgrclose(srel);
+
+		/* Mark the storage as created in the current subtransaction */
+		entry->relid = relid;
+		entry->created_subid = GetCurrentSubTransactionId();
+		entry->dropped_subid = InvalidSubTransactionId;
+	}
+	else
+	{
+		/* Mark the storage as deleted in the current subtransaction */
+		entry = gtr_local_storage == NULL ? NULL :
+			hash_search(gtr_local_storage, &rlocator, HASH_FIND, NULL);
+		if (entry == NULL)
+			elog(ERROR, "Storage not found for relation %u", relid);
+
+		entry->dropped_subid = GetCurrentSubTransactionId();
+	}
+
+	/* Flag the storage for eoxact cleanup */
+	EOXactStorageListAdd(rlocator);
+}
+
+/*
+ * ReassignGlobalTempRelationStorage
+ *
+ *	Reassign global temporary relation storage to a different relation.  This
+ *	is needed for operations such as ALTER TABLE and REPACK, that rewrite a
+ *	relation's contents by building a transient relation and then swapping its
+ *	storage with the original relation.  We must mark the new storage as
+ *	belonging to the original relation here, otherwise it would be deleted
+ *	when the transient relation is dropped.
+ *
+ *	Note: we have no way of undoing this reassignment in case of rollback, so
+ *	we do not assign the original storage to the transient relation, since
+ *	that would leave it in an invalid state after rollback.  This isn't a
+ *	problem for the new storage, since that is dropped on rollback.  Thus,
+ *	this operates in the same way as TRUNCATE, where both the old and new
+ *	storage are temporarily marked as belonging to the same relation.  On
+ *	commit, the old storage is dropped and the relation is left pointing to
+ *	the new storage, and on rollback the new storage is dropped and the
+ *	relation is reloaded and made to point to the old storage.
+ */
+void
+ReassignGlobalTempRelationStorage(RelFileLocator rlocator,
+								  Oid newRelid)
+{
+	GtrStorageEntry *entry;
+
+	/* Must already be tracking the storage */
+	entry = hash_search(gtr_local_storage, &rlocator, HASH_FIND, NULL);
+	if (entry == NULL)
+		elog(ERROR, "could not find global temp relation storage {spcOid: %u, dbOid: %u, relNumber: %u}",
+			 rlocator.spcOid, rlocator.dbOid, rlocator.relNumber);
+
+	/* Reassign it */
+	entry->relid = newRelid;
+}
+
+/*
+ * InitGlobalTempRelation
+ *
+ *	Initialize a global temporary relation for use in this backend, if we
+ *	haven't already done so.
+ *
+ *	This is intended for global temporary relations that were created in some
+ *	other backend.  Such relations will have valid catalog entries, but may
+ *	have no local storage for this backend yet.
+ *
+ *	Note: This is intentionally idempotent.
+ */
+void
+InitGlobalTempRelation(Relation relation)
+{
+	/*
+	 * Certain operations (e.g., pg_table_size()) may open global temporary
+	 * relations from parallel workers.  We allow this, but only the parallel
+	 * leader is allowed to initialize the relation.  Checks in the planner
+	 * should prevent workers from actually attempting to read from or write
+	 * to the relation.
+	 */
+	if (IsParallelWorker())
+		return;
+
+	/* Create storage for the relation, if it has none */
+	if (RELKIND_HAS_STORAGE(relation->rd_rel->relkind) &&
+		(gtr_local_storage == NULL ||
+		 hash_search(gtr_local_storage,
+					 &relation->rd_locator, HASH_FIND, NULL) == NULL))
+	{
+		/* Create (and track) storage for the relation */
+		if (RELKIND_HAS_TABLE_AM(relation->rd_rel->relkind))
+		{
+			table_relation_set_new_filelocator(relation,
+											   &relation->rd_locator,
+											   relation->rd_rel->relpersistence,
+											   &relation->rd_rel->relfrozenxid,
+											   &relation->rd_rel->relminmxid);
+
+			/*
+			 * If tempfrozenxid and tempminmxid haven't been set for this
+			 * backend, then set them now (first global temporary table
+			 * accessed in this session).
+			 */
+			if (!TransactionIdIsValid(MyProc->tempfrozenxid))
+				MyProc->tempfrozenxid = relation->rd_rel->relfrozenxid;
+			if (!MultiXactIdIsValid(MyProc->tempminmxid))
+				MyProc->tempminmxid = (MultiXactId) relation->rd_rel->relminmxid;
+		}
+		else
+			RelationCreateStorage(relation->rd_id,
+								  relation->rd_locator,
+								  relation->rd_rel->relpersistence,
+								  true);
+
+		/* Register the ON COMMIT action for relation, if it's DELETE ROWS */
+		Assert(relation->rd_rel->reloncommit == RELONCOMMIT_PRESERVE_ROWS ||
+			   relation->rd_rel->reloncommit == RELONCOMMIT_DELETE_ROWS);
+
+		if (relation->rd_rel->reloncommit == RELONCOMMIT_DELETE_ROWS)
+			register_on_commit_action(relation->rd_id, ONCOMMIT_DELETE_ROWS);
+
+		/*
+		 * If it's an index, build an empty index in the main fork.
+		 *
+		 * If the table is not empty (can happen if another session added the
+		 * index after we populated the table), then mark it as invalid.  The
+		 * user will need to do a REINDEX to build it.
+		 */
+		if (relation->rd_rel->relkind == RELKIND_INDEX)
+		{
+			Relation	heapRelation;
+			BlockNumber nblocks;
+
+			relation->rd_indam->ambuildempty(relation, MAIN_FORKNUM);
+
+			heapRelation = table_open(relation->rd_index->indrelid, AccessShareLock);
+			nblocks = RelationGetNumberOfBlocks(heapRelation);
+			table_close(heapRelation, AccessShareLock);
+
+			if (nblocks > 0)
+				relation->rd_index->indisvalid = false;
+		}
+
+		/* If it's a sequence, initialize it */
+		if (relation->rd_rel->relkind == RELKIND_SEQUENCE)
+			InitGlobalTempSequence(relation);
+	}
+
+	/* The remaining initialization works as if we had created it locally */
+	GlobalTempRelationCreated(relation);
+}
+
+/*
+ * InvalidateGlobalTempRelation
+ *
+ *	Process an invalidation message for a relation.
+ *
+ *	We are only interested in global temporary relations that we are currently
+ *	using, but the relcache will call this for all invalidated relations, not
+ *	just global temporary relations, since it has no way of knowing the
+ *	difference for relations no longer in its cache.  We filter out the ones
+ *	we're not interested in.
+ *
+ *	For a whole-relcache invalidation, RelationCacheInvalidate() will invoke
+ *	this with relid = InvalidOid.
+ */
+void
+InvalidateGlobalTempRelation(Oid relid)
+{
+	MemoryContext oldcontext;
+	HASH_SEQ_STATUS status;
+	GtrUsageEntry *entry;
+
+	/* Quick exit if we haven't used any global temporary relations */
+	if (gtr_local_usage == NULL)
+		return;
+
+	/* Be sure any memory allocated for gtrs_invalidated is persistent */
+	oldcontext = MemoryContextSwitchTo(TopMemoryContext);
+
+	/*
+	 * We can't do any DB access here, so just make a record of the
+	 * invalidations that might be of interest to us (those for in-use global
+	 * temporary relations).  We don't care about global temporary relations
+	 * that we haven't touched, or any other types of relations.
+	 */
+	if (OidIsValid(relid))
+	{
+		/* Invalidate rel if it's a locally in-use global temp relation */
+		if (hash_search(gtr_local_usage, &relid, HASH_FIND, NULL))
+		{
+			gtrs_invalidated = list_append_unique_oid(gtrs_invalidated, relid);
+		}
+	}
+	else
+	{
+		/* Invalidate all global temporary relations in use locally */
+		list_free(gtrs_invalidated);
+		gtrs_invalidated = NIL;
+
+		hash_seq_init(&status, gtr_local_usage);
+		while ((entry = hash_seq_search(&status)) != NULL)
+		{
+			gtrs_invalidated = lappend_oid(gtrs_invalidated, entry->relid);
+		}
+	}
+
+	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * GlobalTempRelationCreated
+ *
+ *	Initialize a just-created global temporary relation for use in this
+ *	backend.  This is also used by InitGlobalTempRelation() for just-opened
+ *	relations created in other backends, after we have created local storage
+ *	for them.
+ *
+ *	Note: This is intentionally idempotent.
+ */
+void
+GlobalTempRelationCreated(Relation relation)
+{
+	/*
+	 * If this is the first time we've used this relation in this session,
+	 * insert pg_temp_class and pg_temp_index tuples for it, and update the
+	 * usage hash tables.
+	 */
+	if (gtr_local_usage == NULL ||
+		hash_search(gtr_local_usage,
+					&relation->rd_id, HASH_FIND, NULL) == NULL)
+	{
+		InsertPgTempClassTuple(relation);
+
+		if (relation->rd_rel->relkind == RELKIND_INDEX ||
+			relation->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		{
+			/*
+			 * When creating a new index locally, relation->rd_index will be
+			 * NULL here.  Mark it as valid for now --- UpdateIndexRelation()
+			 * will update it later, if it's not actually valid (e.g., CREATE
+			 * INDEX ... ON ONLY ...).  Otherwise, for an index created in
+			 * another session, relation->rd_index->indisvalid will accurately
+			 * reflect whether or not the index needs to be marked invalid
+			 * locally (if our instance of the index's table is not empty).
+			 */
+			InsertPgTempIndexTuple(relation->rd_id,
+								   relation->rd_index == NULL ||
+								   relation->rd_index->indisvalid);
+		}
+
+		gtr_record_usage(relation->rd_id);
+	}
+}
+
+/*
+ * GlobalTempRelationDropped
+ *
+ *	Tidy up after a global temporary relation has been dropped.
+ *
+ *	Note: This is intentionally idempotent.  It is called for locally dropped
+ *	relations as well as relations that we were using that were dropped by
+ *	other backends, which means it can be called twice for the same relation.
+ */
+void
+GlobalTempRelationDropped(Oid relid)
+{
+	GtrUsageEntry *entry;
+	char		relkind;
+
+	/*
+	 * Mark the relation's usage as ending in the current subtransaction, if
+	 * we haven't done so already.
+	 */
+	entry = hash_search(gtr_local_usage, &relid, HASH_FIND, NULL);
+
+	if (entry && entry->stopped_subid == InvalidSubTransactionId)
+	{
+		entry->stopped_subid = GetCurrentSubTransactionId();
+
+		/* Flag the usage entry for eoxact cleanup */
+		EOXactUsageListAdd(relid);
+
+		/* Delete it's pg_temp_class and pg_temp_index tuples */
+		DeletePgTempClassTuple(relid);
+
+		relkind = get_rel_relkind(relid);
+		if (relkind == RELKIND_INDEX ||
+			relkind == RELKIND_PARTITIONED_INDEX)
+			DeletePgTempIndexTuple(relid);
+	}
+
+	/* Forget any ON COMMIT action for the relation */
+	remove_on_commit_action(relid);
+}
+
+/*
+ * PreCommit_GlobalTempRelation
+ *
+ *	Process all dropped global temporary relations that we were using.  For
+ *	relations dropped by other backends, we need to delete any local storage
+ *	that we created.  For relations dropped by this backend, the storage
+ *	should have already been scheduled for deletion, so we ought to have
+ *	nothing to do.
+ */
+void
+PreCommit_GlobalTempRelation(void)
+{
+	HASH_SEQ_STATUS status;
+	GtrStorageEntry *storage_entry;
+	Relation	rel;
+
+	/*
+	 * Update the list of dropped global temporary relations from the list of
+	 * invalidated relations.
+	 */
+	gtr_process_invalidated_gtrs();
+
+	/* Quick exit if no global temporary relations were dropped */
+	if (gtrs_dropped == NIL)
+		return;
+
+	/*
+	 * Schedule all local storage that we created for dropped relations to be
+	 * deleted at transaction commit.  AtEOXact_GlobalTempRelation() will do
+	 * the remaining cleanup work for gtrs_dropped and the hash tables, if the
+	 * transaction commits successfully.  Otherwise, the gtrs_dropped list
+	 * will be untouched and this will be repeated the next time a transaction
+	 * commits.
+	 */
+	hash_seq_init(&status, gtr_local_storage);
+	while ((storage_entry = hash_seq_search(&status)) != NULL)
+	{
+		/* Ignore storage already scheduled to be deleted */
+		if (storage_entry->dropped_subid != InvalidSubTransactionId)
+			continue;
+
+		/* Ignore entries not in the dropped list */
+		if (!list_member_oid(gtrs_dropped, storage_entry->relid))
+			continue;
+
+		/* Need a faked-up Relation descriptor */
+		rel = CreateFakeRelcacheEntry(storage_entry->rlocator);
+		rel->rd_id = storage_entry->relid;
+		rel->rd_backend = ProcNumberForTempRelations();
+		rel->rd_smgr = NULL;
+		rel->rd_rel->relpersistence = RELPERSISTENCE_GLOBAL_TEMP;
+
+		/* Schedule the storage to be deleted and tidy up */
+		RelationDropStorage(rel);
+		FreeFakeRelcacheEntry(rel);
+	}
+
+	/*
+	 * Perform additional tidying up for all dropped relations.
+	 */
+	foreach_oid(relid, gtrs_dropped)
+	{
+		GlobalTempRelationDropped(relid);
+	}
+}
+
+/*
+ * AtEOXact_GlobalTempRelation
+ *
+ *	Clean up storage and usage records at main-transaction commit or abort.
+ */
+void
+AtEOXact_GlobalTempRelation(bool isCommit)
+{
+	HASH_SEQ_STATUS status;
+	GtrStorageEntry *storage_entry;
+	GtrUsageEntry *usage_entry;
+
+	/*
+	 * Unless the eoxact_storage_list[] overflowed, we only need to examine
+	 * the storage listed in it.  Otherwise fall back on a hash_seq_search
+	 * scan --- see similar code in AtEOXact_RelationCache().
+	 */
+	if (eoxact_storage_list_overflowed)
+	{
+		hash_seq_init(&status, gtr_local_storage);
+		while ((storage_entry = hash_seq_search(&status)) != NULL)
+		{
+			AtEOXact_StorageCleanup(storage_entry, isCommit);
+		}
+	}
+	else
+	{
+		for (int i = 0; i < eoxact_storage_list_len; i++)
+		{
+			storage_entry = hash_search(gtr_local_storage,
+										&eoxact_storage_list[i],
+										HASH_FIND, NULL);
+			if (storage_entry)
+				AtEOXact_StorageCleanup(storage_entry, isCommit);
+		}
+	}
+
+	/* Similarly, cleanup usage records */
+	if (eoxact_usage_list_overflowed)
+	{
+		hash_seq_init(&status, gtr_local_usage);
+		while ((usage_entry = hash_seq_search(&status)) != NULL)
+		{
+			AtEOXact_UsageCleanup(usage_entry, isCommit);
+		}
+	}
+	else
+	{
+		for (int i = 0; i < eoxact_usage_list_len; i++)
+		{
+			usage_entry = hash_search(gtr_local_usage, &eoxact_usage_list[i],
+									  HASH_FIND, NULL);
+			if (usage_entry)
+				AtEOXact_UsageCleanup(usage_entry, isCommit);
+		}
+	}
+
+	/* Perform any pg_temp_class and pg_temp_index processing */
+	AtEOXact_PgTempClass(isCommit);
+	AtEOXact_PgTempIndex(isCommit);
+
+	/* Now we're out of the transaction and can clear the lists */
+	eoxact_storage_list_len = 0;
+	eoxact_storage_list_overflowed = false;
+	list_free(gtrs_dropped);
+	gtrs_dropped = NIL;
+}
+
+/*
+ * AtEOSubXact_GlobalTempRelation
+ *
+ *	Clean up storage and usage records at sub-transaction commit or abort.
+ */
+void
+AtEOSubXact_GlobalTempRelation(bool isCommit, SubTransactionId mySubid,
+							   SubTransactionId parentSubid)
+{
+	HASH_SEQ_STATUS status;
+	GtrStorageEntry *storage_entry;
+	GtrUsageEntry *usage_entry;
+
+	/*
+	 * Unless the eoxact_storage_list[] overflowed, we only need to examine
+	 * the storage listed in it.  Otherwise fall back on a hash_seq_search
+	 * scan.  Same logic as in AtEOXact_GlobalTempRelation().
+	 */
+	if (eoxact_storage_list_overflowed)
+	{
+		hash_seq_init(&status, gtr_local_storage);
+		while ((storage_entry = hash_seq_search(&status)) != NULL)
+		{
+			AtEOSubXact_StorageCleanup(storage_entry, isCommit, mySubid,
+									   parentSubid);
+		}
+	}
+	else
+	{
+		for (int i = 0; i < eoxact_storage_list_len; i++)
+		{
+			storage_entry = hash_search(gtr_local_storage,
+										&eoxact_storage_list[i],
+										HASH_FIND, NULL);
+			if (storage_entry)
+				AtEOSubXact_StorageCleanup(storage_entry, isCommit, mySubid,
+										   parentSubid);
+		}
+	}
+
+	/* Similarly, cleanup usage records */
+	if (eoxact_usage_list_overflowed)
+	{
+		hash_seq_init(&status, gtr_local_usage);
+		while ((usage_entry = hash_seq_search(&status)) != NULL)
+		{
+			AtEOSubXact_UsageCleanup(usage_entry, isCommit, mySubid,
+									 parentSubid);
+		}
+	}
+	else
+	{
+		for (int i = 0; i < eoxact_usage_list_len; i++)
+		{
+			usage_entry = hash_search(gtr_local_usage, &eoxact_usage_list[i],
+									  HASH_FIND, NULL);
+			if (usage_entry)
+				AtEOSubXact_UsageCleanup(usage_entry, isCommit, mySubid,
+										 parentSubid);
+		}
+	}
+
+	/* Perform any pg_temp_class and pg_temp_index processing */
+	AtEOSubXact_PgTempClass(isCommit, mySubid, parentSubid);
+	AtEOSubXact_PgTempIndex(isCommit, mySubid, parentSubid);
+
+	/* Don't reset the lists; we still need more cleanup later */
+}
+
+/*
+ * IsOtherUsingGlobalTempRelation
+ *
+ *	Test if any other backend is using the specified global temporary
+ *	relation.  The caller should have an exclusive lock on the relation, or
+ *	else the result could be quickly out-dated.
+ */
+bool
+IsOtherUsingGlobalTempRelation(Oid relid)
+{
+	bool		used_locally;
+	GtrSharedUsageKey key;
+	GtrSharedUsageEntry *entry;
+	int			usage_count;
+
+	gtr_init_usage_tables();
+
+	/* Are we using the relation? (expect true) */
+	(void) hash_search(gtr_local_usage, &relid, HASH_FIND, &used_locally);
+
+	/* Total usage count (including us) */
+	key.dbid = MyDatabaseId;
+	key.relid = relid;
+	entry = dshash_find(gtr_shared_usage, &key, false);
+
+	if (entry)
+	{
+		usage_count = entry->usage_count;
+		Assert(usage_count > 0);
+		dshash_release_lock(gtr_shared_usage, entry);
+	}
+	else
+		usage_count = 0;
+
+	return used_locally ? (usage_count > 1) : (usage_count > 0);
+}
+
+/*
+ * AllGlobalTempRelationsInUse
+ *
+ *	Returns a list of OIDs of all global temporary relations in use (by any
+ *	backend) in the specified database (or all databases, if dbid is
+ *	InvalidOid).
+ *
+ *	Note: The result may be almost immediately out-dated.
+ */
+List *
+AllGlobalTempRelationsInUse(Oid dbid)
+{
+	List	   *rels_in_use = NIL;
+	dshash_seq_status status;
+	GtrSharedUsageEntry *entry;
+
+	gtr_init_usage_tables();
+
+	dshash_seq_init(&status, gtr_shared_usage, false);
+	while ((entry = dshash_seq_next(&status)) != NULL)
+	{
+		Assert(entry->usage_count > 0);
+		if (!OidIsValid(dbid) || entry->key.dbid == dbid)
+			rels_in_use = lappend_oid(rels_in_use, entry->key.relid);
+	}
+	dshash_seq_term(&status);
+
+	return rels_in_use;
+}

@@ -15,6 +15,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "access/parallel.h"
 #include "access/relation.h"
 #include "catalog/index.h"
 #include "fmgr.h"
@@ -160,10 +161,27 @@ pg_prewarm(PG_FUNCTION_ARGS)
 
 	/* Check that the fork exists. */
 	if (!smgrexists(RelationGetSmgr(rel), forkNumber))
+	{
+		/*
+		 * Normally, we treat this as an error, but in a parallel worker, it
+		 * can happen for a global temporary relation that hasn't been used,
+		 * and so has not been initialized.  Treat this as empty storage.
+		 */
+		if (IsParallelWorker() && RELATION_IS_GLOBAL_TEMP(rel))
+		{
+			relation_close(rel, AccessShareLock);
+
+			if (privOid != relOid)
+				UnlockRelationOid(privOid, AccessShareLock);
+
+			PG_RETURN_INT64(0);
+		}
+
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("fork \"%s\" does not exist for this relation",
 						forkString)));
+	}
 
 	/* Validate block numbers, or handle nulls. */
 	nblocks = RelationGetNumberOfBlocksInFork(rel, forkNumber);

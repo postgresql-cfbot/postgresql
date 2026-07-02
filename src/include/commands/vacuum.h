@@ -257,7 +257,7 @@ typedef struct VacuumParams
 struct VacuumCutoffs
 {
 	/*
-	 * Existing pg_class fields at start of VACUUM
+	 * Existing pg_class / pg_temp_class fields at start of VACUUM
 	 */
 	TransactionId relfrozenxid;
 	MultiXactId relminmxid;
@@ -386,6 +386,9 @@ extern void vac_update_relstats(Relation relation,
 extern bool vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 							   struct VacuumCutoffs *cutoffs);
 extern bool vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs);
+extern void vac_update_tempfrozenxids(void);
+extern void vac_get_min_tempfrozenxids(TransactionId *min_tempfrozenxid,
+									   MultiXactId *min_tempminmxid);
 extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(bool is_analyze);
 extern bool vacuum_is_permitted_for_relation(Oid relid, Form_pg_class reltuple,

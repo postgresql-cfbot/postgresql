@@ -32,9 +32,12 @@
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "access/xlogwait.h"
+#include "catalog/global_temp.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_enum.h"
+#include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_index.h"
 #include "catalog/storage.h"
 #include "commands/async.h"
 #include "commands/tablecmds.h"
@@ -1146,6 +1149,10 @@ CommandCounterIncrement(void)
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TRANSACTION_STATE),
 					 errmsg("cannot start commands during a parallel operation")));
+
+		/* Flush out any pending inserts to pg_temp_class and pg_temp_index */
+		PreCCI_PgTempClass();
+		PreCCI_PgTempIndex();
 
 		currentCommandId += 1;
 		if (currentCommandId == InvalidCommandId)
@@ -2353,6 +2360,17 @@ CommitTransaction(void)
 	PreCommit_on_commit_actions();
 
 	/*
+	 * Process dropped global temporary relations, deleting their local
+	 * storage.  It makes sense to do this before smgrDoPendingSyncs() so that
+	 * we don't bother synchronizing these relations.
+	 */
+	PreCommit_GlobalTempRelation();
+
+	/* Flush out any pending inserts to pg_temp_class and pg_temp_index */
+	PreCommit_PgTempClass();
+	PreCommit_PgTempIndex();
+
+	/*
 	 * Synchronize files that are created and not WAL-logged during this
 	 * transaction. This must happen before AtEOXact_RelationMap(), so that we
 	 * don't see committed-but-broken files after a crash.
@@ -2461,6 +2479,9 @@ CommitTransaction(void)
 
 	/* Clean up the relation cache */
 	AtEOXact_RelationCache(true);
+
+	/* Clean up storage and usage records for global temporary relations */
+	AtEOXact_GlobalTempRelation(true);
 
 	/* Clean up the type cache */
 	AtEOXact_TypeCache();
@@ -2614,6 +2635,17 @@ PrepareTransaction(void)
 	 * cursors, to avoid dangling-reference problems)
 	 */
 	PreCommit_on_commit_actions();
+
+	/*
+	 * Process dropped global temporary relations, deleting their local
+	 * storage.  It makes sense to do this before smgrDoPendingSyncs() so that
+	 * we don't bother synchronizing these relations.
+	 */
+	PreCommit_GlobalTempRelation();
+
+	/* Flush out any pending inserts to pg_temp_class and pg_temp_index */
+	PreCommit_PgTempClass();
+	PreCommit_PgTempIndex();
 
 	/*
 	 * Synchronize files that are created and not WAL-logged during this
@@ -2770,6 +2802,9 @@ PrepareTransaction(void)
 
 	/* Clean up the relation cache */
 	AtEOXact_RelationCache(true);
+
+	/* Clean up storage and usage records for global temporary relations */
+	AtEOXact_GlobalTempRelation(true);
 
 	/* Clean up the type cache */
 	AtEOXact_TypeCache();
@@ -3021,6 +3056,7 @@ AbortTransaction(void)
 		AtEOXact_Aio(false);
 		AtEOXact_Buffers(false);
 		AtEOXact_RelationCache(false);
+		AtEOXact_GlobalTempRelation(false);
 		AtEOXact_TypeCache();
 		AtEOXact_Inval(false);
 		AtEOXact_MultiXact();
@@ -5170,6 +5206,10 @@ CommitSubTransaction(void)
 	CallSubXactCallbacks(SUBXACT_EVENT_PRE_COMMIT_SUB, s->subTransactionId,
 						 s->parent->subTransactionId);
 
+	/* Flush out any pending inserts to pg_temp_class and pg_temp_index */
+	PreSubCommit_PgTempClass();
+	PreSubCommit_PgTempIndex();
+
 	/*
 	 * If this subxact has started any unfinished parallel operation, clean up
 	 * its workers and exit parallel mode.  Warn about leaked resources.
@@ -5214,6 +5254,8 @@ CommitSubTransaction(void)
 						 true, false);
 	AtEOSubXact_RelationCache(true, s->subTransactionId,
 							  s->parent->subTransactionId);
+	AtEOSubXact_GlobalTempRelation(true, s->subTransactionId,
+								   s->parent->subTransactionId);
 	AtEOSubXact_TypeCache();
 	AtEOSubXact_Inval(true);
 	AtSubCommit_smgr();
@@ -5399,6 +5441,8 @@ AbortSubTransaction(void)
 		AtEOXact_Aio(false);
 		AtEOSubXact_RelationCache(false, s->subTransactionId,
 								  s->parent->subTransactionId);
+		AtEOSubXact_GlobalTempRelation(false, s->subTransactionId,
+									   s->parent->subTransactionId);
 		AtEOSubXact_TypeCache();
 		AtEOSubXact_Inval(false);
 		ResourceOwnerRelease(s->curTransactionOwner,

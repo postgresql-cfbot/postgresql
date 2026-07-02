@@ -49,6 +49,8 @@
 #include "catalog/pg_opclass.h"
 #include "catalog/pg_operator.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_index.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
@@ -120,7 +122,8 @@ static void UpdateIndexRelation(Oid indexoid, Oid heapoid,
 								bool isexclusion,
 								bool immediate,
 								bool isvalid,
-								bool isready);
+								bool isready,
+								char relpersistence);
 static void index_update_stats(Relation rel,
 							   bool hasindex,
 							   double reltuples);
@@ -572,7 +575,8 @@ UpdateIndexRelation(Oid indexoid,
 					bool isexclusion,
 					bool immediate,
 					bool isvalid,
-					bool isready)
+					bool isready,
+					char relpersistence)
 {
 	int2vector *indkey;
 	oidvector  *indcollation;
@@ -673,6 +677,23 @@ UpdateIndexRelation(Oid indexoid,
 	 */
 	table_close(pg_index, RowExclusiveLock);
 	heap_freetuple(tuple);
+
+	/*
+	 * For an index on a global temporary table, GlobalTempRelationCreated()
+	 * will have inserted a pg_temp_index tuple with indisvalid = true.  If
+	 * the index is actually not valid, fix that now.
+	 */
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP && !isvalid)
+	{
+		tuple = GetPgTempIndexTuple(indexoid);
+		if (!HeapTupleIsValid(tuple))
+			elog(ERROR, "cache lookup failed for global temp index %u", indexoid);
+
+		((Form_pg_temp_index) GETSTRUCT(tuple))->indisvalid = isvalid;
+
+		UpdatePgTempIndexTuple(indexoid, tuple);
+		heap_freetuple(tuple);
+	}
 }
 
 
@@ -989,6 +1010,7 @@ index_create(Relation heapRelation,
 								relpersistence,
 								shared_relation,
 								mapped_relation,
+								ONCOMMIT_NOOP,
 								allow_system_table_mods,
 								&relfrozenxid,
 								&relminmxid,
@@ -1053,7 +1075,8 @@ index_create(Relation heapRelation,
 						isprimary, is_exclusion,
 						(constr_flags & INDEX_CONSTR_CREATE_DEFERRABLE) == 0,
 						!concurrent && !invalid,
-						!concurrent);
+						!concurrent,
+						relpersistence);
 
 	/*
 	 * Register relcache invalidation on the indexes' heap relation, to
@@ -2156,7 +2179,8 @@ index_drop(Oid indexId, bool concurrent, bool concurrent_lock_mode)
 	 * lock (see comments in RemoveRelations), and a non-concurrent DROP is
 	 * more efficient.
 	 */
-	Assert(get_rel_persistence(indexId) != RELPERSISTENCE_TEMP ||
+	Assert((get_rel_persistence(indexId) != RELPERSISTENCE_TEMP &&
+			get_rel_persistence(indexId) != RELPERSISTENCE_GLOBAL_TEMP) ||
 		   (!concurrent && !concurrent_lock_mode));
 
 	/*
@@ -2803,11 +2827,14 @@ FormIndexDatum(IndexInfo *indexInfo,
 
 
 /*
- * index_update_stats --- update pg_class entry after CREATE INDEX or REINDEX
+ * index_update_stats --- update effective pg_class entry after CREATE INDEX
+ * or REINDEX
  *
- * This routine updates the pg_class row of either an index or its parent
- * relation after CREATE INDEX or REINDEX.  Its rather bizarre API is designed
- * to ensure we can do all the necessary work in just one update.
+ * This routine updates the effective pg_class row of either an index or its
+ * parent relation after CREATE INDEX or REINDEX.  Its rather bizarre API is
+ * designed to ensure we can do all the necessary work in just one update
+ * (except for a global temporary relation, which requires both pg_class and
+ * pg_temp_class to be updated).
  *
  * hasindex: set relhasindex to this value
  * reltuples: if >= 0, set reltuples to this value; else no change
@@ -2815,13 +2842,17 @@ FormIndexDatum(IndexInfo *indexInfo,
  * If reltuples >= 0, relpages, relallvisible, and relallfrozen are also
  * updated (using RelationGetNumberOfBlocks() and visibilitymap_count()).
  *
+ * For a global temporary relation, relhasindex is set in pg_class and all the
+ * other fields are set in pg_temp_class.  For any other type of relation, all
+ * the fields are set in pg_class.
+ *
  * NOTE: an important side-effect of this operation is that an SI invalidation
  * message is sent out to all backends --- including me --- causing relcache
  * entries to be flushed or updated with the new data.  This must happen even
- * if we find that no change is needed in the pg_class row.  When updating
- * a heap entry, this ensures that other backends find out about the new
- * index.  When updating an index, it's important because some index AMs
- * expect a relcache flush to occur after REINDEX.
+ * if we find that no change is needed in the pg_class or pg_temp_class rows.
+ * When updating a heap entry, this ensures that other backends find out about
+ * the new index.  When updating an index, it's important because some index
+ * AMs expect a relcache flush to occur after REINDEX.
  */
 static void
 index_update_stats(Relation rel,
@@ -2836,9 +2867,12 @@ index_update_stats(Relation rel,
 	Relation	pg_class;
 	ScanKeyData key[1];
 	HeapTuple	tuple;
+	HeapTuple	temp_tuple;
 	void	   *state;
 	Form_pg_class rd_rel;
+	Form_pg_temp_class temp_rd_rel;
 	bool		dirty;
+	bool		temp_dirty;
 
 	/*
 	 * As a special hack, if we are dealing with an empty table and the
@@ -2921,8 +2955,34 @@ index_update_stats(Relation rel,
 	 * relallvisible) if the caller isn't providing an updated reltuples
 	 * count, because that would bollix the reltuples/relpages ratio which is
 	 * what's really important.
+	 *
+	 * If not for (1) above, pg_temp_class could be updated normally, and in
+	 * fact we could work round (1) by simply not updating pg_temp_class in
+	 * bootstrap mode, since its value just gets thrown away when initdb
+	 * finishes.  However, for consistency, we update it in-place, like
+	 * pg_class --- see also vac_update_relstats().
 	 */
 
+	/*
+	 * For a global temporary relation, need a writable copy of its
+	 * pg_temp_class tuple.  Note: can't use systable_inplace_update_begin()
+	 * here because the tuple might be a pending insert --- see header
+	 * comments in pg_temp_class.c.
+	 */
+	if (RELATION_IS_GLOBAL_TEMP(rel))
+	{
+		temp_tuple = GetPgTempClassTuple(relid);
+		if (!HeapTupleIsValid(temp_tuple))
+			elog(ERROR, "cache lookup failed for global temp relation %u", relid);
+		temp_rd_rel = (Form_pg_temp_class) GETSTRUCT(temp_tuple);
+	}
+	else
+	{
+		temp_tuple = NULL;
+		temp_rd_rel = NULL;
+	}
+
+	/* Fetch a copy of the pg_class tuple to scribble on */
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
 
 	ScanKeyInit(&key[0],
@@ -2939,9 +2999,10 @@ index_update_stats(Relation rel,
 	/* Should this be a more comprehensive test? */
 	Assert(rd_rel->relkind != RELKIND_PARTITIONED_INDEX);
 
-	/* Apply required updates, if any, to copied tuple */
+	/* Apply required updates, if any, to copied tuple(s) */
 
 	dirty = false;
+	temp_dirty = false;
 	if (rd_rel->relhasindex != hasindex)
 	{
 		rd_rel->relhasindex = hasindex;
@@ -2950,30 +3011,18 @@ index_update_stats(Relation rel,
 
 	if (update_stats)
 	{
-		if (rd_rel->relpages != (int32) relpages)
-		{
-			rd_rel->relpages = (int32) relpages;
-			dirty = true;
-		}
-		if (rd_rel->reltuples != (float4) reltuples)
-		{
-			rd_rel->reltuples = (float4) reltuples;
-			dirty = true;
-		}
-		if (rd_rel->relallvisible != (int32) relallvisible)
-		{
-			rd_rel->relallvisible = (int32) relallvisible;
-			dirty = true;
-		}
-		if (rd_rel->relallfrozen != (int32) relallfrozen)
-		{
-			rd_rel->relallfrozen = (int32) relallfrozen;
-			dirty = true;
-		}
+		SetEffective_relpages(rd_rel, temp_rd_rel, (int32) relpages,
+							  &dirty, &temp_dirty);
+		SetEffective_reltuples(rd_rel, temp_rd_rel, (float4) reltuples,
+							   &dirty, &temp_dirty);
+		SetEffective_relallvisible(rd_rel, temp_rd_rel, (int32) relallvisible,
+								   &dirty, &temp_dirty);
+		SetEffective_relallfrozen(rd_rel, temp_rd_rel, (int32) relallfrozen,
+								  &dirty, &temp_dirty);
 	}
 
 	/*
-	 * If anything changed, write out the tuple
+	 * If anything changed, write out the tuple(s)
 	 */
 	if (dirty)
 	{
@@ -2992,6 +3041,14 @@ index_update_stats(Relation rel,
 		 * our API contract.
 		 */
 		CacheInvalidateRelcacheByTuple(tuple);
+	}
+
+	if (HeapTupleIsValid(temp_tuple))
+	{
+		if (temp_dirty)
+			UpdatePgTempClassTupleInPlace(relid, temp_tuple);
+
+		heap_freetuple(temp_tuple);
 	}
 
 	heap_freetuple(tuple);
@@ -3112,7 +3169,7 @@ index_build(Relation heapRelation,
 	{
 		smgrcreate(RelationGetSmgr(indexRelation), INIT_FORKNUM, false);
 		log_smgrcreate(&indexRelation->rd_locator, INIT_FORKNUM);
-		indexRelation->rd_indam->ambuildempty(indexRelation);
+		indexRelation->rd_indam->ambuildempty(indexRelation, INIT_FORKNUM);
 	}
 
 	/*
@@ -3527,6 +3584,9 @@ index_set_state_flags(Oid indexId, IndexStateFlagsAction action)
 	HeapTuple	indexTuple;
 	Form_pg_index indexForm;
 
+	/* This is not expected to be a global temporary index */
+	Assert(!rel_is_global_temp(indexId));
+
 	/* Open pg_index and fetch a writable copy of the index's tuple */
 	pg_index = table_open(IndexRelationId, RowExclusiveLock);
 
@@ -3643,6 +3703,23 @@ reindex_index(const ReindexStmt *stmt, Oid indexId,
 	bool		set_tablespace = false;
 
 	pg_rusage_init(&ru0);
+
+	/*
+	 * Special case: cannot recreate pg_temp_class_oid_index --- to do so
+	 * would require pg_temp_class to be a mapped relation (to avoid use of
+	 * the index while rebuilding it) and the relmapper does not support
+	 * temporary tables.  It might be possible to make this work, but it
+	 * doesn't seem worth the effort, so just punt.
+	 */
+	if (indexId == TempClassOidIndexId)
+	{
+		ereport(NOTICE,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("cannot reindex temporary system index \"%s\", skipping",
+					   get_rel_name(indexId)));
+		RemoveReindexPending(indexId);
+		return;
+	}
 
 	/*
 	 * Open and lock the parent heap relation.  ShareLock is sufficient since
@@ -3869,18 +3946,26 @@ reindex_index(const ReindexStmt *stmt, Oid indexId,
 	{
 		Relation	pg_index;
 		HeapTuple	indexTuple;
+		HeapTuple	temp_indexTuple;
 		Form_pg_index indexForm;
+		Form_pg_temp_index temp_indexForm;
 		bool		index_bad;
 
+		/*
+		 * For a global temporary index, we update indisvalid in both pg_index
+		 * and pg_temp_index, so that the change applies to this session and
+		 * all future sessions.
+		 */
 		pg_index = table_open(IndexRelationId, RowExclusiveLock);
 
-		indexTuple = SearchSysCacheCopy1(INDEXRELID,
-										 ObjectIdGetDatum(indexId));
+		indexTuple = GetPgIndexAndPgTempIndexTuples(indexId, &temp_indexTuple,
+													true);
 		if (!HeapTupleIsValid(indexTuple))
 			elog(ERROR, "cache lookup failed for index %u", indexId);
 		indexForm = (Form_pg_index) GETSTRUCT(indexTuple);
+		temp_indexForm = (Form_pg_temp_index) GETSTRUCT_SAFE(temp_indexTuple);
 
-		index_bad = (!indexForm->indisvalid ||
+		index_bad = (!GetEffective_indisvalid(indexForm, temp_indexForm) ||
 					 !indexForm->indisready ||
 					 !indexForm->indislive);
 		if (index_bad ||
@@ -3891,9 +3976,13 @@ reindex_index(const ReindexStmt *stmt, Oid indexId,
 			else if (index_bad)
 				indexForm->indcheckxmin = true;
 			indexForm->indisvalid = true;
+			if (temp_indexForm != NULL)
+				temp_indexForm->indisvalid = true;
 			indexForm->indisready = true;
 			indexForm->indislive = true;
 			CatalogTupleUpdate(pg_index, &indexTuple->t_self, indexTuple);
+			if (HeapTupleIsValid(temp_indexTuple))
+				UpdatePgTempIndexTuple(indexId, temp_indexTuple);
 
 			/*
 			 * Invalidate the relcache for the table, so that after we commit

@@ -36,6 +36,7 @@
 #include "access/tableam.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
+#include "catalog/global_temp.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/objectaccess.h"
@@ -52,6 +53,7 @@
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_subscription_rel.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_temp_statistic.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
 #include "commands/tablecmds.h"
@@ -294,6 +296,7 @@ heap_create(const char *relname,
 			char relpersistence,
 			bool shared_relation,
 			bool mapped_relation,
+			OnCommitAction oncommit,
 			bool allow_system_table_mods,
 			TransactionId *relfrozenxid,
 			MultiXactId *relminmxid,
@@ -371,7 +374,8 @@ heap_create(const char *relname,
 									 shared_relation,
 									 mapped_relation,
 									 relpersistence,
-									 relkind);
+									 relkind,
+									 oncommit);
 
 	/*
 	 * Have the storage manager create the relation's disk file, if needed.
@@ -387,7 +391,8 @@ heap_create(const char *relname,
 											   relpersistence,
 											   relfrozenxid, relminmxid);
 		else if (RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
-			RelationCreateStorage(rel->rd_locator, relpersistence, true);
+			RelationCreateStorage(rel->rd_id, rel->rd_locator,
+								  relpersistence, true);
 		else
 			Assert(false);
 	}
@@ -396,8 +401,13 @@ heap_create(const char *relname,
 	 * If a tablespace is specified, removal of that tablespace is normally
 	 * protected by the existence of a physical file; but for relations with
 	 * no files, add a pg_shdepend entry to account for that.
+	 *
+	 * Note, however, that although global temporary relations may have files,
+	 * those files will go away at the end of the session, and so provide no
+	 * protection, and we must add a pg_shdepend entry in this case too.
 	 */
-	if (!create_storage && reltablespace != InvalidOid)
+	if ((!create_storage || relpersistence == RELPERSISTENCE_GLOBAL_TEMP) &&
+		reltablespace != InvalidOid)
 		recordDependencyOnTablespace(RelationRelationId, relid,
 									 reltablespace);
 
@@ -958,6 +968,7 @@ InsertPgClassTuple(Relation pg_class_desc,
 	values[Anum_pg_class_relisshared - 1] = BoolGetDatum(rd_rel->relisshared);
 	values[Anum_pg_class_relpersistence - 1] = CharGetDatum(rd_rel->relpersistence);
 	values[Anum_pg_class_relkind - 1] = CharGetDatum(rd_rel->relkind);
+	values[Anum_pg_class_reloncommit - 1] = CharGetDatum(rd_rel->reloncommit);
 	values[Anum_pg_class_relnatts - 1] = Int16GetDatum(rd_rel->relnatts);
 	values[Anum_pg_class_relchecks - 1] = Int16GetDatum(rd_rel->relchecks);
 	values[Anum_pg_class_relhasrules - 1] = BoolGetDatum(rd_rel->relhasrules);
@@ -989,6 +1000,10 @@ InsertPgClassTuple(Relation pg_class_desc,
 	CatalogTupleInsert(pg_class_desc, tup);
 
 	heap_freetuple(tup);
+
+	/* Additional setup for global temporary relations */
+	if (RELATION_IS_GLOBAL_TEMP(new_rel_desc))
+		GlobalTempRelationCreated(new_rel_desc);
 }
 
 /* --------------------------------
@@ -1339,6 +1354,7 @@ heap_create_with_catalog(const char *relname,
 							   relpersistence,
 							   shared_relation,
 							   mapped_relation,
+							   oncommit,
 							   allow_system_table_mods,
 							   &relfrozenxid,
 							   &relminmxid,
@@ -1597,6 +1613,7 @@ DeleteRelationTuple(Oid relid)
 {
 	Relation	pg_class_desc;
 	HeapTuple	tup;
+	char		relpersistence;
 
 	/* Grab an appropriate lock on the pg_class relation */
 	pg_class_desc = table_open(RelationRelationId, RowExclusiveLock);
@@ -1604,6 +1621,7 @@ DeleteRelationTuple(Oid relid)
 	tup = SearchSysCache1(RELOID, ObjectIdGetDatum(relid));
 	if (!HeapTupleIsValid(tup))
 		elog(ERROR, "cache lookup failed for relation %u", relid);
+	relpersistence = ((Form_pg_class) GETSTRUCT(tup))->relpersistence;
 
 	/* delete the relation tuple from pg_class, and finish up */
 	CatalogTupleDelete(pg_class_desc, &tup->t_self);
@@ -1611,6 +1629,10 @@ DeleteRelationTuple(Oid relid)
 	ReleaseSysCache(tup);
 
 	table_close(pg_class_desc, RowExclusiveLock);
+
+	/* Additional tidying up for global temporary relations */
+	if (relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		GlobalTempRelationDropped(relid);
 }
 
 /*
@@ -3467,6 +3489,13 @@ CopyStatistics(Oid fromrelid, Oid torelid)
 	Relation	statrel;
 	CatalogIndexState indstate = NULL;
 
+	/*
+	 * Note: This is currently only used for concurrent index building, which
+	 * isn't supported on global temporary relations, so we never want
+	 * pg_temp_statistic here.
+	 */
+	Assert(!rel_is_global_temp(fromrelid) && !rel_is_global_temp(torelid));
+
 	statrel = table_open(StatisticRelationId, RowExclusiveLock);
 
 	/* Now search for stat records */
@@ -3515,12 +3544,22 @@ void
 RemoveStatistics(Oid relid, AttrNumber attnum)
 {
 	Relation	pgstatistic;
+	Oid			relidAttnumInhIndexId;
 	SysScanDesc scan;
 	ScanKeyData key[2];
 	int			nkeys;
 	HeapTuple	tuple;
 
-	pgstatistic = table_open(StatisticRelationId, RowExclusiveLock);
+	if (rel_is_global_temp(relid))
+	{
+		pgstatistic = table_open(TempStatisticRelationId, RowExclusiveLock);
+		relidAttnumInhIndexId = TempStatisticRelidAttnumInhIndexId;
+	}
+	else
+	{
+		pgstatistic = table_open(StatisticRelationId, RowExclusiveLock);
+		relidAttnumInhIndexId = StatisticRelidAttnumInhIndexId;
+	}
 
 	ScanKeyInit(&key[0],
 				Anum_pg_statistic_starelid,
@@ -3538,7 +3577,7 @@ RemoveStatistics(Oid relid, AttrNumber attnum)
 		nkeys = 2;
 	}
 
-	scan = systable_beginscan(pgstatistic, StatisticRelidAttnumInhIndexId, true,
+	scan = systable_beginscan(pgstatistic, relidAttnumInhIndexId, true,
 							  NULL, nkeys, key);
 
 	/* we must loop even when attnum != 0, in case of inherited stats */

@@ -3050,6 +3050,10 @@ makeTableDataInfo(DumpOptions *dopt, TableInfo *tbinfo)
 	if (tbinfo->relkind == RELKIND_PARTITIONED_TABLE)
 		return;
 
+	/* Don't dump data in global temporary tables */
+	if (tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		return;
+
 	/* Don't dump data in unlogged tables, if so requested */
 	if (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED &&
 		dopt->no_unlogged_table_data)
@@ -17455,7 +17459,9 @@ dumpTableSchema(Archive *fout, const TableInfo *tbinfo)
 		appendPQExpBuffer(q, "CREATE %s%s %s",
 						  (tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED &&
 						   tbinfo->relkind != RELKIND_PARTITIONED_TABLE) ?
-						  "UNLOGGED " : "",
+						  "UNLOGGED " :
+						  tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP ?
+						  "GLOBAL TEMP " : "",
 						  reltypename,
 						  qualrelname);
 
@@ -19607,7 +19613,9 @@ dumpSequence(Archive *fout, const TableInfo *tbinfo)
 		appendPQExpBuffer(query,
 						  "CREATE %sSEQUENCE %s\n",
 						  tbinfo->relpersistence == RELPERSISTENCE_UNLOGGED ?
-						  "UNLOGGED " : "",
+						  "UNLOGGED " :
+						  tbinfo->relpersistence == RELPERSISTENCE_GLOBAL_TEMP ?
+						  "GLOBAL TEMP " : "",
 						  fmtQualifiedDumpable(tbinfo));
 
 		if (seq->seqtype != SEQTYPE_BIGINT)

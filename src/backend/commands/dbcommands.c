@@ -1830,6 +1830,7 @@ dropdb(const char *dbname, bool missing_ok, bool force)
 	 * Tell the cumulative stats system to forget it immediately, too.
 	 */
 	pgstat_drop_database(db_id);
+	pgstat_drop_vacuum_database(db_id);
 
 	/*
 	 * Except for the deletion of the catalog row, subsequent actions are not

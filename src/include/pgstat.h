@@ -118,6 +118,15 @@ typedef struct PgStat_BackendSubEntry
 	PgStat_Counter conflict_count[CONFLICT_NUM_TYPES];
 } PgStat_BackendSubEntry;
 
+/* Type of ExtVacReport */
+typedef enum ExtVacReportType
+{
+	PGSTAT_EXTVAC_INVALID = 0,
+	PGSTAT_EXTVAC_TABLE = 1,
+	PGSTAT_EXTVAC_INDEX = 2,
+	PGSTAT_EXTVAC_DB = 3,
+}			ExtVacReportType;
+
 /* ----------
  * PgStat_TableCounts			The actual per-table counts kept by a backend
  *
@@ -160,7 +169,114 @@ typedef struct PgStat_TableCounts
 
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
+	PgStat_Counter visible_page_marks_cleared;
+	PgStat_Counter frozen_page_marks_cleared;
 } PgStat_TableCounts;
+
+typedef struct PgStat_CommonCounts
+{
+	/* blocks */
+	int64		total_blks_read;
+	int64		total_blks_hit;
+	int64		total_blks_dirtied;
+	int64		total_blks_written;
+
+	/* heap blocks */
+	int64		blks_fetched;
+	int64		blks_hit;
+
+	/* WAL */
+	int64		wal_records;
+	int64		wal_fpi;
+	uint64		wal_bytes;
+
+	/* Time */
+	double		blk_read_time;
+	double		blk_write_time;
+	double		delay_time;
+	double		total_time;
+
+	/* tuples */
+	int64		tuples_deleted;
+
+	/* failsafe */
+	int32		wraparound_failsafe_count;
+
+	/* number of times a vacuum of the object was interrupted by an error */
+	int32		interrupts_count;
+}			PgStat_CommonCounts;
+
+/* ----------
+ *
+ * PgStat_VacuumRelationCounts
+ *
+ * Additional statistics of vacuum processing over a relation.  Counters that
+ * require sampling buffer/WAL/timing usage, and the per-index counters, are
+ * added to the common and per-type members later, together with the code that
+ * gathers them.
+ * ----------
+ */
+typedef struct PgStat_VacuumRelationCounts
+{
+	PgStat_CommonCounts common;
+
+	ExtVacReportType type;		/* heap, index, etc. */
+
+	/* ----------
+	 *
+	 * There are separate metrics of statistic for tables and indexes,
+	 * which collect during vacuum.
+	 * The union operator allows to combine these statistics
+	 * so that each metric is assigned to a specific class of collected statistics.
+	 * Such a combined structure was called per_type_stats.
+	 * The name of the structure itself is not used anywhere,
+	 * it exists only for understanding the code.
+	 * ----------
+	*/
+	union
+	{
+		struct
+		{
+			int64		tuples_frozen;	/* tuples frozen up by vacuum */
+			int64		recently_dead_tuples;	/* deleted tuples that are
+												 * still visible to some
+												 * transaction */
+			int64		pages_scanned;	/* heap pages examined (not skipped by
+										 * VM) */
+			int64		pages_removed;	/* heap pages removed by vacuum
+										 * "truncation" */
+			int64		missed_dead_pages;	/* pages with missed dead tuples */
+			int64		missed_dead_tuples; /* tuples not pruned by vacuum due
+											 * to failure to get a cleanup
+											 * lock */
+			int64		vm_new_frozen_pages;	/* pages marked in VM as
+												 * frozen */
+			int64		vm_new_visible_pages;	/* pages marked in VM as
+												 * all-visible */
+			int64		vm_new_visible_frozen_pages;	/* pages marked in VM as
+														 * all-visible and
+														 * frozen */
+		}			table;
+		struct
+		{
+			int64		pages_deleted;	/* number of pages deleted by vacuum */
+		}			index;
+	} /* per_type_stats */ ;
+}			PgStat_VacuumRelationCounts;
+
+typedef struct PgStat_VacuumRelationStatus
+{
+	Oid			id;				/* table's OID */
+	bool		shared;			/* is it a shared catalog? */
+	PgStat_VacuumRelationCounts counts; /* event counts to be sent */
+}			PgStat_VacuumRelationStatus;
+
+typedef struct PgStat_VacuumDBCounts
+{
+	Oid			dbjid;
+	PgStat_CommonCounts common;
+	int32		errors;
+}			PgStat_VacuumDBCounts;
 
 /* ----------
  * PgStat_TableStatus			Per-table status within a backend
@@ -185,6 +301,12 @@ typedef struct PgStat_TableStatus
 	PgStat_TableCounts counts;	/* event counts to be sent */
 	Relation	relation;		/* rel that is using this entry */
 } PgStat_TableStatus;
+
+typedef struct PgStat_RelationVacuumPending
+{
+	Oid			id;				/* table's OID */
+	PgStat_VacuumRelationCounts counts; /* event counts to be sent */
+}			PgStat_RelationVacuumPending;
 
 /* ----------
  * PgStat_TableXactStatus		Per-table, per-subtransaction status
@@ -218,7 +340,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBC
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBD
 
 typedef struct PgStat_ArchiverStats
 {
@@ -469,6 +591,8 @@ typedef struct PgStat_StatTabEntry
 
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
+	PgStat_Counter visible_page_marks_cleared;
+	PgStat_Counter frozen_page_marks_cleared;
 
 	TimestampTz last_vacuum_time;	/* user initiated vacuum */
 	PgStat_Counter vacuum_count;
@@ -749,6 +873,17 @@ extern void pgstat_report_analyze(Relation rel,
 		if (pgstat_should_count_relation(rel))						\
 			(rel)->pgstat_info->counts.blocks_hit++;				\
 	} while (0)
+/* count revocations of all-visible and all-frozen marks in visibility map */
+#define pgstat_count_visible_page_marks_cleared(rel)					\
+	do {															\
+		if (pgstat_should_count_relation(rel))						\
+			(rel)->pgstat_info->counts.visible_page_marks_cleared++;	\
+	} while (0)
+#define pgstat_count_frozen_page_marks_cleared(rel)					\
+	do {															\
+		if (pgstat_should_count_relation(rel))						\
+			(rel)->pgstat_info->counts.frozen_page_marks_cleared++;	\
+	} while (0)
 
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
 extern void pgstat_count_heap_update(Relation rel, bool hot, bool newpage);
@@ -823,6 +958,15 @@ extern int	pgstat_get_transactional_drops(bool isCommit, struct xl_xact_stats_it
 extern void pgstat_execute_transactional_drops(int ndrops, struct xl_xact_stats_item *items, bool is_redo);
 
 
+extern void pgstat_drop_vacuum_database(Oid databaseid);
+extern void pgstat_vacuum_relation_delete_pending_cb(Oid relid);
+extern void
+			pgstat_report_vacuum_extstats(Oid tableoid, bool shared,
+										  PgStat_VacuumRelationCounts * params);
+extern void pgstat_report_vacuum_error(bool shared);
+extern PgStat_VacuumRelationCounts * pgstat_fetch_stat_vacuum_tabentry(Oid relid, Oid dbid);
+extern PgStat_VacuumDBCounts * pgstat_fetch_stat_vacuum_dbentry(Oid dbid);
+
 /*
  * Functions in pgstat_wal.c
  */
@@ -839,7 +983,8 @@ extern PgStat_WalStats *pgstat_fetch_stat_wal(void);
 extern PGDLLIMPORT bool pgstat_track_counts;
 extern PGDLLIMPORT int pgstat_track_functions;
 extern PGDLLIMPORT int pgstat_fetch_consistency;
-
+extern PGDLLIMPORT bool pgstat_track_vacuum_statistics;
+extern PGDLLIMPORT bool pgstat_track_vacuum_statistics_for_relations;
 
 /*
  * Variables in pgstat_bgwriter.c

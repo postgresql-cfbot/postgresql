@@ -21,9 +21,11 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_statistic.h"
 #include "catalog/pg_type.h"
+#include "executor/instrument.h"
 #include "parser/parse_node.h"
 #include "storage/buf.h"
 #include "utils/relcache.h"
+#include "pgstat.h"
 
 /*
  * Flags for amparallelvacuumoptions to control the participation of bulkdelete
@@ -321,6 +323,26 @@ typedef struct PVWorkerUsage
 	PVWorkerStats cleanup;
 } PVWorkerUsage;
 
+/*
+ * Counters and usage data for extended stats tracking.
+ */
+typedef struct LVExtStatCounters
+{
+	TimestampTz starttime;
+	WalUsage	walusage;
+	BufferUsage bufusage;
+	double		VacuumDelayTime;
+	PgStat_Counter blocks_fetched;
+	PgStat_Counter blocks_hit;
+}			LVExtStatCounters;
+
+typedef struct LVExtStatCountersIdx
+{
+	LVExtStatCounters common;
+	int64		pages_deleted;
+	int64		tuples_removed;
+}			LVExtStatCountersIdx;
+
 /* GUC parameters */
 extern PGDLLIMPORT int default_statistics_target;	/* PGDLLIMPORT for PostGIS */
 extern PGDLLIMPORT int vacuum_freeze_min_age;
@@ -353,6 +375,7 @@ extern PGDLLIMPORT double vacuum_max_eager_freeze_failure_rate;
 extern PGDLLIMPORT pg_atomic_uint32 *VacuumSharedCostBalance;
 extern PGDLLIMPORT pg_atomic_uint32 *VacuumActiveNWorkers;
 extern PGDLLIMPORT int VacuumCostBalanceLocal;
+extern PGDLLIMPORT double VacuumDelayTime;
 
 extern PGDLLIMPORT bool VacuumFailsafeActive;
 extern PGDLLIMPORT double vacuum_cost_delay;
@@ -409,7 +432,8 @@ extern ParallelVacuumState *parallel_vacuum_init(Relation rel, Relation *indrels
 												 int nindexes, int nrequested_workers,
 												 int vac_work_mem, int elevel,
 												 BufferAccessStrategy bstrategy);
-extern void parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats);
+extern void parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats,
+								PgStat_VacuumRelationCounts *idx_heap_total);
 extern TidStore *parallel_vacuum_get_dead_items(ParallelVacuumState *pvs,
 												VacDeadItemsInfo **dead_items_info_p);
 extern void parallel_vacuum_reset_dead_items(ParallelVacuumState *pvs);
@@ -439,4 +463,10 @@ extern double anl_random_fract(void);
 extern double anl_init_selection_state(int n);
 extern double anl_get_next_S(double t, int n, double *stateptr);
 
+extern void extvac_stats_start_idx(Relation rel, IndexBulkDeleteResult *stats,
+								   LVExtStatCountersIdx * counters);
+extern void extvac_stats_end_idx(Relation rel, IndexBulkDeleteResult *stats,
+								 LVExtStatCountersIdx * counters, PgStat_VacuumRelationCounts * report);
+extern void extvac_accumulate_idx_report(PgStat_VacuumRelationCounts * dst,
+										 const PgStat_VacuumRelationCounts * src);
 #endif							/* VACUUM_H */

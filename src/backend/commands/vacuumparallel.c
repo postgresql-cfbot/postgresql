@@ -203,6 +203,16 @@ typedef struct PVIndStats
 	 */
 	bool		istat_updated;	/* are the stats updated? */
 	IndexBulkDeleteResult istat;
+
+	/*
+	 * Extended vacuum statistics accumulated across all bulkdelete and cleanup
+	 * passes for this index, by whichever process (leader or worker) ran each
+	 * pass.  The leader reports the totals to the cumulative stats system once
+	 * per index in parallel_vacuum_end(), and also feeds them back so that the
+	 * index work can be subtracted from the parent heap's figures.
+	 */
+	bool		extvac_touched; /* was this index processed at all? */
+	PgStat_VacuumRelationCounts extvacstats;
 } PVIndStats;
 
 /*
@@ -512,9 +522,21 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
  * context, but that won't be safe (see ExitParallelMode).
  */
 void
-parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
+parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats,
+					PgStat_VacuumRelationCounts *idx_heap_total)
 {
+	PgStat_VacuumRelationCounts *extvacstats = NULL;
+
 	Assert(!IsParallelWorker());
+
+	/*
+	 * Stash the per-index extended vacuum statistics while the DSM is still
+	 * mapped; they are reported once per index after we have left parallel
+	 * mode.  An index that was never processed keeps its zeroed slot (type
+	 * PGSTAT_EXTVAC_INVALID) and is skipped there.
+	 */
+	if (pgstat_track_vacuum_statistics && pvs->nindexes > 0)
+		extvacstats = palloc0_array(PgStat_VacuumRelationCounts, pvs->nindexes);
 
 	/* Copy the updated statistics */
 	for (int i = 0; i < pvs->nindexes; i++)
@@ -528,12 +550,44 @@ parallel_vacuum_end(ParallelVacuumState *pvs, IndexBulkDeleteResult **istats)
 		}
 		else
 			istats[i] = NULL;
+
+		if (extvacstats != NULL && indstats->extvac_touched)
+			memcpy(&extvacstats[i], &indstats->extvacstats,
+				   sizeof(PgStat_VacuumRelationCounts));
 	}
 
 	TidStoreDestroy(pvs->dead_items);
 
 	DestroyParallelContext(pvs->pcxt);
 	ExitParallelMode();
+
+	/*
+	 * Report the per-index extended vacuum statistics, one report per index,
+	 * and add each index's resource usage to idx_heap_total so the caller can
+	 * subtract it from the parent heap's figures (the leader folds the workers'
+	 * buffer/WAL usage into its own, so without this the index work would be
+	 * attributed to the heap).  The indexes are still open here (pvs->indrels
+	 * is the leader's own array, not in the now-destroyed DSM).
+	 */
+	if (extvacstats != NULL)
+	{
+		for (int i = 0; i < pvs->nindexes; i++)
+		{
+			Relation	indrel = pvs->indrels[i];
+
+			if (extvacstats[i].type != PGSTAT_EXTVAC_INDEX)
+				continue;
+
+			pgstat_report_vacuum_extstats(RelationGetRelid(indrel),
+										  indrel->rd_rel->relisshared,
+										  &extvacstats[i]);
+
+			if (idx_heap_total != NULL)
+				extvac_accumulate_idx_report(idx_heap_total, &extvacstats[i]);
+		}
+
+		pfree(extvacstats);
+	}
 
 	if (AmAutoVacuumWorkerProcess())
 		pv_shared_cost_params = NULL;
@@ -1076,6 +1130,14 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	IndexBulkDeleteResult *istat = NULL;
 	IndexBulkDeleteResult *istat_res;
 	IndexVacuumInfo ivinfo;
+	LVExtStatCountersIdx extVacCounters;
+	PgStat_VacuumRelationCounts extVacReport;
+
+	/*
+	 * Zero the report up front: extvac_stats_end_idx() leaves it untouched when
+	 * statistics tracking is disabled.
+	 */
+	memset(&extVacReport, 0, sizeof(PgStat_VacuumRelationCounts));
 
 	/*
 	 * Update the pointer to the corresponding bulk-deletion result if someone
@@ -1083,6 +1145,9 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	 */
 	if (indstats->istat_updated)
 		istat = &(indstats->istat);
+
+	/* Snapshot the resource usage before processing this index pass */
+	extvac_stats_start_idx(indrel, istat, &extVacCounters);
 
 	ivinfo.index = indrel;
 	ivinfo.heaprel = pvs->heaprel;
@@ -1110,6 +1175,20 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 			elog(ERROR, "unexpected parallel vacuum index status %d for index \"%s\"",
 				 indstats->status,
 				 RelationGetRelationName(indrel));
+	}
+
+	/*
+	 * Accumulate this pass's extended vacuum statistics into the index's
+	 * DSM-resident running totals.  The leader reports them, and subtracts
+	 * them from the parent heap, once per index in parallel_vacuum_end().  Each
+	 * index is processed by a single process per pass, so no locking is needed
+	 * here (same as the istat update below).
+	 */
+	extvac_stats_end_idx(indrel, istat_res, &extVacCounters, &extVacReport);
+	if (pgstat_track_vacuum_statistics)
+	{
+		extvac_accumulate_idx_report(&indstats->extvacstats, &extVacReport);
+		indstats->extvac_touched = true;
 	}
 
 	/*
@@ -1276,6 +1355,7 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 		VacuumUpdateCosts();
 
 	VacuumCostBalance = 0;
+	VacuumDelayTime = 0;
 	VacuumCostBalanceLocal = 0;
 	VacuumSharedCostBalance = &(shared->cost_balance);
 	VacuumActiveNWorkers = &(shared->active_nworkers);

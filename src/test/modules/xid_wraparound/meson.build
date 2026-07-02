@@ -31,6 +31,7 @@ tests += {
       't/002_limits.pl',
       't/003_wraparounds.pl',
       't/004_notify_freeze.pl',
+      't/005_vacuum_stats_failsafe.pl',
     ],
   },
 }

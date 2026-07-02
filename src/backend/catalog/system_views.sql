@@ -747,7 +747,9 @@ CREATE VIEW pg_stat_all_tables AS
             pg_stat_get_total_autovacuum_time(C.oid) AS total_autovacuum_time,
             pg_stat_get_total_analyze_time(C.oid) AS total_analyze_time,
             pg_stat_get_total_autoanalyze_time(C.oid) AS total_autoanalyze_time,
-            pg_stat_get_stat_reset_time(C.oid) AS stats_reset
+            pg_stat_get_stat_reset_time(C.oid) AS stats_reset,
+            pg_stat_get_visible_page_marks_cleared(C.oid) AS visible_page_marks_cleared,
+            pg_stat_get_frozen_page_marks_cleared(C.oid) AS frozen_page_marks_cleared
     FROM pg_class C LEFT JOIN
          pg_index I ON C.oid = I.indrelid
          LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace)
@@ -1557,3 +1559,101 @@ CREATE VIEW pg_aios AS
     SELECT * FROM pg_get_aios();
 REVOKE ALL ON pg_aios FROM PUBLIC;
 GRANT SELECT ON pg_aios TO pg_read_all_stats;
+
+CREATE VIEW pg_stat_vacuum_tables AS
+    SELECT
+        N.nspname AS schemaname,
+        C.relname AS relname,
+        S.relid AS relid,
+
+        S.pages_scanned AS pages_scanned,
+        S.pages_removed AS pages_removed,
+        S.tuples_deleted AS tuples_deleted,
+        S.tuples_frozen AS tuples_frozen,
+        S.recently_dead_tuples AS recently_dead_tuples,
+        S.missed_dead_pages AS missed_dead_pages,
+        S.missed_dead_tuples AS missed_dead_tuples,
+        S.vm_new_frozen_pages AS vm_new_frozen_pages,
+        S.vm_new_visible_pages AS vm_new_visible_pages,
+        S.vm_new_visible_frozen_pages AS vm_new_visible_frozen_pages,
+        S.total_blks_read AS total_blks_read,
+        S.total_blks_hit AS total_blks_hit,
+        S.total_blks_dirtied AS total_blks_dirtied,
+        S.total_blks_written AS total_blks_written,
+        S.rel_blks_read AS rel_blks_read,
+        S.rel_blks_hit AS rel_blks_hit,
+        S.blk_read_time AS blk_read_time,
+        S.blk_write_time AS blk_write_time,
+        S.delay_time AS delay_time,
+        S.total_time AS total_time,
+        S.wraparound_failsafe AS wraparound_failsafe,
+        S.wal_records AS wal_records,
+        S.wal_fpi AS wal_fpi,
+        S.wal_bytes AS wal_bytes
+
+    FROM pg_class C JOIN
+            pg_namespace N ON N.oid = C.relnamespace,
+            LATERAL pg_stat_get_vacuum_tables(C.oid) S
+    WHERE C.relkind IN ('r', 't', 'm');
+
+CREATE VIEW pg_stat_vacuum_indexes AS
+    SELECT
+            C.oid AS relid,
+            I.oid AS indexrelid,
+            N.nspname AS schemaname,
+            C.relname AS relname,
+            I.relname AS indexrelname,
+
+            S.pages_deleted AS pages_deleted,
+            S.tuples_deleted AS tuples_deleted,
+
+            S.total_blks_read AS total_blks_read,
+            S.total_blks_hit AS total_blks_hit,
+            S.total_blks_dirtied AS total_blks_dirtied,
+            S.total_blks_written AS total_blks_written,
+
+            S.rel_blks_read AS rel_blks_read,
+            S.rel_blks_hit AS rel_blks_hit,
+
+            S.blk_read_time AS blk_read_time,
+            S.blk_write_time AS blk_write_time,
+            S.delay_time AS delay_time,
+            S.total_time AS total_time,
+
+            S.wal_records AS wal_records,
+            S.wal_fpi AS wal_fpi,
+            S.wal_bytes AS wal_bytes
+    FROM
+            pg_class C JOIN
+            pg_index X ON C.oid = X.indrelid JOIN
+            pg_class I ON I.oid = X.indexrelid
+            LEFT JOIN pg_namespace N ON (N.oid = C.relnamespace),
+            LATERAL pg_stat_get_vacuum_indexes(I.oid) S
+    WHERE C.relkind IN ('r', 't', 'm');
+
+CREATE VIEW pg_stat_vacuum_database AS
+    SELECT
+            D.oid AS dboid,
+            D.datname AS dbname,
+
+            S.errors AS errors,
+
+            S.db_blks_read AS db_blks_read,
+            S.db_blks_hit AS db_blks_hit,
+            S.total_blks_dirtied AS total_blks_dirtied,
+            S.total_blks_written AS total_blks_written,
+
+            S.wraparound_failsafe AS wraparound_failsafe,
+
+            S.blk_read_time AS blk_read_time,
+            S.blk_write_time AS blk_write_time,
+            S.delay_time AS delay_time,
+            S.total_time AS total_time,
+
+            S.wal_records AS wal_records,
+            S.wal_fpi AS wal_fpi,
+            S.wal_bytes AS wal_bytes,
+            S.interrupts_count AS interrupts_count
+    FROM
+            pg_database D,
+            LATERAL pg_stat_get_vacuum_database(D.oid) S;

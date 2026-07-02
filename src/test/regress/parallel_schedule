@@ -91,6 +91,9 @@ test: select_parallel
 test: write_parallel
 test: vacuum_parallel
 
+# extended vacuum statistics views
+test: vacuum_stats
+
 # Run this alone, because concurrent DROP TABLE would make non-superuser
 # "ANALYZE;" fail with "relation with OID $n does not exist".
 test: maintain_every

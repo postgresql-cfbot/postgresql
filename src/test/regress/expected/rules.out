@@ -1846,7 +1846,9 @@ pg_stat_all_tables| SELECT c.oid AS relid,
     pg_stat_get_total_autovacuum_time(c.oid) AS total_autovacuum_time,
     pg_stat_get_total_analyze_time(c.oid) AS total_analyze_time,
     pg_stat_get_total_autoanalyze_time(c.oid) AS total_autoanalyze_time,
-    pg_stat_get_stat_reset_time(c.oid) AS stats_reset
+    pg_stat_get_stat_reset_time(c.oid) AS stats_reset,
+    pg_stat_get_visible_page_marks_cleared(c.oid) AS visible_page_marks_cleared,
+    pg_stat_get_frozen_page_marks_cleared(c.oid) AS frozen_page_marks_cleared
    FROM ((pg_class c
      LEFT JOIN pg_index i ON ((c.oid = i.indrelid)))
      LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace)))
@@ -2357,7 +2359,9 @@ pg_stat_sys_tables| SELECT relid,
     total_autovacuum_time,
     total_analyze_time,
     total_autoanalyze_time,
-    stats_reset
+    stats_reset,
+    visible_page_marks_cleared,
+    frozen_page_marks_cleared
    FROM pg_stat_all_tables
   WHERE ((schemaname = ANY (ARRAY['pg_catalog'::name, 'information_schema'::name])) OR (schemaname ~ '^pg_toast'::text));
 pg_stat_user_functions| SELECT p.oid AS funcid,
@@ -2412,9 +2416,86 @@ pg_stat_user_tables| SELECT relid,
     total_autovacuum_time,
     total_analyze_time,
     total_autoanalyze_time,
-    stats_reset
+    stats_reset,
+    visible_page_marks_cleared,
+    frozen_page_marks_cleared
    FROM pg_stat_all_tables
   WHERE ((schemaname <> ALL (ARRAY['pg_catalog'::name, 'information_schema'::name])) AND (schemaname !~ '^pg_toast'::text));
+pg_stat_vacuum_database| SELECT d.oid AS dboid,
+    d.datname AS dbname,
+    s.errors,
+    s.db_blks_read,
+    s.db_blks_hit,
+    s.total_blks_dirtied,
+    s.total_blks_written,
+    s.wraparound_failsafe,
+    s.blk_read_time,
+    s.blk_write_time,
+    s.delay_time,
+    s.total_time,
+    s.wal_records,
+    s.wal_fpi,
+    s.wal_bytes,
+    s.interrupts_count
+   FROM pg_database d,
+    LATERAL pg_stat_get_vacuum_database(d.oid) s(dboid, errors, db_blks_read, db_blks_hit, total_blks_dirtied, total_blks_written, wraparound_failsafe, blk_read_time, blk_write_time, delay_time, total_time, wal_records, wal_fpi, wal_bytes, interrupts_count);
+pg_stat_vacuum_indexes| SELECT c.oid AS relid,
+    i.oid AS indexrelid,
+    n.nspname AS schemaname,
+    c.relname,
+    i.relname AS indexrelname,
+    s.pages_deleted,
+    s.tuples_deleted,
+    s.total_blks_read,
+    s.total_blks_hit,
+    s.total_blks_dirtied,
+    s.total_blks_written,
+    s.rel_blks_read,
+    s.rel_blks_hit,
+    s.blk_read_time,
+    s.blk_write_time,
+    s.delay_time,
+    s.total_time,
+    s.wal_records,
+    s.wal_fpi,
+    s.wal_bytes
+   FROM (((pg_class c
+     JOIN pg_index x ON ((c.oid = x.indrelid)))
+     JOIN pg_class i ON ((i.oid = x.indexrelid)))
+     LEFT JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
+    LATERAL pg_stat_get_vacuum_indexes(i.oid) s(relid, pages_deleted, tuples_deleted, total_blks_read, total_blks_hit, total_blks_dirtied, total_blks_written, rel_blks_read, rel_blks_hit, blk_read_time, blk_write_time, delay_time, total_time, wal_records, wal_fpi, wal_bytes)
+  WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
+pg_stat_vacuum_tables| SELECT n.nspname AS schemaname,
+    c.relname,
+    s.relid,
+    s.pages_scanned,
+    s.pages_removed,
+    s.tuples_deleted,
+    s.tuples_frozen,
+    s.recently_dead_tuples,
+    s.missed_dead_pages,
+    s.missed_dead_tuples,
+    s.vm_new_frozen_pages,
+    s.vm_new_visible_pages,
+    s.vm_new_visible_frozen_pages,
+    s.total_blks_read,
+    s.total_blks_hit,
+    s.total_blks_dirtied,
+    s.total_blks_written,
+    s.rel_blks_read,
+    s.rel_blks_hit,
+    s.blk_read_time,
+    s.blk_write_time,
+    s.delay_time,
+    s.total_time,
+    s.wraparound_failsafe,
+    s.wal_records,
+    s.wal_fpi,
+    s.wal_bytes
+   FROM (pg_class c
+     JOIN pg_namespace n ON ((n.oid = c.relnamespace))),
+    LATERAL pg_stat_get_vacuum_tables(c.oid) s(relid, pages_scanned, pages_removed, tuples_deleted, tuples_frozen, recently_dead_tuples, missed_dead_pages, missed_dead_tuples, vm_new_frozen_pages, vm_new_visible_pages, vm_new_visible_frozen_pages, total_blks_read, total_blks_hit, total_blks_dirtied, total_blks_written, rel_blks_read, rel_blks_hit, blk_read_time, blk_write_time, delay_time, total_time, wraparound_failsafe, wal_records, wal_fpi, wal_bytes)
+  WHERE (c.relkind = ANY (ARRAY['r'::"char", 't'::"char", 'm'::"char"]));
 pg_stat_wal| SELECT wal_records,
     wal_fpi,
     wal_bytes,

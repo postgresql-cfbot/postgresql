@@ -1,0 +1,230 @@
+--
+-- Extended vacuum statistics views (pg_stat_vacuum_tables, _indexes, _database)
+--
+SET track_vacuum_statistics = on;
+
+CREATE TABLE vacstat_t (id int PRIMARY KEY, v text)
+  WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_t SELECT g, repeat('x', 20) FROM generate_series(1, 1000) g;
+DELETE FROM vacstat_t WHERE id % 2 = 0;
+VACUUM vacstat_t;
+SELECT pg_stat_force_next_flush();
+
+-- core heap-page and tuple metrics.  This VACUUM runs without concurrent
+-- activity: the surviving tuples are too fresh to be frozen (tuples_frozen = 0)
+-- and the interleaved deletions leave no trailing empty pages to truncate
+-- (pages_removed = 0).
+SELECT pages_scanned > 0 AS pages_scanned,
+       pages_removed = 0 AS pages_removed,
+       tuples_deleted = 500 AS tuples_deleted,
+       tuples_frozen = 0 AS tuples_frozen
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- pages_removed path: deleting every tuple lets VACUUM truncate the now-empty
+-- trailing heap pages, so pages_removed advances.
+CREATE TABLE vacstat_trunc (id int)
+  WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_trunc SELECT generate_series(1, 10000);
+DELETE FROM vacstat_trunc;
+VACUUM vacstat_trunc;
+SELECT pg_stat_force_next_flush();
+SELECT pages_removed > 0 AS pages_removed,
+       tuples_deleted = 10000 AS tuples_deleted
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_trunc';
+DROP TABLE vacstat_trunc;
+
+-- tuples_frozen path: an aggressive VACUUM (FREEZE) freezes all live tuples,
+-- so tuples_frozen advances.
+CREATE TABLE vacstat_freeze (x int)
+  WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_freeze SELECT generate_series(1, 1000);
+VACUUM (FREEZE) vacstat_freeze;
+SELECT pg_stat_force_next_flush();
+SELECT tuples_frozen > 0 AS tuples_frozen
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_freeze';
+DROP TABLE vacstat_freeze;
+
+-- dead tuples that survived this vacuum: recently_dead_tuples are still visible
+-- to some transaction, while missed_dead_pages/missed_dead_tuples could not be
+-- removed because the page was pinned by another backend (cleanup lock not
+-- acquired).  None occur here, since this VACUUM runs without concurrent
+-- activity (all = 0).  The non-zero paths are covered by the
+-- vacuum-extending-in-repetable-read isolation test.
+SELECT recently_dead_tuples = 0 AS recently_dead_tuples,
+       missed_dead_pages = 0 AS missed_dead_pages,
+       missed_dead_tuples = 0 AS missed_dead_tuples
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- visibility-map page transitions.  Removing the interleaved dead tuples lets
+-- VACUUM mark every heap page all-visible (vm_new_visible_pages > 0).  Whether
+-- VACUUM also freezes those pages (vm_new_frozen_pages /
+-- vm_new_visible_frozen_pages) depends on opportunistic freezing, which is not
+-- deterministic here, so those are only checked for being non-negative; the
+-- positive freeze path is covered by the dedicated VACUUM (FREEZE) scenario
+-- below.
+SELECT vm_new_frozen_pages >= 0 AS vm_new_frozen_pages,
+       vm_new_visible_pages > 0 AS vm_new_visible_pages,
+       vm_new_visible_frozen_pages >= 0 AS vm_new_visible_frozen_pages
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- freeze path: a dedicated VACUUM (FREEZE) marks freshly-loaded heap pages
+-- all-visible and all-frozen in one pass, so vm_new_visible_frozen_pages
+-- advances.  This restores the coverage of the former
+-- 053_vacuum_extending_freeze TAP test.
+CREATE TABLE vacstat_frz (x int)
+  WITH (autovacuum_enabled = off, fillfactor = 10);
+INSERT INTO vacstat_frz SELECT g FROM generate_series(1, 1000) g;
+VACUUM (FREEZE) vacstat_frz;
+SELECT pg_stat_force_next_flush();
+SELECT vm_new_visible_pages > 0 AS vm_new_visible_pages,
+       vm_new_visible_frozen_pages > 0 AS vm_new_visible_frozen_pages
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_frz';
+DROP TABLE vacstat_frz;
+
+-- total buffer access counters.  The vacuum always touches the table's pages
+-- through the buffer cache (total_blks_hit > 0) and dirties some of them while
+-- removing dead tuples (total_blks_dirtied > 0).  total_blks_read and
+-- total_blks_written depend on the buffer-cache and checkpoint state at run
+-- time, so they are only checked for being non-negative.
+SELECT total_blks_read >= 0 AS total_blks_read,
+       total_blks_hit > 0 AS total_blks_hit,
+       total_blks_dirtied > 0 AS total_blks_dirtied,
+       total_blks_written >= 0 AS total_blks_written
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- per-relation buffer access.  The heap is read through the buffer cache
+-- (rel_blks_hit > 0); rel_blks_read depends on the run-time cache state.
+SELECT rel_blks_read >= 0 AS rel_blks_read,
+       rel_blks_hit > 0 AS rel_blks_hit
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- timing metrics and failsafe.  The vacuum always takes some wall-clock time
+-- (total_time > 0) and does not engage the wraparound failsafe under normal
+-- conditions (wraparound_failsafe = 0).  blk_read_time/blk_write_time are only
+-- non-zero when track_io_timing is enabled, and delay_time only when a vacuum
+-- cost delay is configured, so those are merely checked for being
+-- non-negative; the positive delay_time path is exercised separately below.
+SELECT blk_read_time >= 0 AS blk_read_time,
+       blk_write_time >= 0 AS blk_write_time,
+       delay_time >= 0 AS delay_time,
+       total_time > 0 AS total_time,
+       wraparound_failsafe = 0 AS wraparound_failsafe
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- delay path: with a vacuum cost delay configured, a vacuum that accrues cost
+-- sleeps, so delay_time advances.
+CREATE TABLE vacstat_delay (id int PRIMARY KEY, v text)
+  WITH (autovacuum_enabled = off, fillfactor = 10);
+INSERT INTO vacstat_delay SELECT g, repeat('x', 100) FROM generate_series(1, 3000) g;
+DELETE FROM vacstat_delay WHERE id % 2 = 0;
+SET vacuum_cost_delay = '1ms';
+SET vacuum_cost_limit = 1;
+VACUUM vacstat_delay;
+SELECT pg_stat_force_next_flush();
+RESET vacuum_cost_delay;
+RESET vacuum_cost_limit;
+SELECT delay_time > 0 AS delay_time,
+       total_time > 0 AS total_time
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_delay';
+DROP TABLE vacstat_delay;
+
+-- WAL metrics.  A vacuum that removes tuples always emits WAL
+-- (wal_records > 0, wal_bytes > 0).  wal_fpi depends on whether a checkpoint
+-- happened recently, so it is only checked for being non-negative here; the
+-- positive wal_fpi path is exercised separately below.
+SELECT wal_records > 0 AS wal_records,
+       wal_fpi >= 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_t';
+
+-- WAL full-page-image path: a CHECKPOINT immediately before the vacuum forces
+-- the first modification of each page to emit a full page image, so wal_fpi
+-- advances.
+CREATE TABLE vacstat_fpi (id int PRIMARY KEY, v text)
+  WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_fpi SELECT g, repeat('x', 20) FROM generate_series(1, 1000) g;
+DELETE FROM vacstat_fpi WHERE id % 2 = 0;
+CHECKPOINT;
+VACUUM vacstat_fpi;
+SELECT pg_stat_force_next_flush();
+SELECT wal_records > 0 AS wal_records,
+       wal_fpi > 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
+  FROM pg_stat_vacuum_tables WHERE relname = 'vacstat_fpi';
+DROP TABLE vacstat_fpi;
+
+-- per-index view: the primary key index is processed by the same VACUUM.
+-- No btree leaf empties out (interleaved deletions), so pages_deleted = 0,
+-- while every index entry for a removed heap tuple is deleted.  The index is
+-- read through the buffer cache (total_blks_hit > 0); the read/written/dirtied
+-- counters depend on run-time cache state.
+SELECT indexrelname,
+       pages_deleted = 0 AS pages_deleted,
+       tuples_deleted = 500 AS tuples_deleted,
+       total_blks_read >= 0 AS total_blks_read,
+       total_blks_hit > 0 AS total_blks_hit,
+       total_blks_dirtied >= 0 AS total_blks_dirtied,
+       total_blks_written >= 0 AS total_blks_written,
+       rel_blks_read >= 0 AS rel_blks_read,
+       rel_blks_hit > 0 AS rel_blks_hit,
+       blk_read_time >= 0 AS blk_read_time,
+       blk_write_time >= 0 AS blk_write_time,
+       delay_time >= 0 AS delay_time,
+       total_time > 0 AS total_time,
+       wal_records > 0 AS wal_records,
+       wal_fpi >= 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
+  FROM pg_stat_vacuum_indexes WHERE relname = 'vacstat_t' ORDER BY indexrelname;
+
+-- index page-deletion path: deleting a contiguous key range empties whole
+-- btree leaf pages, which VACUUM then deletes (pages_deleted > 0), and every
+-- removed index entry is counted (tuples_deleted).
+CREATE TABLE vacstat_idxdel (id int PRIMARY KEY, v text)
+  WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_idxdel SELECT g, repeat('x', 20) FROM generate_series(1, 10000) g;
+VACUUM vacstat_idxdel;
+SELECT pg_stat_force_next_flush();
+DELETE FROM vacstat_idxdel WHERE id <= 9000;
+VACUUM vacstat_idxdel;
+SELECT pg_stat_force_next_flush();
+SELECT indexrelname,
+       pages_deleted > 0 AS pages_deleted,
+       tuples_deleted = 9000 AS tuples_deleted
+  FROM pg_stat_vacuum_indexes WHERE relname = 'vacstat_idxdel' ORDER BY indexrelname;
+DROP TABLE vacstat_idxdel;
+
+-- per-database aggregate view: no vacuum errors occurred in this database, and
+-- the vacuums in this database touched pages through the buffer cache
+-- (db_blks_hit > 0).
+SELECT errors = 0 AS errors,
+       db_blks_read >= 0 AS db_blks_read,
+       db_blks_hit > 0 AS db_blks_hit,
+       total_blks_dirtied >= 0 AS total_blks_dirtied,
+       total_blks_written >= 0 AS total_blks_written,
+       wraparound_failsafe = 0 AS wraparound_failsafe,
+       blk_read_time >= 0 AS blk_read_time,
+       blk_write_time >= 0 AS blk_write_time,
+       delay_time >= 0 AS delay_time,
+       total_time > 0 AS total_time,
+       wal_records > 0 AS wal_records,
+       wal_fpi >= 0 AS wal_fpi,
+       wal_bytes > 0 AS wal_bytes
+  FROM pg_stat_vacuum_database WHERE dbname = current_database();
+
+-- parallel index vacuum: index statistics must be captured for indexes
+-- vacuumed through the parallel path, not folded into the heap.  Force the
+-- parallel path with min_parallel_index_scan_size = 0.
+SET min_parallel_index_scan_size = 0;
+CREATE TABLE vacstat_par (id int, x int) WITH (autovacuum_enabled = off);
+INSERT INTO vacstat_par SELECT g, g FROM generate_series(1, 50000) g;
+CREATE INDEX vacstat_par_i1 ON vacstat_par (id);
+CREATE INDEX vacstat_par_i2 ON vacstat_par (x);
+DELETE FROM vacstat_par WHERE id % 2 = 0;
+VACUUM (PARALLEL 2) vacstat_par;
+SELECT pg_stat_force_next_flush();
+SELECT indexrelname,
+       tuples_deleted = 25000 AS tuples_deleted,
+       wal_records > 0 AS wal_records
+  FROM pg_stat_vacuum_indexes WHERE relname = 'vacstat_par' ORDER BY indexrelname;
+RESET min_parallel_index_scan_size;
+DROP TABLE vacstat_par;

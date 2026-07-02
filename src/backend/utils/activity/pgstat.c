@@ -204,7 +204,7 @@ static inline bool pgstat_is_kind_valid(PgStat_Kind kind);
 
 bool		pgstat_track_counts = false;
 int			pgstat_fetch_consistency = PGSTAT_FETCH_CONSISTENCY_CACHE;
-
+bool		pgstat_track_vacuum_statistics = false;
 
 /* ----------
  * state shared with pgstat_*.c
@@ -499,6 +499,34 @@ static const PgStat_KindInfo pgstat_kind_builtin_infos[PGSTAT_KIND_BUILTIN_SIZE]
 		.init_shmem_cb = pgstat_wal_init_shmem_cb,
 		.reset_all_cb = pgstat_wal_reset_all_cb,
 		.snapshot_cb = pgstat_wal_snapshot_cb,
+	},
+	[PGSTAT_KIND_VACUUM_DB] = {
+		.name = "vacuum statistics",
+
+		.fixed_amount = false,
+		.write_to_file = true,
+		/* so pg_stat_database entries can be seen in all databases */
+		.accessed_across_databases = true,
+
+		.shared_size = sizeof(PgStatShared_VacuumDB),
+		.shared_data_off = offsetof(PgStatShared_VacuumDB, stats),
+		.shared_data_len = sizeof(((PgStatShared_VacuumDB *) 0)->stats),
+		.pending_size = sizeof(PgStat_VacuumDBCounts),
+
+		.flush_pending_cb = pgstat_vacuum_db_flush_cb,
+	},
+	[PGSTAT_KIND_VACUUM_RELATION] = {
+		.name = "vacuum statistics",
+
+		.fixed_amount = false,
+		.write_to_file = true,
+
+		.shared_size = sizeof(PgStatShared_VacuumRelation),
+		.shared_data_off = offsetof(PgStatShared_VacuumRelation, stats),
+		.shared_data_len = sizeof(((PgStatShared_VacuumRelation *) 0)->stats),
+		.pending_size = sizeof(PgStat_RelationVacuumPending),
+
+		.flush_pending_cb = pgstat_vacuum_relation_flush_cb
 	},
 };
 

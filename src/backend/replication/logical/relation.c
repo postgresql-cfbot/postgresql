@@ -20,12 +20,17 @@
 #include "access/amapi.h"
 #include "access/genam.h"
 #include "access/table.h"
+#include "catalog/heap.h"
 #include "catalog/namespace.h"
+#include "catalog/pg_constraint.h"
+#include "catalog/pg_proc.h"
 #include "catalog/pg_subscription_rel.h"
+#include "commands/trigger.h"
 #include "executor/executor.h"
 #include "nodes/makefuncs.h"
 #include "replication/logicalrelation.h"
 #include "replication/worker_internal.h"
+#include "utils/fmgroids.h"
 #include "utils/inval.h"
 #include "utils/lsyscache.h"
 #include "utils/syscache.h"
@@ -82,6 +87,8 @@ logicalrep_relmap_invalidate_cb(Datum arg, Oid reloid)
 			if (entry->localreloid == reloid)
 			{
 				entry->localrelvalid = false;
+				entry->local_unique_indexes_collected = false;
+				entry->local_fkeys_collected = false;
 				hash_seq_term(&status);
 				break;
 			}
@@ -95,7 +102,11 @@ logicalrep_relmap_invalidate_cb(Datum arg, Oid reloid)
 		hash_seq_init(&status, LogicalRepRelMap);
 
 		while ((entry = (LogicalRepRelMapEntry *) hash_seq_search(&status)) != NULL)
+		{
 			entry->localrelvalid = false;
+			entry->local_unique_indexes_collected = false;
+			entry->local_fkeys_collected = false;
+		}
 	}
 }
 
@@ -127,6 +138,48 @@ logicalrep_relmap_init(void)
 }
 
 /*
+ * Release local index list
+ */
+static void
+free_local_unique_indexes(LogicalRepRelMapEntry *entry)
+{
+	Assert(am_leader_apply_worker());
+
+	foreach_ptr(LogicalRepSubscriberIdx, idxinfo, entry->local_unique_indexes)
+		bms_free(idxinfo->indexkeys);
+
+	list_free_deep(entry->local_unique_indexes);
+	entry->local_unique_indexes = NIL;
+}
+
+/*
+ * Release local foreign key lists.
+ */
+static void
+free_local_fkeys(LogicalRepRelMapEntry *entry)
+{
+	Assert(am_leader_apply_worker());
+
+	foreach_ptr(LogicalRepSubscriberFK, fkinfo, entry->local_fkeys)
+	{
+		list_free(fkinfo->fkattnums);
+		list_free(fkinfo->fkattnums_old);
+	}
+
+	foreach_ptr(LogicalRepSubscriberRefFK, refinfo, entry->local_referenced_fkeys)
+	{
+		list_free(refinfo->refattnums);
+		list_free(refinfo->refattnums_old);
+	}
+
+	list_free_deep(entry->local_fkeys);
+	list_free_deep(entry->local_referenced_fkeys);
+
+	entry->local_fkeys = NIL;
+	entry->local_referenced_fkeys = NIL;
+}
+
+/*
  * Free the entry of a relation map cache.
  */
 static void
@@ -153,6 +206,12 @@ logicalrep_relmap_free_entry(LogicalRepRelMapEntry *entry)
 
 	if (entry->attrmap)
 		free_attrmap(entry->attrmap);
+
+	if (entry->local_unique_indexes != NIL)
+		free_local_unique_indexes(entry);
+
+	if (entry->local_fkeys != NIL || entry->local_referenced_fkeys != NIL)
+		free_local_fkeys(entry);
 }
 
 /*
@@ -160,6 +219,10 @@ logicalrep_relmap_free_entry(LogicalRepRelMapEntry *entry)
  *
  * Called when new relation mapping is sent by the publisher to update
  * our expected view of incoming data from said publisher.
+ *
+ * Note that we do not check the user-defined constraints here. PostgreSQL has
+ * already assumed that CHECK constraints' conditions are immutable and here
+ * follows the rule.
  */
 void
 logicalrep_relmap_update(LogicalRepRelation *remoterel)
@@ -209,6 +272,10 @@ logicalrep_relmap_update(LogicalRepRelation *remoterel)
 		(remoterel->relkind == 0) ? RELKIND_RELATION : remoterel->relkind;
 
 	entry->remoterel.attkeys = bms_copy(remoterel->attkeys);
+
+	entry->parallel_safe = LOGICALREP_PARALLEL_UNKNOWN;
+	entry->local_unique_indexes_collected = false;
+	entry->local_fkeys_collected = false;
 	MemoryContextSwitchTo(oldctx);
 }
 
@@ -353,27 +420,691 @@ logicalrep_rel_mark_updatable(LogicalRepRelMapEntry *entry)
 }
 
 /*
- * Open the local relation associated with the remote one.
+ * Collect all local unique indexes that can be used for dependency tracking
  *
- * Rebuilds the Relcache mapping if it was invalidated by local DDL.
+ * This function collects all types of unique indexes, including those with
+ * index expressions and partial indexes. However, to avoid the overhead and
+ * complexity of executing expressions, we do not evaluate them during
+ * dependency tracking.
+ *
+ * For indexes with expressions, only the non-expression columns are recorded in
+ * the bitmap. The dependency tracking function will use only these columns,
+ * which may lead to false dependency detection. For example, consider a unique
+ * index defined as UNIQUE (a, func(b)), where b is an expression column. Rows
+ * (1, 2) and (1, 3) will be treated as dependent even though they are not. This
+ * is acceptable, as it is still better than disabling parallelism for all
+ * relations that have expression indexes.
+ *
+ * Similarly, partial indexes may also cause false dependencies due to predicate
+ * expressions. For the same reason, we consider this acceptable as well.
+ *
+ * To avoid redundant dependency tracking, indexes whose key columns are the
+ * same as, or a superset of, the replica identity key columns are skipped,
+ * since tracking the replica identity keys already covers their scope.
+ *
+ * Columns not in the replica identity key are excluded from the unique column
+ * set. Since the old tuple of an UPDATE or DELETE contains only replica
+ * identity key columns, any other columns would be missing and thus unavailable
+ * for dependency tracking.
  */
-LogicalRepRelMapEntry *
-logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
+static void
+collect_indexes_for_dependency_tracking(LogicalRepRelMapEntry *entry)
 {
-	LogicalRepRelMapEntry *entry;
-	bool		found;
-	LogicalRepRelation *remoterel;
+	List	   *idxlist;
+
+	free_local_unique_indexes(entry);
+
+	/*
+	 * XXX For partitioned tables, we must collect unique indexes from leaf
+	 * partitions, which are the actual replication targets. This is because
+	 * leaf partitions can have unique indexes that are not present on the
+	 * partitioned table, and those indexes can be used for dependency tracking.
+	 * However, collecting unique indexes from leaf partitions requires building
+	 * the tuple, and executing partition pruning expressions, which could be
+	 * expensive for each change on a partitioned table. For now, we skip
+	 * collecting local unique indexes for partitioned tables and create a dummy
+	 * entry, ensuring that changes on partitioned tables are not applied in
+	 * parallel.
+	 */
+	if (entry->localrel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+	{
+		MemoryContext oldctx;
+		LogicalRepSubscriberIdx *indexinfo;
+
+		oldctx = MemoryContextSwitchTo(LogicalRepRelMapContext);
+		indexinfo = palloc(sizeof(LogicalRepSubscriberIdx));
+		indexinfo->indexoid = InvalidOid;
+		indexinfo->indexkeys = NULL;
+		indexinfo->nulls_distinct = false;
+		entry->local_unique_indexes = lappend(entry->local_unique_indexes,
+											  indexinfo);
+		MemoryContextSwitchTo(oldctx);
+
+		entry->local_unique_indexes_collected = true;
+
+		return;
+	}
+
+	idxlist = RelationGetIndexList(entry->localrel);
+
+	/* Iterate indexes to list all usable indexes */
+	foreach_oid(idxoid, idxlist)
+	{
+		Relation	idxrel;
+		int			indnkeys;
+		AttrMap    *attrmap;
+		MemoryContext oldctx;
+		LogicalRepSubscriberIdx *indexinfo;
+		Bitmapset  *indexkeys = NULL;
+		bool		nulls_distinct;
+
+		idxrel = index_open(idxoid, AccessShareLock);
+
+		/* Only unique indexes are considered */
+		if (!idxrel->rd_index->indisunique)
+		{
+			index_close(idxrel, AccessShareLock);
+			continue;
+		}
+
+		indnkeys = idxrel->rd_index->indnkeyatts;
+		nulls_distinct = !idxrel->rd_index->indnullsnotdistinct;
+		attrmap = entry->attrmap;
+
+		Assert(indnkeys);
+
+		/* Seek each attributes and add to a Bitmap */
+		for (int i = 0; i < indnkeys; i++)
+		{
+			AttrNumber	localcol = idxrel->rd_index->indkey.values[i];
+			AttrNumber	remotecol;
+
+			/* Skip expression */
+			if (!AttributeNumberIsValid(localcol))
+				continue;
+
+			remotecol = attrmap->attnums[AttrNumberGetAttrOffset(localcol)];
+
+			/* Skip if the column does not exist on publisher node */
+			if (remotecol < 0)
+				continue;
+
+			/* Skip columns that are not part of the replica identity key */
+			if (!bms_is_member(remotecol, entry->remoterel.attkeys))
+				continue;
+
+			/* Checks are passed, remember the attribute */
+			indexkeys = bms_add_member(indexkeys, remotecol);
+		}
+
+		index_close(idxrel, AccessShareLock);
+
+		/*
+		 * Skip indexes whose key columns are a superset of the replica identity
+		 * key.
+		 */
+		if (bms_equal(entry->remoterel.attkeys, indexkeys) ||
+			bms_is_subset(entry->remoterel.attkeys, indexkeys))
+		{
+			bms_free(indexkeys);
+			continue;
+		}
+
+		oldctx = MemoryContextSwitchTo(LogicalRepRelMapContext);
+		indexinfo = palloc(sizeof(LogicalRepSubscriberIdx));
+		indexinfo->indexoid = idxoid;
+		indexinfo->indexkeys = bms_copy(indexkeys);
+		indexinfo->nulls_distinct = nulls_distinct;
+		entry->local_unique_indexes = lappend(entry->local_unique_indexes,
+											  indexinfo);
+		MemoryContextSwitchTo(oldctx);
+
+		bms_free(indexkeys);
+	}
+
+	list_free(idxlist);
+
+	entry->local_unique_indexes_collected = true;
+}
+
+/*
+ * Search a relmap entry by local relation OID.
+ */
+static LogicalRepRelMapEntry *
+logicalrep_get_relentry_by_local_oid(Oid localreloid)
+{
+	HASH_SEQ_STATUS status;
+	LogicalRepRelMapEntry *entry = NULL;
 
 	if (LogicalRepRelMap == NULL)
-		logicalrep_relmap_init();
+		return NULL;
 
-	/* Search for existing entry. */
-	entry = hash_search(LogicalRepRelMap, &remoteid,
-						HASH_FIND, &found);
+	hash_seq_init(&status, LogicalRepRelMap);
+	while ((entry = (LogicalRepRelMapEntry *) hash_seq_search(&status)) != NULL)
+	{
+		if (entry->localreloid == localreloid)
+		{
+			hash_seq_term(&status);
+			return entry;
+		}
+	}
 
+	return NULL;
+}
+
+/*
+ * Return remote relation IDs that have FK dependency metadata tied to the
+ * specified relation, either as referencing-side or referenced-side entries.
+ */
+List *
+logicalrep_get_fk_related_relids(LogicalRepRelation *remoterel)
+{
+	LogicalRepRelMapEntry *target;
+	bool		found;
+	List	   *related = NIL;
+	Oid		relnamespace;
+	Oid			remoteid = remoterel->remoteid;
+
+	if (LogicalRepRelMap == NULL)
+		return NIL;
+
+	target = hash_search(LogicalRepRelMap, &remoteid, HASH_FIND, &found);
+
+	/*
+	 * If not exists yet, build a new entry so that we can collect all the
+	 * referenced and referencing tables.
+	 */
 	if (!found)
-		elog(ERROR, "no relation map entry for remote relation ID %u",
-			 remoteid);
+	{
+		logicalrep_relmap_update(remoterel);
+		target = hash_search(LogicalRepRelMap, &remoteid, HASH_FIND, &found);
+	}
+
+	Assert(found);
+
+	/* Collect the tables if not yet */
+	if (!target->local_fkeys_collected)
+	{
+		bool		needs_start = !IsTransactionOrTransactionBlock();
+
+		if (needs_start)
+			StartTransactionCommand();
+
+		/* Return if the relation does not exist */
+		relnamespace = get_namespace_oid(remoterel->nspname, true);
+		if (!OidIsValid(get_relname_relid(remoterel->relname, relnamespace)))
+		{
+			if (needs_start)
+				CommitTransactionCommand();
+
+			return NIL;
+		}
+
+		logicalrep_rel_load(NULL, remoteid, AccessShareLock);
+
+		if (needs_start)
+			CommitTransactionCommand();
+	}
+
+	Assert(target->local_fkeys_collected);
+
+	/* Collect all the tables referenced by the given table */
+	foreach_ptr(LogicalRepSubscriberFK, fkinfo, target->local_fkeys)
+		related = list_append_unique_oid(related, fkinfo->ref_remoteid);
+
+	/* Collect all the tables referencing the given table */
+	foreach_ptr(LogicalRepSubscriberRefFK, refinfo, target->local_referenced_fkeys)
+		related = list_append_unique_oid(related, refinfo->fk_remoteid);
+
+	/* Remove the given table itself from the list */
+	related = list_delete_oid(related, remoteid);
+
+	return related;
+}
+
+/*
+ * Return true if the FK constraint is always deferred.
+ */
+static bool
+foreign_key_is_always_deferred(Oid conoid)
+{
+	HeapTuple	tup;
+	Form_pg_constraint con;
+	bool		deferred;
+
+	tup = SearchSysCache1(CONSTROID, ObjectIdGetDatum(conoid));
+	if (!HeapTupleIsValid(tup))
+		elog(ERROR, "cache lookup failed for foreign key %u", conoid);
+
+	con = (Form_pg_constraint) GETSTRUCT(tup);
+	deferred = con->condeferrable && con->condeferred;
+	ReleaseSysCache(tup);
+
+	return deferred;
+}
+
+/*
+ * Check whether the table has any referencing-side foreign key triggers (ON
+ * INSERT or ON UPDATE) enabled in replica mode that could cause a foreign key
+ * violation error.
+ */
+static bool
+fkey_trigger_enabled_in_replica(Relation rel, Oid conoid)
+{
+	TriggerDesc *trigdesc = rel->trigdesc;
+
+	if (trigdesc == NULL)
+		return false;
+
+	for (int i = 0; i < trigdesc->numtriggers; i++)
+	{
+		Trigger    *trig = &trigdesc->triggers[i];
+
+		/* Keep only FK-side check triggers that belong to this FK constraint */
+		if (trig->tgconstraint != conoid ||
+			(trig->tgfoid != F_RI_FKEY_CHECK_INS &&
+			 trig->tgfoid != F_RI_FKEY_CHECK_UPD))
+			continue;
+
+		/* In replica mode, only REPLICA/ALWAYS triggers can fire */
+		if (trig->tgenabled == TRIGGER_FIRES_ON_REPLICA ||
+			trig->tgenabled == TRIGGER_FIRES_ALWAYS)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Check whether the table has any referenced-side foreign key triggers (ON
+ * DELETE or ON UPDATE) enabled in replica mode that could cause a foreign key
+ * violation error.
+ */
+static bool
+refkey_trigger_enabled_in_replica(Relation rel, Oid conoid)
+{
+	TriggerDesc *trigdesc = rel->trigdesc;
+
+	if (trigdesc == NULL)
+		return false;
+
+	for (int i = 0; i < trigdesc->numtriggers; i++)
+	{
+		Trigger    *trig = &trigdesc->triggers[i];
+
+		/* Keep only PK-side action triggers for this FK constraint */
+		if (trig->tgconstraint != conoid ||
+			(trig->tgfoid != F_RI_FKEY_NOACTION_DEL &&
+			 trig->tgfoid != F_RI_FKEY_NOACTION_UPD &&
+			 trig->tgfoid != F_RI_FKEY_RESTRICT_DEL &&
+			 trig->tgfoid != F_RI_FKEY_RESTRICT_UPD))
+			continue;
+
+		/* In replica mode, only REPLICA/ALWAYS triggers can fire. */
+		if (trig->tgenabled == TRIGGER_FIRES_ON_REPLICA ||
+			trig->tgenabled == TRIGGER_FIRES_ALWAYS)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * Build a list of foreign key remote columns in the order of the referenced
+ * table's remote columns.
+ */
+static void
+build_fk_remote_attnums(LogicalRepRelMapEntry *fkentry,
+						LogicalRepRelMapEntry *refentry,
+						int nkeys,
+						const AttrNumber *fk_conkey,
+						const AttrNumber *ref_confkey,
+						List **fkattnums,
+						List **fkattnums_old,
+						List **refattnums,
+						List **refattnums_old)
+{
+	int			pkatt = -1;
+	List	   *fkcols = NIL;
+	List	   *fkcols_old = NIL;
+	List	   *refcols = NIL;
+	List	   *refcols_old = NIL;
+
+	/*
+	 * Traverse the referenced table's remote replica identity columns in order,
+	 * and for each, find the corresponding foreign key column that matches it.
+	 */
+	while ((pkatt = bms_next_member(refentry->remoterel.attkeys, pkatt)) >= 0)
+	{
+		for (int i = 0; i < nkeys; i++)
+		{
+			AttrNumber	fk_local_attnum = fk_conkey[i];
+			AttrNumber	ref_local_attnum = ref_confkey[i];
+			int			fk_remote_attnum;
+			int			ref_remote_attnum;
+
+			fk_remote_attnum = fkentry->attrmap->attnums[AttrNumberGetAttrOffset(fk_local_attnum)];
+			ref_remote_attnum = refentry->attrmap->attnums[AttrNumberGetAttrOffset(ref_local_attnum)];
+
+			/* Skip if not the current traversed column */
+			if (ref_remote_attnum != pkatt)
+				continue;
+
+			/* Skip columns that are unavailable in the remote table */
+			if (ref_remote_attnum < 0 || fk_remote_attnum < 0)
+				continue;
+
+			fkcols = lappend_int(fkcols, fk_remote_attnum + 1);
+			refcols = lappend_int(refcols, ref_remote_attnum + 1);
+
+			/* Old tuple contains only replica identity columns. */
+			if (bms_is_member(fk_remote_attnum, fkentry->remoterel.attkeys) &&
+				bms_is_member(ref_remote_attnum, refentry->remoterel.attkeys))
+			{
+				fkcols_old = lappend_int(fkcols_old, fk_remote_attnum + 1);
+				refcols_old = lappend_int(refcols_old, ref_remote_attnum + 1);
+			}
+
+			break;
+		}
+	}
+
+	*fkattnums = fkcols;
+	*fkattnums_old = fkcols_old;
+	*refattnums = refcols;
+	*refattnums_old = refcols_old;
+}
+
+/*
+ * Collect referenced-side key projections for dependency tracking
+ *
+ * Helper for collect_fkeys_for_dependency_tracking(). See that function for
+ * detailed comments.
+ */
+static void
+collect_refkeys_for_dependency_tracking(LogicalRepRelMapEntry *entry)
+{
+	Relation	fkeyRel;
+	SysScanDesc fkeyScan;
+	HeapTuple	tuple;
+	Oid			relid = RelationGetRelid(entry->localrel);
+
+	Assert(OidIsValid(relid));
+
+	fkeyRel = table_open(ConstraintRelationId, AccessShareLock);
+
+	fkeyScan = systable_beginscan(fkeyRel, InvalidOid, false,
+								  NULL, 0, NULL);
+
+	while (HeapTupleIsValid(tuple = systable_getnext(fkeyScan)))
+	{
+		Form_pg_constraint con = (Form_pg_constraint) GETSTRUCT(tuple);
+		LogicalRepRelMapEntry *fkentry;
+		LogicalRepSubscriberRefFK *refinfo;
+		List	   *fkattnums;
+		List	   *fkattnums_old;
+		List	   *refattnums;
+		List	   *refattnums_old;
+		AttrNumber	conkey[INDEX_MAX_KEYS] = {0};
+		AttrNumber	confkey[INDEX_MAX_KEYS] = {0};
+		int			numfks;
+		MemoryContext oldctx;
+
+		/* Not a foreign key */
+		if (con->contype != CONSTRAINT_FOREIGN)
+			continue;
+
+		/* Not referencing the given table */
+		if (con->confrelid != relid)
+			continue;
+
+		/* Skip if FK enforcement is disabled */
+		if (!con->conenforced)
+			continue;
+
+		/* Always-deferred FK does not need dependency tracking. */
+		if (foreign_key_is_always_deferred(con->oid))
+			continue;
+
+		/*
+		 * Skip when no replica-mode ON DELETE/ON UPDATE violation trigger can
+		 * fire for this FK on the referenced table.
+		 */
+		if (!refkey_trigger_enabled_in_replica(entry->localrel, con->oid))
+			continue;
+
+		fkentry = logicalrep_get_relentry_by_local_oid(con->conrelid);
+
+		/*
+		 * Skip if the referencing table is not published or has not replicated
+		 * any changes.
+		 */
+		if (!fkentry || !fkentry->attrmap)
+			continue;
+
+		DeconstructFkConstraintRow(tuple, &numfks, conkey, confkey,
+								   NULL, NULL, NULL, NULL, NULL);
+
+		build_fk_remote_attnums(fkentry, entry, numfks, conkey, confkey,
+								&fkattnums, &fkattnums_old,
+								&refattnums, &refattnums_old);
+
+		list_free(fkattnums);
+		list_free(fkattnums_old);
+
+		oldctx = MemoryContextSwitchTo(LogicalRepRelMapContext);
+		refinfo = palloc_object(LogicalRepSubscriberRefFK);
+		refinfo->conoid = con->oid;
+		refinfo->fk_remoteid = fkentry->remoterel.remoteid;
+		refinfo->refattnums = list_copy(refattnums);
+		refinfo->refattnums_old = list_copy(refattnums_old);
+		entry->local_referenced_fkeys = lappend(entry->local_referenced_fkeys,
+												refinfo);
+		MemoryContextSwitchTo(oldctx);
+
+		list_free(refattnums);
+		list_free(refattnums_old);
+	}
+
+	systable_endscan(fkeyScan);
+
+	table_close(fkeyRel, AccessShareLock);
+}
+
+/*
+ * Collect foreign keys for dependency tracking.
+ *
+ * This function collects both foreign keys in the referencing table and the
+ * primary key in the referenced table, as both are needed for dependency
+ * tracking (see applyparallelworker.c for details).
+ *
+ * For a primary key, we directly record the bitmap of remote columns that the
+ * foreign key references.
+ *
+ * For a foreign key in the referencing table, we cannot use the columns as-is
+ * because their order on the remote side may differ from the local referencing
+ * and referenced table. To ensure consistency, we store a list of column
+ * numbers in the order of the referenced table's remote columns. The dependency
+ * tracking function will traverse this list to build the hash key.
+ *
+ * For one foreign key constraint on the table, We collect two set of column
+ * numbers for both the referencing and referenced tables: one for the new tuple
+ * of an INSERT or UPDATE, and the other for the old tuple of an UPDATE or
+ * DELETE. The former includes all remote columns that the foreign key
+ * references, while the latter includes only those that are part of the replica
+ * identity key. This is because the old tuple of an UPDATE or DELETE contains
+ * only replica identity key columns, and any other columns would be missing and
+ * thus unavailable for dependency tracking.
+ *
+ * If there are multiple foreign keys referencing other tables or if the primary
+ * key is referenced by multiple foreign keys, we will have multiple sets of
+ * column numbers.
+ *
+ * When recording or checking a foreign key dependency, we fill columns in the
+ * referencing table that are outside the replica identity as NULL, and during
+ * comparison, we treat NULL as equal to any value. This is safe because the
+ * referenced key is a primary key (no NULLs allowed), and NULL values in the
+ * referencing key never participate in foreign key constraint checks.
+ * Therefore, we will not encounter genuine NULL values in the remote columns.
+ */
+static void
+collect_fkeys_for_dependency_tracking(LogicalRepRelMapEntry *entry)
+{
+	List	   *fkeys;
+	MemoryContext oldctx;
+
+	if (entry->local_fkeys != NIL || entry->local_referenced_fkeys != NIL)
+		free_local_fkeys(entry);
+
+	fkeys = copyObject(RelationGetFKeyList(entry->localrel));
+
+	/* Collect foreign keys where this table is the referencing side */
+	foreach_ptr(ForeignKeyCacheInfo, fk, fkeys)
+	{
+		LogicalRepRelMapEntry *refentry;
+		List	  *fkattnums;
+		List	  *fkattnums_old;
+		List	  *refattnums;
+		List	  *refattnums_old;
+		LogicalRepSubscriberFK *fkinfo;
+
+		/* Skip if FK enforcement is disabled */
+		if (!fk->conenforced)
+			continue;
+
+		/*
+		 * Skip if this FK's check trigger is disabled in replica mode.
+		 */
+		if (!fkey_trigger_enabled_in_replica(entry->localrel, fk->conoid))
+			continue;
+
+		/*
+		 * Deferrable foreign keys do not need tracking, as they won't cause
+		 * constraint violations as long as commit order is preserved.
+		 */
+		if (foreign_key_is_always_deferred(fk->conoid))
+			continue;
+
+		refentry = logicalrep_get_relentry_by_local_oid(fk->confrelid);
+
+		/*
+		 * Skip if the referenced table is not published or has not replicated
+		 * any changes.
+		 */
+		if (!refentry || !refentry->attrmap)
+			continue;
+
+		build_fk_remote_attnums(entry, refentry, fk->nkeys, fk->conkey,
+								fk->confkey, &fkattnums, &fkattnums_old,
+								&refattnums, &refattnums_old);
+
+		list_free(refattnums);
+		list_free(refattnums_old);
+
+		oldctx = MemoryContextSwitchTo(LogicalRepRelMapContext);
+		fkinfo = palloc_object(LogicalRepSubscriberFK);
+		fkinfo->conoid = fk->conoid;
+		fkinfo->ref_remoteid = refentry->remoterel.remoteid;
+		fkinfo->fkattnums = list_copy(fkattnums);
+		fkinfo->fkattnums_old = list_copy(fkattnums_old);
+		entry->local_fkeys = lappend(entry->local_fkeys, fkinfo);
+		MemoryContextSwitchTo(oldctx);
+
+		list_free(fkattnums);
+		list_free(fkattnums_old);
+	}
+
+	list_free_deep(fkeys);
+
+	/* Collect keys where this table is the referenced side */
+	collect_refkeys_for_dependency_tracking(entry);
+
+	entry->local_fkeys_collected = true;
+}
+
+/*
+ * Check all local triggers for the relation to see the parallelizability.
+ *
+ * We regard relations as applicable in parallel if all triggers are immutable.
+ * Result is directly set to LogicalRepRelMapEntry::parallel_safe.
+ */
+static void
+check_defined_triggers(LogicalRepRelMapEntry *entry)
+{
+	TriggerDesc *trigdesc;
+
+	/*
+	 * Skip if the parallelizability has already been checked. Possilble if
+	 * the relation has expression indexes.
+	 */
+	if (entry->parallel_safe != LOGICALREP_PARALLEL_UNKNOWN)
+		return;
+
+	trigdesc = entry->localrel->trigdesc;
+
+	/* Quick exit if triffer is not defined */
+	if (trigdesc == NULL)
+	{
+		entry->parallel_safe = LOGICALREP_PARALLEL_SAFE;
+		return;
+	}
+
+	/* Seek triggers one by one to see the volatility */
+	for (int i = 0; i < trigdesc->numtriggers; i++)
+	{
+		Trigger    *trigger = &trigdesc->triggers[i];
+
+		Assert(OidIsValid(trigger->tgfoid));
+
+		/* Skip if the trigger is not enabled for logical replication */
+		if (trigger->tgenabled == TRIGGER_DISABLED ||
+			trigger->tgenabled == TRIGGER_FIRES_ON_ORIGIN)
+			continue;
+
+		/* Check the volatility of the trigger. Exit if it is not immutable */
+		if (func_volatile(trigger->tgfoid) != PROVOLATILE_IMMUTABLE)
+		{
+			entry->parallel_safe = LOGICALREP_PARALLEL_RESTRICTED;
+			return;
+		}
+	}
+
+	/* All triggers are immutable, set as parallel safe */
+	entry->parallel_safe = LOGICALREP_PARALLEL_SAFE;
+}
+
+/*
+ * Actual workhorse for logicalrep_rel_open().
+ *
+ * Caller must specify *either* entry or key. If the entry is specified, its
+ * attributes are filled and returned. The logical relation is kept opening.
+ * If the key is given, the corresponding entry is first searched in the hash
+ * table and processed as in the above case. At the end, logical replication is
+ * closed.
+ */
+void
+logicalrep_rel_load(LogicalRepRelMapEntry *entry, LogicalRepRelId remoteid,
+					LOCKMODE lockmode)
+{
+	LogicalRepRelation *remoterel;
+
+	Assert((entry && !remoteid) || (!entry && remoteid));
+
+	if (!entry)
+	{
+		bool		found;
+
+		if (LogicalRepRelMap == NULL)
+			logicalrep_relmap_init();
+
+		/* Search for existing entry. */
+		entry = hash_search(LogicalRepRelMap, &remoteid,
+							HASH_FIND, &found);
+
+		if (!found)
+			elog(ERROR, "no relation map entry for remote relation ID %u",
+				 remoteid);
+	}
 
 	remoterel = &entry->remoterel;
 
@@ -394,6 +1125,8 @@ logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
 		{
 			/* Table was renamed or dropped. */
 			entry->localrelvalid = false;
+			entry->local_unique_indexes_collected = false;
+			entry->local_fkeys_collected = false;
 		}
 		else if (!entry->localrelvalid)
 		{
@@ -499,13 +1232,55 @@ logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
 		entry->localindexoid = FindLogicalRepLocalIndex(entry->localrel, remoterel,
 														entry->attrmap);
 
+		/*
+		 * Leader must also collect all local unique indexes for dependency
+		 * tracking.
+		 */
+		if (am_leader_apply_worker())
+		{
+			entry->parallel_safe = LOGICALREP_PARALLEL_UNKNOWN;
+			collect_indexes_for_dependency_tracking(entry);
+			check_defined_triggers(entry);
+		}
+
 		entry->localrelvalid = true;
 	}
+
+	if (am_leader_apply_worker() && !entry->local_fkeys_collected)
+		collect_fkeys_for_dependency_tracking(entry);
 
 	if (entry->state != SUBREL_STATE_READY)
 		entry->state = GetSubscriptionRelState(MySubscription->oid,
 											   entry->localreloid,
 											   &entry->statelsn);
+
+	if (remoteid)
+		logicalrep_rel_close(entry, lockmode);
+}
+
+/*
+ * Open the local relation associated with the remote one.
+ *
+ * Rebuilds the Relcache mapping if it was invalidated by local DDL.
+ */
+LogicalRepRelMapEntry *
+logicalrep_rel_open(LogicalRepRelId remoteid, LOCKMODE lockmode)
+{
+	LogicalRepRelMapEntry *entry;
+	bool		found;
+
+	if (LogicalRepRelMap == NULL)
+		logicalrep_relmap_init();
+
+	/* Search for existing entry. */
+	entry = hash_search(LogicalRepRelMap, &remoteid,
+						HASH_FIND, &found);
+
+	if (!found)
+		elog(ERROR, "no relation map entry for remote relation ID %u",
+			 remoteid);
+
+	logicalrep_rel_load(entry, 0, lockmode);
 
 	return entry;
 }
@@ -771,6 +1546,14 @@ logicalrep_partition_open(LogicalRepRelMapEntry *root,
 	entry->localindexoid = FindLogicalRepLocalIndex(partrel, remoterel,
 													entry->attrmap);
 
+	/*
+	 * TODO: Parallel apply cannot collect indexes from leaf partition for now.
+	 * Just mark local indexes are collected. (See
+	 * collect_indexes_for_dependency_tracking() for details.)
+	 */
+	entry->local_unique_indexes_collected = true;
+	entry->local_fkeys_collected = true;
+
 	entry->localrelvalid = true;
 
 	return entry;
@@ -958,4 +1741,59 @@ FindLogicalRepLocalIndex(Relation localrel, LogicalRepRelation *remoterel,
 	}
 
 	return InvalidOid;
+}
+
+/*
+ * Get the number of entries in the LogicalRepRelMap.
+ */
+int
+logicalrep_get_num_rels(void)
+{
+	if (LogicalRepRelMap == NULL)
+		return 0;
+
+	return hash_get_num_entries(LogicalRepRelMap);
+}
+
+/*
+ * Write all the remote relation information from the LogicalRepRelMapEntry to
+ * the output stream.
+ */
+void
+logicalrep_write_all_rels(StringInfo out)
+{
+	LogicalRepRelMapEntry *entry;
+	HASH_SEQ_STATUS status;
+
+	if (LogicalRepRelMap == NULL)
+		return;
+
+	hash_seq_init(&status, LogicalRepRelMap);
+
+	while ((entry = (LogicalRepRelMapEntry *) hash_seq_search(&status)) != NULL)
+		logicalrep_write_internal_rel(out, &entry->remoterel);
+}
+
+/*
+ * Get the LogicalRepRelMapEntry corresponding to the given relid without
+ * opening the local relation.
+ */
+LogicalRepRelMapEntry *
+logicalrep_get_relentry(LogicalRepRelId remoteid)
+{
+	LogicalRepRelMapEntry *entry;
+	bool		found;
+
+	if (LogicalRepRelMap == NULL)
+		logicalrep_relmap_init();
+
+	/* Search for existing entry. */
+	entry = hash_search(LogicalRepRelMap, (void *) &remoteid,
+						HASH_FIND, &found);
+
+	if (!found)
+		elog(DEBUG1, "no relation map entry for remote relation ID %u",
+			 remoteid);
+
+	return entry;
 }

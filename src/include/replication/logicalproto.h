@@ -53,6 +53,13 @@
  * in logical replication protocol, which uses a single byte to identify a
  * message type. Hence the values should be single-byte wide and preferably
  * human-readable characters.
+ *
+ * LOGICAL_REP_MSG_INTERNAL_MESSAGE ('i') is reserved for internal messages (see
+ * PAWorkerMsgType for sub-message types) sent from the leader apply
+ * worker to parallel apply workers. Centralizing this definition here allows
+ * all message types to be handled together and avoids the maintenance burden of
+ * ensuring sub-message types do not conflict with regular LogicalRepMsgType
+ * values.
  */
 typedef enum LogicalRepMsgType
 {
@@ -75,6 +82,7 @@ typedef enum LogicalRepMsgType
 	LOGICAL_REP_MSG_STREAM_COMMIT = 'c',
 	LOGICAL_REP_MSG_STREAM_ABORT = 'A',
 	LOGICAL_REP_MSG_STREAM_PREPARE = 'p',
+	LOGICAL_REP_MSG_INTERNAL_MESSAGE = 'i',
 } LogicalRepMsgType;
 
 /*
@@ -251,6 +259,8 @@ extern void logicalrep_write_message(StringInfo out, TransactionId xid, XLogRecP
 extern void logicalrep_write_rel(StringInfo out, TransactionId xid,
 								 Relation rel, Bitmapset *columns,
 								 PublishGencolsType include_gencols_type);
+extern void logicalrep_write_internal_rel(StringInfo out,
+										  LogicalRepRelation *rel);
 extern LogicalRepRelation *logicalrep_read_rel(StringInfo in);
 extern void logicalrep_write_typ(StringInfo out, TransactionId xid,
 								 Oid typoid);

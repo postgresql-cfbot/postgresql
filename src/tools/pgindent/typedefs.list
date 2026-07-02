@@ -1701,6 +1701,7 @@ LogicalRepBeginData
 LogicalRepCommitData
 LogicalRepCommitPreparedTxnData
 LogicalRepCtxStruct
+LogicalRepKeyKind
 LogicalRepMsgType
 LogicalRepPartMapEntry
 LogicalRepPreparedTxnData
@@ -1710,6 +1711,7 @@ LogicalRepRelation
 LogicalRepRollbackPreparedTxnData
 LogicalRepSequenceInfo
 LogicalRepStreamAbortData
+LogicalRepSubscriberIdx
 LogicalRepTupleData
 LogicalRepTyp
 LogicalRepWorker
@@ -1926,6 +1928,7 @@ OverridingKind
 PACE_HEADER
 PACL
 PATH
+PAWorkerMsgType
 PCtxtHandle
 PERL_CONTEXT
 PERL_SI
@@ -2160,7 +2163,9 @@ ParallelHashGrowth
 ParallelHashJoinBatch
 ParallelHashJoinBatchAccessor
 ParallelHashJoinState
+ParallelizedTxnEntry
 ParallelIndexScanDesc
+ParallelizedTxnEntry
 ParallelSlot
 ParallelSlotArray
 ParallelSlotResultHandler
@@ -2666,6 +2671,8 @@ ReplOriginXactState
 ReplaceVarsFromTargetList_context
 ReplaceVarsNoMatchOption
 ReplaceWrapOption
+ReplicaIdentityEntry
+ReplicaIdentityKey
 ReplicaIdentityStmt
 ReplicationKind
 ReplicationSlot
@@ -2677,6 +2684,7 @@ ReplicationSlotPersistentData
 ReplicationState
 ReplicationStateCtl
 ReplicationStateOnDisk
+replica_identity_hash
 ResTarget
 ReservoirState
 ReservoirStateData
@@ -4251,6 +4259,7 @@ rendezvousHashEntry
 rep
 replace_rte_variables_callback
 replace_rte_variables_context
+replica_identity_hash
 report_error_fn
 ret_type
 rewind_source

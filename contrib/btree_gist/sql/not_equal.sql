@@ -34,3 +34,21 @@ INSERT INTO zoo VALUES(123, 'zebra');
 INSERT INTO zoo VALUES(123, 'zebra');
 INSERT INTO zoo VALUES(123, 'lion');
 INSERT INTO zoo VALUES(124, 'lion');
+
+-- A <> search must descend internal pages instead of comparing the query to a
+-- truncated internal key.  Use a multi-level index and check it agrees with seq scan.
+CREATE TABLE bitne (a bit(8));
+INSERT INTO bitne SELECT (g % 256)::bit(8) FROM generate_series(1, 20000) g;
+CREATE INDEX bitne_idx ON bitne USING gist (a);
+
+SET enable_seqscan to on;
+SET enable_indexscan to off;
+SET enable_bitmapscan to off;
+SELECT count(*) FROM bitne WHERE a <> B'00000000';
+
+SET enable_seqscan to off;
+SET enable_indexscan to on;
+SET enable_bitmapscan to on;
+SELECT count(*) FROM bitne WHERE a <> B'00000000';
+
+DROP TABLE bitne;

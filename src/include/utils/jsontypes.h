@@ -33,9 +33,24 @@ typedef enum
 	JSONTYPE_OTHER,				/* all else */
 } JsonTypeCategory;
 
+typedef struct
+{
+	int			nargs;
+	JsonTypeCategory *categories;
+	FmgrInfo   *flinfos;
+} JsonTypeCache;
+
 extern void json_categorize_type(Oid typoid, bool is_jsonb,
 								 JsonTypeCategory *tcategory,
 								 FmgrInfo *outflinfo);
 extern void json_check_mutability(Oid typoid, bool *has_mutable);
+extern JsonTypeCache *json_build_type_cache(bool is_jsonb,
+											int nargs,
+											Oid *types);
+extern int json_extract_variadic_args(bool is_jsonb,
+									  FunctionCallInfo fcinfo,
+									  Datum **args, bool **nulls,
+									  JsonTypeCategory **categories,
+									  FmgrInfo **outflinfos);
 
 #endif							/* JSONTYPES_H */

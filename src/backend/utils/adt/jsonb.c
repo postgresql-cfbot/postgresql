@@ -1059,18 +1059,26 @@ to_jsonb(PG_FUNCTION_ARGS)
 {
 	Datum		val = PG_GETARG_DATUM(0);
 	Oid			val_type = get_fn_expr_argtype(fcinfo->flinfo, 0);
-	JsonTypeCategory tcategory;
-	FmgrInfo	outflinfo;
+	JsonTypeCache *jcache;
 
 	if (val_type == InvalidOid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("could not determine input data type")));
 
-	json_categorize_type(val_type, true,
-						 &tcategory, &outflinfo);
+	if (fcinfo->flinfo->fn_extra == NULL)
+	{
+		MemoryContext oldcontext;
 
-	PG_RETURN_DATUM(datum_to_jsonb(val, tcategory, &outflinfo));
+		oldcontext = MemoryContextSwitchTo(fcinfo->flinfo->fn_mcxt);
+		jcache = json_build_type_cache(true, 1, &val_type);
+		fcinfo->flinfo->fn_extra = jcache;
+		MemoryContextSwitchTo(oldcontext);
+	}
+	else
+		jcache = fcinfo->flinfo->fn_extra;
+
+	PG_RETURN_DATUM(datum_to_jsonb(val, jcache->categories[0], &jcache->flinfos[0]));
 }
 
 /*
@@ -1157,23 +1165,14 @@ jsonb_build_object(PG_FUNCTION_ARGS)
 {
 	Datum	   *args;
 	bool	   *nulls;
-	Oid		   *types;
 	int			nargs;
 	JsonTypeCategory *categories;
 	FmgrInfo   *outflinfos;
 
-	/* build argument values to build the object */
-	nargs = extract_variadic_args(fcinfo, 0, true,
-								  &args, &types, &nulls);
-
+	nargs = json_extract_variadic_args(true, fcinfo, &args, &nulls,
+									   &categories, &outflinfos);
 	if (nargs < 0)
 		PG_RETURN_NULL();
-
-	categories = palloc_array(JsonTypeCategory, nargs);
-	outflinfos = palloc0_array(FmgrInfo, nargs);
-	for (int i = 0; i < nargs; i++)
-		json_categorize_type(types[i], true,
-							 &categories[i], &outflinfos[i]);
 
 	PG_RETURN_DATUM(jsonb_build_object_worker(nargs, args, nulls,
 											  categories, outflinfos,
@@ -1230,23 +1229,14 @@ jsonb_build_array(PG_FUNCTION_ARGS)
 {
 	Datum	   *args;
 	bool	   *nulls;
-	Oid		   *types;
 	int			nargs;
 	JsonTypeCategory *categories;
 	FmgrInfo   *outflinfos;
 
-	/* build argument values to build the array */
-	nargs = extract_variadic_args(fcinfo, 0, true,
-								  &args, &types, &nulls);
-
+	nargs = json_extract_variadic_args(true, fcinfo, &args, &nulls,
+									   &categories, &outflinfos);
 	if (nargs < 0)
 		PG_RETURN_NULL();
-
-	categories = palloc_array(JsonTypeCategory, nargs);
-	outflinfos = palloc0_array(FmgrInfo, nargs);
-	for (int i = 0; i < nargs; i++)
-		json_categorize_type(types[i], true,
-							 &categories[i], &outflinfos[i]);
 
 	PG_RETURN_DATUM(jsonb_build_array_worker(nargs, args, nulls,
 											 categories, outflinfos,

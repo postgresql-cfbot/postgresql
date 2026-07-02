@@ -15,6 +15,7 @@
 #include "access/htup_details.h"
 #include "common/hashfn.h"
 #include "funcapi.h"
+#include "utils/guc.h"
 #include "storage/dsm_registry.h"
 #include "storage/fd.h"
 #include "utils/builtins.h"
@@ -105,7 +106,27 @@ static void test_custom_stats_var_finish(PgStat_StatsFileOp status);
  *--------------------------------------------------------------------------
  */
 
-static const PgStat_KindInfo custom_stats = {
+/* Whether to use a dedicated dshash for this kind */
+static bool test_custom_stats_use_own_hash = false;
+
+static const PgStat_KindInfo custom_stats_own_hash = {
+	.name = "test_custom_var_stats",
+	.fixed_amount = false,		/* variable number of entries */
+	.write_to_file = true,		/* persist across restarts */
+	.track_entry_count = true,	/* count active entries */
+	.accessed_across_databases = true,	/* global statistics */
+	.own_hash = true,			/* use dedicated dshash */
+	.shared_size = sizeof(PgStatShared_CustomVarEntry),
+	.shared_data_off = offsetof(PgStatShared_CustomVarEntry, stats),
+	.shared_data_len = sizeof(((PgStatShared_CustomVarEntry *) 0)->stats),
+	.pending_size = sizeof(PgStat_StatCustomVarEntry),
+	.flush_pending_cb = test_custom_stats_var_flush_pending_cb,
+	.to_serialized_data = test_custom_stats_var_to_serialized_data,
+	.from_serialized_data = test_custom_stats_var_from_serialized_data,
+	.finish = test_custom_stats_var_finish,
+};
+
+static const PgStat_KindInfo custom_stats_shared_hash = {
 	.name = "test_custom_var_stats",
 	.fixed_amount = false,		/* variable number of entries */
 	.write_to_file = true,		/* persist across restarts */
@@ -133,8 +154,25 @@ _PG_init(void)
 	if (!process_shared_preload_libraries_in_progress)
 		return;
 
-	/* Register custom statistics kind */
-	pgstat_register_kind(PGSTAT_KIND_TEST_CUSTOM_VAR_STATS, &custom_stats);
+	/*
+	 * test_custom_stats_use_own_hash = (on|off)
+	 *
+	 * Use the shared hash (default) or a dedicated hash for the
+	 * test_custom_var_stats kind.
+	 */
+	DefineCustomBoolVariable("test_custom_var_stats.use_own_hash",
+							 "Use dedicated dshash for test custom var stats",
+							 NULL,
+							 &test_custom_stats_use_own_hash,
+							 false,
+							 PGC_POSTMASTER,
+							 0,
+							 NULL, NULL, NULL);
+
+	/* Register with the appropriate kind info */
+	pgstat_register_kind(PGSTAT_KIND_TEST_CUSTOM_VAR_STATS,
+						 test_custom_stats_use_own_hash ?
+						 &custom_stats_own_hash : &custom_stats_shared_hash);
 }
 
 /*--------------------------------------------------------------------------
@@ -691,4 +729,63 @@ test_custom_stats_var_report(PG_FUNCTION_ARGS)
 	}
 
 	SRF_RETURN_DONE(funcctx);
+}
+
+/*
+ * test_custom_stats_var_scan
+ *		Count entries by scanning the kind's dedicated dshash directly
+ *
+ * Exercises pgstat_get_hash_for_kind() and dshash_seq iteration on
+ * a dedicated hash table.
+ */
+PG_FUNCTION_INFO_V1(test_custom_stats_var_scan);
+Datum
+test_custom_stats_var_scan(PG_FUNCTION_ARGS)
+{
+	dshash_table *hash;
+	dshash_seq_status hstat;
+	PgStatShared_HashEntry *p;
+	int64		count = 0;
+
+	hash = pgstat_get_hash_for_kind(PGSTAT_KIND_TEST_CUSTOM_VAR_STATS);
+
+	dshash_seq_init(&hstat, hash, false);
+	while ((p = dshash_seq_next(&hstat)) != NULL)
+	{
+		if (p->dropped)
+			continue;
+
+		if (p->key.kind != PGSTAT_KIND_TEST_CUSTOM_VAR_STATS)
+			continue;
+
+		count++;
+	}
+	dshash_seq_term(&hstat);
+
+	PG_RETURN_INT64(count);
+}
+
+/*
+ * test_custom_stats_var_is_own_hash
+ *		Verify whether the kind uses a dedicated dshash
+ *
+ * Scans pgStatLocal.all_hashes[] looking for the hash returned by
+ * pgstat_get_hash_for_kind().  Index 0 is always the shared hash,
+ * so finding it at a non-zero index confirms it has its own hash.
+ */
+PG_FUNCTION_INFO_V1(test_custom_stats_var_is_own_hash);
+Datum
+test_custom_stats_var_is_own_hash(PG_FUNCTION_ARGS)
+{
+	dshash_table *hash;
+
+	hash = pgstat_get_hash_for_kind(PGSTAT_KIND_TEST_CUSTOM_VAR_STATS);
+
+	for (int i = 0; i < pgStatLocal.num_hashes; i++)
+	{
+		if (pgStatLocal.all_hashes[i] == hash)
+			PG_RETURN_BOOL(i != 0);
+	}
+
+	PG_RETURN_BOOL(false);
 }

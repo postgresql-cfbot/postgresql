@@ -16,12 +16,13 @@
  <para>
   The module must be loaded by adding <literal>pg_stat_statements</literal> to
   <xref linkend="guc-shared-preload-libraries"/> in
-  <filename>postgresql.conf</filename>, because it requires additional shared memory.
-  This means that a server restart is needed to add or remove the module.
-  In addition, query identifier calculation must be enabled in order for the
-  module to be active, which is done automatically if <xref linkend="guc-compute-query-id"/>
-  is set to <literal>auto</literal> or <literal>on</literal>, or any third-party
-  module that calculates query identifiers is loaded.
+  <filename>postgresql.conf</filename>, because it must register hooks and a
+  custom statistics kind at server start. This means that a server restart is
+  needed to add or remove the module. In addition, query identifier calculation
+  must be enabled in order for the module to be active, which is done automatically
+  if <xref linkend="guc-compute-query-id"/> is set to <literal>auto</literal> or
+  <literal>on</literal>, or any third-party module that calculates query identifiers
+  is loaded.
  </para>
 
  <para>
@@ -794,10 +795,12 @@ calls | 2
        <structfield>dealloc</structfield> <type>bigint</type>
       </para>
       <para>
-       Total number of times <structname>pg_stat_statements</structname>
-       entries about the least-executed statements were deallocated
-       because more distinct statements than
-       <varname>pg_stat_statements.max</varname> were observed
+       Total number of <structname>pg_stat_statements</structname>
+       entries evicted because more distinct statements than
+       <varname>pg_stat_statements.max</varname> were observed.
+       A high value relative to <varname>pg_stat_statements.max</varname>
+       indicates significant query churn and that
+       <varname>pg_stat_statements.max</varname> should be increased
       </para></entry>
      </row>
      <row>
@@ -910,12 +913,15 @@ calls | 2
       <varname>pg_stat_statements.max</varname> is the maximum number of
       statements tracked by the module (i.e., the maximum number of rows
       in the <structname>pg_stat_statements</structname> view).  If more distinct
-      statements than that are observed, information about the least-executed
+      statements than that are observed, information about the least-recently-used
       statements is discarded.  The number of times such information was
       discarded can be seen in the
       <structname>pg_stat_statements_info</structname> view.
+      This is a soft limit; the actual number of tracked statements may
+      briefly exceed it until eviction reclaims space.
       The default value is 5000.
-      This parameter can only be set at server start.
+      This parameter can only be set in the <filename>postgresql.conf</filename>
+      file or on the server command line.
      </para>
     </listitem>
    </varlistentry>
@@ -1007,10 +1013,11 @@ calls | 2
   </variablelist>
 
   <para>
-   The module requires additional shared memory proportional to
-   <varname>pg_stat_statements.max</varname>.  Note that this
-   memory is consumed whenever the module is loaded, even if
-   <varname>pg_stat_statements.track</varname> is set to <literal>none</literal>.
+   The module uses dynamic shared memory that grows as statements are
+   tracked, up to the limit set by
+   <varname>pg_stat_statements.max</varname>.  Note that this memory is
+   not reclaimed when entries are deallocated; it is reused for new
+   entries but the overall shared memory footprint does not shrink.
   </para>
 
   <para>

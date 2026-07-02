@@ -4132,6 +4132,9 @@ pgsa_stash_name_table_hash
 pgsa_writer_context
 pgsocket
 pgsql_thing_t
+PgStat_PgssPending
+PgStatShared_Pgss
+pgssCounters
 pgssEntry
 pgssGlobalStats
 pgssHashKey

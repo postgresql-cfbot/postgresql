@@ -889,3 +889,39 @@ SELECT pg_stat_statements_reset() IS NOT NULL AS t;
  t
 (1 row)
 
+--
+-- reset within a transaction: entries with unflushed pending data should
+-- still be removed and not reappear in the view
+--
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
+(1 row)
+
+BEGIN;
+SELECT 1 AS "RESET_TXN_TEST";
+ RESET_TXN_TEST 
+----------------
+              1
+(1 row)
+
+SELECT count(*) FROM pg_stat_statements WHERE query LIKE '%RESET_TXN_TEST%';
+ count 
+-------
+     1
+(1 row)
+
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
+(1 row)
+
+SELECT count(*) FROM pg_stat_statements WHERE query LIKE '%RESET_TXN_TEST%';
+ count 
+-------
+     0
+(1 row)
+
+COMMIT;

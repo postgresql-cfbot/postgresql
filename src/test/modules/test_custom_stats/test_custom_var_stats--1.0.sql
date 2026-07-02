@@ -24,3 +24,13 @@ CREATE FUNCTION test_custom_stats_var_report(INOUT name TEXT,
 RETURNS SETOF record
 AS 'MODULE_PATHNAME', 'test_custom_stats_var_report'
 LANGUAGE C STRICT PARALLEL UNSAFE;
+
+CREATE FUNCTION test_custom_stats_var_scan()
+RETURNS BIGINT
+AS 'MODULE_PATHNAME', 'test_custom_stats_var_scan'
+LANGUAGE C STRICT PARALLEL UNSAFE;
+
+CREATE FUNCTION test_custom_stats_var_is_own_hash()
+RETURNS BOOLEAN
+AS 'MODULE_PATHNAME', 'test_custom_stats_var_is_own_hash'
+LANGUAGE C STRICT PARALLEL UNSAFE;

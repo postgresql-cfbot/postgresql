@@ -2,6 +2,7 @@
 -- DMLs on test table
 --
 
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
 SET pg_stat_statements.track_utility = FALSE;
 
 CREATE TEMP TABLE pgss_dml_tab (a int, b char(20));

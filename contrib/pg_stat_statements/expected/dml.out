@@ -1,6 +1,12 @@
 --
 -- DMLs on test table
 --
+SELECT pg_stat_statements_reset() IS NOT NULL AS t;
+ t 
+---
+ t
+(1 row)
+
 SET pg_stat_statements.track_utility = FALSE;
 CREATE TEMP TABLE pgss_dml_tab (a int, b char(20));
 INSERT INTO pgss_dml_tab VALUES(generate_series(1, 10), 'aaa');

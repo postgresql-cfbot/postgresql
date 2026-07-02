@@ -1946,7 +1946,7 @@ SELECT brin_summarize_range('sro_brin', 0);
 DROP TABLE sro_tab;
 -- Check with a partitioned table
 CREATE TABLE sro_ptab (a int) PARTITION BY RANGE (a);
-ALTER TABLE sro_ptab OWNER TO regress_sro_user;
+ALTER TABLE ONLY sro_ptab OWNER TO regress_sro_user;
 CREATE TABLE sro_part PARTITION OF sro_ptab FOR VALUES FROM (1) TO (10);
 ALTER TABLE sro_part OWNER TO regress_sro_user;
 INSERT INTO sro_ptab VALUES (1), (2), (3);

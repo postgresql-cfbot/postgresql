@@ -499,7 +499,7 @@ INSERT INTO part_document VALUES
     ( 9, 11, 1, 'regress_rls_dave', 'awesome science fiction'),
     (10, 99, 2, 'regress_rls_dave', 'awesome technology book');
 
-ALTER TABLE part_document ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY part_document ENABLE ROW LEVEL SECURITY;
 
 -- Create policy on parent
 -- user's security level must be higher than or equal to document's
@@ -2414,7 +2414,7 @@ CREATE TABLE rls_part PARTITION OF rls_ptbl FOR VALUES FROM (-100) TO (100);
 INSERT INTO rls_ptbl SELECT x/10 FROM generate_series(1, 100) x;
 ANALYZE rls_ptbl, rls_part;
 
-ALTER TABLE rls_ptbl ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY rls_ptbl ENABLE ROW LEVEL SECURITY;
 ALTER TABLE rls_part ENABLE ROW LEVEL SECURITY;
 GRANT SELECT ON rls_ptbl TO regress_rls_alice;
 GRANT SELECT ON rls_part TO regress_rls_alice;

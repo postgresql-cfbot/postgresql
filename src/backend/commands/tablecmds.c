@@ -506,7 +506,8 @@ static void ATController(AlterTableStmt *parsetree,
 						 AlterTableUtilityContext *context);
 static void ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 					  bool recurse, bool recursing, LOCKMODE lockmode,
-					  AlterTableUtilityContext *context);
+					  AlterTableUtilityContext *context,
+					  List **pendingNotice);
 static void ATRewriteCatalogs(List **wqueue, LOCKMODE lockmode,
 							  AlterTableUtilityContext *context);
 static void ATExecCmd(List **wqueue, AlteredTableInfo *tab,
@@ -790,6 +791,10 @@ static void ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation
 static void ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab,
 								 Relation rel, PartitionCmd *cmd,
 								 AlterTableUtilityContext *context);
+static void CollectPartitionNoRecurseNotice(AlterTableType cmdtype, Relation rel,
+											bool recurse, bool recursing,
+											List **pendingNotice);
+static void EmitPartitionNoRecurseNotice(List *pendingNotice);
 static List *collectPartitionIndexExtDeps(List *partitionOids);
 static void applyPartitionIndexExtDeps(Oid newPartOid, List *extDepState);
 static void freePartitionIndexExtDeps(List *extDepState);
@@ -4942,13 +4947,14 @@ ATController(AlterTableStmt *parsetree,
 {
 	List	   *wqueue = NIL;
 	ListCell   *lcmd;
+	List	   *pendingNotice = NIL;
 
 	/* Phase 1: preliminary examination of commands, create work queue */
 	foreach(lcmd, cmds)
 	{
 		AlterTableCmd *cmd = (AlterTableCmd *) lfirst(lcmd);
 
-		ATPrepCmd(&wqueue, rel, cmd, recurse, false, lockmode, context);
+		ATPrepCmd(&wqueue, rel, cmd, recurse, false, lockmode, context, &pendingNotice);
 	}
 
 	/* Close the relation, but keep lock until commit */
@@ -4959,6 +4965,9 @@ ATController(AlterTableStmt *parsetree,
 
 	/* Phase 3: scan/rewrite tables as needed, and run afterStmts */
 	ATRewriteTables(parsetree, &wqueue, lockmode, context);
+
+	/* Emit post-notice for partitions that were not recursed into. */
+	EmitPartitionNoRecurseNotice(pendingNotice);
 }
 
 /*
@@ -4973,7 +4982,8 @@ ATController(AlterTableStmt *parsetree,
 static void
 ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		  bool recurse, bool recursing, LOCKMODE lockmode,
-		  AlterTableUtilityContext *context)
+		  AlterTableUtilityContext *context,
+		  List **pendingNotice)
 {
 	AlteredTableInfo *tab;
 	AlterTablePass pass = AT_PASS_UNSET;
@@ -5122,6 +5132,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 								ATT_MATVIEW | ATT_FOREIGN_TABLE);
 			/* This command never recurses */
 			pass = AT_PASS_MISC;
+			/* Emit a notice if needed */
+			CollectPartitionNoRecurseNotice(cmd->subtype, rel, recurse, recursing, pendingNotice);
 			break;
 		case AT_SetStorage:		/* ALTER COLUMN SET STORAGE */
 			ATSimplePermissions(cmd->subtype, rel,
@@ -5137,6 +5149,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* This command never recurses */
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
+			/* Emit a notice if needed */
+			CollectPartitionNoRecurseNotice(cmd->subtype, rel, recurse, recursing, pendingNotice);
 			break;
 		case AT_DropColumn:		/* DROP COLUMN */
 			ATSimplePermissions(cmd->subtype, rel,
@@ -5204,6 +5218,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* This command never recurses */
 			/* No command-specific prep needed */
 			pass = AT_PASS_MISC;
+			/* Emit a notice if needed */
+			CollectPartitionNoRecurseNotice(cmd->subtype, rel, recurse, recursing, pendingNotice);
 			break;
 		case AT_ClusterOn:		/* CLUSTER ON */
 		case AT_DropCluster:	/* SET WITHOUT CLUSTER */
@@ -5240,6 +5256,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 
 			ATPrepSetAccessMethod(tab, rel, cmd->name);
 			pass = AT_PASS_MISC;	/* does not matter; no work in Phase 2 */
+			/* Emit a notice if needed */
+			CollectPartitionNoRecurseNotice(cmd->subtype, rel, recurse, recursing, pendingNotice);
 			break;
 		case AT_SetTableSpace:	/* SET TABLESPACE */
 			ATSimplePermissions(cmd->subtype, rel, ATT_TABLE | ATT_PARTITIONED_TABLE |
@@ -5247,6 +5265,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			/* This command never recurses */
 			ATPrepSetTableSpace(tab, rel, cmd->name, lockmode);
 			pass = AT_PASS_MISC;	/* doesn't actually matter */
+			/* Emit a notice if needed */
+			CollectPartitionNoRecurseNotice(cmd->subtype, rel, recurse, recursing, pendingNotice);
 			break;
 		case AT_SetRelOptions:	/* SET (...) */
 		case AT_ResetRelOptions:	/* RESET (...) */
@@ -5256,6 +5276,7 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 								ATT_MATVIEW | ATT_INDEX);
 			/* This command never recurses */
 			/* No command-specific prep needed */
+			/* It will check for partitioned table at exec time */
 			pass = AT_PASS_MISC;
 			break;
 		case AT_AddInherit:		/* INHERIT */
@@ -5293,8 +5314,8 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 			ATSimplePermissions(cmd->subtype, rel,
 								ATT_TABLE | ATT_PARTITIONED_TABLE | ATT_MATVIEW);
 			pass = AT_PASS_MISC;
-			/* This command never recurses */
-			/* No command-specific prep needed */
+			/* This command doesn't recurse to partitions, so notice if needed */
+			CollectPartitionNoRecurseNotice(cmd->subtype, rel, recurse, recursing, pendingNotice);
 			break;
 		case AT_EnableTrig:		/* ENABLE TRIGGER variants */
 		case AT_EnableAlwaysTrig:
@@ -5315,16 +5336,29 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_EnableAlwaysRule:
 		case AT_EnableReplicaRule:
 		case AT_DisableRule:
-		case AT_AddOf:			/* OF */
-		case AT_DropOf:			/* NOT OF */
-		case AT_EnableRowSecurity:
+		case AT_EnableRowSecurity:	/* ENABLE/DISABLE ROW SECURITY variants */
 		case AT_DisableRowSecurity:
-		case AT_ForceRowSecurity:
+		case AT_ForceRowSecurity:	/* FORCE/NO FORCE ROW SECURITY variants */
 		case AT_NoForceRowSecurity:
 			ATSimplePermissions(cmd->subtype, rel,
 								ATT_TABLE | ATT_PARTITIONED_TABLE);
 			/* These commands never recurse */
 			/* No command-specific prep needed */
+			pass = AT_PASS_MISC;
+			/* Emit a notice if needed */
+			CollectPartitionNoRecurseNotice(cmd->subtype, rel, recurse, recursing, pendingNotice);
+			break;
+		case AT_AddOf:			/* OF */
+		case AT_DropOf:			/* NOT OF */
+			ATSimplePermissions(cmd->subtype, rel,
+								ATT_TABLE | ATT_PARTITIONED_TABLE);
+			/* These commands never recurse */
+			/* No command-specific prep needed */
+
+			/*
+			 * They only work on partitioned tables but child partitions, thus
+			 * no need to emit a notice
+			 */
 			pass = AT_PASS_MISC;
 			break;
 		case AT_GenericOptions:
@@ -6820,6 +6854,8 @@ alter_table_type_to_string(AlterTableType cmdtype)
 			return "ALTER COLUMN ... DROP IDENTITY";
 		case AT_ReAddStatistics:
 			return NULL;		/* not real grammar */
+		case AT_SetSchema:
+			return "SET SCHEMA";
 	}
 
 	return NULL;
@@ -6941,7 +6977,7 @@ ATSimpleRecursion(List **wqueue, Relation rel,
 			/* find_all_inheritors already got lock */
 			childrel = relation_open(childrelid, NoLock);
 			CheckAlterTableIsSafe(childrel);
-			ATPrepCmd(wqueue, childrel, cmd, false, true, lockmode, context);
+			ATPrepCmd(wqueue, childrel, cmd, false, true, lockmode, context, NULL);
 			relation_close(childrel, NoLock);
 		}
 	}
@@ -7004,7 +7040,7 @@ ATTypedTableRecursion(List **wqueue, Relation rel, AlterTableCmd *cmd,
 
 		childrel = relation_open(childrelid, lockmode);
 		CheckAlterTableIsSafe(childrel);
-		ATPrepCmd(wqueue, childrel, cmd, true, true, lockmode, context);
+		ATPrepCmd(wqueue, childrel, cmd, true, true, lockmode, context, NULL);
 		relation_close(childrel, NoLock);
 	}
 }
@@ -9650,7 +9686,7 @@ ATPrepAddPrimaryKey(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		newcmd->recurse = true;
 		newcmd->def = (Node *) nnconstr;
 
-		ATPrepCmd(wqueue, rel, newcmd, true, false, lockmode, context);
+		ATPrepCmd(wqueue, rel, newcmd, true, false, lockmode, context, NULL);
 	}
 }
 
@@ -15120,7 +15156,7 @@ ATPrepAlterColumnType(List **wqueue,
 							 errdetail("USING expression contains a whole-row table reference.")));
 				pfree(attmap);
 			}
-			ATPrepCmd(wqueue, childrel, cmd, false, true, lockmode, context);
+			ATPrepCmd(wqueue, childrel, cmd, false, true, lockmode, context, NULL);
 			relation_close(childrel, NoLock);
 		}
 	}
@@ -19418,6 +19454,7 @@ AlterTableNamespace(AlterObjectSchemaStmt *stmt, Oid *oldschema)
 	RangeVar   *newrv;
 	ObjectAddresses *objsMoved;
 	ObjectAddress myself;
+	List	   *pendingNotice = NIL;
 
 	relid = RangeVarGetRelidExtended(stmt->relation, AccessExclusiveLock,
 									 stmt->missing_ok ? RVR_MISSING_OK : 0,
@@ -19433,6 +19470,13 @@ AlterTableNamespace(AlterObjectSchemaStmt *stmt, Oid *oldschema)
 	}
 
 	rel = relation_open(relid, NoLock);
+
+	/*
+	 * SET SCHEMA doesn't recurse to children, emit a notice if ONLY is not
+	 * specified. As this action doesn't go through ATPrepCmd, we have to emit
+	 * the notice here.
+	 */
+	CollectPartitionNoRecurseNotice(AT_SetSchema, rel, stmt->relation->inh, false, &pendingNotice);
 
 	oldNspOid = RelationGetNamespace(rel);
 
@@ -19470,6 +19514,8 @@ AlterTableNamespace(AlterObjectSchemaStmt *stmt, Oid *oldschema)
 
 	/* close rel, but keep lock until commit */
 	relation_close(rel, NoLock);
+
+	EmitPartitionNoRecurseNotice(pendingNotice);
 
 	return myself;
 }
@@ -24128,4 +24174,70 @@ ATExecSplitPartition(List **wqueue, AlteredTableInfo *tab, Relation rel,
 
 	/* Restore the userid and security context. */
 	SetUserIdAndSecContext(save_userid, save_sec_context);
+}
+
+/*
+ * When ONLY is not specified with a partitioned table, it is expected that the
+ * command recurses to all partitions. However, some sub-commands do not recurse.
+ * In such cases, emit a NOTICE to make this behavior explicit to the user.
+ */
+static void
+CollectPartitionNoRecurseNotice(AlterTableType cmdtype, Relation rel, bool recurse, bool recursing,
+								List **pendingNotice)
+{
+	if (pendingNotice == NULL)
+		return;
+
+	/* Only emit the notice at the top level of recursion */
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE && recurse && !recursing)
+	{
+		PartitionDesc pd = RelationGetPartitionDesc(rel, true);
+		int			nparts = pd->nparts;
+		const char *action_str;
+		char	   *notice_msg;
+		const ListCell *cell;
+
+		/* Emit a notice only if there are partitions */
+		if (nparts == 0)
+			return;
+
+		action_str = alter_table_type_to_string(cmdtype);
+		notice_msg = psprintf(_("ALTER action %s on relation \"%s\" does not affect present partitions"),
+							  action_str,
+							  RelationGetRelationName(rel));
+
+		foreach(cell, *pendingNotice)
+		{
+			if (strcmp((char *) lfirst(cell), notice_msg) == 0)
+			{
+				/* Skip the duplicate notice message */
+				pfree(notice_msg);
+				return;
+			}
+		}
+		*pendingNotice = lappend(*pendingNotice, notice_msg);
+	}
+}
+
+static void
+EmitPartitionNoRecurseNotice(List *pendingNotice)
+{
+	ListCell   *cell;
+	int			len;
+	int			i = 0;
+
+	len = list_length(pendingNotice);
+	foreach(cell, pendingNotice)
+	{
+		char	   *notice_msg = (char *) lfirst(cell);
+
+		/* Only emit the hint for the last notice */
+		i++;
+		ereport(NOTICE, errmsg("%s", notice_msg),
+				(i == len) ?
+				errhint("Partitions may be modified individually, or specify ONLY to suppress this message.")
+				: 0);
+		pfree(notice_msg);
+	}
+	list_free(pendingNotice);
 }

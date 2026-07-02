@@ -434,6 +434,167 @@ EnableStandbyMode(void)
 }
 
 /*
+ * Start WAL receiver eagerly without waiting to play all WAL from the archive
+ * and pg_wal. First, find the last valid WAL segment in pg_wal and then request
+ * streaming to commence from it's beginning. startPoint signifies whether we
+ * are trying the eager start right at startup or once we have reached
+ * consistency.
+ */
+static void
+StartWALReceiverEagerlyIfPossible(WalRcvStartCondition startPoint,
+								  TimeLineID currentTLI)
+{
+	DIR           *dir;
+	struct dirent *de;
+	XLogSegNo     startsegno = -1;
+	XLogSegNo     endsegno   = -1;
+
+	/*
+	 * We should not be starting the walreceiver during bootstrap/init
+	 * processing.
+	 */
+	if (!IsNormalProcessingMode())
+		return;
+
+	/* Only the startup process can request an eager walreceiver start. */
+	Assert(AmStartupProcess());
+
+	/* Return if we are not set up to start the WAL receiver eagerly. */
+	if (wal_receiver_start_at == WAL_RCV_START_AT_EXHAUST)
+		return;
+
+	/*
+	 * Sanity checks: We must be in standby mode with primary_conninfo set up
+	 * for streaming replication, the WAL receiver should not already have
+	 * started and the intended startPoint must match the start condition GUC.
+	 *
+	 * Archiving from the restore command does not holds the control lock
+	 * and enabling XLogCtl->InstallXLogFileSegmentActive for wal reciever
+	 * early start will create a race condition with the checkpointer process
+	 * as fixed in cc2c7d65fc27e877c9f407587b0b92d46cd6dd16. Hence skipping
+	 * early start of the wal receiver in case of archive recovery.
+	 */
+	if (!StandbyModeRequested || WalRcvStreaming() ||
+		!PrimaryConnInfo || strcmp(PrimaryConnInfo, "") == 0 ||
+		startPoint != wal_receiver_start_at ||
+		(ArchiveRecoveryRequested &&
+			recoveryRestoreCommand != NULL && strcmp(recoveryRestoreCommand, "") != 0))
+		return;
+
+	/*
+	 * We must have reached consistency if we wanted to start the walreceiver
+	 * at the consistency point.
+	 */
+	if (wal_receiver_start_at == WAL_RCV_START_AT_CONSISTENCY && !reachedConsistency)
+		return;
+
+	/* Find the latest and earliest WAL segments in pg_wal */
+	dir        = AllocateDir("pg_wal");
+	while ((de = ReadDir(dir, "pg_wal")) != NULL)
+	{
+		/* Does it look like a WAL segment? */
+		if (IsXLogFileName(de->d_name))
+		{
+			XLogSegNo logSegNo;
+			TimeLineID tli;
+
+			XLogFromFileName(de->d_name, &tli, &logSegNo, wal_segment_size);
+			if (tli != currentTLI)
+			{
+				/*
+				 * It seems wrong to stream WAL on a timeline different from
+				 * the one we are replaying on. So, bail in case a timeline
+				 * change is noticed.
+				 */
+				ereport(LOG,
+						(errmsg("could not start streaming WAL eagerly"),
+							errdetail("There are timeline changes in the locally available WAL files."),
+							errhint("WAL streaming will begin once all local WAL and archives are exhausted.")));
+				FreeDir(dir);
+				return;
+			}
+			startsegno = (startsegno == -1) ? logSegNo : Min(startsegno, logSegNo);
+			endsegno = (endsegno == -1) ? logSegNo : Max(endsegno, logSegNo);
+		}
+	}
+	FreeDir(dir);
+
+	/*
+	 * We should have at least one valid WAL segment in pg_wal. By this point,
+	 * we must have read at the segment that included the checkpoint record we
+	 * started replaying from.
+	 */
+	Assert(startsegno != -1 && endsegno != -1);
+
+	/* Find the latest valid WAL segment and request streaming from its start */
+	while (endsegno >= startsegno)
+	{
+		XLogReaderState * state;
+		XLogRecPtr   startptr;
+		WALReadError errinfo;
+		char         xlogfname[MAXFNAMELEN];
+
+		XLogSegNoOffsetToRecPtr(endsegno, 0, wal_segment_size, startptr);
+		XLogFileName(xlogfname, currentTLI, endsegno,
+					 wal_segment_size);
+
+		state = XLogReaderAllocate(wal_segment_size, NULL,
+								   XL_ROUTINE(.segment_open = wal_segment_open,
+											  .segment_close = wal_segment_close),
+								   NULL);
+		if (!state)
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+						errmsg("out of memory"),
+						errdetail("Failed while allocating a WAL reading processor.")));
+
+		/*
+		 * Read the first page of the current WAL segment and validate it by
+		 * inspecting the page header. Once we find a valid WAL segment, we
+		 * can request WAL streaming from its beginning.
+		 */
+		XLogBeginRead(state, startptr);
+
+		if (!WALRead(state, state->readBuf, startptr, XLOG_BLCKSZ,
+					 currentTLI, &errinfo))
+		{
+			/*
+			 * FIXME: In case when a segment file with zero bytes is found in pg_wal directory ,
+			 * instead of error out here skip that file and try to read the next previous endsegno.
+			*/
+			WALReadRaiseError(&errinfo);
+		}
+
+		if (XLogReaderValidatePageHeader(state, startptr, state->readBuf))
+		{
+			ereport(LOG,
+					errmsg("requesting stream from beginning of: \"%s\"", xlogfname));
+			XLogReaderFree(state);
+			SetInstallXLogFileSegmentActive();
+			RequestXLogStreaming(currentTLI,
+								 startptr,
+								 PrimaryConnInfo,
+								 PrimarySlotName,
+								 wal_receiver_create_temp_slot);
+			return;
+		}
+
+		ereport(LOG,
+				errmsg("invalid WAL segment found while calculating stream start: \"%s\". skipping..", xlogfname));
+
+		XLogReaderFree(state);
+		endsegno--;
+	}
+
+	/*
+	 * We should never reach here as we should have at least one valid WAL
+	 * segment in pg_wal. By this point, we must have read at the segment that
+	 * included the checkpoint record we started replaying from.
+	 */
+	Assert(false);
+}
+
+/*
  * Prepare the system for WAL recovery, if needed.
  *
  * This is called by StartupXLOG() which coordinates the server startup
@@ -753,6 +914,9 @@ InitWalRecovery(ControlFileData *ControlFile, bool *wasShutdown_ptr,
 							   LSN_FORMAT_ARGS(checkPoint.redo), LSN_FORMAT_ARGS(CheckPointLoc)));
 		}
 	}
+
+	/* Start WAL receiver eagerly if requested. */
+	StartWALReceiverEagerlyIfPossible(WAL_RCV_START_AT_STARTUP, recoveryTargetTLI);
 
 	if (ArchiveRecoveryRequested)
 	{
@@ -2146,6 +2310,7 @@ CheckTablespaceDirectory(void)
  * Checks if recovery has reached a consistent state. When consistency is
  * reached and we have a valid starting standby snapshot, tell postmaster
  * that it can start accepting read-only connections.
+ * Also, attempt to start the WAL receiver eagerly if so configured.
  */
 static void
 CheckRecoveryConsistency(void)
@@ -2243,6 +2408,10 @@ CheckRecoveryConsistency(void)
 
 		SendPostmasterSignal(PMSIGNAL_BEGIN_HOT_STANDBY);
 	}
+
+	/* Start WAL receiver eagerly if requested. */
+	StartWALReceiverEagerlyIfPossible(WAL_RCV_START_AT_CONSISTENCY,
+									  lastReplayedTLI);
 }
 
 /*
@@ -3624,10 +3793,12 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 
 					/*
 					 * Move to XLOG_FROM_STREAM state, and set to start a
-					 * walreceiver if necessary.
+					 * walreceiver if necessary. The WAL receiver may have
+					 * already started (if it was configured to start
+					 * eagerly).
 					 */
 					currentSource = XLOG_FROM_STREAM;
-					startWalReceiver = true;
+					startWalReceiver = !WalRcvStreaming();
 					break;
 
 				case XLOG_FROM_STREAM:
@@ -3760,13 +3931,6 @@ WaitForWALToBecomeAvailable(XLogRecPtr RecPtr, bool randAccess,
 		{
 			case XLOG_FROM_ARCHIVE:
 			case XLOG_FROM_PG_WAL:
-
-				/*
-				 * WAL receiver must not be running when reading WAL from
-				 * archive or pg_wal.
-				 */
-				Assert(!WalRcvStreaming());
-
 				/* Close any old file we might have open. */
 				if (readFile >= 0)
 				{

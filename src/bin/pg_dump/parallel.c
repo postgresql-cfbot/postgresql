@@ -56,9 +56,10 @@
 #include <sys/select.h>
 #include <sys/wait.h>
 #include <signal.h>
-#include <unistd.h>
-#include <fcntl.h>
 #endif
+
+#include <fcntl.h>
+#include <unistd.h>
 
 #include "fe_utils/string_utils.h"
 #include "parallel.h"
@@ -187,7 +188,7 @@ static CRITICAL_SECTION signal_info_lock;
 	do { \
 		const char *str_ = (str); \
 		int		rc_; \
-		rc_ = write(fileno(stderr), str_, strlen(str_)); \
+		rc_ = write(STDERR_FILENO, str_, strlen(str_)); \
 		(void) rc_; \
 	} while (0)
 
@@ -641,18 +642,38 @@ consoleHandler(DWORD dwCtrlType)
 	if (dwCtrlType == CTRL_C_EVENT ||
 		dwCtrlType == CTRL_BREAK_EVENT)
 	{
+		int			null_device;
+
+		/*
+		 * Report we're quitting, using nothing more complicated than
+		 * write(2).
+		 */
+		if (progname)
+		{
+			write_stderr(progname);
+			write_stderr(": ");
+		}
+		write_stderr("terminated by user\n");
+
+		/*
+		 * Atomically replace STDERR_FILENO with the null device, to swallow
+		 * future write() and fwrite() output to that descriptor.  This
+		 * prevents worker threads from reporting cancellation-related errors,
+		 * which might clutter the user's screen if they manage arrive before
+		 * the whole process exits and terminates them.  Ignore errors.
+		 */
+		if ((null_device = open(DEVNULL, O_WRONLY | O_BINARY, 0)) >= 0)
+			dup2(null_device, STDERR_FILENO);
+
 		/* Critical section prevents changing data we look at here */
 		EnterCriticalSection(&signal_info_lock);
 
 		/*
 		 * If in parallel mode, stop worker threads and send QueryCancel to
-		 * their connected backends.  The main point of stopping the worker
-		 * threads is to keep them from reporting the query cancels as errors,
-		 * which would clutter the user's screen.  We needn't stop the leader
-		 * thread since it won't be doing much anyway.  Do this before
-		 * canceling the main transaction, else we might get invalid-snapshot
-		 * errors reported before we can stop the workers.  Ignore errors,
-		 * there's not much we can do about them anyway.
+		 * their connected backends.  Do this before canceling the main
+		 * transaction, else we might get invalid-snapshot errors reported
+		 * before we can stop the workers.  Ignore errors, there's not much we
+		 * can do about them anyway.
 		 */
 		if (signal_info.pstate != NULL)
 		{
@@ -660,15 +681,6 @@ consoleHandler(DWORD dwCtrlType)
 			{
 				ParallelSlot *slot = &(signal_info.pstate->parallelSlot[i]);
 				ArchiveHandle *AH = slot->AH;
-				HANDLE		hThread = (HANDLE) slot->hThread;
-
-				/*
-				 * Using TerminateThread here may leave some resources leaked,
-				 * but it doesn't matter since we're about to end the whole
-				 * process.
-				 */
-				if (hThread != INVALID_HANDLE_VALUE)
-					TerminateThread(hThread, 0);
 
 				if (AH != NULL && AH->connCancel != NULL)
 					(void) PQcancel(AH->connCancel, errbuf, sizeof(errbuf));
@@ -684,19 +696,6 @@ consoleHandler(DWORD dwCtrlType)
 							errbuf, sizeof(errbuf));
 
 		LeaveCriticalSection(&signal_info_lock);
-
-		/*
-		 * Report we're quitting, using nothing more complicated than
-		 * write(2).  (We might be able to get away with using pg_log_*()
-		 * here, but since we terminated other threads uncleanly above, it
-		 * seems better to assume as little as possible.)
-		 */
-		if (progname)
-		{
-			write_stderr(progname);
-			write_stderr(": ");
-		}
-		write_stderr("terminated by user\n");
 	}
 
 	/* Always return FALSE to allow signal handling to continue */

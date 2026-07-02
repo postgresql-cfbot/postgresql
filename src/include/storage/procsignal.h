@@ -38,6 +38,8 @@ typedef enum
 	PROCSIG_PARALLEL_APPLY_MESSAGE, /* Message from parallel apply workers */
 	PROCSIG_SLOTSYNC_MESSAGE,	/* ask slot synchronization to stop */
 	PROCSIG_REPACK_MESSAGE,		/* Message from repack worker */
+	PROCSIG_REPORT_ANYTIME_STATS,	/* ask backend to report anytime
+									 * statistics */
 	PROCSIG_RECOVERY_CONFLICT,	/* backend is blocking recovery, check
 								 * PGPROC->pendingRecoveryConflicts for the
 								 * reason */

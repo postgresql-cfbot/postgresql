@@ -106,6 +106,7 @@
 
 #include "access/xact.h"
 #include "lib/dshash.h"
+#include "miscadmin.h"
 #include "pgstat.h"
 #include "storage/fd.h"
 #include "storage/ipc.h"
@@ -846,6 +847,57 @@ pgstat_force_next_flush(void)
 }
 
 /*
+ * Immediately flush all pending statistics entries to shared memory.
+ *
+ * Unlike pgstat_report_stat(), this can be called anytime, including
+ * within a transaction.
+ */
+void
+pgstat_report_anytime_stat(void)
+{
+	pgstat_flush_pending_entries(false);
+
+	for (PgStat_Kind kind = PGSTAT_KIND_MIN; kind <= PGSTAT_KIND_MAX; kind++)
+	{
+		const PgStat_KindInfo *kind_info = pgstat_get_kind_info(kind);
+
+		if (!kind_info || !kind_info->flush_static_cb)
+			continue;
+
+		kind_info->flush_static_cb(false);
+	}
+}
+
+/*
+ * HandleReportAnytimeStatsInterrupt
+ *		Handle receipt of an interrupt requesting an anytime stats report.
+ *
+ * All the actual work is deferred to ProcessReportAnytimeStatsInterrupt(),
+ * because we cannot safely acquire locks inside the signal handler.
+ */
+void
+HandleReportAnytimeStatsInterrupt(void)
+{
+	InterruptPending = true;
+	ReportAnytimeStatsPending = true;
+	/* latch will be set by procsignal_sigusr1_handler */
+}
+
+/*
+ * ProcessReportAnytimeStatsInterrupt
+ *		Report all pending statistics to shared memory.
+ *
+ * Called from ProcessInterrupts() when ReportAnytimeStatsPending is set.
+ */
+void
+ProcessReportAnytimeStatsInterrupt(void)
+{
+	ReportAnytimeStatsPending = false;
+
+	pgstat_report_anytime_stat();
+}
+
+/*
  * Only for use by pgstat_reset_counters()
  */
 static bool
@@ -1414,7 +1466,14 @@ pgstat_flush_pending_entries(bool nowait)
 		/* flush the stats, if possible */
 		did_flush = kind_info->flush_pending_cb(entry_ref, nowait);
 
-		Assert(did_flush || nowait);
+		/*
+		 * When nowait is false we block for the lock, so the only reason a
+		 * flush_pending_cb can legitimately return false is that the entry
+		 * has active transaction state that must not be freed yet (e.g.
+		 * relation stats with trans != NULL).  That situation only arises
+		 * mid-transaction, hence the IsTransactionOrTransactionBlock() check.
+		 */
+		Assert(did_flush || nowait || IsTransactionOrTransactionBlock());
 
 		/* determine next entry, before deleting the pending entry */
 		if (dlist_has_next(&pgStatPending, cur))

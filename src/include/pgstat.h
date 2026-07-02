@@ -552,6 +552,9 @@ extern void pgstat_initialize(void);
 /* Functions called from backends */
 extern long pgstat_report_stat(bool force);
 extern void pgstat_force_next_flush(void);
+extern void pgstat_report_anytime_stat(void);
+extern void HandleReportAnytimeStatsInterrupt(void);
+extern void ProcessReportAnytimeStatsInterrupt(void);
 
 extern void pgstat_reset_counters(void);
 extern void pgstat_reset(PgStat_Kind kind, Oid dboid, uint64 objid);

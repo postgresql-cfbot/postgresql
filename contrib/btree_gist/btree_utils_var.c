@@ -213,16 +213,14 @@ gbt_bytea_pf_match(const bytea *pf, const bytea *query, const gbtree_vinfo *tinf
  * If the data type is truncatable, then a shortened upper bound must be
  * considered to include all values that match it up to its own length,
  * even though longer values would normally be considered larger.
- *
- * XXX isn't the check against node->lower useless?
- * A truncated lower bound would already be less than all included values.
+ * We don't need to check the lower bound though: shortening it just
+ * makes it even smaller.
  */
 static bool
 gbt_var_node_pf_match(const GBT_VARKEY_R *node, const bytea *query, const gbtree_vinfo *tinfo)
 {
 	return (tinfo->trnc &&
-			(gbt_bytea_pf_match(node->lower, query, tinfo) ||
-			 gbt_bytea_pf_match(node->upper, query, tinfo)));
+			gbt_bytea_pf_match(node->upper, query, tinfo));
 }
 
 

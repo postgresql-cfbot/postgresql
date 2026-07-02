@@ -1209,6 +1209,18 @@ Keywords_for_list_of_owner_roles, "PUBLIC"
 "  FROM pg_catalog.pg_timezone_names() "\
 " WHERE pg_catalog.quote_literal(pg_catalog.lower(name)) LIKE pg_catalog.lower('%s')"
 
+#define Query_for_list_of_publications \
+"SELECT pubname "\
+"  FROM pg_catalog.pg_publication "\
+" WHERE pubname LIKE '%s'"
+
+#define Query_for_list_of_subscriptions \
+"SELECT s.subname "\
+"  FROM pg_catalog.pg_subscription s, pg_catalog.pg_database d"\
+" WHERE s.subname LIKE '%s' "\
+"   AND d.datname = pg_catalog.current_database() "\
+"   AND s.subdbid = d.oid"
+
 /* Privilege options shared between GRANT and REVOKE */
 #define Privilege_options_of_grant_and_revoke \
 "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", \
@@ -1242,32 +1254,6 @@ Copy_common_options, "DEFAULT", "FORCE_NOT_NULL", "FORCE_NULL", "FREEZE", \
 /* COPY TO options */
 #define Copy_to_options \
 Copy_common_options, "FORCE_QUOTE", "FORCE_ARRAY"
-
-/*
- * These object types were introduced later than our support cutoff of
- * server version 9.2.  We use the VersionedQuery infrastructure so that
- * we don't send certain-to-fail queries to older servers.
- */
-
-static const VersionedQuery Query_for_list_of_publications[] = {
-	{100000,
-		" SELECT pubname "
-		"   FROM pg_catalog.pg_publication "
-		"  WHERE pubname LIKE '%s'"
-	},
-	{0, NULL}
-};
-
-static const VersionedQuery Query_for_list_of_subscriptions[] = {
-	{100000,
-		" SELECT s.subname "
-		"   FROM pg_catalog.pg_subscription s, pg_catalog.pg_database d "
-		"  WHERE s.subname LIKE '%s' "
-		"    AND d.datname = pg_catalog.current_database() "
-		"    AND s.subdbid = d.oid"
-	},
-	{0, NULL}
-};
 
  /* Known command-starting keywords. */
 static const char *const sql_commands[] = {
@@ -1346,7 +1332,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"POLICY", NULL, NULL, NULL},
 	{"PROCEDURE", NULL, NULL, Query_for_list_of_procedures},
 	{"PROPERTY GRAPH", NULL, NULL, &Query_for_list_of_propgraphs},
-	{"PUBLICATION", NULL, Query_for_list_of_publications},
+	{"PUBLICATION", Query_for_list_of_publications},
 	{"ROLE", Query_for_list_of_roles},
 	{"ROUTINE", NULL, NULL, &Query_for_list_of_routines, NULL, THING_NO_CREATE},
 	{"RULE", "SELECT rulename FROM pg_catalog.pg_rules WHERE rulename LIKE '%s'"},
@@ -1354,7 +1340,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"SEQUENCE", NULL, NULL, &Query_for_list_of_sequences},
 	{"SERVER", Query_for_list_of_servers},
 	{"STATISTICS", NULL, NULL, &Query_for_list_of_statistics},
-	{"SUBSCRIPTION", NULL, Query_for_list_of_subscriptions},
+	{"SUBSCRIPTION", Query_for_list_of_subscriptions},
 	{"SYSTEM", NULL, NULL, NULL, NULL, THING_NO_CREATE | THING_NO_DROP},
 	{"TABLE", NULL, NULL, &Query_for_list_of_tables},
 	{"TABLESPACE", Query_for_list_of_tablespaces},
@@ -5701,9 +5687,9 @@ match_previous_words(int pattern_id,
 	else if (TailMatchesCS("\\dP*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_partitioned_relations);
 	else if (TailMatchesCS("\\dRp*"))
-		COMPLETE_WITH_VERSIONED_QUERY(Query_for_list_of_publications);
+		COMPLETE_WITH_QUERY(Query_for_list_of_publications);
 	else if (TailMatchesCS("\\dRs*"))
-		COMPLETE_WITH_VERSIONED_QUERY(Query_for_list_of_subscriptions);
+		COMPLETE_WITH_QUERY(Query_for_list_of_subscriptions);
 	else if (TailMatchesCS("\\ds*"))
 		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_sequences);
 	else if (TailMatchesCS("\\dt*"))

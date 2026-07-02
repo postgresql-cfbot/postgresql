@@ -479,7 +479,7 @@ verify_heapam(PG_FUNCTION_ARGS)
 										stream_data,
 										0);
 
-	while ((ctx.buffer = read_stream_next_buffer(stream, NULL)) != InvalidBuffer)
+	while ((ctx.buffer = read_stream_get_buffer(stream)) != InvalidBuffer)
 	{
 		OffsetNumber maxoff;
 		OffsetNumber predecessor[MaxOffsetNumber];

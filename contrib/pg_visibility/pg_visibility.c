@@ -546,7 +546,7 @@ collect_visibility_data(Oid relid, bool include_pd)
 			Buffer		buffer;
 			Page		page;
 
-			buffer = read_stream_next_buffer(stream, NULL);
+			buffer = read_stream_get_buffer(stream);
 			LockBuffer(buffer, BUFFER_LOCK_SHARE);
 
 			page = BufferGetPage(buffer);
@@ -559,7 +559,7 @@ collect_visibility_data(Oid relid, bool include_pd)
 
 	if (include_pd)
 	{
-		Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+		Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 		read_stream_end(stream);
 	}
 
@@ -742,7 +742,7 @@ collect_corrupt_items(Oid relid, bool all_visible, bool all_frozen)
 										0);
 
 	/* Loop over every block in the relation. */
-	while ((buffer = read_stream_next_buffer(stream, NULL)) != InvalidBuffer)
+	while ((buffer = read_stream_get_buffer(stream)) != InvalidBuffer)
 	{
 		bool		check_frozen = all_frozen;
 		bool		check_visible = all_visible;

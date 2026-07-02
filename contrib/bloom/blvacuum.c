@@ -81,7 +81,7 @@ blbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 		vacuum_delay_point(false);
 
-		buffer = read_stream_next_buffer(stream, NULL);
+		buffer = read_stream_get_buffer(stream);
 
 		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		gxlogState = GenericXLogStart(index);
@@ -154,7 +154,7 @@ blbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 		UnlockReleaseBuffer(buffer);
 	}
 
-	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 	read_stream_end(stream);
 
 	/*
@@ -233,7 +233,7 @@ blvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 
 		vacuum_delay_point(false);
 
-		buffer = read_stream_next_buffer(stream, NULL);
+		buffer = read_stream_get_buffer(stream);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 
@@ -250,7 +250,7 @@ blvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		UnlockReleaseBuffer(buffer);
 	}
 
-	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 	read_stream_end(stream);
 
 	IndexFreeSpaceMapVacuum(info->index);

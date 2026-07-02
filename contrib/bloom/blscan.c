@@ -145,7 +145,7 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 		Buffer		buffer;
 		Page		page;
 
-		buffer = read_stream_next_buffer(stream, NULL);
+		buffer = read_stream_get_buffer(stream);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buffer);
 
@@ -182,7 +182,7 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 		CHECK_FOR_INTERRUPTS();
 	}
 
-	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 	read_stream_end(stream);
 	FreeAccessStrategy(bas);
 

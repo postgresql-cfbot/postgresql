@@ -65,7 +65,8 @@ ANALYZE [ ( <replaceable class="parameter">option</replaceable> [, ...] ) ] [ <r
     <term><literal>VERBOSE</literal></term>
     <listitem>
      <para>
-      Enables display of progress messages at <literal>INFO</literal> level.
+      Sends a detailed <literal>INFO</literal> message to the client
+      for each table as it is processed.
      </para>
     </listitem>
    </varlistentry>

@@ -1706,6 +1706,111 @@ statext_is_compatible_clause(PlannerInfo *root, Node *clause, Index relid,
 }
 
 /*
+ * mcv_can_cap
+ *		Determines whether the MCV selectivity estimate can be capped at the
+ *		frequency of the least common item in the MCV list.
+ *
+ * When a combination of values does not appear in the MCV list, its true
+ * selectivity must be lower than the frequency of the least common tracked
+ * combination.  We can exploit this to cap the combined selectivity estimate,
+ * but only when the following conditions are both satisfied:
+ *
+ * 1. The clauses cover all dimensions of the statistics object, i.e.
+ *    covered_attnums equals stat->keys exactly.  If any dimension is
+ *    unconstrained, the absence of a match in the MCV list does not bound
+ *    the selectivity of the full combination.
+ *
+ * 2. Every clause is an equality-like condition: either an equality operator,
+ *    an IS NULL test, or a bare boolean Var.  Range or inequality predicates
+ *    can match many values, so the per-combination argument no longer applies.
+ *
+ * Returns true if both conditions hold and capping is valid.
+ */
+static bool
+mcv_can_cap(StatisticExtInfo *stat, Bitmapset *covered_attnums, List *stat_clauses)
+{
+	ListCell   *lc;
+
+	/*
+	 * Expressions are not supported, they can match multiple rows. Also, the
+	 * clauses must cover all dimensions of the MCV list.
+	 */
+	if (stat->exprs != NULL || !bms_equal(covered_attnums, stat->keys))
+	{
+		return false;
+	}
+
+	foreach(lc, stat_clauses)
+	{
+		Node	   *clause = (Node *) lfirst(lc);
+
+		if (IsA(clause, RestrictInfo))
+			clause = (Node *) ((RestrictInfo *) clause)->clause;
+
+		/* = */
+		if (is_opclause(clause) && get_oprrest(((const OpExpr *) clause)->opno) == F_EQSEL)
+			continue;
+
+		/* IS NULL */
+		if (IsA(clause, NullTest) && ((const NullTest *) clause)->nulltesttype == IS_NULL)
+			continue;
+
+		/* = TRUE */
+		if (IsA(clause, Var))
+			continue;
+
+		/* = FALSE */
+		if (IsA(clause, BoolExpr) && ((const BoolExpr *) clause)->boolop == NOT_EXPR && IsA(linitial(((const BoolExpr *) clause)->args), Var))
+			continue;
+
+		return false;
+	}
+	return true;
+}
+
+/*
+ * get_ndistinct_for_keys
+ *		Return the ndistinct estimate for the full set of columns identified by
+ *		keys, using a matching STATS_EXT_NDISTINCT object from the relation's
+ *		statlist.
+ *
+ * Accepts both exact-match and superset statistics objects.  Returns -1.0
+ * if no matching ndistinct statistics object or item is found.
+ */
+static double
+get_ndistinct_for_keys(List *statlist, Bitmapset *keys, bool inh)
+{
+	ListCell   *lc;
+
+	foreach(lc, statlist)
+	{
+		StatisticExtInfo *info = (StatisticExtInfo *) lfirst(lc);
+		MVNDistinct *mvnd;
+		MVNDistinctItem *item;
+
+		if (info->kind != STATS_EXT_NDISTINCT || info->inherit != inh)
+			continue;
+		if (!bms_is_subset(keys, info->keys))
+			continue;
+
+		mvnd = statext_ndistinct_load(info->statOid, inh);
+		item = mvndistinct_find_item(mvnd, keys, 0);
+
+		if (item)
+		{
+			double		ndistinct = item->ndistinct;
+
+			statext_ndistinct_free(mvnd);
+			return ndistinct;
+		}
+
+		statext_ndistinct_free(mvnd);
+	}
+
+	return -1.0;
+}
+
+/*
  * statext_mcv_clauselist_selectivity
  *		Estimate clauses using the best multi-column statistics.
  *
@@ -1800,6 +1905,7 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 		StatisticExtInfo *stat;
 		List	   *stat_clauses;
 		Bitmapset  *simple_clauses;
+		Bitmapset  *covered_attnums;
 
 		/* find the best suited statistics object for these attnums */
 		stat = choose_best_statistics(rel->statlist, STATS_EXT_MCV, rte->inh,
@@ -1821,6 +1927,9 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 
 		/* record which clauses are simple (single column or expression) */
 		simple_clauses = NULL;
+
+		/* record all attnums to check if MCV covers all of them */
+		covered_attnums = NULL;
 
 		listidx = -1;
 		foreach(l, clauses)
@@ -1871,6 +1980,9 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 			/* add clause to list and mark it as estimated */
 			stat_clauses = lappend(stat_clauses, (Node *) lfirst(l));
 			*estimatedclauses = bms_add_member(*estimatedclauses, listidx);
+
+			if (!is_or)
+				covered_attnums = bms_add_members(covered_attnums, list_attnums[listidx]);
 
 			/*
 			 * Reset the pointers, so that choose_best_statistics knows this
@@ -1985,11 +2097,18 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 		}
 		else					/* Implicitly-ANDed list of clauses */
 		{
+			bool		can_cap;
+			bool		mcv_matched;
 			Selectivity simple_sel,
 						mcv_sel,
 						mcv_basesel,
 						mcv_totalsel,
+						mcv_cap,
 						stat_sel;
+			uint32		mcv_nitems;
+
+			can_cap = mcv_can_cap(stat, covered_attnums, stat_clauses);
+			bms_free(covered_attnums);
 
 			/*
 			 * "Simple" selectivity, i.e. without any extended statistics,
@@ -2006,13 +2125,41 @@ statext_mcv_clauselist_selectivity(PlannerInfo *root, List *clauses, int varReli
 			mcv_sel = mcv_clauselist_selectivity(root, stat, stat_clauses,
 												 varRelid, jointype, sjinfo,
 												 rel, &mcv_basesel,
-												 &mcv_totalsel);
+												 &mcv_totalsel,
+												 &mcv_cap,
+												 &mcv_nitems,
+												 &mcv_matched);
 
 			/* Combine the simple and multi-column estimates. */
 			stat_sel = mcv_combine_selectivities(simple_sel,
 												 mcv_sel,
 												 mcv_basesel,
 												 mcv_totalsel);
+
+			/* Cap when no MCV items matched. */
+			if (can_cap && !mcv_matched)
+			{
+				double		ndistinct;
+
+				/* Cap to the least common MCV item. */
+				if (stat_sel > mcv_cap)
+					stat_sel = mcv_cap;
+
+				ndistinct = get_ndistinct_for_keys(rel->statlist, stat->keys, rte->inh);
+
+				if (ndistinct > (double) mcv_nitems)
+				{
+					double		non_mcv_sel = (1.0 - mcv_totalsel) / (ndistinct - (double) mcv_nitems);
+
+					/*
+					 * Cap to uniform distribution among the non-MCV
+					 * combinations. This is similar to what var_eq_const()
+					 * does for single-column MCV stats.
+					 */
+					if (stat_sel > non_mcv_sel)
+						stat_sel = non_mcv_sel;
+				}
+			}
 
 			/* Factor this into the overall result */
 			sel *= stat_sel;

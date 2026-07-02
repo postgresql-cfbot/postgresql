@@ -558,7 +558,23 @@ gbt_var_picksplit(const GistEntryVector *entryvec, GIST_SPLITVEC *v,
 
 
 /*
- * The GiST consistent method
+ * The GiST consistent method.
+ *
+ * The stored key has two forms, with different rules:
+ *
+ * - Leaf keys (key->lower == key->upper) are genuine values of the indexed
+ *   type, so the type-specific callbacks (f_eq/f_lt/f_le/f_gt/f_ge) may be
+ *   used on them.
+ *
+ * - Internal keys are a lossy [lower, upper] range whose bounds are truncated
+ *   prefixes (see gbt_var_node_truncate).  They are effectively just bytea,
+ *   not necessarily valid values of the indexed type -- e.g. for bit/varbit
+ *   the leaf-to-node transform drops the length header.  So only f_cmp (a raw
+ *   byte compare) and the prefix-match helpers may be applied to internal
+ *   keys; the type-specific f_eq/f_lt/... callbacks must not be.
+ *
+ * The leaf-page tests use the mirror callback with swapped operands (e.g.
+ * f_gt(query, lower) means "lower < query"), which is why they look reversed.
  */
 bool
 gbt_var_consistent(GBT_VARKEY_R *key,
@@ -611,8 +627,16 @@ gbt_var_consistent(GBT_VARKEY_R *key,
 					|| gbt_var_node_pf_match(key, query, tinfo);
 			break;
 		case BtreeGistNotEqualStrategyNumber:
-			retval = !(tinfo->f_eq(query, key->lower, collation, flinfo) &&
-					   tinfo->f_eq(query, key->upper, collation, flinfo));
+
+			/*
+			 * On a leaf, "not equal" is the negation of equality.  On an
+			 * internal page we must not call f_eq (see above); a non-equal
+			 * value can always exist below, so just recurse.
+			 */
+			if (is_leaf)
+				retval = !tinfo->f_eq(query, key->lower, collation, flinfo);
+			else
+				retval = true;
 			break;
 		default:
 			retval = false;

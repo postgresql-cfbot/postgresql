@@ -177,6 +177,13 @@ SELECT pg_drop_replication_slot('orig_slot2');
 SELECT pg_drop_replication_slot('copied_slot2_no_change');
 SELECT pg_drop_replication_slot('copied_slot2_notemp');
 
+-- Test auto_revalidate is preserved when copying physical slots
+SELECT 'init' FROM pg_create_physical_replication_slot('orig_slot_ar', true, false, true);
+SELECT 'copy' FROM pg_copy_physical_replication_slot('orig_slot_ar', 'copied_slot_ar');
+SELECT slot_name, auto_revalidate FROM pg_replication_slots WHERE slot_name LIKE '%_ar' ORDER BY slot_name;
+SELECT pg_drop_replication_slot('orig_slot_ar');
+SELECT pg_drop_replication_slot('copied_slot_ar');
+
 -- Test failover option of slots.
 SELECT 'init' FROM pg_create_logical_replication_slot('failover_true_slot', 'test_decoding', false, false, true);
 SELECT 'init' FROM pg_create_logical_replication_slot('failover_false_slot', 'test_decoding', false, false, false);

@@ -1032,7 +1032,7 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         <indexterm>
          <primary>pg_create_physical_replication_slot</primary>
         </indexterm>
-        <function>pg_create_physical_replication_slot</function> ( <parameter>slot_name</parameter> <type>name</type> <optional>, <parameter>immediately_reserve</parameter> <type>boolean</type>, <parameter>temporary</parameter> <type>boolean</type> </optional> )
+        <function>pg_create_physical_replication_slot</function> ( <parameter>slot_name</parameter> <type>name</type> <optional>, <parameter>immediately_reserve</parameter> <type>boolean</type>, <parameter>temporary</parameter> <type>boolean</type>, <parameter>auto_revalidate</parameter> <type>boolean</type> </optional> )
         <returnvalue>record</returnvalue>
         ( <parameter>slot_name</parameter> <type>name</type>,
         <parameter>lsn</parameter> <type>pg_lsn</type> )
@@ -1051,7 +1051,11 @@ postgres=# SELECT '0/0'::pg_lsn + pd.segment_number * ps.setting::int + :offset 
         parameter, <parameter>temporary</parameter>, when set to true, specifies that
         the slot should not be permanently stored to disk and is only meant
         for use by the current session. Temporary slots are also
-        released upon any error. This function corresponds
+        released upon any error. The optional fourth parameter,
+        <parameter>auto_revalidate</parameter>, when set to true, specifies
+        that the slot may be automatically revalidated after invalidation
+        once the standby reconnects and confirms WAL receipt.
+        This function corresponds
         to the replication protocol command <literal>CREATE_REPLICATION_SLOT
         ... PHYSICAL</literal>.
        </para></entry>

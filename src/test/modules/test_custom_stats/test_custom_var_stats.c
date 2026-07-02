@@ -129,11 +129,10 @@ static const PgStat_KindInfo custom_stats = {
 void
 _PG_init(void)
 {
-	/* Must be loaded via shared_preload_libraries */
-	if (!process_shared_preload_libraries_in_progress)
-		return;
-
-	/* Register custom statistics kind */
+	/*
+	 * In order to register our custom statistics kind, we have to be loaded
+	 * via shared_preload_libraries. Otherwise, registration will fail.
+	 */
 	pgstat_register_kind(PGSTAT_KIND_TEST_CUSTOM_VAR_STATS, &custom_stats);
 }
 

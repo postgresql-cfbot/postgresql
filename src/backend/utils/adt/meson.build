@@ -55,6 +55,7 @@ backend_sources += files(
   'jsonb_util.c',
   'jsonbsubs.c',
   'jsonfuncs.c',
+  'jsontypes.c',
   'jsonpath.c',
   'jsonpath_exec.c',
   'like.c',

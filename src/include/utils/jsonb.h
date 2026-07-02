@@ -14,6 +14,7 @@
 
 #include "lib/stringinfo.h"
 #include "utils/array.h"
+#include "utils/jsontypes.h"
 #include "utils/numeric.h"
 
 /* Tokens used when sequentially processing a jsonb value */
@@ -457,11 +458,18 @@ extern Datum jsonb_set_element(Jsonb *jb, const Datum *path, int path_len,
 							   JsonbValue *newval);
 extern Datum jsonb_get_element(Jsonb *jb, const Datum *path, int npath,
 							   bool *isnull, bool as_text);
+extern Datum datum_to_jsonb(Datum val, JsonTypeCategory tcategory,
+							FmgrInfo *outflinfo);
 extern bool to_jsonb_is_immutable(Oid typoid);
-extern Datum jsonb_build_object_worker(int nargs, const Datum *args, const bool *nulls,
-									   const Oid *types, bool absent_on_null,
-									   bool unique_keys);
-extern Datum jsonb_build_array_worker(int nargs, const Datum *args, const bool *nulls,
-									  const Oid *types, bool absent_on_null);
+extern Datum jsonb_build_object_worker(int nargs, const Datum *args,
+									   const bool *nulls,
+									   const JsonTypeCategory *categories,
+									   FmgrInfo *outflinfos,
+									   bool absent_on_null, bool unique_keys);
+extern Datum jsonb_build_array_worker(int nargs, const Datum *args,
+									  const bool *nulls,
+									  const JsonTypeCategory *categories,
+									  FmgrInfo *outflinfos,
+									  bool absent_on_null);
 
 #endif							/* __JSONB_H__ */

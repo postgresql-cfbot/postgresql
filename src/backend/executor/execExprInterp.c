@@ -4745,7 +4745,8 @@ ExecEvalJsonConstructor(ExprState *state, ExprEvalStep *op,
 			   json_build_array_worker) (jcstate->nargs,
 										 jcstate->arg_values,
 										 jcstate->arg_nulls,
-										 jcstate->arg_types,
+										 jcstate->arg_categories,
+										 jcstate->arg_outflinfos,
 										 jcstate->constructor->absent_on_null);
 	else if (ctor->type == JSCTOR_JSON_OBJECT)
 		res = (is_jsonb ?
@@ -4753,7 +4754,8 @@ ExecEvalJsonConstructor(ExprState *state, ExprEvalStep *op,
 			   json_build_object_worker) (jcstate->nargs,
 										  jcstate->arg_values,
 										  jcstate->arg_nulls,
-										  jcstate->arg_types,
+										  jcstate->arg_categories,
+										  jcstate->arg_outflinfos,
 										  jcstate->constructor->absent_on_null,
 										  jcstate->constructor->unique);
 	else if (ctor->type == JSCTOR_JSON_SCALAR)
@@ -4766,14 +4768,13 @@ ExecEvalJsonConstructor(ExprState *state, ExprEvalStep *op,
 		else
 		{
 			Datum		value = jcstate->arg_values[0];
-			Oid			outfuncid = jcstate->arg_type_cache[0].outfuncid;
-			JsonTypeCategory category = (JsonTypeCategory)
-				jcstate->arg_type_cache[0].category;
 
 			if (is_jsonb)
-				res = datum_to_jsonb(value, category, outfuncid);
+				res = datum_to_jsonb(value, jcstate->arg_categories[0],
+									 &jcstate->arg_outflinfos[0]);
 			else
-				res = datum_to_json(value, category, outfuncid);
+				res = datum_to_json(value, jcstate->arg_categories[0],
+									&jcstate->arg_outflinfos[0]);
 		}
 	}
 	else if (ctor->type == JSCTOR_JSON_PARSE)

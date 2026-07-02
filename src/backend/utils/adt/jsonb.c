@@ -29,9 +29,9 @@ typedef struct JsonbAggState
 {
 	JsonbInState pstate;
 	JsonTypeCategory key_category;
-	Oid			key_output_func;
+	FmgrInfo	key_flinfo;
 	JsonTypeCategory val_category;
-	Oid			val_output_func;
+	FmgrInfo	val_flinfo;
 } JsonbAggState;
 
 static inline Datum jsonb_from_cstring(char *json, int len, bool unique_keys,
@@ -47,13 +47,11 @@ static JsonParseErrorType jsonb_in_scalar(void *pstate, char *token, JsonTokenTy
 static void composite_to_jsonb(Datum composite, JsonbInState *result);
 static void array_dim_to_jsonb(JsonbInState *result, int dim, int ndims, int *dims,
 							   const Datum *vals, const bool *nulls, int *valcount,
-							   JsonTypeCategory tcategory, Oid outfuncoid);
+							   JsonTypeCategory tcategory, FmgrInfo *outflinfo);
 static void array_to_jsonb_internal(Datum array, JsonbInState *result);
 static void datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
-									JsonTypeCategory tcategory, Oid outfuncoid,
-									bool key_scalar);
-static void add_jsonb(Datum val, bool is_null, JsonbInState *result,
-					  Oid val_type, bool key_scalar);
+									JsonTypeCategory tcategory,
+									FmgrInfo *outflinfo, bool key_scalar);
 static char *JsonbToCStringWorker(StringInfo out, JsonbContainer *in, int estimated_len, bool indent);
 static void add_indent(StringInfo out, bool indent, int level);
 
@@ -617,8 +615,12 @@ add_indent(StringInfo out, bool indent, int level)
 /*
  * Turn a Datum into jsonb, adding it to the result JsonbInState.
  *
- * tcategory and outfuncoid are from a previous call to json_categorize_type,
- * except that if is_null is true then they can be invalid.
+ * tcategory is from a previous call to json_categorize_type, except that if
+ * is_null is true then it can be invalid.
+ *
+ * outflinfo is a pointer to an FmgrInfo populated by the same call to
+ * json_categorize_type, but it is only needed for categories where
+ * json_categorize_type actually populates it.
  *
  * If key_scalar is true, the value is stored as a key, so insist
  * it's of an acceptable type, and force it to be a jbvString.
@@ -628,7 +630,7 @@ add_indent(StringInfo out, bool indent, int level)
  */
 static void
 datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
-						JsonTypeCategory tcategory, Oid outfuncoid,
+						JsonTypeCategory tcategory, FmgrInfo *outflinfo,
 						bool key_scalar)
 {
 	char	   *outputstr;
@@ -691,7 +693,7 @@ datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
 				{
 					Datum		numd;
 
-					switch (outfuncoid)
+					switch (outflinfo->fn_oid)
 					{
 						case F_NUMERIC_OUT:
 							numeric_val = DatumGetNumeric(val);
@@ -725,7 +727,7 @@ datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
 							break;
 #endif
 						default:
-							outputstr = OidOutputFunctionCall(outfuncoid, val);
+							outputstr = OutputFunctionCall(outflinfo, val);
 							numd = DirectFunctionCall3(numeric_in,
 													   CStringGetDatum(outputstr),
 													   ObjectIdGetDatum(InvalidOid),
@@ -739,7 +741,7 @@ datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
 				}
 				if (numeric_to_string)
 				{
-					outputstr = OidOutputFunctionCall(outfuncoid, val);
+					outputstr = OutputFunctionCall(outflinfo, val);
 					jb.type = jbvString;
 					jb.val.string.len = strlen(outputstr);
 					jb.val.string.val = outputstr;
@@ -770,7 +772,7 @@ datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
 				break;
 			case JSONTYPE_CAST:
 				/* cast to JSON, and then process as JSON */
-				val = OidFunctionCall1(outfuncoid, val);
+				val = FunctionCall1(outflinfo, val);
 				pg_fallthrough;
 			case JSONTYPE_JSON:
 				{
@@ -828,9 +830,9 @@ datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
 				break;
 			default:
 				/* special-case text types to save useless palloc/memcpy ops */
-				if (outfuncoid == F_TEXTOUT ||
-					outfuncoid == F_VARCHAROUT ||
-					outfuncoid == F_BPCHAROUT)
+				if (outflinfo->fn_oid == F_TEXTOUT ||
+					outflinfo->fn_oid == F_VARCHAROUT ||
+					outflinfo->fn_oid == F_BPCHAROUT)
 				{
 					text	   *txt = DatumGetTextPP(val);
 
@@ -839,7 +841,7 @@ datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
 				}
 				else
 				{
-					outputstr = OidOutputFunctionCall(outfuncoid, val);
+					outputstr = OutputFunctionCall(outflinfo, val);
 					jb.val.string.len = strlen(outputstr);
 					jb.val.string.val = outputstr;
 				}
@@ -897,7 +899,7 @@ datum_to_jsonb_internal(Datum val, bool is_null, JsonbInState *result,
 static void
 array_dim_to_jsonb(JsonbInState *result, int dim, int ndims, int *dims, const Datum *vals,
 				   const bool *nulls, int *valcount, JsonTypeCategory tcategory,
-				   Oid outfuncoid)
+				   FmgrInfo *outflinfo)
 {
 	int			i;
 
@@ -909,14 +911,14 @@ array_dim_to_jsonb(JsonbInState *result, int dim, int ndims, int *dims, const Da
 	{
 		if (dim + 1 == ndims)
 		{
-			datum_to_jsonb_internal(vals[*valcount], nulls[*valcount], result, tcategory,
-									outfuncoid, false);
+			datum_to_jsonb_internal(vals[*valcount], nulls[*valcount],
+									result, tcategory, outflinfo, false);
 			(*valcount)++;
 		}
 		else
 		{
 			array_dim_to_jsonb(result, dim + 1, ndims, dims, vals, nulls,
-							   valcount, tcategory, outfuncoid);
+							   valcount, tcategory, outflinfo);
 		}
 	}
 
@@ -941,7 +943,7 @@ array_to_jsonb_internal(Datum array, JsonbInState *result)
 	bool		typbyval;
 	char		typalign;
 	JsonTypeCategory tcategory;
-	Oid			outfuncoid;
+	FmgrInfo	outflinfo;
 
 	ndim = ARR_NDIM(v);
 	dim = ARR_DIMS(v);
@@ -958,14 +960,14 @@ array_to_jsonb_internal(Datum array, JsonbInState *result)
 						 &typlen, &typbyval, &typalign);
 
 	json_categorize_type(element_type, true,
-						 &tcategory, &outfuncoid);
+						 &tcategory, &outflinfo);
 
 	deconstruct_array(v, element_type, typlen, typbyval,
 					  typalign, &elements, &nulls,
 					  &nitems);
 
-	array_dim_to_jsonb(result, 0, ndim, dim, elements, nulls, &count, tcategory,
-					   outfuncoid);
+	array_dim_to_jsonb(result, 0, ndim, dim, elements, nulls, &count,
+					   tcategory, &outflinfo);
 
 	pfree(elements);
 	pfree(nulls);
@@ -1005,7 +1007,7 @@ composite_to_jsonb(Datum composite, JsonbInState *result)
 		bool		isnull;
 		char	   *attname;
 		JsonTypeCategory tcategory;
-		Oid			outfuncoid;
+		FmgrInfo	outflinfo;
 		JsonbValue	v;
 		Form_pg_attribute att = TupleDescAttr(tupdesc, i);
 
@@ -1024,55 +1026,18 @@ composite_to_jsonb(Datum composite, JsonbInState *result)
 		val = heap_getattr(tuple, i + 1, tupdesc, &isnull);
 
 		if (isnull)
-		{
 			tcategory = JSONTYPE_NULL;
-			outfuncoid = InvalidOid;
-		}
 		else
 			json_categorize_type(att->atttypid, true, &tcategory,
-								 &outfuncoid);
+								 &outflinfo);
 
-		datum_to_jsonb_internal(val, isnull, result, tcategory, outfuncoid,
+		datum_to_jsonb_internal(val, isnull, result, tcategory, &outflinfo,
 								false);
 	}
 
 	pushJsonbValue(result, WJB_END_OBJECT, NULL);
 	ReleaseTupleDesc(tupdesc);
 }
-
-/*
- * Append JSON text for "val" to "result".
- *
- * This is just a thin wrapper around datum_to_jsonb.  If the same type will be
- * printed many times, avoid using this; better to do the json_categorize_type
- * lookups only once.
- */
-
-static void
-add_jsonb(Datum val, bool is_null, JsonbInState *result,
-		  Oid val_type, bool key_scalar)
-{
-	JsonTypeCategory tcategory;
-	Oid			outfuncoid;
-
-	if (val_type == InvalidOid)
-		ereport(ERROR,
-				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("could not determine input data type")));
-
-	if (is_null)
-	{
-		tcategory = JSONTYPE_NULL;
-		outfuncoid = InvalidOid;
-	}
-	else
-		json_categorize_type(val_type, true,
-							 &tcategory, &outfuncoid);
-
-	datum_to_jsonb_internal(val, is_null, result, tcategory, outfuncoid,
-							key_scalar);
-}
-
 
 /*
  * Is the given type immutable when coming out of a JSONB context?
@@ -1082,7 +1047,7 @@ to_jsonb_is_immutable(Oid typoid)
 {
 	bool		has_mutable = false;
 
-	json_check_mutability(typoid, true, &has_mutable);
+	json_check_mutability(typoid, &has_mutable);
 	return !has_mutable;
 }
 
@@ -1094,40 +1059,54 @@ to_jsonb(PG_FUNCTION_ARGS)
 {
 	Datum		val = PG_GETARG_DATUM(0);
 	Oid			val_type = get_fn_expr_argtype(fcinfo->flinfo, 0);
-	JsonTypeCategory tcategory;
-	Oid			outfuncoid;
+	JsonTypeCache *jcache;
 
 	if (val_type == InvalidOid)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("could not determine input data type")));
 
-	json_categorize_type(val_type, true,
-						 &tcategory, &outfuncoid);
+	if (fcinfo->flinfo->fn_extra == NULL)
+	{
+		MemoryContext oldcontext;
 
-	PG_RETURN_DATUM(datum_to_jsonb(val, tcategory, outfuncoid));
+		oldcontext = MemoryContextSwitchTo(fcinfo->flinfo->fn_mcxt);
+		jcache = json_build_type_cache(true, 1, &val_type);
+		fcinfo->flinfo->fn_extra = jcache;
+		MemoryContextSwitchTo(oldcontext);
+	}
+	else
+		jcache = fcinfo->flinfo->fn_extra;
+
+	PG_RETURN_DATUM(datum_to_jsonb(val, jcache->categories[0], &jcache->flinfos[0]));
 }
 
 /*
  * Turn a Datum into jsonb.
  *
- * tcategory and outfuncoid are from a previous call to json_categorize_type.
+ * tcategory is from a previous call to json_categorize_type.
+ *
+ * outflinfo is a pointer to an FmgrInfo populated by the same call to
+ * json_categorize_type, but it is only needed for categories where
+ * json_categorize_type actually populates it.
  */
 Datum
-datum_to_jsonb(Datum val, JsonTypeCategory tcategory, Oid outfuncoid)
+datum_to_jsonb(Datum val, JsonTypeCategory tcategory, FmgrInfo *outflinfo)
 {
 	JsonbInState result;
 
 	memset(&result, 0, sizeof(JsonbInState));
 
-	datum_to_jsonb_internal(val, false, &result, tcategory, outfuncoid,
+	datum_to_jsonb_internal(val, false, &result, tcategory, outflinfo,
 							false);
 
 	return JsonbPGetDatum(JsonbValueToJsonb(result.result));
 }
 
 Datum
-jsonb_build_object_worker(int nargs, const Datum *args, const bool *nulls, const Oid *types,
+jsonb_build_object_worker(int nargs, const Datum *args, const bool *nulls,
+						  const JsonTypeCategory *categories,
+						  FmgrInfo *outflinfos,
 						  bool absent_on_null, bool unique_keys)
 {
 	int			i;
@@ -1164,10 +1143,13 @@ jsonb_build_object_worker(int nargs, const Datum *args, const bool *nulls, const
 		if (skip && !unique_keys)
 			continue;
 
-		add_jsonb(args[i], false, &result, types[i], true);
+		datum_to_jsonb_internal(args[i], false, &result,
+								categories[i], &outflinfos[i], true);
 
 		/* process value */
-		add_jsonb(args[i + 1], nulls[i + 1], &result, types[i + 1], false);
+		datum_to_jsonb_internal(args[i + 1], nulls[i + 1], &result,
+								categories[i + 1], &outflinfos[i + 1],
+								false);
 	}
 
 	pushJsonbValue(&result, WJB_END_OBJECT, NULL);
@@ -1183,16 +1165,18 @@ jsonb_build_object(PG_FUNCTION_ARGS)
 {
 	Datum	   *args;
 	bool	   *nulls;
-	Oid		   *types;
+	int			nargs;
+	JsonTypeCategory *categories;
+	FmgrInfo   *outflinfos;
 
-	/* build argument values to build the object */
-	int			nargs = extract_variadic_args(fcinfo, 0, true,
-											  &args, &types, &nulls);
-
+	nargs = json_extract_variadic_args(true, fcinfo, &args, &nulls,
+									   &categories, &outflinfos);
 	if (nargs < 0)
 		PG_RETURN_NULL();
 
-	PG_RETURN_DATUM(jsonb_build_object_worker(nargs, args, nulls, types, false, false));
+	PG_RETURN_DATUM(jsonb_build_object_worker(nargs, args, nulls,
+											  categories, outflinfos,
+											  false, false));
 }
 
 /*
@@ -1212,8 +1196,9 @@ jsonb_build_object_noargs(PG_FUNCTION_ARGS)
 }
 
 Datum
-jsonb_build_array_worker(int nargs, const Datum *args, const bool *nulls, const Oid *types,
-						 bool absent_on_null)
+jsonb_build_array_worker(int nargs, const Datum *args, const bool *nulls,
+						 const JsonTypeCategory *categories,
+						 FmgrInfo *outflinfos, bool absent_on_null)
 {
 	int			i;
 	JsonbInState result;
@@ -1227,7 +1212,8 @@ jsonb_build_array_worker(int nargs, const Datum *args, const bool *nulls, const 
 		if (absent_on_null && nulls[i])
 			continue;
 
-		add_jsonb(args[i], nulls[i], &result, types[i], false);
+		datum_to_jsonb_internal(args[i], nulls[i], &result,
+								categories[i], &outflinfos[i], false);
 	}
 
 	pushJsonbValue(&result, WJB_END_ARRAY, NULL);
@@ -1243,16 +1229,18 @@ jsonb_build_array(PG_FUNCTION_ARGS)
 {
 	Datum	   *args;
 	bool	   *nulls;
-	Oid		   *types;
+	int			nargs;
+	JsonTypeCategory *categories;
+	FmgrInfo   *outflinfos;
 
-	/* build argument values to build the object */
-	int			nargs = extract_variadic_args(fcinfo, 0, true,
-											  &args, &types, &nulls);
-
+	nargs = json_extract_variadic_args(true, fcinfo, &args, &nulls,
+									   &categories, &outflinfos);
 	if (nargs < 0)
 		PG_RETURN_NULL();
 
-	PG_RETURN_DATUM(jsonb_build_array_worker(nargs, args, nulls, types, false));
+	PG_RETURN_DATUM(jsonb_build_array_worker(nargs, args, nulls,
+											 categories, outflinfos,
+											 false));
 }
 
 
@@ -1490,6 +1478,7 @@ jsonb_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 	if (PG_ARGISNULL(0))
 	{
 		Oid			arg_type = get_fn_expr_argtype(fcinfo->flinfo, 1);
+		MemoryContext oldcontext;
 
 		if (arg_type == InvalidOid)
 			ereport(ERROR,
@@ -1501,8 +1490,11 @@ jsonb_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 		result->outcontext = aggcontext;
 		pushJsonbValue(result, WJB_BEGIN_ARRAY, NULL);
 
+		/* make sure to set up val_flinfo in the correct context */
+		oldcontext = MemoryContextSwitchTo(aggcontext);
 		json_categorize_type(arg_type, true, &state->val_category,
-							 &state->val_output_func);
+							 &state->val_flinfo);
+		MemoryContextSwitchTo(oldcontext);
 	}
 	else
 	{
@@ -1522,7 +1514,7 @@ jsonb_agg_transfn_worker(FunctionCallInfo fcinfo, bool absent_on_null)
 	val = PG_ARGISNULL(1) ? (Datum) 0 : PG_GETARG_DATUM(1);
 
 	datum_to_jsonb_internal(val, PG_ARGISNULL(1), result, state->val_category,
-							state->val_output_func, false);
+							&state->val_flinfo, false);
 
 	PG_RETURN_POINTER(state);
 }
@@ -1599,6 +1591,7 @@ jsonb_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 	if (PG_ARGISNULL(0))
 	{
 		Oid			arg_type;
+		MemoryContext oldcontext;
 
 		state = MemoryContextAllocZero(aggcontext, sizeof(JsonbAggState));
 		result = &state->pstate;
@@ -1606,6 +1599,9 @@ jsonb_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 		pushJsonbValue(result, WJB_BEGIN_OBJECT, NULL);
 		result->parseState->unique_keys = unique_keys;
 		result->parseState->skip_nulls = absent_on_null;
+
+		/* make sure to set up key_flinfo/val_flinfo in the correct context */
+		oldcontext = MemoryContextSwitchTo(aggcontext);
 
 		arg_type = get_fn_expr_argtype(fcinfo->flinfo, 1);
 
@@ -1615,7 +1611,7 @@ jsonb_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 					 errmsg("could not determine input data type")));
 
 		json_categorize_type(arg_type, true, &state->key_category,
-							 &state->key_output_func);
+							 &state->key_flinfo);
 
 		arg_type = get_fn_expr_argtype(fcinfo->flinfo, 2);
 
@@ -1625,7 +1621,8 @@ jsonb_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 					 errmsg("could not determine input data type")));
 
 		json_categorize_type(arg_type, true, &state->val_category,
-							 &state->val_output_func);
+							 &state->val_flinfo);
+		MemoryContextSwitchTo(oldcontext);
 	}
 	else
 	{
@@ -1656,12 +1653,12 @@ jsonb_object_agg_transfn_worker(FunctionCallInfo fcinfo,
 	val = PG_GETARG_DATUM(1);
 
 	datum_to_jsonb_internal(val, false, result, state->key_category,
-							state->key_output_func, true);
+							&state->key_flinfo, true);
 
 	val = PG_ARGISNULL(2) ? (Datum) 0 : PG_GETARG_DATUM(2);
 
 	datum_to_jsonb_internal(val, PG_ARGISNULL(2), result, state->val_category,
-							state->val_output_func, false);
+							&state->val_flinfo, false);
 
 	PG_RETURN_POINTER(state);
 }

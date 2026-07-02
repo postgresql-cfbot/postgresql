@@ -1616,12 +1616,12 @@ pgoutput_change(LogicalDecodingContext *ctx, ReorderBufferTXN *txn,
 									relentry->include_gencols_type);
 			break;
 		case REORDER_BUFFER_CHANGE_UPDATE:
-			logicalrep_write_update(ctx->out, xid, targetrel, old_slot,
+			logicalrep_write_update_extended(ctx->out, xid, relation, targetrel, old_slot,
 									new_slot, data->binary, relentry->columns,
 									relentry->include_gencols_type);
 			break;
 		case REORDER_BUFFER_CHANGE_DELETE:
-			logicalrep_write_delete(ctx->out, xid, targetrel, old_slot,
+			logicalrep_write_delete_extended(ctx->out, xid, relation, targetrel, old_slot,
 									data->binary, relentry->columns,
 									relentry->include_gencols_type);
 			break;

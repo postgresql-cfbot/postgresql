@@ -1570,11 +1570,6 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	 */
 	sub = GetSubscription(subid, false, orig_conninfo_needed, false);
 
-	retain_dead_tuples = sub->retaindeadtuples;
-	origin = sub->origin;
-	max_retention = sub->maxretention;
-	retention_active = sub->retentionactive;
-
 	/*
 	 * Don't allow non-superuser modification of a subscription with
 	 * password_required=false.
@@ -1587,6 +1582,42 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 
 	/* Lock the subscription so nobody else can do anything with it. */
 	LockSharedObject(SubscriptionRelationId, subid, 0, AccessExclusiveLock);
+
+	/*
+	 * Re-read the subscription tuple after acquiring the lock. A concurrent
+	 * DROP or ALTER may have committed before we acquired the lock.
+	 */
+	heap_freetuple(tup);
+	tup = SearchSysCacheCopy2(SUBSCRIPTIONNAME, ObjectIdGetDatum(MyDatabaseId),
+							  CStringGetDatum(stmt->subname));
+
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("subscription \"%s\" does not exist",
+						stmt->subname)));
+
+	form = (Form_pg_subscription) GETSTRUCT(tup);
+
+	/* Refresh the subscription. */
+	pfree(sub);
+	sub = GetSubscription(subid, false, orig_conninfo_needed, false);
+
+	/*
+	 * Re-check whether a non-superuser is allowed to alter this subscription.
+	 * A concurrent ALTER may have set password_required=false while we were
+	 * waiting for the lock.
+	 */
+	if (!sub->passwordrequired && !superuser())
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("password_required=false is superuser-only"),
+				 errhint("Subscriptions with the password_required option set to false may only be created or modified by the superuser.")));
+
+	retain_dead_tuples = sub->retaindeadtuples;
+	origin = sub->origin;
+	max_retention = sub->maxretention;
+	retention_active = sub->retentionactive;
 
 	/* Form a new tuple. */
 	memset(values, 0, sizeof(values));

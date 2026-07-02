@@ -498,6 +498,43 @@ SELECT pg_stat_reset_slru();
 SELECT stats_reset > :'slru_commit_ts_reset_ts'::timestamptz FROM pg_stat_slru WHERE name = 'commit_timestamp';
 SELECT stats_reset > :'slru_notify_reset_ts'::timestamptz FROM pg_stat_slru WHERE name = 'notify';
 
+-- Test deprecated feature usage statistics
+
+-- Creating a temporary table with the deprecated GLOBAL keyword must be
+-- counted, in addition to emitting a warning.
+SELECT usage_count AS deprecated_global_temp_count
+  FROM pg_stat_deprecated_features WHERE name = 'global_temporary_table' \gset
+CREATE GLOBAL TEMPORARY TABLE stats_global_temp (a int);
+DROP TABLE stats_global_temp;
+SELECT pg_stat_force_next_flush();
+SELECT usage_count = :deprecated_global_temp_count + 1 AS incremented,
+       last_used IS NOT NULL AS has_last_used
+  FROM pg_stat_deprecated_features WHERE name = 'global_temporary_table';
+
+-- Creating a temporary table with the deprecated LOCAL keyword must be
+-- counted, even though it is accepted silently.
+SELECT usage_count AS deprecated_local_temp_count
+  FROM pg_stat_deprecated_features WHERE name = 'local_temporary_table' \gset
+CREATE LOCAL TEMPORARY TABLE stats_local_temp (a int);
+DROP TABLE stats_local_temp;
+SELECT pg_stat_force_next_flush();
+SELECT usage_count = :deprecated_local_temp_count + 1 AS incremented,
+       last_used IS NOT NULL AS has_last_used
+  FROM pg_stat_deprecated_features WHERE name = 'local_temporary_table';
+
+-- Setting an MD5-encrypted password must be counted even when
+-- md5_password_warnings is disabled.
+SET md5_password_warnings = off;
+SELECT usage_count AS deprecated_md5_set_count
+  FROM pg_stat_deprecated_features WHERE name = 'md5_password_set' \gset
+CREATE ROLE regress_stats_md5 PASSWORD 'md5912f4d9b58e4731e3e9f6dd9eebbbca5';
+DROP ROLE regress_stats_md5;
+RESET md5_password_warnings;
+SELECT pg_stat_force_next_flush();
+SELECT usage_count = :deprecated_md5_set_count + 1 AS incremented,
+       last_used IS NOT NULL AS has_last_used
+  FROM pg_stat_deprecated_features WHERE name = 'md5_password_set';
+
 -- Test that reset_shared with archiver specified as the stats type works
 SELECT stats_reset AS archiver_reset_ts FROM pg_stat_archiver \gset
 SELECT pg_stat_reset_shared('archiver');
@@ -512,6 +549,14 @@ SELECT stats_reset > :'bgwriter_reset_ts'::timestamptz FROM pg_stat_bgwriter;
 SELECT stats_reset AS checkpointer_reset_ts FROM pg_stat_checkpointer \gset
 SELECT pg_stat_reset_shared('checkpointer');
 SELECT stats_reset > :'checkpointer_reset_ts'::timestamptz FROM pg_stat_checkpointer;
+
+-- The deprecated features view should list the expected features
+SELECT name FROM pg_stat_deprecated_features ORDER BY name COLLATE "C";
+
+-- Test that reset_shared with deprecated_features specified as the stats type works
+SELECT max(stats_reset) AS deprecated_features_reset_ts FROM pg_stat_deprecated_features \gset
+SELECT pg_stat_reset_shared('deprecated_features');
+SELECT max(stats_reset) > :'deprecated_features_reset_ts'::timestamptz FROM pg_stat_deprecated_features;
 
 -- Test that reset_shared with recovery_prefetch specified as the stats type works
 SELECT stats_reset AS recovery_prefetch_reset_ts FROM pg_stat_recovery_prefetch \gset

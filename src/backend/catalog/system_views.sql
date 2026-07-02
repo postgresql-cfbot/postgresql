@@ -1012,6 +1012,14 @@ CREATE VIEW pg_stat_lock AS
             l.stats_reset
     FROM pg_stat_get_lock() l;
 
+CREATE VIEW pg_stat_deprecated_features AS
+    SELECT
+            d.name,
+            d.usage_count,
+            d.last_used,
+            d.stats_reset
+    FROM pg_stat_get_deprecated_features() d;
+
 CREATE VIEW pg_stat_wal_receiver AS
     SELECT
             s.pid,

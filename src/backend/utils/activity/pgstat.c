@@ -432,6 +432,23 @@ static const PgStat_KindInfo pgstat_kind_builtin_infos[PGSTAT_KIND_BUILTIN_SIZE]
 		.snapshot_cb = pgstat_checkpointer_snapshot_cb,
 	},
 
+	[PGSTAT_KIND_DEPRECATED_FEATURES] = {
+		.name = "deprecated_features",
+
+		.fixed_amount = true,
+		.write_to_file = true,
+
+		.snapshot_ctl_off = offsetof(PgStat_Snapshot, deprecated_features),
+		.shared_ctl_off = offsetof(PgStat_ShmemControl, deprecated_features),
+		.shared_data_off = offsetof(PgStatShared_DeprecatedFeatures, stats),
+		.shared_data_len = sizeof(((PgStatShared_DeprecatedFeatures *) 0)->stats),
+
+		.flush_static_cb = pgstat_deprecated_features_flush_cb,
+		.init_shmem_cb = pgstat_deprecated_features_init_shmem_cb,
+		.reset_all_cb = pgstat_deprecated_features_reset_all_cb,
+		.snapshot_cb = pgstat_deprecated_features_snapshot_cb,
+	},
+
 	[PGSTAT_KIND_IO] = {
 		.name = "io",
 

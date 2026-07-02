@@ -24,6 +24,7 @@ OBJS = \
 	pgstat_bgwriter.o \
 	pgstat_checkpointer.o \
 	pgstat_database.o \
+	pgstat_deprecated_features.o \
 	pgstat_function.o \
 	pgstat_io.o \
 	pgstat_lock.o \

@@ -1820,6 +1820,51 @@ pg_stat_get_slru(PG_FUNCTION_ARGS)
 	return (Datum) 0;
 }
 
+/*
+ * Returns statistics of deprecated feature usage.
+ */
+Datum
+pg_stat_get_deprecated_features(PG_FUNCTION_ARGS)
+{
+#define PG_STAT_GET_DEPRECATED_FEATURES_COLS	4
+	ReturnSetInfo *rsinfo = (ReturnSetInfo *) fcinfo->resultinfo;
+	int			i;
+	PgStat_DeprecatedFeatureStats *stats;
+
+	InitMaterializedSRF(fcinfo, 0);
+
+	/* request deprecated feature stats from the cumulative stats system */
+	stats = pgstat_fetch_deprecated_features();
+
+	for (i = 0;; i++)
+	{
+		/* for each row */
+		Datum		values[PG_STAT_GET_DEPRECATED_FEATURES_COLS] = {0};
+		bool		nulls[PG_STAT_GET_DEPRECATED_FEATURES_COLS] = {0};
+		PgStat_DeprecatedFeatureStats stat;
+		const char *name;
+
+		name = pgstat_get_deprecated_feature_name(i);
+
+		if (!name)
+			break;
+
+		stat = stats[i];
+
+		values[0] = PointerGetDatum(cstring_to_text(name));
+		values[1] = Int64GetDatum(stat.usage_count);
+		if (stat.last_used == 0)
+			nulls[2] = true;
+		else
+			values[2] = TimestampTzGetDatum(stat.last_used);
+		values[3] = TimestampTzGetDatum(stat.stat_reset_timestamp);
+
+		tuplestore_putvalues(rsinfo->setResult, rsinfo->setDesc, values, nulls);
+	}
+
+	return (Datum) 0;
+}
+
 #define PG_STAT_GET_XACT_RELENTRY_INT64(stat)			\
 Datum													\
 CppConcat(pg_stat_get_xact_,stat)(PG_FUNCTION_ARGS)		\
@@ -1956,6 +2001,7 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 		pgstat_reset_of_kind(PGSTAT_KIND_ARCHIVER);
 		pgstat_reset_of_kind(PGSTAT_KIND_BGWRITER);
 		pgstat_reset_of_kind(PGSTAT_KIND_CHECKPOINTER);
+		pgstat_reset_of_kind(PGSTAT_KIND_DEPRECATED_FEATURES);
 		pgstat_reset_of_kind(PGSTAT_KIND_IO);
 		pgstat_reset_of_kind(PGSTAT_KIND_LOCK);
 		XLogPrefetchResetStats();
@@ -1973,6 +2019,8 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 		pgstat_reset_of_kind(PGSTAT_KIND_BGWRITER);
 	else if (strcmp(target, "checkpointer") == 0)
 		pgstat_reset_of_kind(PGSTAT_KIND_CHECKPOINTER);
+	else if (strcmp(target, "deprecated_features") == 0)
+		pgstat_reset_of_kind(PGSTAT_KIND_DEPRECATED_FEATURES);
 	else if (strcmp(target, "io") == 0)
 		pgstat_reset_of_kind(PGSTAT_KIND_IO);
 	else if (strcmp(target, "lock") == 0)
@@ -1987,7 +2035,7 @@ pg_stat_reset_shared(PG_FUNCTION_ARGS)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				 errmsg("unrecognized reset target: \"%s\"", target),
-				 errhint("Target must be \"archiver\", \"bgwriter\", \"checkpointer\", \"io\", \"lock\", \"recovery_prefetch\", \"slru\", or \"wal\".")));
+				 errhint("Target must be \"archiver\", \"bgwriter\", \"checkpointer\", \"deprecated_features\", \"io\", \"lock\", \"recovery_prefetch\", \"slru\", or \"wal\".")));
 
 	PG_RETURN_VOID();
 }

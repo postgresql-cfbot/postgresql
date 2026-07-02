@@ -453,6 +453,13 @@ typedef struct PgStatShared_Checkpointer
 	PgStat_CheckpointerStats reset_offset;
 } PgStatShared_Checkpointer;
 
+typedef struct PgStatShared_DeprecatedFeatures
+{
+	/* lock protects ->stats */
+	LWLock		lock;
+	PgStat_DeprecatedFeatureStats stats[PGSTAT_NUM_DEPRECATED_FEATURES];
+} PgStatShared_DeprecatedFeatures;
+
 /* Shared-memory ready PgStat_IO */
 typedef struct PgStatShared_IO
 {
@@ -576,6 +583,7 @@ typedef struct PgStat_ShmemControl
 	PgStatShared_Archiver archiver;
 	PgStatShared_BgWriter bgwriter;
 	PgStatShared_Checkpointer checkpointer;
+	PgStatShared_DeprecatedFeatures deprecated_features;
 	PgStatShared_IO io;
 	PgStatShared_Lock lock;
 	PgStatShared_SLRU slru;
@@ -607,6 +615,8 @@ typedef struct PgStat_Snapshot
 	PgStat_BgWriterStats bgwriter;
 
 	PgStat_CheckpointerStats checkpointer;
+
+	PgStat_DeprecatedFeatureStats deprecated_features[PGSTAT_NUM_DEPRECATED_FEATURES];
 
 	PgStat_IO	io;
 
@@ -742,6 +752,16 @@ extern PgStat_StatDBEntry *pgstat_prep_database_pending(Oid dboid);
 extern void pgstat_reset_database_timestamp(Oid dboid, TimestampTz ts);
 extern bool pgstat_database_flush_cb(PgStat_EntryRef *entry_ref, bool nowait);
 extern void pgstat_database_reset_timestamp_cb(PgStatShared_Common *header, TimestampTz ts);
+
+
+/*
+ * Functions in pgstat_deprecated_features.c
+ */
+
+extern bool pgstat_deprecated_features_flush_cb(bool nowait);
+extern void pgstat_deprecated_features_init_shmem_cb(void *stats);
+extern void pgstat_deprecated_features_reset_all_cb(TimestampTz ts);
+extern void pgstat_deprecated_features_snapshot_cb(void);
 
 
 /*

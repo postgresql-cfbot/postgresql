@@ -521,6 +521,16 @@ SKIP:
 		log_like => [
 			qr/connection authenticated: identity="md5_role_no_warnings" method=md5/
 		]);
+
+	# This session is authenticated with an MD5-encrypted password, so the
+	# md5_password_auth deprecated feature counter must be positive once
+	# this session's pending statistics have been flushed.
+	$res = $node->safe_psql(
+		'postgres',
+		"SELECT pg_stat_force_next_flush();
+SELECT usage_count >= 1 FROM pg_stat_deprecated_features WHERE name = 'md5_password_auth';",
+		connstr => "user=md5_role");
+	is($res, qq(\nt), 'md5_password_auth deprecated feature usage counted');
 }
 
 # require_auth succeeds with SCRAM required.

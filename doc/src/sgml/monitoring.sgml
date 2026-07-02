@@ -500,6 +500,15 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
      </row>
 
      <row>
+      <entry><structname>pg_stat_deprecated_features</structname><indexterm><primary>pg_stat_deprecated_features</primary></indexterm></entry>
+      <entry>
+       One row per deprecated feature, showing cluster-wide usage statistics.
+       See <link linkend="monitoring-pg-stat-deprecated-features-view">
+       <structname>pg_stat_deprecated_features</structname></link> for details.
+     </entry>
+     </row>
+
+     <row>
       <entry><structname>pg_stat_io</structname><indexterm><primary>pg_stat_io</primary></indexterm></entry>
       <entry>
        One row for each combination of backend type, context, and target object
@@ -3397,6 +3406,145 @@ description | Waiting for a newly initialized WAL file to reach durable storage
   </table>
  </sect2>
 
+ <sect2 id="monitoring-pg-stat-deprecated-features-view">
+  <title><structname>pg_stat_deprecated_features</structname></title>
+
+  <indexterm>
+   <primary>pg_stat_deprecated_features</primary>
+  </indexterm>
+
+  <para>
+   The <structname>pg_stat_deprecated_features</structname> view will contain
+   one row for each deprecated feature whose usage is tracked, showing
+   cluster-wide usage statistics.  This allows administrators to determine
+   whether anything still depends on a deprecated feature before it is
+   removed.
+  </para>
+
+  <para>
+   Depending on the feature, usage is counted when SQL making use of the
+   feature is parsed, when a command using the feature is executed, or when
+   an authentication exchange relying on the feature succeeds.  For features
+   counted at parse time, re-executing a prepared statement does not
+   increment the counter again.  Counting happens regardless of whether a
+   warning about the feature's use is emitted; for example, MD5 password
+   usage is counted even when <xref linkend="guc-md5-password-warnings"/> is
+   disabled.
+  </para>
+
+  <table id="pg-stat-deprecated-features-view" xreflabel="pg_stat_deprecated_features">
+   <title><structname>pg_stat_deprecated_features</structname> View</title>
+   <tgroup cols="1">
+    <thead>
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        Column Type
+       </para>
+       <para>
+        Description
+       </para>
+      </entry>
+     </row>
+    </thead>
+    <tbody>
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>name</structfield> <type>text</type>
+       </para>
+       <para>
+        Name of the deprecated feature.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>usage_count</structfield> <type>bigint</type>
+       </para>
+       <para>
+        Number of times the deprecated feature has been used.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>last_used</structfield> <type>timestamp with time zone</type>
+       </para>
+       <para>
+        Time at which the deprecated feature was last used, or
+        <literal>NULL</literal> if it has not been used since these
+        statistics were last reset.
+       </para>
+      </entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry">
+       <para role="column_definition">
+        <structfield>stats_reset</structfield> <type>timestamp with time zone</type>
+       </para>
+       <para>
+        Time at which these statistics were last reset.
+       </para>
+      </entry>
+     </row>
+    </tbody>
+   </tgroup>
+  </table>
+
+  <para>
+   The tracked deprecated features are:
+
+   <variablelist>
+    <varlistentry>
+     <term><literal>global_temporary_table</literal></term>
+     <listitem>
+      <para>
+       Use of the deprecated <literal>GLOBAL</literal> keyword in temporary
+       table creation.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>local_temporary_table</literal></term>
+     <listitem>
+      <para>
+       Use of the deprecated <literal>LOCAL</literal> keyword in temporary
+       table creation.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>md5_password_auth</literal></term>
+     <listitem>
+      <para>
+       Successful authentication against an MD5-encrypted password, via
+       either <literal>md5</literal> or <literal>password</literal>
+       authentication.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
+     <term><literal>md5_password_set</literal></term>
+     <listitem>
+      <para>
+       Setting an MD5-encrypted password, e.g., with <command>CREATE
+       ROLE</command> or <command>ALTER ROLE</command>.
+      </para>
+     </listitem>
+    </varlistentry>
+   </variablelist>
+  </para>
+ </sect2>
+
  <sect2 id="monitoring-pg-stat-bgwriter-view">
   <title><structname>pg_stat_bgwriter</structname></title>
 
@@ -5652,6 +5800,12 @@ description | Waiting for a newly initialized WAL file to reach durable storage
          <para>
           <literal>checkpointer</literal>: Reset all the counters shown in the
           <structname>pg_stat_checkpointer</structname> view.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>deprecated_features</literal>: Reset all the counters shown
+          in the <structname>pg_stat_deprecated_features</structname> view.
          </para>
         </listitem>
         <listitem>

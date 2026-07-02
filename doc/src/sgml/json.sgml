@@ -621,8 +621,17 @@ SELECT jdoc->'guid', jdoc->'name' FROM api WHERE jdoc @@ '$.tags[*] == "qui"';
    subscripting expressions, following the same rules as the <literal>path</literal>
    argument in the <literal>jsonb_set</literal> function. If a <type>jsonb</type>
    value is an array, numeric subscripts start at zero, and negative integers count
-   backwards from the last element of the array. Slice expressions are not supported.
+   backwards from the last element of the array. Non-integer numeric subscripts are
+   truncated toward zero. Slice expressions are not supported.
    The result of a subscripting expression is always of the jsonb data type.
+  </para>
+
+  <para>
+   When an integer subscript is applied to a <type>jsonb</type> value that is not
+   an array (i.e., an object or a scalar), the value is treated as if it were a
+   single-element array per SQL/JSON lax mode. Thus, index 0 and -1 access the
+   value itself, while other indices are out-of-bounds and return
+   <literal>NULL</literal>.
   </para>
 
   <para>
@@ -634,10 +643,10 @@ SELECT jdoc->'guid', jdoc->'name' FROM api WHERE jdoc @@ '$.tags[*] == "qui"';
    <literal>val['a']</literal>, and <literal>val['a']['b']</literal> is an
    object. If any <literal>val['a']</literal> or <literal>val['a']['b']</literal>
    is not defined, it will be created as an empty object and filled as
-   necessary. However, if any <literal>val</literal> itself or one of the
-   intermediary values is defined as a non-object such as a string, number, or
-   <literal>jsonb</literal> <literal>null</literal>, traversal cannot proceed so
-   an error is raised and the transaction aborted.
+   necessary. However, if a text subscript (key access) is applied to a non-object
+   <literal>val</literal>, traversal cannot proceed so an error is raised. Integer
+   subscripts on any non-array <literal>val</literal> use lax mode as described
+   above, treating the value as a single-element array.
   </para>
 
   <para>
@@ -667,6 +676,19 @@ UPDATE table_name SET jsonb_field['a']['b']['c'] = '1';
 -- subscripting is jsonb, the value we compare it against must also be jsonb.
 -- The double quotes make "value" also a valid jsonb string.
 SELECT * FROM table_name WHERE jsonb_field['key'] = '"value"';
+
+-- Numeric subscripts are truncated toward zero
+SELECT ('[1, 2, 3]'::jsonb)[1.7];  -- returns 2
+
+-- Integer subscript on a non-array value (lax mode)
+SELECT ('{"a": 1}'::jsonb)[0];     -- returns {"a": 1}
+SELECT ('"hello"'::jsonb)[-1];    -- returns "hello"
+SELECT ('{"a": 1}'::jsonb)[1];     -- returns NULL (out-of-bounds)
+
+-- Lax mode also works for assignment
+UPDATE table_name SET jsonb_field['a'][0] = '"x"';
+-- If jsonb_field['a'] is "hello", it becomes "x"
+
 </programlisting>
 
    <type>jsonb</type> assignment via subscripting handles a few edge cases

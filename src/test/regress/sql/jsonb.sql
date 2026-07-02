@@ -1615,3 +1615,107 @@ select ('true'::jsonb)::bool;
 select ('true'::jsonb).bool;
 select ('{"text": "hello"}'::jsonb)::text;
 select ('{"text": "hello"}'::jsonb).text;
+
+-- non-integer numeric subscripts
+select ('[1, "2", null]'::jsonb)[0.0];
+select ('[1, "2", null]'::jsonb)[0.9];
+select ('[1, "2", null]'::jsonb)[1.9];
+select ('[1, "2", null]'::jsonb)[-1.0];
+select ('[1, "2", null]'::jsonb)[-1.9];
+select ('[1, "2", null]'::jsonb)[1::numeric];
+select ('[1, "2", null]'::jsonb)[1.5::float8]; -- errors
+
+-- non-integer numeric subscript assignment
+create temp table test_jsonb_numeric_subscript(id int, val jsonb);
+insert into test_jsonb_numeric_subscript values (1, '[1, 2, 3]');
+update test_jsonb_numeric_subscript set val[1.0] = '"x"';
+select * from test_jsonb_numeric_subscript;
+update test_jsonb_numeric_subscript set val[1.9] = '"y"';
+select * from test_jsonb_numeric_subscript;
+drop table test_jsonb_numeric_subscript;
+
+-- integer subscript on non-array values
+select ('123'::jsonb)[0];
+select ('123'::jsonb)[-1];
+select ('123'::jsonb)[1];
+select ('{"a": 1}'::jsonb)[0];
+select ('{"a": 1}'::jsonb)[-1];
+select ('{"a": 1}'::jsonb)[1];
+
+-- chained subscript with integer index
+select ('{"a": 1}'::jsonb)['a'][0];
+select ('{"a": 1}'::jsonb)['a'][1]; -- out-of-bounds
+select ('{"a": {"b": 2}}'::jsonb)['a'][0];
+select ('{"a": {"b": 2}}'::jsonb)['a'][0]['b'];
+
+-- integer vs text subscript on object with numeric key
+select ('{"0": "value"}'::jsonb)[0];
+select ('{"0": "value"}'::jsonb)['0'];
+select ('{"0": "value"}'::jsonb)[0.0];
+
+-- Write tests: integer subscript assignment on non-array values
+create temp table test_jsonb_lax(val jsonb);
+
+-- in-bounds on scalar
+insert into test_jsonb_lax values ('123');
+update test_jsonb_lax set val[0] = '"x"';
+select val from test_jsonb_lax;
+
+-- in-bounds on object
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"a": 1}');
+update test_jsonb_lax set val[-1] = '"x"';
+select val from test_jsonb_lax;
+
+-- in-bounds on nested object
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"a": {"b": 1}}');
+update test_jsonb_lax set val[0] = '"x"';
+select val from test_jsonb_lax;
+
+-- out-of-bounds wraps in array
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"a": 1}');
+update test_jsonb_lax set val[1] = '"x"';
+select val from test_jsonb_lax;
+
+-- out-of-bounds negative is error
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"a": 1}');
+update test_jsonb_lax set val[-2] = '"x"';
+select val from test_jsonb_lax;
+
+-- integer subscript vs text subscript on object with numeric key
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"0": "value"}');
+update test_jsonb_lax set val[0] = '"x"';
+select val from test_jsonb_lax;
+
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"0": "value"}');
+update test_jsonb_lax set val['0'] = '"x"';
+select val from test_jsonb_lax;
+
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"0": "value"}');
+update test_jsonb_lax set val[0.0] = '"x"';
+select val from test_jsonb_lax;
+
+-- numeric subscript truncates toward zero
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"a": 1}');
+update test_jsonb_lax set val[0.7] = '"x"';
+select val from test_jsonb_lax;
+
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"a": 1}');
+update test_jsonb_lax set val[-1.7] = '"x"';
+select val from test_jsonb_lax;
+
+-- chained subscript on intermediate non-array
+truncate test_jsonb_lax;
+insert into test_jsonb_lax values ('{"a": "hello"}');
+update test_jsonb_lax set val['a'][0] = '"x"';
+select val from test_jsonb_lax;
+
+drop table test_jsonb_lax;

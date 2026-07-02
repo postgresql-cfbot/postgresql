@@ -27,8 +27,8 @@ OBJS = \
 
 all: pg_amcheck
 
-pg_amcheck: $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pg_amcheck: $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 
 install: all installdirs

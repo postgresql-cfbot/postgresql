@@ -141,6 +141,35 @@ sub adjust_database_contents
 		}
 	}
 
+	# refint was removed in v20
+	if ($old_version < 20)
+	{
+		if ($dbnames{"contrib_regression_autoinc"})
+		{
+			_add_st(
+				$result,
+				'contrib_regression_autoinc',
+				'drop extension if exists refint cascade',
+				'drop table if exists pkeys, fkeys, fkeys2');
+		}
+		if ($dbnames{"contrib_regression_spi"})
+		{
+			_add_st(
+				$result,
+				'contrib_regression_spi',
+				'drop extension if exists refint cascade',
+				'drop table if exists pkeys, fkeys, fkeys2');
+		}
+		if ($dbnames{"regression_spi"})
+		{
+			_add_st(
+				$result,
+				'regression_spi',
+				'drop extension if exists refint cascade',
+				'drop table if exists pkeys, fkeys, fkeys2');
+		}
+	}
+
 	# we removed these test-support functions in v18
 	if ($old_version < 18)
 	{

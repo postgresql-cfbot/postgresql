@@ -594,6 +594,13 @@ gbt_var_consistent(GBT_VARKEY_R *key,
 {
 	bool		retval = false;
 
+	/*
+	 * Remember that f_cmp is for internal pages, f_eq etc for leaf pages, and
+	 * on internal pages we need to check gbt_var_node_pf_match too.
+	 *
+	 * The leaf-page tests use swapped operands (e.g., f_gt(query, lower)
+	 * means "lower < query"), which is why they look reversed.
+	 */
 	switch (strategy)
 	{
 		case BTLessEqualStrategyNumber:
@@ -634,8 +641,13 @@ gbt_var_consistent(GBT_VARKEY_R *key,
 					|| gbt_var_node_pf_match(key, query, tinfo);
 			break;
 		case BtreeGistNotEqualStrategyNumber:
-			retval = !(tinfo->f_eq(query, key->lower, collation, flinfo) &&
-					   tinfo->f_eq(query, key->upper, collation, flinfo));
+			if (is_leaf)
+				retval = !(tinfo->f_eq(query, key->lower, collation, flinfo));
+			else
+			{
+				/* we can never disprove existence of a not-equal entry below */
+				retval = true;
+			}
 			break;
 		default:
 			retval = false;

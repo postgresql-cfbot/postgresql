@@ -120,6 +120,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/datetime.h"
 #include "utils/memutils.h"
+#include "utils/pg_rusage.h"
 #include "utils/pidfile.h"
 #include "utils/timestamp.h"
 #include "utils/varlena.h"
@@ -240,6 +241,13 @@ bool		EnableSSL = false;
 
 int			PreAuthDelay = 0;
 int			AuthenticationTimeout = 60;
+
+/* Log postmaster performance statistics every this many seconds. 0 disables */
+int			log_postmaster_stats = 0;
+
+/* Running counts used by log_postmaster_stats. */
+static uint64 pmstats_new_connections = 0;
+static uint64 pmstats_disconnections = 0;
 
 bool		log_hostname;		/* for ps display and logging */
 
@@ -1636,10 +1644,15 @@ DetermineSleepTime(void)
 		/* result of TimestampDifferenceMilliseconds is in [0, INT_MAX] */
 		ms = (int) TimestampDifferenceMilliseconds(GetCurrentTimestamp(),
 												   next_wakeup);
+		if (log_postmaster_stats > 0)
+			ms = Min(ms, log_postmaster_stats * 1000);
 		return Min(60 * 1000, ms);
 	}
 
-	return 60 * 1000;
+	if (log_postmaster_stats > 0)
+		return Min(60 * 1000, log_postmaster_stats * 1000);
+	else
+		return 60 * 1000;
 }
 
 /*
@@ -1678,12 +1691,21 @@ static int
 ServerLoop(void)
 {
 	time_t		last_lockfile_recheck_time,
-				last_touch_time;
+				last_touch_time,
+				last_pmstats_time;
+	uint64		last_pmstats_connections = 0;
+	uint64		last_pmstats_disconnections = 0;
+	uint32		last_pmstats_parallel_regs = 0;
+	PGRUsage	pmstats_ru0;
 	WaitEvent	events[MAXLISTEN];
 	int			nevents;
 
 	ConfigurePostmasterWaitSet(true);
-	last_lockfile_recheck_time = last_touch_time = time(NULL);
+	last_lockfile_recheck_time = last_touch_time = last_pmstats_time = time(NULL);
+	last_pmstats_connections = pmstats_new_connections;
+	last_pmstats_disconnections = pmstats_disconnections;
+	last_pmstats_parallel_regs = GetParallelWorkerRegisterCount();
+	pg_rusage_init(&pmstats_ru0);
 
 	for (;;)
 	{
@@ -1725,7 +1747,10 @@ ServerLoop(void)
 				ClientSocket s;
 
 				if (AcceptConnection(events[i].fd, &s) == STATUS_OK)
+				{
 					BackendStartup(&s);
+					pmstats_new_connections++;
+				}
 
 				/* We no longer need the open socket in this process */
 				if (s.sock != PGINVALID_SOCKET)
@@ -1823,6 +1848,42 @@ ServerLoop(void)
 			TouchSocketFiles();
 			TouchSocketLockFiles();
 			last_touch_time = now;
+		}
+
+		/*
+		 * Optionally periodically log postmaster connection and resource
+		 * usage statistics.
+		 */
+		if (log_postmaster_stats > 0 &&
+			now - last_pmstats_time >= log_postmaster_stats)
+		{
+			time_t		elapsed = now - last_pmstats_time;
+			uint32		cur_parallel_regs = GetParallelWorkerRegisterCount();
+
+			/*
+			 * Just to be on safe side: emit LOG message only in the case of
+			 * positive elapsed time (to avoid potential divisions by zero
+			 * in case of time jumping backwards).
+			 */
+			if (elapsed > 0)
+			{
+				uint64		conn_delta = pmstats_new_connections - last_pmstats_connections;
+				uint64		disc_delta = pmstats_disconnections - last_pmstats_disconnections;
+				uint32		pqw_delta = cur_parallel_regs - last_pmstats_parallel_regs;
+
+				ereport(LOG,
+						(errmsg("postmaster stats: avg %.2f conns/sec; %.2f disconns/sec; %.2f parallel workers started/sec; %s",
+								(double) conn_delta / (double) elapsed,
+								(double) disc_delta / (double) elapsed,
+								(double) pqw_delta / (double) elapsed,
+								pg_rusage_show(&pmstats_ru0))));
+			}
+
+			last_pmstats_connections = pmstats_new_connections;
+			last_pmstats_disconnections = pmstats_disconnections;
+			last_pmstats_parallel_regs = cur_parallel_regs;
+			last_pmstats_time = now;
+			pg_rusage_init(&pmstats_ru0);
 		}
 	}
 }
@@ -2606,6 +2667,10 @@ CleanupBackend(PMChild *bp,
 	}
 	else
 		procname = _(GetBackendTypeDesc(bp->bkend_type));
+
+	/* Count external (client or walsender) backend exits for stats. */
+	if (IsExternalConnectionBackend(bp->bkend_type))
+		pmstats_disconnections++;
 
 	/*
 	 * If a backend dies in an ugly way then we must signal all other backends

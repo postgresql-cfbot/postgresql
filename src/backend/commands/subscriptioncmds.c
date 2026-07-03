@@ -1686,6 +1686,25 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 			orig_conninfo_needed = false;
 	}
 
+	heap_freetuple(tup);
+
+	/* Lock the subscription so nobody else can do anything with it. */
+	LockSharedObject(SubscriptionRelationId, subid, 0, AccessExclusiveLock);
+
+	/*
+	 * Re-read the subscription tuple after acquiring the lock. A concurrent
+	 * DROP or ALTER may have committed before we acquired the lock.
+	 */
+	tup = SearchSysCacheCopy1(SUBSCRIPTIONOID, ObjectIdGetDatum(subid));
+
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("subscription \"%s\" does not exist",
+						stmt->subname)));
+
+	form = (Form_pg_subscription) GETSTRUCT(tup);
+
 	/*
 	 * Skip ACL checks on the subscription's foreign server, if any. If
 	 * changing the server (or replacing it with a raw connection), then the
@@ -1694,11 +1713,6 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 	 * by the subscription worker.
 	 */
 	sub = GetSubscription(subid, false, orig_conninfo_needed, false);
-
-	retain_dead_tuples = sub->retaindeadtuples;
-	origin = sub->origin;
-	max_retention = sub->maxretention;
-	retention_active = sub->retentionactive;
 
 	/*
 	 * Don't allow non-superuser modification of a subscription with
@@ -1710,8 +1724,10 @@ AlterSubscription(ParseState *pstate, AlterSubscriptionStmt *stmt,
 				 errmsg("password_required=false is superuser-only"),
 				 errhint("Subscriptions with the password_required option set to false may only be created or modified by the superuser.")));
 
-	/* Lock the subscription so nobody else can do anything with it. */
-	LockSharedObject(SubscriptionRelationId, subid, 0, AccessExclusiveLock);
+	retain_dead_tuples = sub->retaindeadtuples;
+	origin = sub->origin;
+	max_retention = sub->maxretention;
+	retention_active = sub->retentionactive;
 
 	/* Form a new tuple. */
 	memset(values, 0, sizeof(values));

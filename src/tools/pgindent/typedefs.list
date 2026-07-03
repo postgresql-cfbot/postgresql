@@ -1701,6 +1701,7 @@ LogicalRepBeginData
 LogicalRepCommitData
 LogicalRepCommitPreparedTxnData
 LogicalRepCtxStruct
+LogicalRepMessageData
 LogicalRepMsgType
 LogicalRepPartMapEntry
 LogicalRepPreparedTxnData

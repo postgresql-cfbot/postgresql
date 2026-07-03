@@ -4232,20 +4232,56 @@ WHERE c <= 3;
 (8 rows)
 
 -- Ensure we get the correct run condition when the window function is both
--- monotonically increasing and decreasing.
+-- monotonically increasing and decreasing in RANGE mode without an ORDER BY
 EXPLAIN (COSTS OFF)
 SELECT * FROM
   (SELECT empno,
           depname,
           salary,
-          count(empno) OVER () c
+          count(empno) OVER (RANGE BETWEEN CURRENT ROW AND CURRENT ROW) c
    FROM empsalary) emp
 WHERE c = 1;
-                      QUERY PLAN                       
--------------------------------------------------------
+                         QUERY PLAN                          
+-------------------------------------------------------------
  WindowAgg
-   Window: w1 AS ()
+   Window: w1 AS (RANGE BETWEEN CURRENT ROW AND CURRENT ROW)
    Run Condition: (count(empsalary.empno) OVER w1 = 1)
+   ->  Seq Scan on empsalary
+(4 rows)
+
+-- Ensure that ROWS mode without an ORDER BY doesn't think it's monotonically
+-- decreasing, i.e. don't push down the run condition.
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          depname,
+          salary,
+          count(empno) OVER (ROWS BETWEEN CURRENT ROW AND CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c > 1;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c > 1)
+   ->  WindowAgg
+         Window: w1 AS (ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+         ->  Seq Scan on empsalary
+(5 rows)
+
+-- As above, but check we detect it's monotonically increasing
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          depname,
+          salary,
+          count(empno) OVER (ROWS BETWEEN CURRENT ROW AND CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                         QUERY PLAN                         
+------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ROWS BETWEEN CURRENT ROW AND CURRENT ROW)
+   Run Condition: (count(empsalary.empno) OVER w1 <= 3)
    ->  Seq Scan on empsalary
 (4 rows)
 
@@ -4435,6 +4471,442 @@ WHERE c = 1;
                Sort Key: empsalary.empno DESC
                ->  Seq Scan on empsalary
 (9 rows)
+
+--
+-- Ensure we get the correct behavior for run condition pushdown when the
+-- frame option has an EXCLUDE clause
+--
+-- Ensure pushdown occurs for 0 PRECEDING when we exclude the entire peer group
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING EXCLUDE GROUP) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                       QUERY PLAN                                                       
+------------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND '0'::bigint PRECEDING EXCLUDE GROUP)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+-- Ensure we don't get pushdown with EXCLUDE CURRENT ROW
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND '0'::bigint PRECEDING EXCLUDE CURRENT ROW)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+-- Ensure we don't get pushdown with EXCLUDE TIES
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING EXCLUDE TIES) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                         QUERY PLAN                                                          
+-----------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND '0'::bigint PRECEDING EXCLUDE TIES)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+-- Ensure pushdown occurs with 0 PRECEDING when in ROWS mode and only
+-- excluding the current row
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND '0'::bigint PRECEDING EXCLUDE CURRENT ROW)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+-- EXCLUDE GROUP is also fine to push down the run condition with 0 PRECEDING
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING EXCLUDE GROUP) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND '0'::bigint PRECEDING EXCLUDE GROUP)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+-- Ensure we don't do run condition pushdown for EXCLUDE TIES
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND 0 PRECEDING EXCLUDE TIES) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                        QUERY PLAN                                                         
+---------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND '0'::bigint PRECEDING EXCLUDE TIES)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+-- Ensure the following 6 tests do pushdown the run condition.
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING EXCLUDE GROUP) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                       QUERY PLAN                                                       
+------------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND '1'::bigint PRECEDING EXCLUDE GROUP)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                          QUERY PLAN                                                          
+------------------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND '1'::bigint PRECEDING EXCLUDE CURRENT ROW)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING EXCLUDE TIES) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                      QUERY PLAN                                                       
+-----------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND '1'::bigint PRECEDING EXCLUDE TIES)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND '1'::bigint PRECEDING EXCLUDE CURRENT ROW)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING EXCLUDE GROUP) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                      QUERY PLAN                                                      
+----------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND '1'::bigint PRECEDING EXCLUDE GROUP)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING EXCLUDE TIES) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                     QUERY PLAN                                                      
+---------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND '1'::bigint PRECEDING EXCLUDE TIES)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+-- For the following 4 tests, ensure there's no pushdown with COUNT(ANY) when
+-- excluding rows from the current peer group.
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                       QUERY PLAN                                                        
+-------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE TIES) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE TIES)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                        QUERY PLAN                                                        
+--------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE TIES) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                    QUERY PLAN                                                     
+-------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE TIES)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+-- Ensure the following 2 tests push down the run condition
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                 QUERY PLAN                                                  
+-------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP)
+   Run Condition: (count(empsalary.empno) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary GROUPS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                  QUERY PLAN                                                  
+--------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary GROUPS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP)
+   Run Condition: (count(empsalary.empno) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+-- Ensure the following 3 ROWS mode tests also push down
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                    QUERY PLAN                                                    
+------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW)
+   Run Condition: (count(empsalary.empno) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                 QUERY PLAN                                                 
+------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE GROUP)
+   Run Condition: (count(empsalary.empno) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(empno) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE TIES) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                QUERY PLAN                                                 
+-----------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE TIES)
+   Run Condition: (count(empsalary.empno) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
+
+-- Ensure RANGE mode with 1 FOLLOWING does not push down the run condition
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                       QUERY PLAN                                                        
+-------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary RANGE BETWEEN UNBOUNDED PRECEDING AND 1 FOLLOWING EXCLUDE CURRENT ROW)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+-- Ensure there's no run condition pushdown with a non-const N FOLLOWING value
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND random(1,10) FOLLOWING EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ Subquery Scan on emp
+   Filter: (emp.c <= 3)
+   ->  WindowAgg
+         Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND random(1, 10) FOLLOWING EXCLUDE CURRENT ROW)
+         ->  Sort
+               Sort Key: empsalary.salary
+               ->  Seq Scan on empsalary
+(7 rows)
+
+-- Ensure we push down the run condition with 0 following, which is the same as CURRENT ROW.
+EXPLAIN (COSTS OFF)
+SELECT * FROM
+  (SELECT empno,
+          salary,
+          count(*) OVER (ORDER BY salary ROWS BETWEEN UNBOUNDED PRECEDING AND 0 FOLLOWING EXCLUDE CURRENT ROW) c
+   FROM empsalary) emp
+WHERE c <= 3;
+                                                         QUERY PLAN                                                         
+----------------------------------------------------------------------------------------------------------------------------
+ WindowAgg
+   Window: w1 AS (ORDER BY empsalary.salary ROWS BETWEEN UNBOUNDED PRECEDING AND '0'::bigint FOLLOWING EXCLUDE CURRENT ROW)
+   Run Condition: (count(*) OVER w1 <= 3)
+   ->  Sort
+         Sort Key: empsalary.salary
+         ->  Seq Scan on empsalary
+(6 rows)
 
 -- Test Sort node collapsing
 EXPLAIN (COSTS OFF)

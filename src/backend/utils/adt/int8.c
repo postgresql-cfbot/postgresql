@@ -795,9 +795,112 @@ int8inc_support(PG_FUNCTION_ARGS)
 		MonotonicFunction monotonic = MONOTONICFUNC_NONE;
 		int			frameOptions = req->window_clause->frameOptions;
 
-		/* No ORDER BY clause then all rows are peers */
+		/*
+		 * When the frame options has an EXCLUDE clause, this can affect the
+		 * monotonic guarantees.  Various cases are handled or rejected below.
+		 */
+		if (frameOptions & FRAMEOPTION_EXCLUSION)
+		{
+			WindowFunc *wfunc = req->window_func;
+
+			if (frameOptions & FRAMEOPTION_END_OFFSET_PRECEDING)
+			{
+				Node	   *endOffset = req->window_clause->endOffset;
+
+				/*
+				 * ROWS mode with EXCLUDE CURRENT ROW is fine, as the count
+				 * cannot include rows beyond the current row.  With GROUPS or
+				 * RANGE, peer rows would be included and those peers could be
+				 * after the current row.
+				 */
+				if (frameOptions & FRAMEOPTION_ROWS &&
+					frameOptions & FRAMEOPTION_EXCLUDE_CURRENT_ROW)
+				{
+					/* Allowed */
+				}
+
+				/*
+				 * Otherwise, EXCLUDE is fine when in GROUPS or ROWS mode when
+				 * we have an above zero Const in the N PRECEDING.  This means
+				 * all the would-be-excluded rows are never in the frame's
+				 * scope.  We allow any value of PRECEDING, including
+				 * non-consts when EXCLUDE GROUP is used, as effectively
+				 * that's 1 PRECEDING.  The executor ensures the value is
+				 * never negative.  Range mode is disallowed as the endOffset
+				 * has a different purpose.
+				 */
+				else if ((frameOptions & FRAMEOPTION_EXCLUDE_GROUP) == 0)
+				{
+					endOffset = eval_const_expressions(NULL, endOffset);
+
+					if (frameOptions & FRAMEOPTION_RANGE ||
+						!IsA(endOffset, Const) || castNode(Const, endOffset)->constisnull ||
+						DatumGetInt64(castNode(Const, endOffset)->constvalue) <= 0)
+					{
+						req->monotonic = MONOTONICFUNC_NONE;
+						PG_RETURN_POINTER(req);
+					}
+				}
+			}
+
+			else if (frameOptions & FRAMEOPTION_END_CURRENT_ROW)
+			{
+				/*
+				 * When the frame ends at CURRENT ROW, we must disallow
+				 * COUNT(ANY) when in RANGE or GROUPS mode unless we're
+				 * excluding the entire peer group.  Some values being counted
+				 * may be NULL, which could result in the count going up with
+				 * EXCLUDE CURRENT ROW, or down with EXCLUDE TIES.  ROWS mode
+				 * is fine as the count doesn't include peer rows ahead of the
+				 * current row.
+				 */
+				if (wfunc->winfnoid == F_COUNT_ANY &&
+					frameOptions & (FRAMEOPTION_RANGE | FRAMEOPTION_GROUPS) &&
+					frameOptions & (FRAMEOPTION_EXCLUDE_CURRENT_ROW | FRAMEOPTION_EXCLUDE_TIES))
+				{
+					req->monotonic = MONOTONICFUNC_NONE;
+					PG_RETURN_POINTER(req);
+				}
+
+				/*
+				 * COUNT(*) doesn't have the same problem as COUNT(ANY) since
+				 * rows in the peer group are always counted with GROUPS and
+				 * RANGE modes, and all the EXCLUDE options always exclude the
+				 * same number of rows, just not always the same rows.
+				 */
+			}
+
+			else if (frameOptions & FRAMEOPTION_END_OFFSET_FOLLOWING)
+			{
+				Node	   *endOffset = req->window_clause->endOffset;
+
+				endOffset = eval_const_expressions(NULL, endOffset);
+
+				/*
+				 * If the frame ends beyond the current row or peer group, we
+				 * can't prove any monotonic properties, as counting rows that
+				 * may later be excluded by EXCLUDE could result in the count
+				 * going down.  Technically, someone could write 0 FOLLOWING,
+				 * which is the same as CURRENT ROW in GROUPS or ROWS mode, so
+				 * don't disallow that.
+				 */
+				if (frameOptions & FRAMEOPTION_RANGE ||
+					!IsA(endOffset, Const) || castNode(Const, endOffset)->constisnull ||
+					DatumGetInt64(castNode(Const, endOffset)->constvalue) > 0)
+				{
+					req->monotonic = MONOTONICFUNC_NONE;
+					PG_RETURN_POINTER(req);
+				}
+			}
+		}
+
+		/*
+		 * Otherwise, no ORDER BY clause means either all rows are peers, in
+		 * GROUPS mode, or the result is monotonically increasing.
+		 */
 		if (req->window_clause->orderClause == NIL)
-			monotonic = MONOTONICFUNC_BOTH;
+			monotonic = (frameOptions & FRAMEOPTION_ROWS) ?
+				MONOTONICFUNC_INCREASING : MONOTONICFUNC_BOTH;
 		else
 		{
 			/*

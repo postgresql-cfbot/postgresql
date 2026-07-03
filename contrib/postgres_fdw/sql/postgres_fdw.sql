@@ -4090,6 +4090,17 @@ INSERT INTO result_tbl SELECT * FROM async_pt WHERE b === 505;
 SELECT * FROM result_tbl ORDER BY a;
 DELETE FROM result_tbl;
 
+-- Check that a pending async request on a shared connection isn't corrupted
+-- when the Append is rescanned with the subplan holding it pruned out.  Here
+-- async_p2 and async_p3 share a connection, and per outer row exactly one of
+-- them is pruned while async_p1 (a different connection) always matches; the
+-- inner LIMIT leaves the other shared-connection request outstanding across
+-- the rescan, and reusing that connection for the next round must drain it
+-- rather than trip over stale state.
+SELECT o.x FROM (VALUES (2505), (3505)) o(x),
+  LATERAL (SELECT a FROM async_pt WHERE a = 1505 OR a = o.x LIMIT 1) s
+ORDER BY o.x;
+
 -- Test COPY TO when foreign table is partition
 COPY async_pt TO stdout; --error
 

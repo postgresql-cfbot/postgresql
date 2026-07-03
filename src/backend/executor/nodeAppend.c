@@ -469,7 +469,21 @@ ExecReScanAppend(AppendState *node)
 		{
 			AsyncRequest *areq = node->as_asyncrequests[i];
 
-			areq->callback_pending = false;
+			/*
+			 * Leave a request that is still marked as pending a callback
+			 * alone: it may genuinely still be in flight, or it may have an
+			 * unconsumed result already sitting on a connection shared with
+			 * another subplan (as can happen with postgres_fdw).  Blindly
+			 * clearing callback_pending here would desync our bookkeeping
+			 * from the async-capable node's own, which can lead it to
+			 * mishandle that connection later (e.g. postgres_fdw asserts that
+			 * a request it still considers in-process has callback_pending
+			 * set).  Such a request is instead drained lazily, right before
+			 * it would be reused, in ExecAppendAsyncBegin().
+			 */
+			if (areq->callback_pending)
+				continue;
+
 			areq->request_complete = false;
 			areq->result = NULL;
 		}
@@ -915,7 +929,25 @@ ExecAppendAsyncBegin(AppendState *node)
 		AsyncRequest *areq = node->as_asyncrequests[i];
 
 		Assert(areq->request_index == i);
-		Assert(!areq->callback_pending);
+
+		/*
+		 * This request may still be marked as pending a callback, if
+		 * ExecReScanAppend() left it alone because it might have been
+		 * genuinely in flight (or had an unconsumed result waiting on a
+		 * connection shared with another subplan).  Drain it now, before
+		 * reusing it: ExecReScan() lets the async-capable node settle any
+		 * such outstanding state (e.g. postgres_fdw's
+		 * postgresReScanForeignScan() will wait for an in-progress request on
+		 * its own connection and consume its result), after which it's safe
+		 * to reset our own bookkeeping and issue a fresh request.
+		 */
+		if (areq->callback_pending)
+		{
+			ExecReScan(node->appendplans[i]);
+			areq->callback_pending = false;
+			areq->request_complete = false;
+			areq->result = NULL;
+		}
 
 		/* Do the actual work. */
 		ExecAsyncRequest(areq);

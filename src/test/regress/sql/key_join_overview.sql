@@ -366,6 +366,80 @@ FOR KEY (team_dept_id) -> ref_departments (dept_id)
 ORDER BY emp_id;
 
 -- ============================================================
+-- 5. GROUP BY / DISTINCT / DISTINCT ON
+-- ============================================================
+
+-- accepted, reason: LEFT JOIN + GROUP BY on PK restores uniqueness
+SELECT t3.rev_id, q.prod_id, q.cnt FROM
+(
+    SELECT ref_products.prod_id, COUNT(*) AS cnt
+    FROM ref_products
+    LEFT JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+    GROUP BY ref_products.prod_id
+) q
+JOIN fk_reviews t3 FOR KEY (rev_prod_id) -> q (prod_id)
+ORDER BY t3.rev_id;
+
+-- accepted, reason: DISTINCT on full PK restores uniqueness
+SELECT t3.rev_id, q.prod_id FROM
+(
+    SELECT DISTINCT ref_products.prod_id
+    FROM ref_products
+    LEFT JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_reviews t3 FOR KEY (rev_prod_id) -> q (prod_id)
+ORDER BY t3.rev_id;
+
+-- accepted, reason: DISTINCT ON covering PK
+SELECT t3.rev_id, q.prod_id FROM
+(
+    SELECT DISTINCT ON (ref_products.prod_id)
+        ref_products.prod_id, fk_orders.ord_id
+    FROM ref_products
+    LEFT JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_reviews t3 FOR KEY (rev_prod_id) -> q (prod_id)
+ORDER BY t3.rev_id;
+
+-- rejected, reason: GROUP BY on expression
+SELECT * FROM
+(
+    SELECT ref_products.prod_id + 1 AS expr_result
+    FROM ref_products
+    LEFT JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+    GROUP BY ref_products.prod_id + 1
+) q
+JOIN fk_reviews FOR KEY (rev_prod_id) -> q (expr_result);
+
+-- rejected, reason: GROUP BY columns from different base tables
+SELECT * FROM
+(
+    SELECT ref_products.prod_id, fk_orders.ord_id
+    FROM ref_products
+    LEFT JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+    GROUP BY ref_products.prod_id, fk_orders.ord_id
+) q
+JOIN fk_reviews FOR KEY (rev_prod_id) -> q (prod_id);
+
+-- rejected, reason: DISTINCT on partial composite PK
+SELECT * FROM
+(
+    SELECT DISTINCT loc_country
+    FROM ref_locations
+) q
+JOIN fk_warehouses FOR KEY (wh_country, wh_zip) -> q (loc_country, loc_zip);
+
+-- rejected, reason: DISTINCT ON not covering PK
+SELECT * FROM
+(
+    SELECT DISTINCT ON (fk_orders.ord_prod_id)
+        ref_products.prod_id, fk_orders.ord_id
+    FROM ref_products
+    LEFT JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_reviews FOR KEY (rev_prod_id) -> q (prod_id);
+
+-- ============================================================
 -- 6. Outer join null semantics
 -- ============================================================
 
@@ -420,6 +494,16 @@ SELECT * FROM
     SELECT ref_products.prod_id, fk_orders.ord_id
     FROM ref_products
     JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_reviews FOR KEY (rev_prod_id) -> q (prod_id);
+
+-- rejected, reason: INNER JOIN inside subquery removes rows (R violated)
+SELECT * FROM
+(
+    SELECT ref_products.prod_id
+    FROM ref_products
+    JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+    GROUP BY ref_products.prod_id
 ) q
 JOIN fk_reviews FOR KEY (rev_prod_id) -> q (prod_id);
 
@@ -557,6 +641,44 @@ JOIN (
 -- ============================================================
 -- 10. Deep multi-feature stress test
 -- ============================================================
+
+-- accepted, reason: deeply-nested query stress-testing key join resolution
+--
+-- The key join analysis must drill through 6 levels to reach the base table:
+--   Level 1: ref_products (base table with PK prod_id)
+--   Level 2: LEFT JOIN with fk_orders (subquery on referencing side, column renamed)
+--            + GROUP BY on base-table PK restoring uniqueness
+--   Level 3: subquery wrapper with column rename
+--   Level 4: subquery wrapper with column rename
+--   Level 5: subquery wrapper with column rename
+--   Level 6: outer key join with fk_reviews through all layers
+--
+SELECT rev.rev_id, deep.p_id, deep.order_count
+FROM (
+    -- Level 5: rename layer 3
+    SELECT l4_id AS p_id, l4_cnt AS order_count
+    FROM (
+        -- Level 4: rename layer 2
+        SELECT l3_id AS l4_id, l3_cnt AS l4_cnt
+        FROM (
+            -- Level 3: rename layer 1
+            SELECT grp_id AS l3_id, grp_cnt AS l3_cnt
+            FROM (
+                -- Level 2: GROUP BY on base-table PK restoring uniqueness
+                SELECT ref_products.prod_id AS grp_id, COUNT(*) AS grp_cnt
+                FROM ref_products                  -- Level 1: base table
+                LEFT JOIN (
+                    -- subquery on referencing side with column rename
+                    SELECT ord_prod_id AS opid FROM fk_orders
+                ) ord_q FOR KEY (opid) -> ref_products (prod_id)
+                GROUP BY ref_products.prod_id
+            ) grp
+        ) l3
+    ) l4
+) deep
+-- Level 6: final key join reaching through all rename layers
+JOIN fk_reviews rev FOR KEY (rev_prod_id) -> deep (p_id)
+ORDER BY rev.rev_id;
 
 -- rejected, reason: row-filtering WHERE buried under rename layers (R violated)
 SELECT rev.rev_id, deep.p_id

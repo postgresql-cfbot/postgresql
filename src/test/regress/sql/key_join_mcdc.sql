@@ -114,6 +114,8 @@ ALTER OPERATOR FAMILY mcdc_hash_bridge_ops USING hash ADD
     OPERATOR 1 =## (int, bigint),
     FUNCTION 1 hashint8(bigint);
 
+-- The nondeterministic-collation GROUP BY case is exercised in key_join_icu.
+
 SET client_min_messages = warning;
 CREATE TYPE mcdc_nonstrict_eq_type;
 CREATE FUNCTION mcdc_nonstrict_eq_type_in(cstring)
@@ -386,6 +388,7 @@ FROM (
 JOIN mcdc_reader r FOR KEY (parent_id) -> j (id)
 ORDER BY r.id;
 
+-- Duplicate inactive unique facts preserve the first diagnostic source.
 CREATE TABLE mcdc_dupe_parent
 (
     id int PRIMARY KEY
@@ -410,6 +413,11 @@ INSERT INTO mcdc_dupe_nullable_reader VALUES (801, 1), (802, NULL);
 CREATE VIEW mcdc_dupe_active_v AS
 SELECT DISTINCT p.id
 FROM mcdc_dupe_parent p;
+
+SELECT n.id, v.id
+FROM mcdc_dupe_active_v v
+JOIN mcdc_dupe_nullable_reader n FOR KEY (parent_id) -> v (id)
+ORDER BY n.id, v.id;
 
 CREATE VIEW mcdc_group_inactive_rowcov_v AS
 SELECT p.id, p.tenant_id, p.code
@@ -454,6 +462,66 @@ FROM (
 ) q
 JOIN mcdc_reader r FOR KEY (parent_id) -> q (id)
 ORDER BY r.id;
+
+-- GROUP BY expression path: expression keys do not prove projected facts.
+SELECT r.id, g.id
+FROM (
+    SELECT p.id + 0 AS id
+    FROM mcdc_parent p
+    GROUP BY p.id + 0
+) g
+JOIN mcdc_reader r FOR KEY (parent_id) -> g (id)
+ORDER BY r.id;
+
+-- GROUPING SETS path: resjunk grouping expressions are skipped.
+SELECT r.id, g.id
+FROM (
+    SELECT p.id
+    FROM mcdc_parent p
+    GROUP BY GROUPING SETS ((p.id, p.id + 0), (p.id))
+) g
+JOIN mcdc_reader r FOR KEY (parent_id) -> g (id)
+ORDER BY r.id;
+
+-- GROUPING SETS path: unusable equality operators are skipped.
+SELECT nr.id, g.id
+FROM (
+    SELECT p.id
+    FROM mcdc_nonstrict_parent p
+    GROUP BY GROUPING SETS ((p.id), ())
+) g
+JOIN mcdc_nonstrict_reader nr FOR KEY (parent_id) -> g (id)
+ORDER BY nr.id;
+
+-- GROUP BY binary-compatible equality identity path: no projected key facts.
+SELECT rr.id, g.id
+FROM (
+    SELECT p.id
+    FROM mcdc_regclass_parent p
+    GROUP BY p.id
+) g
+JOIN mcdc_regclass_reader rr FOR KEY (parent_id) -> g (id)
+ORDER BY rr.id;
+
+-- GROUPING SETS path: equality identity must match the exposed type.
+SELECT rr.id, g.id
+FROM (
+    SELECT p.id
+    FROM mcdc_regclass_parent p
+    GROUP BY GROUPING SETS ((p.id), ())
+) g
+JOIN mcdc_regclass_reader rr FOR KEY (parent_id) -> g (id)
+ORDER BY rr.id;
+
+-- Varchar opclasses can use either varchar or text equality input.
+SELECT c.id, g.id
+FROM (
+    SELECT p.id
+    FROM mcdc_varchar_parent p
+    GROUP BY p.id
+) g
+JOIN mcdc_varchar_child c FOR KEY (parent_id) -> g (id)
+ORDER BY c.id;
 
 -- Same-domain FK operators must use the normalized base equality type.
 SELECT c.id, p.id

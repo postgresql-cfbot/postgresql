@@ -744,13 +744,13 @@ JOIN t2 FOR KEY (c3) -> u (c1);
 SELECT * FROM (SELECT c1 FROM t1 OFFSET 1) AS u
 JOIN t2 FOR KEY (c3) -> u (c1);
 
--- rejected, reason: DISTINCT on the referenced side collapses rows and defeats
--- row coverage
+-- accepted: DISTINCT on the referenced key preserves its row coverage and
+-- proves its uniqueness
 SELECT * FROM (SELECT DISTINCT c1 FROM t1) AS u
 JOIN t2 FOR KEY (c3) -> u (c1);
 
--- rejected, reason: GROUP BY on the referenced side collapses rows and defeats
--- row coverage
+-- accepted: GROUP BY on the referenced key preserves its row coverage and
+-- proves its uniqueness
 SELECT * FROM (SELECT c1 FROM t1 GROUP BY c1) AS u
 JOIN t2 FOR KEY (c3) -> u (c1);
 
@@ -1858,6 +1858,28 @@ DROP VIEW self_fk_nodes_valid_v;
 DROP TABLE refs_to_nodes_valid;
 DROP TABLE self_fk_nodes_valid;
 
+--
+-- Correct pattern: pre-aggregate each child, then join through parent.
+-- Each derived table has one row per order_id (GROUP BY guarantees it),
+-- so both LEFT JOINs pass validation.
+--
+SELECT
+    o.id,
+    oi.item_count,
+    p.payment_total
+FROM orders o
+LEFT JOIN (
+    SELECT order_id, count(*) AS item_count
+    FROM order_items
+    GROUP BY order_id
+-- accepted
+) oi FOR KEY (order_id) -> o (id)
+LEFT JOIN (
+    SELECT order_id, SUM(amount) AS payment_total
+    FROM payments
+    GROUP BY order_id
+) p FOR KEY (order_id) -> o (id);
+
 DROP TABLE payments;
 
 --
@@ -1911,6 +1933,427 @@ CREATE TABLE resupplies_gbu (
 INSERT INTO products_gbu VALUES (1), (2), (3);
 INSERT INTO sales_gbu VALUES (1, 10, 5.00), (1, 20, 5.00), (2, 5, 10.00);
 INSERT INTO resupplies_gbu VALUES (1, 100, 4.00), (2, 50, 8.00);
+
+SELECT *
+FROM (
+    SELECT DISTINCT abs(id) AS id
+    FROM products_gbu
+) p
+-- rejected, reason: DISTINCT expression does not prove key uniqueness
+JOIN resupplies_gbu r FOR KEY (product_id) -> p (id);
+
+-- Nondeterministic DISTINCT collations are exercised in key_join_icu.
+
+-- Query-level DISTINCT equality must use an immutable, strict operator.
+SET client_min_messages = warning;
+CREATE TYPE query_unique_nonstrict_type;
+CREATE FUNCTION query_unique_nonstrict_type_in(cstring)
+RETURNS query_unique_nonstrict_type
+LANGUAGE internal STRICT IMMUTABLE AS 'int4in';
+CREATE FUNCTION query_unique_nonstrict_type_out(query_unique_nonstrict_type)
+RETURNS cstring
+LANGUAGE internal STRICT IMMUTABLE AS 'int4out';
+CREATE TYPE query_unique_nonstrict_type (
+    input = query_unique_nonstrict_type_in,
+    output = query_unique_nonstrict_type_out,
+    like = int4
+);
+RESET client_min_messages;
+CREATE CAST (int4 AS query_unique_nonstrict_type) WITHOUT FUNCTION;
+CREATE CAST (query_unique_nonstrict_type AS int4) WITHOUT FUNCTION;
+CREATE FUNCTION query_unique_nonstrict_hash(query_unique_nonstrict_type)
+RETURNS int LANGUAGE internal STRICT IMMUTABLE AS 'hashint4';
+CREATE FUNCTION query_unique_nonstrict_eq(a query_unique_nonstrict_type,
+                                          b query_unique_nonstrict_type)
+RETURNS boolean LANGUAGE sql IMMUTABLE AS
+$$ SELECT a IS NULL OR b IS NULL OR a::int4 = b::int4 $$;
+CREATE OPERATOR === (
+    LEFTARG = query_unique_nonstrict_type,
+    RIGHTARG = query_unique_nonstrict_type,
+    PROCEDURE = query_unique_nonstrict_eq,
+    COMMUTATOR = ===,
+    RESTRICT = eqsel,
+    JOIN = eqjoinsel,
+    HASHES
+);
+CREATE OPERATOR CLASS query_unique_nonstrict_type_ops
+DEFAULT FOR TYPE query_unique_nonstrict_type USING hash AS
+    OPERATOR 1 === (query_unique_nonstrict_type,
+                    query_unique_nonstrict_type),
+    FUNCTION 1 query_unique_nonstrict_hash(query_unique_nonstrict_type);
+CREATE TABLE query_unique_nonstrict_parent (id query_unique_nonstrict_type);
+CREATE TABLE query_unique_nonstrict_child (parent_id query_unique_nonstrict_type);
+SELECT *
+FROM (SELECT DISTINCT id FROM query_unique_nonstrict_parent) p
+-- rejected, reason: DISTINCT equality operator is not strict
+JOIN query_unique_nonstrict_child c FOR KEY (parent_id) -> p (id);
+DROP TABLE query_unique_nonstrict_child, query_unique_nonstrict_parent;
+DROP OPERATOR CLASS query_unique_nonstrict_type_ops USING hash;
+DROP OPERATOR === (query_unique_nonstrict_type, query_unique_nonstrict_type);
+DROP FUNCTION query_unique_nonstrict_eq(query_unique_nonstrict_type,
+                                        query_unique_nonstrict_type);
+DROP FUNCTION query_unique_nonstrict_hash(query_unique_nonstrict_type);
+DROP CAST (query_unique_nonstrict_type AS int4);
+DROP CAST (int4 AS query_unique_nonstrict_type);
+SET client_min_messages = warning;
+DROP TYPE query_unique_nonstrict_type CASCADE;
+RESET client_min_messages;
+
+-- DISTINCT ON a non-key column can discard referenced keys, so it must not
+-- preserve the referenced relation's row set for a later key join.
+CREATE TABLE products_do (
+    id integer PRIMARY KEY,
+    grp integer NOT NULL
+);
+CREATE TABLE reviews_do (
+    id integer PRIMARY KEY,
+    product_id integer NOT NULL REFERENCES products_do(id)
+);
+
+INSERT INTO products_do VALUES (1, 10), (2, 10);
+INSERT INTO reviews_do VALUES (1, 1), (2, 2);
+
+SELECT q.id, r.id
+FROM (SELECT DISTINCT ON (grp) id FROM products_do ORDER BY grp, id) q
+-- rejected, reason: DISTINCT ON does not cover the referenced key
+JOIN reviews_do r FOR KEY (product_id) -> q (id);
+
+DROP TABLE reviews_do, products_do;
+
+-- DISTINCT ON drops sibling rows for each distinct group, so a base
+-- rowCoverage on the wider key is no longer valid for the resulting
+-- surface.  An outer GROUP BY (or DISTINCT) on the wider key supplies a
+-- query-shape unique that, paired with the now-bogus catalog rowCoverage,
+-- would let a key join through and silently drop FK-bearing rows whose
+-- referenced row was dropped by the inner DISTINCT ON.
+CREATE TABLE rowcov_pk (a int NOT NULL, b int NOT NULL, PRIMARY KEY (a, b));
+CREATE TABLE rowcov_fk (fk_a int NOT NULL, fk_b int NOT NULL,
+                        FOREIGN KEY (fk_a, fk_b) REFERENCES rowcov_pk (a, b));
+INSERT INTO rowcov_pk VALUES (1, 1), (1, 2), (2, 1);
+INSERT INTO rowcov_fk VALUES (1, 2);
+
+SELECT *
+FROM (
+    SELECT a, b
+    FROM (SELECT DISTINCT ON (a) a, b FROM rowcov_pk ORDER BY a, b) i
+    GROUP BY a, b
+) sub
+-- rejected, reason: inner DISTINCT ON (a) drops sibling rows so (a, b)
+-- row coverage is lost regardless of the outer GROUP BY
+JOIN rowcov_fk FOR KEY (fk_a, fk_b) -> sub (a, b);
+
+SELECT *
+FROM (
+    SELECT DISTINCT a, b
+    FROM (SELECT DISTINCT ON (a) a, b FROM rowcov_pk ORDER BY a, b) i
+) sub
+-- rejected, reason: same anti-pattern using DISTINCT instead of GROUP BY
+JOIN rowcov_fk FOR KEY (fk_a, fk_b) -> sub (a, b);
+
+DROP TABLE rowcov_fk, rowcov_pk;
+
+-- GROUP BY/DISTINCT preserve row coverage only when their equality identity
+-- exactly matches the key equality identity.
+CREATE TABLE rowcov_exact_parent (id int PRIMARY KEY);
+CREATE TABLE rowcov_exact_child (
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES rowcov_exact_parent (id)
+);
+INSERT INTO rowcov_exact_parent VALUES (1), (2);
+INSERT INTO rowcov_exact_child VALUES (10, 1), (20, 2);
+
+SELECT p.id, c.id AS child_id
+FROM (SELECT id FROM rowcov_exact_parent GROUP BY id) p
+-- accepted
+JOIN rowcov_exact_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+
+SELECT p.id, c.id AS child_id
+FROM (SELECT DISTINCT id FROM rowcov_exact_parent) p
+-- accepted
+JOIN rowcov_exact_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+
+SELECT p.id, c.id AS child_id
+FROM (SELECT id FROM rowcov_exact_parent GROUP BY ROLLUP(id)) p
+-- rejected, reason: ROLLUP preserves row coverage but does not prove uniqueness
+JOIN rowcov_exact_child c FOR KEY (parent_id) -> p (id);
+
+SELECT p.id, c.id AS child_id
+FROM (
+    SELECT id
+    FROM (SELECT id FROM rowcov_exact_parent GROUP BY ROLLUP(id)) g
+    GROUP BY id
+) p
+-- accepted, reason: ROLLUP preserves row coverage and outer GROUP BY proves uniqueness
+JOIN rowcov_exact_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+
+SELECT p.id, c.id AS child_id
+FROM (SELECT DISTINCT id FROM rowcov_exact_parent GROUP BY ROLLUP(id)) p
+-- accepted, reason: ROLLUP preserves row coverage and DISTINCT proves uniqueness
+JOIN rowcov_exact_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+
+DROP TABLE rowcov_exact_child, rowcov_exact_parent;
+
+CREATE TABLE rowcov_gsets_parent (
+    a int NOT NULL,
+    b int NOT NULL,
+    PRIMARY KEY (a, b)
+);
+CREATE TABLE rowcov_gsets_child (
+    id int PRIMARY KEY,
+    fk_a int NOT NULL,
+    fk_b int NOT NULL,
+    FOREIGN KEY (fk_a, fk_b) REFERENCES rowcov_gsets_parent (a, b)
+);
+INSERT INTO rowcov_gsets_parent VALUES (1, 10), (1, 20), (2, 10);
+INSERT INTO rowcov_gsets_child VALUES (10, 1, 10), (20, 1, 20);
+
+SELECT p.a, p.b, c.id AS child_id
+FROM (
+    SELECT a, b
+    FROM (
+        SELECT a, b
+        FROM rowcov_gsets_parent
+        GROUP BY GROUPING SETS ((a, b), (a), ())
+    ) g
+    GROUP BY a, b
+) p
+-- accepted, reason: one grouping set contains the full composite key
+JOIN rowcov_gsets_child c FOR KEY (fk_a, fk_b) -> p (a, b)
+ORDER BY p.a, p.b, c.id;
+
+SELECT p.a, p.b, c.id AS child_id
+FROM (
+    SELECT a, b
+    FROM (
+        SELECT a, b
+        FROM rowcov_gsets_parent
+        GROUP BY GROUPING SETS ((a), (b), ())
+    ) g
+    GROUP BY a, b
+) p
+-- rejected, reason: no grouping set contains the full composite key
+JOIN rowcov_gsets_child c FOR KEY (fk_a, fk_b) -> p (a, b);
+
+DROP TABLE rowcov_gsets_child, rowcov_gsets_parent;
+
+-- GROUP BY/DISTINCT preserve row coverage for nullable referenced keys when
+-- the collapsed key covers the same all-non-null values under the same key
+-- identity.  Null-containing referenced rows are outside the referenced
+-- multiset that key joins must cover.
+CREATE TABLE rowcov_nullable_parent (
+    id int PRIMARY KEY,
+    code text UNIQUE
+);
+CREATE TABLE rowcov_nullable_child (
+    id int PRIMARY KEY,
+    parent_code text NOT NULL REFERENCES rowcov_nullable_parent (code)
+);
+INSERT INTO rowcov_nullable_parent VALUES
+    (1, 'a'), (2, 'b'), (3, NULL), (4, NULL);
+INSERT INTO rowcov_nullable_child VALUES (10, 'a'), (20, 'b');
+
+SELECT p.code, c.id AS child_id
+FROM (SELECT code FROM rowcov_nullable_parent GROUP BY code) p
+-- accepted
+JOIN rowcov_nullable_child c FOR KEY (parent_code) -> p (code)
+ORDER BY p.code, c.id;
+
+SELECT p.code, c.id AS child_id
+FROM (SELECT DISTINCT code FROM rowcov_nullable_parent) p
+-- accepted
+JOIN rowcov_nullable_child c FOR KEY (parent_code) -> p (code)
+ORDER BY p.code, c.id;
+
+SELECT p.code, c.id AS child_id
+FROM (SELECT DISTINCT code FROM rowcov_nullable_parent GROUP BY ROLLUP(code)) p
+-- accepted, reason: subtotal NULLs do not invalidate all-non-null row coverage
+JOIN rowcov_nullable_child c FOR KEY (parent_code) -> p (code)
+ORDER BY p.code, c.id;
+
+SELECT p.code, c.id AS child_id
+FROM (SELECT code FROM rowcov_nullable_parent GROUP BY code HAVING count(*) > 0) p
+-- rejected, reason: HAVING remains a row-removal barrier
+JOIN rowcov_nullable_child c FOR KEY (parent_code) -> p (code);
+
+DROP TABLE rowcov_nullable_child, rowcov_nullable_parent;
+
+-- Extra row-collapse columns may have different identity from the key.
+-- Row coverage is preserved as long as the grouped key column itself has
+-- the exact key identity.
+CREATE TABLE rowcov_identity_type_parent (
+    label text NOT NULL,
+    id int PRIMARY KEY
+);
+CREATE TABLE rowcov_identity_type_child (
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES rowcov_identity_type_parent (id)
+);
+INSERT INTO rowcov_identity_type_parent VALUES ('a', 1), ('b', 2);
+INSERT INTO rowcov_identity_type_child VALUES (10, 1), (20, 2);
+
+SELECT p.id, c.id AS child_id
+FROM (
+    SELECT label, id
+    FROM rowcov_identity_type_parent
+    GROUP BY label, id
+) p
+-- accepted, reason: extra grouped column has different type
+JOIN rowcov_identity_type_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+
+DROP TABLE rowcov_identity_type_child, rowcov_identity_type_parent;
+
+CREATE TABLE rowcov_identity_typmod_parent (
+    amount numeric(5,0) NOT NULL,
+    id numeric(10,0) PRIMARY KEY
+);
+CREATE TABLE rowcov_identity_typmod_child (
+    id int PRIMARY KEY,
+    parent_id numeric(10,0) NOT NULL
+        REFERENCES rowcov_identity_typmod_parent (id)
+);
+INSERT INTO rowcov_identity_typmod_parent VALUES (1, 10), (2, 20);
+INSERT INTO rowcov_identity_typmod_child VALUES (10, 10), (20, 20);
+
+SELECT p.id, c.id AS child_id
+FROM (
+    SELECT amount, id
+    FROM rowcov_identity_typmod_parent
+    GROUP BY amount, id
+) p
+-- accepted, reason: extra grouped column has different typmod
+JOIN rowcov_identity_typmod_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+
+DROP TABLE rowcov_identity_typmod_child, rowcov_identity_typmod_parent;
+
+CREATE TABLE rowcov_identity_collation_parent (
+    label text COLLATE "POSIX" NOT NULL,
+    id text COLLATE "C" PRIMARY KEY
+);
+CREATE TABLE rowcov_identity_collation_child (
+    id int PRIMARY KEY,
+    parent_id text COLLATE "C" NOT NULL
+        REFERENCES rowcov_identity_collation_parent (id)
+);
+INSERT INTO rowcov_identity_collation_parent VALUES ('a', 'x'), ('b', 'y');
+INSERT INTO rowcov_identity_collation_child VALUES (10, 'x'), (20, 'y');
+
+SELECT p.id, c.id AS child_id
+FROM (
+    SELECT label, id
+    FROM rowcov_identity_collation_parent
+    GROUP BY label, id
+) p
+-- accepted, reason: extra grouped column has different collation
+JOIN rowcov_identity_collation_child c FOR KEY (parent_id) -> p (id)
+ORDER BY p.id, c.id;
+
+DROP TABLE rowcov_identity_collation_child, rowcov_identity_collation_parent;
+
+CREATE FUNCTION rowcov_numeric_scale_cmp(a numeric, b numeric) RETURNS int
+LANGUAGE sql IMMUTABLE STRICT AS
+$$ SELECT CASE WHEN a < b THEN -1
+               WHEN a > b THEN 1
+               WHEN scale(a) < scale(b) THEN -1
+               WHEN scale(a) > scale(b) THEN 1
+               ELSE 0 END $$;
+
+CREATE FUNCTION rowcov_numeric_scale_eq(a numeric, b numeric) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT a = b AND scale(a) = scale(b) $$;
+
+CREATE FUNCTION rowcov_numeric_scale_lt(a numeric, b numeric) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS
+$$ SELECT rowcov_numeric_scale_cmp(a, b) < 0 $$;
+
+CREATE OPERATOR =# (
+    LEFTARG = numeric,
+    RIGHTARG = numeric,
+    FUNCTION = rowcov_numeric_scale_eq,
+    COMMUTATOR = =#,
+    RESTRICT = eqsel,
+    JOIN = eqjoinsel,
+    MERGES
+);
+
+CREATE OPERATOR <# (
+    LEFTARG = numeric,
+    RIGHTARG = numeric,
+    FUNCTION = rowcov_numeric_scale_lt
+);
+
+CREATE OPERATOR CLASS rowcov_numeric_scale_ops
+FOR TYPE numeric USING btree AS
+    OPERATOR 1 <# (numeric, numeric),
+    OPERATOR 3 =# (numeric, numeric),
+    FUNCTION 1 rowcov_numeric_scale_cmp(numeric, numeric);
+
+CREATE TABLE rowcov_numeric_parent (id numeric NOT NULL);
+CREATE UNIQUE INDEX rowcov_numeric_parent_id_idx
+    ON rowcov_numeric_parent USING btree (id rowcov_numeric_scale_ops);
+CREATE TABLE rowcov_numeric_child (
+    id int PRIMARY KEY,
+    parent_id numeric NOT NULL REFERENCES rowcov_numeric_parent (id)
+);
+INSERT INTO rowcov_numeric_parent VALUES (1.0), (1.00);
+INSERT INTO rowcov_numeric_child VALUES (10, 1.00);
+
+SELECT *
+FROM (SELECT id FROM rowcov_numeric_parent GROUP BY id) p
+-- rejected, reason: GROUP BY equality collapses keys distinct under FK equality
+JOIN rowcov_numeric_child c FOR KEY (parent_id) -> p (id);
+
+SELECT *
+FROM (
+    SELECT id
+    FROM (SELECT id FROM rowcov_numeric_parent GROUP BY ROLLUP(id)) g
+    GROUP BY id
+) p
+-- rejected, reason: ROLLUP equality collapses keys distinct under FK equality
+JOIN rowcov_numeric_child c FOR KEY (parent_id) -> p (id);
+
+SELECT *
+FROM (SELECT DISTINCT id FROM rowcov_numeric_parent) p
+-- rejected, reason: DISTINCT equality collapses keys distinct under FK equality
+JOIN rowcov_numeric_child c FOR KEY (parent_id) -> p (id);
+
+SELECT *
+FROM (
+    SELECT DISTINCT ON (id) id
+    FROM rowcov_numeric_parent
+    ORDER BY id, id USING <#
+) p
+-- rejected, reason: duplicate DISTINCT ON ordering adds no key coverage
+JOIN rowcov_numeric_child c FOR KEY (parent_id) -> p (id);
+
+CREATE VIEW rowcov_numeric_group_v AS
+SELECT id FROM rowcov_numeric_parent GROUP BY id;
+SELECT *
+FROM rowcov_numeric_group_v p
+-- rejected, reason: GROUP BY row coverage loss occurred inside the view
+JOIN rowcov_numeric_child c FOR KEY (parent_id) -> p (id);
+DROP VIEW rowcov_numeric_group_v;
+
+CREATE VIEW rowcov_numeric_distinct_v AS
+SELECT DISTINCT id FROM rowcov_numeric_parent;
+SELECT *
+FROM rowcov_numeric_distinct_v p
+-- rejected, reason: DISTINCT row coverage loss occurred inside the view
+JOIN rowcov_numeric_child c FOR KEY (parent_id) -> p (id);
+DROP VIEW rowcov_numeric_distinct_v;
+
+DROP TABLE rowcov_numeric_child, rowcov_numeric_parent;
+DROP OPERATOR CLASS rowcov_numeric_scale_ops USING btree;
+DROP OPERATOR FAMILY rowcov_numeric_scale_ops USING btree;
+DROP OPERATOR <# (numeric, numeric);
+DROP OPERATOR =# (numeric, numeric);
+DROP FUNCTION rowcov_numeric_scale_cmp(numeric, numeric);
+DROP FUNCTION rowcov_numeric_scale_eq(numeric, numeric);
+DROP FUNCTION rowcov_numeric_scale_lt(numeric, numeric);
 
 CREATE SEQUENCE volatile_default_seq;
 CREATE FUNCTION volatile_default_int(v int DEFAULT nextval('volatile_default_seq')::int)
@@ -2059,6 +2502,36 @@ ORDER BY q.parent_id NULLS LAST, q.child_id, g.id;
 DROP TABLE output_fk_nullable_child,
            output_fk_nullable_parent,
            output_fk_nullable_gp;
+
+-- Query-level uniqueness on the referenced side must not be paired with row
+-- coverage from an unrelated relation that happens to expose the same column
+-- number.
+CREATE TABLE key_join_wrong_coverage_parent
+(
+    id int PRIMARY KEY
+);
+CREATE TABLE key_join_wrong_coverage_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES key_join_wrong_coverage_parent (id)
+);
+CREATE TABLE key_join_wrong_coverage_other
+(
+    id int PRIMARY KEY
+);
+INSERT INTO key_join_wrong_coverage_parent VALUES (1), (2);
+INSERT INTO key_join_wrong_coverage_child VALUES (10, 2);
+INSERT INTO key_join_wrong_coverage_other VALUES (1);
+
+SELECT c.id, c.parent_id, o.id AS other_id
+FROM key_join_wrong_coverage_child c
+-- rejected, reason: referenced operand does not cover parent_id = 2
+JOIN (SELECT id FROM key_join_wrong_coverage_other GROUP BY id) o
+    FOR KEY (id) <- c (parent_id);
+
+DROP TABLE key_join_wrong_coverage_child,
+           key_join_wrong_coverage_other,
+           key_join_wrong_coverage_parent;
 
 -- Referenced-side uniqueness and row coverage must use the same key identity
 -- as the FK proof.  When an older alternate unique index appears before the

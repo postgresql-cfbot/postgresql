@@ -1153,9 +1153,11 @@ typedef struct KeyJoinFact
 	AttrNumber	attnum;			/* surface column attnum */
 
 	/*
-	 * KJF_UNIQUE, KJF_FOREIGN_KEY, KJF_ROW_COVERAGE.  relid is the base
-	 * relation supplying the proof.  baseAttnums has one entry per
-	 * keyPositions entry: the base relation attnums of the key.
+	 * KJF_UNIQUE, KJF_FOREIGN_KEY, KJF_ROW_COVERAGE.  relid is normally the
+	 * base relation supplying the proof; it is InvalidOid for KJF_UNIQUE
+	 * facts derived from GROUP BY / DISTINCT.  baseAttnums has one entry per
+	 * keyPositions entry: base relation attnums for relation-level facts,
+	 * target-list resnos for GROUP BY / DISTINCT facts.
 	 */
 	List	   *keyPositions;	/* list of KeyJoinKeyPosition */
 	Oid			relid;

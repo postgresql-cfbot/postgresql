@@ -46,6 +46,7 @@
 #include "nodes/nodeFuncs.h"
 #include "nodes/parsenodes.h"
 #include "optimizer/optimizer.h"
+#include "parser/parse_agg.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_key_join.h"
 #include "parser/parse_relation.h"
@@ -153,6 +154,18 @@ typedef struct KeyJoinFactContext
 	KeyJoinQueryStack *query_stack;
 } KeyJoinFactContext;
 
+/*
+ * KeyJoinRowCollapse
+ *
+ *		One GROUP BY or DISTINCT stage a row-coverage key must survive, with the
+ *		reason to record on the fact if it does not.
+ */
+typedef struct KeyJoinRowCollapse
+{
+	KeyJoinInactiveReason reason;	/* KJI_GROUP_BY or KJI_DISTINCT */
+	List	   *position_sets;		/* list of lists of KeyJoinKeyPosition */
+} KeyJoinRowCollapse;
+
 static bool find_key_join_match(RangeTblEntry *referencing_rte,
 								RangeTblEntry *referenced_rte,
 								List *referencing_attnums,
@@ -175,7 +188,9 @@ static void project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst,
 											KeyJoinInactiveReason unique_inact_reason,
 											bool preserve_rowcoverage,
 											bool filter_present,
+											List *rowcoverage_key_position_sets,
 											KeyJoinInactiveReason inact_reason);
+static List *make_rowcollapse_key_positions(Query *query, List *clauses);
 static bool key_join_contains_volatile_after_planning(Node *node);
 static bool key_join_expression_contains_volatile_after_planning(Node *node);
 static bool key_join_after_planning_query_walker(Node *node, void *context);
@@ -209,6 +224,8 @@ static bool select_key_position_parts(List *selected_attnums,
 									  List *keyPositions, List *baseAttnums,
 									  List **selected_base_attnums,
 									  List **selected_key_positions);
+static bool rowcollapse_preserves_rowcoverage(List *rowcoverage_key_positions,
+											  KeyJoinRowCollapse *rowcollapse);
 static int	key_position_index_for_attnum(List *keyPositions, int attno);
 static bool key_position_identity_lists_equal(List *left, List *right);
 static bool key_position_identity_equal(KeyJoinKeyPosition *left,
@@ -745,6 +762,7 @@ find_key_join_match(RangeTblEntry *referencing_rte,
 		{
 			List	   *unique_base;
 			List	   *unique_key_positions;
+			bool		catalog_unique;
 
 			if (uniqfact->kind != KJF_UNIQUE)
 				continue;
@@ -765,12 +783,15 @@ find_key_join_match(RangeTblEntry *referencing_rte,
 					inactive_unique = uniqfact;
 				continue;
 			}
+			catalog_unique = OidIsValid(uniqfact->relid);
+
 			/*
-			 * The unique fact has to be on the same relation the FK fact
-			 * targets; without that, condition 1 doesn't hold over the
-			 * relevant rows.
+			 * A catalog-backed unique fact has to be on the same relation the
+			 * FK fact targets; without that, condition 1 doesn't hold over
+			 * the relevant rows.
 			 */
-			if (uniqfact->relid != fkfact->referencedRelid)
+			if (catalog_unique &&
+				uniqfact->relid != fkfact->referencedRelid)
 				continue;
 			if (reached < REQ_UNIQUE)
 				reached = REQ_UNIQUE;
@@ -817,7 +838,8 @@ find_key_join_match(RangeTblEntry *referencing_rte,
 				 */
 				if (coverage->relid != fkfact->referencedRelid)
 					continue;
-				Assert(int_lists_same_members(coverage_base, unique_base));
+				Assert(!catalog_unique ||
+					   int_lists_same_members(coverage_base, unique_base));
 				Assert(int_lists_same_members(coverage->baseAttnums,
 											  coverage_base));
 				if (reached < REQ_COVERAGE)
@@ -1053,6 +1075,88 @@ select_key_position_parts(List *selected_attnums, List *keyPositions,
 	if (selected_key_positions != NULL)
 		*selected_key_positions = position_result;
 	return true;
+}
+
+/*
+ * rowcollapse_set_preserves_rowcoverage
+ *
+ *		Return true if one GROUP BY or DISTINCT key alternative preserves one
+ *		existing row-coverage fact.
+ *
+ *		Every projected row-coverage key position must appear in the
+ *		grouped/distinct key under the same identity.  Nullable referenced
+ *		rows are excluded from the referenced multiset, so collapsing
+ *		null-containing referenced rows cannot remove a value required by an
+ *		all-non-null referencing key.  Extra row-collapse columns do not merge
+ *		distinct covered key values.
+ */
+static bool
+rowcollapse_set_preserves_rowcoverage(List *rowcoverage_key_positions,
+									  List *rowcollapse_key_positions)
+{
+	List	   *used_row_positions = NIL;
+
+	foreach_node(KeyJoinKeyPosition, keypos, rowcoverage_key_positions)
+	{
+		bool		position_match = false;
+		int			pos = 0;
+
+		foreach_node(KeyJoinKeyPosition, rowpos, rowcollapse_key_positions)
+		{
+			if (list_member_int(used_row_positions, pos))
+			{
+				pos++;
+				continue;
+			}
+			if (!key_position_identity_equal(rowpos, keypos))
+			{
+				pos++;
+				continue;
+			}
+			foreach_int(attno, rowpos->attnums)
+			{
+				if (list_member_int(keypos->attnums, attno))
+				{
+					position_match = true;
+					break;
+				}
+			}
+			if (position_match)
+			{
+				used_row_positions = lappend_int(used_row_positions, pos);
+				break;
+			}
+			pos++;
+		}
+		if (!position_match)
+			return false;
+	}
+
+	return true;
+}
+
+/*
+ * rowcollapse_preserves_rowcoverage
+ *
+ *		Return true if a GROUP BY or DISTINCT row-collapse stage preserves one
+ *		existing row-coverage fact.
+ *
+ *		Simple GROUP BY and DISTINCT have one alternative key.  GROUPING SETS,
+ *		ROLLUP, and CUBE have multiple alternatives, and row coverage survives
+ *		if any one resulting grouping set contains the full key.
+ */
+static bool
+rowcollapse_preserves_rowcoverage(List *rowcoverage_key_positions,
+								  KeyJoinRowCollapse *rowcollapse)
+{
+	foreach_ptr(List, rowcollapse_key_positions, rowcollapse->position_sets)
+	{
+		if (rowcollapse_set_preserves_rowcoverage(rowcoverage_key_positions,
+												  rowcollapse_key_positions))
+			return true;
+	}
+
+	return false;
 }
 
 static int
@@ -2033,7 +2137,8 @@ find_join_expr_in_jointree(Node *jtnode, Index rtindex)
  *
  *		Compute surface facts exposed by a query targetlist.
  *
- *		Query shape determines which base facts survive projection.
+ *		Query shape determines which base facts survive projection and
+ *		whether GROUP BY or DISTINCT introduces query-level uniqueness.
  */
 static KeyJoinSurfaceFacts *
 project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
@@ -2047,7 +2152,7 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
 	Index		top_rtindex = 0;
 	RangeTblEntry *toprte = NULL;
 	bool		block_rowcoverage;
-	KeyJoinInactiveReason rowcoverage_inact_reason = KJI_ROW_REMOVING_CLAUSE;
+	List	   *rowcoverage_key_position_sets = NIL;
 
 	Assert(context != NULL);
 	Assert(query != NULL);
@@ -2108,27 +2213,104 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
 
 	/*
 	 * HAVING/LIMIT/OFFSET/FOR UPDATE can remove rows post-base, so they block
-	 * row coverage but not other facts.  GROUP BY and DISTINCT collapse rows,
-	 * which can likewise remove referenced key rows.  GROUP BY is blamed
-	 * first when both are present.
+	 * row coverage but not other facts.
 	 */
-	if (query->havingQual != NULL ||
+	block_rowcoverage = query->havingQual != NULL ||
 		query->limitOffset != NULL ||
 		query->limitCount != NULL ||
-		query->rowMarks != NIL)
-		block_rowcoverage = true;
-	else if (query->groupClause != NIL || query->groupingSets != NIL)
+		query->rowMarks != NIL;
+
+	/*
+	 * GROUP BY and DISTINCT can remove rows.  A row-coverage key survives
+	 * only when every row-collapsing stage groups/distincts by that key under
+	 * exactly the same equality identity used by the key proof.  If both
+	 * stages are present, either one could otherwise discard a needed key.
+	 */
+	if (query->groupClause != NIL)
 	{
-		block_rowcoverage = true;
-		rowcoverage_inact_reason = KJI_GROUP_BY;
+		KeyJoinRowCollapse *rc = palloc(sizeof(KeyJoinRowCollapse));
+
+		rc->reason = KJI_GROUP_BY;
+		if (query->groupingSets != NIL)
+		{
+			List	   *expanded_sets;
+
+			/*
+			 * Use the same expansion limit as aggregate parse checking.
+			 * Parse analysis rejects queries that exceed it.
+			 */
+			expanded_sets = expand_grouping_sets(query->groupingSets,
+												 query->groupDistinct, 4096);
+			Assert(expanded_sets != NIL);
+
+			rc->position_sets = NIL;
+			foreach_ptr(List, sortgrouprefs, expanded_sets)
+			{
+				List	   *position_set = NIL;
+				List	   *attnums = NIL;
+
+				foreach_int(sortgroupref, sortgrouprefs)
+				{
+					SortGroupClause *sgc;
+					TargetEntry *tle;
+					Node	   *expr;
+					Oid			eqtype;
+					int32		eqtypmod;
+
+					sgc = get_sortgroupref_clause(sortgroupref,
+												  query->groupClause);
+					tle = get_sortgroupref_tle(sortgroupref,
+											   query->targetList);
+
+					Assert(tle != NULL);
+					Assert(OidIsValid(sgc->eqop));
+					if (tle->resjunk)
+						continue;
+					Assert(direct_var_from_node((Node *) tle->expr) != NULL);
+					Assert(!list_member_int(attnums, tle->resno));
+
+					expr = (Node *) tle->expr;
+					if (!key_join_equality_operator_is_usable(sgc->eqop,
+															  InvalidOid,
+															  &eqtype))
+						continue;
+					if (!key_join_equality_identity_is_usable(exprType(expr),
+															  exprTypmod(expr),
+															  eqtype,
+															  &eqtypmod))
+						continue;
+
+					attnums = lappend_int(attnums, tle->resno);
+					position_set =
+						lappend(position_set,
+								make_key_position(list_make1_int(tle->resno),
+												  exprType(expr),
+												  exprTypmod(expr),
+												  exprCollation(expr),
+												  eqtype, eqtypmod,
+												  sgc->eqop));
+				}
+				rc->position_sets = lappend(rc->position_sets, position_set);
+			}
+		}
+		else
+			rc->position_sets =
+				list_make1(make_rowcollapse_key_positions(query,
+														  query->groupClause));
+		rowcoverage_key_position_sets =
+			lappend(rowcoverage_key_position_sets, rc);
 	}
-	else if (query->distinctClause != NIL)
+	if (query->distinctClause != NIL)
 	{
-		block_rowcoverage = true;
-		rowcoverage_inact_reason = KJI_DISTINCT;
+		KeyJoinRowCollapse *rc = palloc(sizeof(KeyJoinRowCollapse));
+
+		rc->reason = KJI_DISTINCT;
+		rc->position_sets =
+			list_make1(make_rowcollapse_key_positions(query,
+													  query->distinctClause));
+		rowcoverage_key_position_sets =
+			lappend(rowcoverage_key_position_sets, rc);
 	}
-	else
-		block_rowcoverage = false;
 
 	Assert(query->jointree != NULL);
 	if (list_length(query->jointree->fromlist) == 1)
@@ -2168,8 +2350,94 @@ project_key_join_query_facts(KeyJoinFactContext *context, Query *query)
 										KJI_GROUP_BY,
 										!block_rowcoverage,
 										query->jointree->quals != NULL,
-										rowcoverage_inact_reason);
+										rowcoverage_key_position_sets,
+										KJI_ROW_REMOVING_CLAUSE);
 		pfree(attrmap);
+	}
+
+	/*
+	 * GROUP BY / DISTINCT also proves uniqueness of the grouped/distinct
+	 * output columns.  This mirrors the planner's query_is_distinct_for()
+	 * (analyzejoins.c); we re-derive it here rather than call that because this
+	 * runs at parse time and, unlike a bool distinctness check, must also emit
+	 * the per-column key identity used for cross-side matching.  These
+	 * query-level facts have no base-relation relid.  GROUPING SETS, ROLLUP,
+	 * and CUBE do not prove uniqueness; if SELECT DISTINCT is also present,
+	 * derive uniqueness from that final row collapse.
+	 */
+	if (query->distinctClause != NIL ||
+		(query->groupClause != NIL && query->groupingSets == NIL))
+	{
+		List	   *clauses = query->distinctClause != NIL ?
+			query->distinctClause : query->groupClause;
+		List	   *attnums = NIL;
+		List	   *keypositions = NIL;
+		bool		usable = true;
+
+		foreach_node(SortGroupClause, sgc, clauses)
+		{
+			TargetEntry *tle = get_sortgroupref_tle(sgc->tleSortGroupRef,
+													query->targetList);
+
+			Assert(tle != NULL);
+			Assert(OidIsValid(sgc->eqop));
+			if (tle->resjunk)
+			{
+				usable = false;
+				break;
+			}
+			if (direct_var_from_node((Node *) tle->expr) == NULL)
+			{
+				usable = false;
+				break;
+			}
+			if (!list_member_int(attnums, tle->resno))
+			{
+				Node	   *expr = (Node *) tle->expr;
+				Oid			eqtype;
+				int32		eqtypmod;
+
+				if (!key_join_collation_is_usable(exprCollation(expr)))
+				{
+					usable = false;
+					break;
+				}
+				if (!key_join_equality_operator_is_usable(sgc->eqop,
+														  InvalidOid,
+														  &eqtype))
+				{
+					usable = false;
+					break;
+				}
+				if (!key_join_equality_identity_is_usable(exprType(expr),
+														  exprTypmod(expr),
+														  eqtype,
+														  &eqtypmod))
+				{
+					usable = false;
+					break;
+				}
+				attnums = lappend_int(attnums, tle->resno);
+				keypositions =
+					lappend(keypositions,
+							make_key_position(list_make1_int(tle->resno),
+											  exprType(expr),
+											  exprTypmod(expr),
+											  exprCollation(expr),
+											  eqtype, eqtypmod,
+											  sgc->eqop));
+			}
+		}
+
+		if (usable)
+		{
+			KeyJoinFact *fact = add_fact(result, KJF_UNIQUE);
+
+			Assert(attnums != NIL);
+			fact->keyPositions = keypositions;
+			fact->relid = InvalidOid;
+			fact->baseAttnums = list_copy(attnums);
+		}
 	}
 
 	pfree(srcvarno);
@@ -2198,6 +2466,7 @@ project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst, RangeTblEntry *src,
 								KeyJoinInactiveReason unique_inact_reason,
 								bool preserve_rowcoverage,
 								bool filter_present,
+								List *rowcoverage_key_position_sets,
 								KeyJoinInactiveReason inact_reason)
 {
 	bool		tablesample;
@@ -2262,39 +2531,68 @@ project_key_join_facts_from_rte(KeyJoinSurfaceFacts *dst, RangeTblEntry *src,
 				continue;
 
 			case KJF_ROW_COVERAGE:
-				if (!preserve_rowcoverage)
 				{
-					add_inactive_projected(dst, old, attrmap, inact_reason);
-					continue;
-				}
-				if (tablesample)
-				{
-					add_inactive_projected(dst, old, attrmap,
-										   KJI_ROW_REMOVING_CLAUSE);
-					continue;
-				}
-				Assert(list_length(old->baseAttnums) ==
-					   list_length(old->keyPositions));
-				newpositions = project_key_positions(old->keyPositions,
-													 attrmap);
-				if (newpositions == NIL)
-					continue;
+					bool		rowcollapse_sets_cover = true;
+					KeyJoinInactiveReason rowcollapse_reason = KJI_NONE;
 
-				/*
-				 * Row coverage must account for every filter: a filtered
-				 * referenced input may have dropped rows the join still
-				 * needs, so any filter on this surface ends coverage here.
-				 */
-				if (filter_present)
-				{
-					add_inactive_projected(dst, old, attrmap,
-										   KJI_REFERENCED_FILTER);
+					if (!preserve_rowcoverage)
+					{
+						add_inactive_projected(dst, old, attrmap, inact_reason);
+						continue;
+					}
+					if (tablesample)
+					{
+						add_inactive_projected(dst, old, attrmap,
+											   KJI_ROW_REMOVING_CLAUSE);
+						continue;
+					}
+					Assert(list_length(old->baseAttnums) ==
+						   list_length(old->keyPositions));
+					newpositions = project_key_positions(old->keyPositions,
+														 attrmap);
+					if (newpositions == NIL)
+						continue;
+
+					/*
+					 * Every row-collapsing stage must group/distinct on this
+					 * row-coverage key under the same equality identity.
+					 * Null-containing referenced rows are outside the
+					 * referenced multiset.
+					 */
+					foreach_ptr(KeyJoinRowCollapse, rc,
+								rowcoverage_key_position_sets)
+					{
+						if (!rowcollapse_preserves_rowcoverage(newpositions,
+															   rc))
+						{
+							rowcollapse_sets_cover = false;
+							rowcollapse_reason = rc->reason;
+							break;
+						}
+					}
+					if (!rowcollapse_sets_cover)
+					{
+						add_inactive_projected(dst, old, attrmap,
+											   rowcollapse_reason);
+						continue;
+					}
+
+					/*
+					 * Row coverage must account for every filter: a filtered
+					 * referenced input may have dropped rows the join still
+					 * needs, so any filter on this surface ends coverage here.
+					 */
+					if (filter_present)
+					{
+						add_inactive_projected(dst, old, attrmap,
+											   KJI_REFERENCED_FILTER);
+						continue;
+					}
+					new = copyObject(old);
+					new->keyPositions = newpositions;
+					dst->facts = lappend(dst->facts, new);
 					continue;
 				}
-				new = copyObject(old);
-				new->keyPositions = newpositions;
-				dst->facts = lappend(dst->facts, new);
-				continue;
 
 			default:
 				Assert(old->kind == KJF_FOREIGN_KEY);
@@ -2340,6 +2638,61 @@ project_key_positions(List *keyPositions, List **attrmap)
 										   oldpos->eqTypeOid,
 										   oldpos->eqTypmod,
 										   oldpos->eqOperator));
+	}
+	return result;
+}
+
+/*
+ * make_rowcollapse_key_positions
+ *
+ *		Build key-position evidence for one row-collapsing stage.
+ */
+static List *
+make_rowcollapse_key_positions(Query *query, List *clauses)
+{
+	List	   *result = NIL;
+	List	   *attnums = NIL;
+
+	foreach_node(SortGroupClause, sgc, clauses)
+	{
+		TargetEntry *tle = get_sortgroupref_tle(sgc->tleSortGroupRef,
+												query->targetList);
+		Node	   *expr;
+
+		Assert(tle != NULL);
+		Assert(OidIsValid(sgc->eqop));
+		if (tle->resjunk)
+			continue;
+		if (direct_var_from_node((Node *) tle->expr) == NULL)
+			continue;
+		if (list_member_int(attnums, tle->resno))
+			continue;
+
+		expr = (Node *) tle->expr;
+		{
+			Oid			eqtype;
+			int32		eqtypmod;
+
+			if (!key_join_equality_operator_is_usable(sgc->eqop,
+													  InvalidOid,
+													  &eqtype))
+				continue;
+			if (!key_join_equality_identity_is_usable(exprType(expr),
+													  exprTypmod(expr),
+													  eqtype,
+													  &eqtypmod))
+				continue;
+
+			attnums = lappend_int(attnums, tle->resno);
+			result =
+				lappend(result,
+						make_key_position(list_make1_int(tle->resno),
+										  exprType(expr),
+										  exprTypmod(expr),
+										  exprCollation(expr),
+										  eqtype, eqtypmod,
+										  sgc->eqop));
+		}
 	}
 	return result;
 }
@@ -2636,6 +2989,7 @@ compute_join_output_facts(JoinExpr *j,
 									KJI_NULL_EXTENDING_JOIN,
 									true, KJI_NONE, true,
 									false,
+									NIL,
 									KJI_NONE);
 	project_key_join_facts_from_rte(result, referenced_rte, referenced_map,
 									preserve_referenced_notnull,
@@ -2644,6 +2998,7 @@ compute_join_output_facts(JoinExpr *j,
 									KJI_JOIN_FANOUT,
 									referenced_preserved,
 									false,
+									NIL,
 									KJI_JOIN_NOT_PRESERVED);
 
 	Assert(result->facts != NIL);

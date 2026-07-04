@@ -1555,6 +1555,7 @@ KeyJoinMatch
 KeyJoinNode
 KeyJoinQueryStack
 KeyJoinReq
+KeyJoinRowCollapse
 KeyJoinSurfaceFacts
 KeySuffix
 KeyWord

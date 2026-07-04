@@ -70,6 +70,11 @@ ORDER BY c1.c3;
 RESET enable_self_join_elimination;
 
 SELECT *
+FROM t1 p
+JOIN LATERAL (SELECT p.c1 AS c1) q
+  FOR KEY (c1) -> p (c1); -- rejected, reason: lateral outer Vars are not direct key facts
+
+SELECT *
 FROM pg_catalog.pg_class pc
 -- rejected, reason: catalog NOT NULL columns do not provide proof facts
 JOIN t2 FOR KEY (c3) -> pc (relname);
@@ -291,6 +296,45 @@ INSERT INTO t3 (c5, c6) VALUES (NULL, 5678); -- accepted
 INSERT INTO t3 (c5, c6) VALUES (NULL, NULL); -- accepted
 
 --
+-- Test composite key joins with columns in matching order
+--
+SELECT *
+FROM t1
+-- rejected, reason: nullable referencing columns are not preserved by an inner key join
+JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2)
+JOIN t3 FOR KEY (c5,c6) -> t1 (c1,c2);
+
+SELECT *
+FROM t1
+-- rejected, reason: nullable referencing columns are on the non-preserved side
+JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2)
+LEFT JOIN t3 FOR KEY (c5,c6) -> t1 (c1,c2);
+
+SELECT *
+FROM t1
+-- rejected, reason: referenced t1 surface is unique but not row-covered after the preceding inner key join
+JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2)
+RIGHT JOIN t3 FOR KEY (c5,c6) -> t1 (c1,c2);
+
+--
+-- Test composite key joins with swapped column orders
+--
+SELECT *
+FROM t1
+-- rejected, reason: nullable referencing columns are not preserved by an inner key join
+JOIN t2 FOR KEY (c4,c3) -> t1 (c2,c1)
+JOIN t3 FOR KEY (c6,c5) -> t1 (c2,c1);
+
+--
+-- Test mismatched column orders between referencing and referenced sides
+--
+SELECT *
+FROM t1
+-- accepted
+JOIN t2 FOR KEY (c4,c3) -> t1 (c2,c1)
+JOIN t3 FOR KEY (c6,c5) -> t1 (c1,c2); -- rejected, reason: referencing and referenced column orders do not match the FK
+
+--
 -- Test defining foreign key constraints with MATCH FULL
 --
 
@@ -307,6 +351,24 @@ INSERT INTO t4 (c7, c8) VALUES (NULL, 30); -- rejected, reason: MATCH FULL disal
 INSERT INTO t4 (c7, c8) VALUES (1234, NULL); -- rejected, reason: MATCH FULL disallows partially NULL composite FK values
 INSERT INTO t4 (c7, c8) VALUES (NULL, 5678); -- rejected, reason: MATCH FULL disallows partially NULL composite FK values
 INSERT INTO t4 (c7, c8) VALUES (NULL, NULL); -- accepted
+
+SELECT *
+FROM t1
+-- rejected, reason: nullable referencing columns are not preserved by an inner key join
+JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2)
+JOIN t4 FOR KEY (c7,c8) -> t1 (c1,c2);
+
+SELECT *
+FROM t1
+-- rejected, reason: nullable referencing columns are on the non-preserved side
+JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2)
+LEFT JOIN t4 FOR KEY (c7,c8) -> t1 (c1,c2);
+
+SELECT *
+FROM t1
+-- rejected, reason: referenced t1 surface is unique but not row-covered after the preceding inner key join
+JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2)
+RIGHT JOIN t4 FOR KEY (c7,c8) -> t1 (c1,c2);
 
 CREATE TABLE t5
 (
@@ -391,34 +453,261 @@ CREATE TABLE t11
 INSERT INTO t11 (c27, c28) VALUES (1, 10);
 
 --
--- Derived operands are not supported: FOR KEY joins prove only plain-table
--- operands
+-- Test subqueries
 --
 
-SELECT *
-FROM t1
--- rejected, reason: a subquery operand is not a plain table
-JOIN (SELECT c3, c4 FROM t2) AS sub FOR KEY (c3) -> t1 (c1);
+SELECT
+    a.c1,
+    a.c2,
+    b.c3,
+    b.c4
+FROM t1 AS a
+JOIN
+(
+    SELECT * FROM t2
+-- accepted
+) AS b FOR KEY (c3) -> a (c1);
+
+SELECT
+    a.c1,
+    a.c2,
+    b.c3,
+    b.c4
+FROM
+(
+    SELECT * FROM t1
+) AS a
+JOIN
+(
+    SELECT * FROM t2
+-- accepted
+) AS b FOR KEY (c3) -> a (c1);
+
+SELECT
+    a.t1_c1,
+    a.t1_c2,
+    b.t2_c3,
+    b.t2_c4
+FROM
+(
+    SELECT c1 AS t1_c1, c2 AS t1_c2 FROM t1
+) AS a
+JOIN
+(
+    SELECT c3 AS t2_c3, c4 AS t2_c4 FROM t2
+-- accepted
+) AS b FOR KEY (t2_c3) -> a (t1_c1);
+
+SELECT
+    a.outer_c1,
+    a.outer_c2,
+    b.outer_c3,
+    b.outer_c4
+FROM
+(
+    SELECT mid_c1 AS outer_c1, mid_c2 AS outer_c2 FROM
+    (
+        SELECT c1 AS mid_c1, c2 AS mid_c2 FROM t1
+    ) sub1
+) AS a
+JOIN
+(
+    SELECT mid_c3 AS outer_c3, mid_c4 AS outer_c4 FROM
+    (
+        SELECT c3 AS mid_c3, c4 AS mid_c4 FROM t2
+    ) sub2
+-- accepted
+) AS b FOR KEY (outer_c3) -> a (outer_c1);
 
 SELECT *
 FROM t1
-JOIN t2 ON c3 = c1
--- rejected, reason: the referenced alias is buried below a preceding join
-JOIN t2 AS t2b FOR KEY (c3) -> t1 (c1);
+JOIN
+(
+    SELECT
+        t10.c23,
+        t10.c24,
+        t10_2.c25,
+        t10_2.c26
+    FROM t10
+-- accepted
+    JOIN t10 AS t10_2 FOR KEY (c23, c24) <- t10 (c25, c26)
+) AS q1 FOR KEY (c23, c24) -> t1 (c1, c2);
+
+SELECT *
+FROM t1
+JOIN LATERAL (
+    SELECT c3, c4 FROM t2 WHERE c4 = c1 + 9
+-- rejected, reason: LATERAL subqueries do not expose surface FK facts
+) AS q1 FOR KEY (c3) -> t1 (c1);
+
+SELECT *
+FROM t1 AS outer_t,
+     LATERAL (SELECT outer_t.c1) AS q1(c1)
+-- rejected, reason: LATERAL subqueries do not expose referenced-side surface facts
+     JOIN t2 FOR KEY (c3) -> q1 (c1);
+
+SELECT *
+FROM t1 AS outer_t,
+     LATERAL (SELECT outer_t.c1, g FROM generate_series(1, 2) AS g) AS q1(c1, g)
+-- rejected, reason: LATERAL referenced side can duplicate inherited keys
+     JOIN t2 FOR KEY (c3) -> q1 (c1);
+
+SELECT *
+FROM t1 AS outer_t,
+     LATERAL (SELECT outer_t.c1 WHERE false) AS q1(c1)
+-- rejected, reason: LATERAL referenced side can suppress inherited keys
+     JOIN t2 FOR KEY (c3) -> q1 (c1);
 
 --
 -- Test CTEs
 --
 
--- Regression: a FOR KEY join in a sibling CTE of a recursive one.
--- makeDependencyGraph walks every CTE body in the WITH block, so the
--- raw walker must handle KeyJoinClause here too.
+WITH
+q1 (q1_c1, q1_c2) AS
+(
+    SELECT c1, c2 FROM t1
+),
+q2 (q2_c1, q2_c2) AS
+(
+    SELECT q1_c1, q1_c2 FROM q1
+),
+q3 (q3_c3, q3_c4) AS
+(
+    SELECT c3, c4 FROM t2
+),
+q4 (q4_c3, q4_c4) AS
+(
+    SELECT q3_c3, q3_c4 FROM q3
+)
+SELECT
+    q2_c1,
+    q2_c2,
+    q4_c3,
+    q4_c4
+-- accepted
+FROM q2 JOIN q4 FOR KEY (q4_c3, q4_c4) -> q2 (q2_c1, q2_c2);
+
+WITH RECURSIVE q1 AS (SELECT c1 FROM t1 UNION SELECT c1 FROM q1)
+-- rejected, reason: recursive CTEs do not expose surface FK facts
+SELECT * FROM q1 JOIN t2 FOR KEY (c3) -> q1 (c1);
+
+WITH RECURSIVE rec_self(c1) AS (
+    SELECT c1 FROM t1
+    UNION ALL
+    SELECT t2.c3
+    FROM rec_self
+    -- rejected, reason: recursive self-references do not expose surface FK facts
+    JOIN t2 FOR KEY (c3) -> rec_self (c1)
+    WHERE false
+)
+SELECT * FROM rec_self;
+
+-- Regression: a FOR KEY join inside a CTE body of a WITH RECURSIVE
+-- block must not raise "unrecognized node type" from the raw
+-- parse-tree walker that builds the CTE dependency graph.
+WITH RECURSIVE rec_kj AS (
+    SELECT t2.c3 FROM t1 JOIN t2 FOR KEY (c3) -> t1 (c1)
+    UNION ALL
+    SELECT c3 FROM rec_kj WHERE false
+)
+-- rejected, reason: recursive CTEs do not expose surface FK facts
+SELECT * FROM rec_kj JOIN t2 t2b FOR KEY (c3) -> rec_kj (c3);
+
+-- Regression: same as above, but the FOR KEY join is in a sibling CTE
+-- of the recursive one.  makeDependencyGraph walks every CTE body in
+-- the WITH block, so the raw walker must handle KeyJoinClause here too.
 WITH RECURSIVE rec_only AS (
     SELECT 1 AS x UNION ALL SELECT x FROM rec_only WHERE false
 ), kj_sibling AS (
     SELECT t1.c1 FROM t1 JOIN t2 FOR KEY (c3) -> t1 (c1)
 )
 SELECT * FROM rec_only, kj_sibling;
+
+--
+-- Test VIEWs
+--
+
+CREATE VIEW v1 AS
+SELECT c1 AS v1_c1, c2 AS v1_c2 FROM t1;
+
+CREATE VIEW v2 AS
+SELECT v1_c1 AS v2_c1, v1_c2 AS v2_c2 FROM v1;
+
+CREATE VIEW v3 AS
+SELECT c3 AS v3_c3, c4 AS v3_c4 FROM t2;
+
+CREATE VIEW v4 AS
+SELECT v3_c3 AS v4_c3, v3_c4 AS v4_c4 FROM v3;
+
+--
+-- Test subqueries, CTEs, and views
+--
+WITH
+q2 (q2_c1, q2_c2) AS
+(
+    SELECT
+        q1_c1,
+        q1_c2
+    FROM
+    (
+        SELECT c1 AS q1_c1, c2 AS q1_c2 FROM t1
+    ) AS q1
+)
+SELECT
+    q2_c1,
+    q2_c2,
+    v4_c3,
+    v4_c4
+-- accepted
+FROM q2 JOIN v4 FOR KEY (v4_c3, v4_c4) -> q2 (q2_c1, q2_c2);
+
+DROP VIEW v1, v2, v3, v4;
+
+--
+-- Test subqueries, CTEs and VIEWs containing joins
+--
+
+SELECT
+    q1.c11,
+    q1.c12,
+    t6.c13,
+    t6.c14
+FROM
+(
+    SELECT
+        t5.c9,
+        t5.c10,
+        t5.c11,
+        t5.c12
+    FROM t5
+-- accepted
+    JOIN t1 FOR KEY (c1, c2) <- t5 (c11, c12)
+    JOIN t1 AS t1_2 FOR KEY (c1, c2) <- t5 (c11, c12)
+    JOIN t1 AS t1_3 FOR KEY (c1, c2) <- t5 (c11, c12)
+) AS q1
+JOIN t6 FOR KEY (c13, c14) -> q1 (c9, c10);
+
+WITH
+q1 AS
+(
+    SELECT
+        t5.c9,
+        t5.c10,
+        t5.c11,
+        t5.c12
+    FROM t5
+-- accepted
+    JOIN t1 FOR KEY (c1, c2) <- t5 (c11, c12)
+    JOIN t1 AS t1_2 FOR KEY (c1, c2) <- t5 (c11, c12)
+    JOIN t1 AS t1_3 FOR KEY (c1, c2) <- t5 (c11, c12)
+)
+SELECT
+    q1.c11,
+    q1.c12,
+    t6.c13,
+    t6.c14
+FROM q1
+JOIN t6 FOR KEY (c13, c14) -> q1 (c9, c10);
 
 --
 -- Test disallowed filtering of referenced table
@@ -429,6 +718,114 @@ SELECT * FROM t1 WHERE c1 > 0;
 
 CREATE VIEW v2 AS
 SELECT * FROM t2 WHERE c3 > 0;
+
+-- rejected, reason: a filter on the referenced side (v1) defeats row coverage
+SELECT * FROM v1 JOIN t2 FOR KEY (c3) -> v1 (c1);
+
+-- accepted, filtering allowed since v2 is the referencing table
+SELECT * FROM t1 JOIN v2 FOR KEY (c3) -> t1 (c1);
+
+-- rejected, reason: a filter on the referenced side (v1) defeats row coverage,
+-- even when the referencing side applies an equivalent filter
+SELECT * FROM v1 JOIN v2 FOR KEY (c3) -> v1 (c1);
+
+-- rejected, reason: a HAVING filter on the referenced side defeats row coverage
+SELECT * FROM
+(
+    SELECT c1, count(*) FROM t1 GROUP BY c1 HAVING c2 > 100
+) AS u
+JOIN t2 FOR KEY (c3) -> u (c1);
+
+-- rejected, reason: u is filtered and is the referenced table
+SELECT * FROM (SELECT c1 FROM t1 LIMIT 1) AS u
+JOIN t2 FOR KEY (c3) -> u (c1);
+
+-- rejected, reason: u is filtered and is the referenced table
+SELECT * FROM (SELECT c1 FROM t1 OFFSET 1) AS u
+JOIN t2 FOR KEY (c3) -> u (c1);
+
+-- rejected, reason: DISTINCT on the referenced side collapses rows and defeats
+-- row coverage
+SELECT * FROM (SELECT DISTINCT c1 FROM t1) AS u
+JOIN t2 FOR KEY (c3) -> u (c1);
+
+-- rejected, reason: GROUP BY on the referenced side collapses rows and defeats
+-- row coverage
+SELECT * FROM (SELECT c1 FROM t1 GROUP BY c1) AS u
+JOIN t2 FOR KEY (c3) -> u (c1);
+
+-- rejected, reason: GROUPING SETS can null the referenced key, so its
+-- uniqueness is not proven
+SELECT * FROM (SELECT c1 FROM t1 GROUP BY GROUPING SETS ((c1), ())) AS u
+JOIN t2 FOR KEY (c3) -> u (c1);
+
+WITH q2 AS
+(
+    SELECT * FROM t5 WHERE t5.c11 > 0
+)
+SELECT
+    q1.c11,
+    q1.c12,
+    t7.c15,
+    t7.c16
+FROM
+(
+    SELECT
+        q2.c9,
+        q2.c10,
+        q2.c11,
+        q2.c12
+    FROM q2
+-- rejected, reason: referenced-side q1 is filtered — the filter defeats row coverage of c9,c10
+    JOIN t1 FOR KEY (c1, c2) <- q2 (c11, c12)
+) AS q1
+JOIN t7 FOR KEY (c15, c16) -> q1 (c9, c10);
+
+--
+-- Test allowed joins not affecting uniqueness
+--
+
+SELECT
+    q1.c11,
+    q1.c12,
+    t6.c13,
+    t6.c14
+FROM
+(
+    SELECT
+        t5.c9,
+        t5.c10,
+        t5.c11,
+        t5.c12
+    FROM t5
+-- accepted
+    JOIN t1 FOR KEY (c1, c2) <- t5 (c11, c12)
+) AS q1
+JOIN t6 FOR KEY (c13, c14) -> q1 (c9, c10);
+
+--
+-- Test disallowed non-unique referenced table
+--
+
+SELECT
+    q1.c11,
+    q1.c12,
+    t7.c15,
+    t7.c16
+FROM
+(
+    SELECT
+        t5.c9,
+        t5.c10,
+        t5.c11,
+        t5.c12
+    FROM t5
+-- accepted
+    JOIN t1 FOR KEY (c1, c2) <- t5 (c11, c12)
+    JOIN t6 FOR KEY (c13, c14) -> t5 (c9, c10)
+) AS q1
+-- rejected, reason: inner key join duplicates the referenced key
+JOIN t7 FOR KEY (c15, c16) -> q1 (c9, c10);
 
 CREATE TABLE t1_nn (t1_id INTEGER PRIMARY KEY);
 CREATE TABLE t2_nn (
@@ -469,6 +866,71 @@ SELECT * FROM t1_nn
 -- rejected, reason: nullable referencing column is on the non-preserved side
 LEFT JOIN t2_nn FOR KEY (t2_t1_id_nullable) -> t1_nn (t1_id);
 
+-- NE1: NOT NULL FK col null-extended by prior FK LEFT JOIN → null-extended error
+-- t1_nn a LEFT JOIN t2_nn makes t2_t1_id_nn null-extended; the subsequent INNER key join
+-- on that column should fire the null-extended branch of the error.
+SELECT * FROM
+    t1_nn a
+    LEFT JOIN t2_nn FOR KEY (t2_t1_id_nn) -> a (t1_id)
+-- rejected, reason: FK column was null-extended by the prior outer join
+    JOIN t1_nn b FOR KEY (t1_id) <- t2_nn (t2_t1_id_nn);
+
+-- NE2: NOT NULL FK col null-extended through prior outer key joins → error
+CREATE TABLE t1_nn_chain (t1_id INTEGER PRIMARY KEY);
+CREATE TABLE t2_nn_chain (
+    t2_id INTEGER PRIMARY KEY,
+    t2_t1_id INTEGER NOT NULL REFERENCES t1_nn_chain(t1_id)
+);
+CREATE TABLE t3_nn_chain (
+    t3_id INTEGER PRIMARY KEY,
+    t3_t2_id INTEGER NOT NULL UNIQUE REFERENCES t2_nn_chain(t2_id)
+);
+
+INSERT INTO t1_nn_chain VALUES (1), (2);
+INSERT INTO t2_nn_chain VALUES (10, 1), (20, 2);
+INSERT INTO t3_nn_chain VALUES (100, 10);
+
+SELECT * FROM
+    t2_nn_chain m
+-- accepted
+    FULL JOIN t3_nn_chain l FOR KEY (t3_t2_id) -> m (t2_id)
+    LEFT JOIN t2_nn_chain m2 FOR KEY (t2_id) <- l (t3_t2_id)
+-- rejected, reason: FK column was null-extended through prior outer key joins
+    JOIN t1_nn_chain r FOR KEY (t1_id) <- m2 (t2_t1_id);
+
+DROP TABLE t3_nn_chain, t2_nn_chain, t1_nn_chain;
+
+-- NE3: outer padding null-extends every base table in a nested subtree
+CREATE TABLE ne3_a (id INTEGER PRIMARY KEY);
+CREATE TABLE ne3_e (id INTEGER PRIMARY KEY);
+CREATE TABLE ne3_c (
+    id   INTEGER PRIMARY KEY,
+    e_id INTEGER NOT NULL REFERENCES ne3_e(id)
+);
+CREATE TABLE ne3_b (
+    id   INTEGER PRIMARY KEY,
+    a_id INTEGER NOT NULL REFERENCES ne3_a(id),
+    c_id INTEGER NOT NULL REFERENCES ne3_c(id)
+);
+
+INSERT INTO ne3_a VALUES (1), (2);
+INSERT INTO ne3_e VALUES (10);
+INSERT INTO ne3_c VALUES (100, 10);
+INSERT INTO ne3_b VALUES (1000, 1, 100);
+
+SELECT * FROM
+(
+    SELECT ne3_a.id AS a_id, ne3_c.e_id AS c_e_id
+    FROM ne3_a
+-- accepted
+    LEFT JOIN (ne3_c JOIN ne3_b FOR KEY (c_id) -> ne3_c (id))
+        FOR KEY (a_id) -> ne3_a (id)
+) q
+-- rejected, reason: c_e_id is null-extended by the preceding LEFT key join
+JOIN ne3_e FOR KEY (id) <- q (c_e_id);
+
+DROP TABLE ne3_b, ne3_c, ne3_e, ne3_a;
+
 DROP TABLE t2_nn, t1_nn;
 
 --
@@ -501,6 +963,9 @@ CREATE FUNCTION t2() RETURNS TABLE (c3 INTEGER, c4 INTEGER)
 LANGUAGE sql
 RETURN (1, 2);
 
+-- rejected, reason: functions in FROM do not expose surface FK facts
+SELECT * FROM t1 JOIN t2() FOR KEY (c3, c4) -> t1 (c1, c2);
+
 -- rejected, reason: referenced column c5 does not exist
 SELECT * FROM t1 JOIN t2 FOR KEY (c3, c4) -> t1 (c1, c5);
 
@@ -523,8 +988,61 @@ DROP VIEW v1, v2;
 CREATE VIEW v1 AS SELECT c1 AS c1_1, c1 AS c1_2, c2 AS c2_1, c2 AS c2_2 FROM t1;
 CREATE VIEW v2 AS SELECT c3 AS c3_1, c3 AS c3_2, c4 AS c4_1, c4 AS c4_2 FROM t2;
 
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_1, c2_1); -- accepted
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_2, c2_1); -- accepted
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_1, c2_2); -- accepted
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_2, c2_2); -- accepted
+SELECT * FROM v1 JOIN v2 FOR KEY (c3_2, c4_1) -> v1 (c1_2, c2_1); -- accepted
+
+-- rejected, reason: selected referenced columns do not map to the composite key
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_1, c1_2);
+
 -- rejected, reason: referenced column does not exist
 SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_1, nonexistent);
+
+/*
+ * We don't need to check for duplicate columns,
+ * since there is already such a check for foreign key constraints.
+ * Let's test it anyway.
+ */
+-- rejected, reason: duplicate selected columns do not match a foreign key
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c3) -> v1 (c1_1, c1_1);
+-- rejected, reason: duplicate referencing aliases do not map to the composite FK
+SELECT * FROM v1 JOIN v2 FOR KEY (c3_1, c3_2) -> v1 (c1_1, c2_1);
+
+DROP VIEW v1;
+CREATE VIEW v1 AS SELECT c1+0 AS c1_1, c1 AS c1_2, c2 AS c2_1, c2 AS c2_2 FROM t1;
+-- rejected, reason: referenced key column is an expression, not a direct Var
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_1, c2_1);
+SELECT * FROM v1 JOIN t2 FOR KEY (c3, c4) -> v1 (c1_2, c2_1); -- accepted
+
+SELECT * FROM t1 JOIN
+(
+    SELECT c3, c4 FROM t2
+    UNION ALL
+    SELECT c3, c4 FROM t2
+-- rejected, reason: set operations do not expose surface FK facts
+) AS u FOR KEY (c3, c4) -> t1 (c1, c2);
+
+-- rejected, reason: GROUPING SETS can null omitted referencing key columns
+SELECT * FROM t1 JOIN
+(
+    SELECT c3, c4 FROM t2
+    GROUP BY GROUPING SETS ((c3), (c4))
+) AS sub FOR KEY (c3, c4) -> t1 (c1, c2);
+
+-- rejected, reason: key join on subquery with SRF in target list
+SELECT * FROM t1 JOIN
+(
+    SELECT generate_series(1, 3) AS gs, c3, c4 FROM t2
+) AS sub FOR KEY (c3, c4) -> t1 (c1, c2);
+
+SELECT * FROM
+(
+    SELECT c1, c2 FROM t1 WHERE c2 > 0
+) AS u
+-- rejected, reason: a filter on the referenced side defeats row coverage
+JOIN t2 FOR KEY (c3, c4) -> u (c1, c2);
 
 SELECT *
 FROM t1
@@ -549,6 +1067,19 @@ JOIN
     JOIN t10 AS t10_2 FOR KEY (c23, c24) <- t10 (c25, c26)
 -- rejected, reason: referencing column does not exist in the derived table
 ) AS q1 FOR KEY (nonexistent, c24) -> t1 (c1, c2);
+
+SELECT *
+FROM t1
+JOIN
+(
+    SELECT
+        t10.c23,
+        t10_2.c24
+    FROM t10
+-- accepted
+    JOIN t10 AS t10_2 FOR KEY (c23, c24) <- t10 (c25, c26)
+-- rejected, reason: selected derived columns do not preserve the FK mapping
+) AS q1 FOR KEY (c23, c24) -> t1 (c1, c2);
 
 --
 -- Test materialized views (not supported yet)
@@ -661,12 +1192,32 @@ INSERT INTO pt3 (c5, c6) VALUES (1, 1000);
 INSERT INTO pt3 (c5, c6) VALUES (3, 3000);
 
 -- accepted
+SELECT * FROM t1 JOIN pt2 FOR KEY (c3) -> t1 (c1) JOIN pt3 FOR KEY (c5) -> pt2 (c3);
+-- accepted
 SELECT * FROM t1 JOIN pt2_1 FOR KEY (c3) -> t1 (c1);
 -- rejected, reason: ONLY scans on partitioned tables are not supported
 SELECT * FROM ONLY pt2 JOIN pt3 FOR KEY (c5) -> pt2 (c3);
 
 DROP TABLE pt3;
 DROP TABLE pt2;
+
+SELECT *
+FROM (SELECT * FROM (SELECT c1, c2 FROM t1) AS q1(q1_c1, q1_c2)) q
+-- accepted
+JOIN t2 FOR KEY (c3, c4) -> q (q1_c1, q1_c2);
+-- equivalent to:
+SELECT *
+FROM (WITH q1 (q1_c1, q1_c2) AS (SELECT c1, c2 FROM t1) SELECT * FROM q1) q
+-- accepted
+JOIN t2 FOR KEY (c3, c4) -> q (q1_c1, q1_c2);
+
+--
+-- The below query should raise the error "key join violation",
+-- "referenced relation does not preserve uniqueness of keys", since
+-- even though there is a UNIQUE constraint on orders.shipment_id,
+-- the orders table doesn't preserve the uniqueness of its keys
+-- due to the join with order_items.
+--
 
 CREATE TABLE shipments
 (
@@ -718,6 +1269,20 @@ CREATE TABLE payments
 INSERT INTO payments (id, order_id, amount, method) VALUES
   (100, 10, 50.00, 'card'),
   (200, 20, 29.99, 'card');
+
+--
+-- Inline fan trap: order_items and payments both join to orders via
+-- separate key joins.  The first join (order_items <- orders) consumes
+-- orders.id uniqueness, so the second join (payments -> orders) must
+-- be rejected — orders.id is no longer unique in the intermediate result.
+-- Wrapping the same joins in a view correctly rejects this; inline must
+-- behave identically.
+--
+SELECT *
+FROM order_items
+-- accepted
+JOIN orders FOR KEY (id) <- order_items (order_id)
+JOIN payments FOR KEY (order_id) -> orders (id);
 
 --
 -- Cross-type FK equality semantics are intentionally not supported by
@@ -1188,6 +1753,111 @@ DROP OPERATOR FAMILY key_join_trusted_contract_int4_ops USING btree;
 DROP OPERATOR === (int, int);
 DROP FUNCTION key_join_trusted_contract_eq(int, int);
 
+--
+-- Reused derived relation identities: two references to the same CTE or
+-- view body must remain distinct table occurrences.  The inner self-key join
+-- duplicates q.pid and drops id = 2 as a referenced key, so the outer key
+-- join through refs_to_nodes.ref_id must be rejected.
+--
+CREATE TABLE self_fk_nodes
+(
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER NOT NULL REFERENCES self_fk_nodes(id)
+);
+
+CREATE TABLE refs_to_nodes
+(
+    id INTEGER PRIMARY KEY,
+    ref_id INTEGER NOT NULL REFERENCES self_fk_nodes(id)
+);
+
+INSERT INTO self_fk_nodes VALUES (1, 1), (2, 1), (3, 1);
+INSERT INTO refs_to_nodes VALUES (1, 2);
+
+WITH n AS (SELECT id, parent_id FROM self_fk_nodes)
+SELECT *
+FROM (
+    SELECT p.id AS pid, c.id AS cid
+    FROM n p
+-- accepted
+    JOIN n c FOR KEY (parent_id) -> p (id)
+) q
+-- rejected, reason: inner self-key join duplicates the referenced key
+JOIN refs_to_nodes r FOR KEY (ref_id) -> q (pid);
+
+CREATE VIEW self_fk_nodes_v AS
+SELECT id, parent_id FROM self_fk_nodes;
+
+SELECT *
+FROM (
+    SELECT p.id AS pid, c.id AS cid
+    FROM self_fk_nodes_v p
+-- accepted
+    JOIN self_fk_nodes_v c FOR KEY (parent_id) -> p (id)
+) q
+-- rejected, reason: inner self-key join duplicates the referenced key
+JOIN refs_to_nodes r FOR KEY (ref_id) -> q (pid);
+
+SELECT *
+FROM (
+    SELECT *
+    FROM (
+        SELECT p.id AS pid, c.id AS cid
+        FROM self_fk_nodes_v p
+-- accepted
+        JOIN self_fk_nodes_v c FOR KEY (parent_id) -> p (id)
+    ) s
+) q
+-- rejected, reason: inner self-key join duplicates the referenced key
+JOIN refs_to_nodes r FOR KEY (ref_id) -> q (pid);
+
+DROP VIEW self_fk_nodes_v;
+DROP TABLE refs_to_nodes;
+DROP TABLE self_fk_nodes;
+
+CREATE TABLE self_fk_nodes_valid
+(
+    id INTEGER PRIMARY KEY,
+    parent_id INTEGER NOT NULL UNIQUE REFERENCES self_fk_nodes_valid(id)
+);
+
+CREATE TABLE refs_to_nodes_valid
+(
+    id INTEGER PRIMARY KEY,
+    ref_id INTEGER NOT NULL REFERENCES self_fk_nodes_valid(id)
+);
+
+INSERT INTO self_fk_nodes_valid VALUES (1, 1), (2, 2), (3, 3);
+INSERT INTO refs_to_nodes_valid VALUES (1, 2);
+
+WITH n AS (SELECT id, parent_id FROM self_fk_nodes_valid)
+SELECT q.pid, q.cid, r.id AS rid
+FROM (
+    SELECT p.id AS pid, c.id AS cid
+    FROM n p
+-- accepted
+    LEFT JOIN n c FOR KEY (parent_id) -> p (id)
+) q
+JOIN refs_to_nodes_valid r FOR KEY (ref_id) -> q (pid)
+ORDER BY q.pid, q.cid, rid;
+
+CREATE VIEW self_fk_nodes_valid_v AS
+SELECT id, parent_id FROM self_fk_nodes_valid;
+
+SELECT q.pid, q.cid, r.id AS rid
+FROM (
+    SELECT p.id AS pid, c.id AS cid
+    FROM self_fk_nodes_valid_v p
+-- accepted
+    LEFT JOIN self_fk_nodes_valid_v c FOR KEY (parent_id) -> p (id)
+) q
+JOIN refs_to_nodes_valid r FOR KEY (ref_id) -> q (pid)
+ORDER BY q.pid, q.cid, rid;
+
+DROP VIEW self_fk_nodes_valid_v;
+DROP TABLE refs_to_nodes_valid;
+DROP TABLE self_fk_nodes_valid;
+
 DROP TABLE payments;
 
 --
@@ -1220,6 +1890,10 @@ JOIN rls_key_join_child c FOR KEY (parent_id) -> p (id);
 
 DROP TABLE rls_key_join_child, rls_key_join_parent;
 
+-- rejected, reason: key join on data-modifying CTE
+WITH ins AS (INSERT INTO t2 (c3, c4) VALUES (1, 10) RETURNING c3, c4)
+SELECT * FROM t1 JOIN ins FOR KEY (c3, c4) -> t1 (c1, c2);
+
 CREATE TABLE products_gbu (
     id integer PRIMARY KEY
 );
@@ -1237,6 +1911,36 @@ CREATE TABLE resupplies_gbu (
 INSERT INTO products_gbu VALUES (1), (2), (3);
 INSERT INTO sales_gbu VALUES (1, 10, 5.00), (1, 20, 5.00), (2, 5, 10.00);
 INSERT INTO resupplies_gbu VALUES (1, 100, 4.00), (2, 50, 8.00);
+
+CREATE SEQUENCE volatile_default_seq;
+CREATE FUNCTION volatile_default_int(v int DEFAULT nextval('volatile_default_seq')::int)
+RETURNS int
+LANGUAGE sql STABLE AS $$ SELECT v $$;
+
+CREATE VIEW volatile_target_parent_v AS
+SELECT id, set_config('key_join.volatile', id::text, false) AS side_effect
+FROM products_gbu;
+
+SELECT *
+FROM volatile_target_parent_v p
+-- rejected, reason: volatile targetlist blocks surface row coverage
+JOIN resupplies_gbu r FOR KEY (product_id) -> p (id);
+
+DROP VIEW volatile_target_parent_v;
+
+CREATE VIEW volatile_default_target_parent_v AS
+SELECT id, volatile_default_int() AS side_effect
+FROM products_gbu;
+
+SELECT *
+FROM volatile_default_target_parent_v p
+-- rejected, reason: volatile default targetlist blocks surface row coverage
+JOIN resupplies_gbu r FOR KEY (product_id) -> p (id);
+
+DROP VIEW volatile_default_target_parent_v;
+
+DROP FUNCTION volatile_default_int(int);
+DROP SEQUENCE volatile_default_seq;
 
 -- FILTER5a: referencing-side uniqueness must exactly match the FK key.
 CREATE TABLE filter_unique_len_parent (id int PRIMARY KEY);
@@ -1273,6 +1977,88 @@ FROM filter_unique_identity_parent p
 JOIN filter_unique_identity_child c FOR KEY (code) -> p (code);
 
 DROP TABLE filter_unique_identity_child, filter_unique_identity_parent;
+
+-- Referenced-side FK facts survive outer null-extension as nullable FK facts.
+CREATE TABLE output_fk_null_ext_gp (id int PRIMARY KEY);
+CREATE TABLE output_fk_null_ext_parent
+(
+    id int PRIMARY KEY,
+    gp_id int NOT NULL REFERENCES output_fk_null_ext_gp (id)
+);
+CREATE TABLE output_fk_null_ext_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES output_fk_null_ext_parent (id)
+);
+INSERT INTO output_fk_null_ext_gp VALUES (1), (2);
+INSERT INTO output_fk_null_ext_parent VALUES (10, 1), (20, 2);
+INSERT INTO output_fk_null_ext_child VALUES (100, 10);
+
+-- Control: a non-null-extending referenced side already exported the FK fact.
+SELECT q.parent_id, q.gp_id, q.child_id, g.id AS gp_match
+FROM (
+    SELECT p.id AS parent_id, p.gp_id, c.id AS child_id
+    FROM output_fk_null_ext_parent p
+    LEFT JOIN output_fk_null_ext_child c FOR KEY (parent_id) -> p (id)
+) q
+LEFT JOIN output_fk_null_ext_gp g FOR KEY (id) <- q (gp_id)
+ORDER BY q.parent_id, q.child_id, g.id;
+
+-- A FULL JOIN can null-extend the referenced side, but non-null FK values
+-- projected from that side still have FK-backed containment.
+SELECT q.parent_id, q.gp_id, q.child_id, g.id AS gp_match
+FROM (
+    SELECT p.id AS parent_id, p.gp_id, c.id AS child_id
+    FROM output_fk_null_ext_parent p
+    FULL JOIN output_fk_null_ext_child c FOR KEY (parent_id) -> p (id)
+) q
+LEFT JOIN output_fk_null_ext_gp g FOR KEY (id) <- q (gp_id)
+ORDER BY q.parent_id, q.child_id, g.id;
+
+-- The FK fact survived, but not the not-null fact, so an inner key join
+-- through the same null-extended surface is still rejected.
+SELECT q.parent_id, q.gp_id, q.child_id, g.id AS gp_match
+FROM (
+    SELECT p.id AS parent_id, p.gp_id, c.id AS child_id
+    FROM output_fk_null_ext_parent p
+    FULL JOIN output_fk_null_ext_child c FOR KEY (parent_id) -> p (id)
+) q
+JOIN output_fk_null_ext_gp g FOR KEY (id) <- q (gp_id);
+
+DROP TABLE output_fk_null_ext_child,
+           output_fk_null_ext_parent,
+           output_fk_null_ext_gp;
+
+-- Stronger case: the FULL JOIN can actually produce a row whose referenced
+-- side is null-extended.  The later preserved-side key join remains valid
+-- because nullable FK values are allowed when the referencing side is preserved.
+CREATE TABLE output_fk_nullable_gp (id int PRIMARY KEY);
+CREATE TABLE output_fk_nullable_parent
+(
+    id int PRIMARY KEY,
+    gp_id int NOT NULL REFERENCES output_fk_nullable_gp (id)
+);
+CREATE TABLE output_fk_nullable_child
+(
+    id int PRIMARY KEY,
+    parent_id int REFERENCES output_fk_nullable_parent (id)
+);
+INSERT INTO output_fk_nullable_gp VALUES (1), (2);
+INSERT INTO output_fk_nullable_parent VALUES (10, 1), (20, 2);
+INSERT INTO output_fk_nullable_child VALUES (100, 10), (200, NULL);
+
+SELECT q.parent_id, q.gp_id, q.child_id, g.id AS gp_match
+FROM (
+    SELECT p.id AS parent_id, p.gp_id, c.id AS child_id
+    FROM output_fk_nullable_parent p
+    FULL JOIN output_fk_nullable_child c FOR KEY (parent_id) -> p (id)
+) q
+LEFT JOIN output_fk_nullable_gp g FOR KEY (id) <- q (gp_id)
+ORDER BY q.parent_id NULLS LAST, q.child_id, g.id;
+
+DROP TABLE output_fk_nullable_child,
+           output_fk_nullable_parent,
+           output_fk_nullable_gp;
 
 -- Referenced-side uniqueness and row coverage must use the same key identity
 -- as the FK proof.  When an older alternate unique index appears before the
@@ -1399,6 +2185,15 @@ SELECT p.id AS parent_key, c.id AS child_id, c.parent_id
 FROM key_join_refuniq_parent p
 LEFT JOIN key_join_refuniq_child c FOR KEY (parent_id) -> p (id)
 ORDER BY 1, 2;
+
+SELECT q.parent_key, q.child_id, g.id AS grandchild_id
+FROM (
+    SELECT p.id AS parent_key, c.id AS child_id, c.parent_id
+    FROM key_join_refuniq_parent p
+    LEFT JOIN key_join_refuniq_child c FOR KEY (parent_id) -> p (id)
+) q
+JOIN key_join_refuniq_grandchild g FOR KEY (parent_id) -> q (parent_key)
+ORDER BY q.parent_key, q.child_id, g.id;
 
 DROP TABLE key_join_refuniq_grandchild,
            key_join_refuniq_child,
@@ -1583,6 +2378,11 @@ SELECT *
 FROM kd_sale_order o
 JOIN kd_customer c FOR KEY (id) <- o (cuid);
 
+-- Missing through a derived referenced surface, using provenance not base RTEs.
+SELECT *
+FROM kd_sale_order o
+JOIN (SELECT id FROM kd_customer) c FOR KEY (id) <- o (cuid);
+
 -- Accepted: the corrected FK target still succeeds.
 SELECT o.id AS order_id, c.id AS customer_id
 FROM kd_sale_order o
@@ -1591,6 +2391,41 @@ JOIN kd_customer c FOR KEY (id) <- o (cid);
 DROP TABLE kd_sale_order;
 DROP TABLE kd_customs, kd_customer;
 
+-- Inactivated: a derived referenced surface drops its row coverage at LIMIT.
+SELECT *
+FROM (SELECT id FROM kd_parent LIMIT 1) p
+JOIN kd_child c FOR KEY (parent_id) -> p (id);
+
+-- Inactivated by HAVING: the row-removing clause is named.
+SELECT *
+FROM (SELECT id FROM kd_parent GROUP BY id HAVING count(*) > 0) p
+JOIN kd_child c FOR KEY (parent_id) -> p (id);
+
+-- Inactivated uniqueness: the referenced surface may fan out.
+SELECT *
+FROM (
+    SELECT p.id
+    FROM kd_parent p
+    LEFT JOIN kd_fanout_child f FOR KEY (parent_id) -> p (id)
+) q
+JOIN kd_child c FOR KEY (parent_id) -> q (id);
+
+-- Inactivated row coverage: the referenced surface may lose rows.
+SELECT *
+FROM (
+    SELECT p.id
+    FROM kd_parent p
+    JOIN kd_unique_child u FOR KEY (parent_id) -> p (id)
+) q
+JOIN kd_child c FOR KEY (parent_id) -> q (id);
+
+-- Inactivated inside a view: the message names the view to inspect.
+CREATE VIEW kd_parent_limited AS SELECT id FROM kd_parent LIMIT 1;
+SELECT *
+FROM kd_parent_limited p
+JOIN kd_child c FOR KEY (parent_id) -> p (id);
+
+DROP VIEW kd_parent_limited;
 RESET search_path;
 DROP SCHEMA key_join_diag CASCADE;
 

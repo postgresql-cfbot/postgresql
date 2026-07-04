@@ -366,6 +366,26 @@ JOIN mcdc_self_ref s2 FOR KEY (id) -> s1 (id)
 ORDER BY s2.id;
 RESET enable_self_join_elimination;
 
+-- Plain non-inner no-qual join path: no projected key facts.
+SELECT r.id, j.id
+FROM (
+    SELECT p.id
+    FROM mcdc_parent p
+    NATURAL LEFT JOIN (SELECT 1 AS extra) s
+) j
+JOIN mcdc_reader r FOR KEY (parent_id) -> j (id)
+ORDER BY r.id;
+
+-- Function ordinality path: no projected key facts.
+SELECT r.id, j.id
+FROM (
+    SELECT p.id
+    FROM mcdc_parent p
+    CROSS JOIN LATERAL generate_series(1, 1) WITH ORDINALITY AS g(x, n)
+) j
+JOIN mcdc_reader r FOR KEY (parent_id) -> j (id)
+ORDER BY r.id;
+
 CREATE TABLE mcdc_dupe_parent
 (
     id int PRIMARY KEY
@@ -405,6 +425,35 @@ CREATE VIEW mcdc_second_cte_v AS
 WITH unused AS (SELECT id FROM mcdc_parent WHERE false),
      parents AS (SELECT id FROM mcdc_parent)
 SELECT id FROM parents;
+
+SELECT r.id, v.id
+FROM mcdc_second_cte_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
+-- CTE projection path: skip an outer Var while projecting current key facts.
+SELECT p.id, probe.ok
+FROM mcdc_parent p,
+LATERAL (
+    WITH outer_cols AS (
+        SELECT p.id AS outer_id, c.parent_id
+        FROM mcdc_child c
+    )
+    SELECT true AS ok
+    FROM outer_cols oc
+    JOIN mcdc_parent pp FOR KEY (id) <- oc (parent_id)
+    WHERE oc.outer_id = p.id AND pp.id = p.id
+) probe
+ORDER BY p.id;
+
+-- Query projection path: system columns are not projected key facts.
+SELECT r.id, q.id
+FROM (
+    SELECT p.id, p.ctid
+    FROM mcdc_parent p
+) q
+JOIN mcdc_reader r FOR KEY (parent_id) -> q (id)
+ORDER BY r.id;
 
 -- Same-domain FK operators must use the normalized base equality type.
 SELECT c.id, p.id

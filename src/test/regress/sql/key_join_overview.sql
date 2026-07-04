@@ -249,15 +249,179 @@ JOIN fk_warehouses FOR KEY (wh_zip, wh_country) -> ref_locations (loc_country, l
 -- 4. Derived tables (views, subqueries, CTEs)
 -- ============================================================
 
+-- accepted, reason: subquery wrapping base table as referenced side
+SELECT q.prod_id, fk_orders.ord_id
+FROM (SELECT * FROM ref_products) AS q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id)
+ORDER BY ord_id;
+
+-- accepted, reason: subquery on referencing side
+SELECT ref_products.prod_id, q.ord_id
+FROM ref_products
+JOIN (SELECT ord_id, ord_prod_id FROM fk_orders) AS q
+    FOR KEY (ord_prod_id) -> ref_products (prod_id)
+ORDER BY q.ord_id;
+
+-- accepted, reason: nested subquery with column renames
+SELECT q.p_id, q2.o_id
+FROM (SELECT prod_id AS p_id FROM (SELECT prod_id FROM ref_products) sub) AS q
+JOIN (SELECT ord_id AS o_id, ord_prod_id AS o_pid FROM fk_orders) AS q2
+    FOR KEY (o_pid) -> q (p_id)
+ORDER BY q2.o_id;
+
+-- accepted, reason: view with column renames as referenced side
 CREATE VIEW v_products_renamed AS
     SELECT prod_id AS pid, prod_name AS pname FROM ref_products;
 
+SELECT v.pid, fk_orders.ord_id
+FROM v_products_renamed v
+-- accepted
+JOIN fk_orders FOR KEY (ord_prod_id) -> v (pid)
+ORDER BY ord_id;
+
+-- accepted, reason: CTE chain with column renames
+WITH
+cte1 (cte_pid, cte_pname) AS (SELECT prod_id, prod_name FROM ref_products),
+cte2 (c2_pid, c2_pname) AS (SELECT cte_pid, cte_pname FROM cte1)
+SELECT c2_pid, fk_orders.ord_id
+FROM cte2
+JOIN fk_orders FOR KEY (ord_prod_id) -> cte2 (c2_pid)
+ORDER BY ord_id;
+
+-- rejected, reason: ordinary ON join in subquery does not expose key facts
+SELECT q.prod_id, fk_orders.ord_id
+FROM (
+    SELECT ref_products.prod_id
+    FROM ref_products
+    LEFT JOIN fk_inventory ON fk_inventory.inv_prod_id = ref_products.prod_id
+) q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id);
+
+-- rejected, reason: ordinary USING join in subquery does not expose key facts
+SELECT q.prod_id, fk_orders.ord_id
+FROM (
+    SELECT p.prod_id
+    FROM ref_products p
+    LEFT JOIN (SELECT inv_prod_id AS prod_id FROM fk_inventory) i USING (prod_id)
+) q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id);
+
+-- rejected, reason: ordinary CROSS JOIN with WHERE does not expose key facts
+SELECT q.prod_id, fk_orders.ord_id
+FROM (
+    SELECT ref_products.prod_id
+    FROM ref_products
+    CROSS JOIN fk_inventory
+    WHERE fk_inventory.inv_prod_id = ref_products.prod_id
+) q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id);
+
+-- rejected, reason: comma join with WHERE does not expose key facts
+SELECT q.prod_id, fk_orders.ord_id
+FROM (
+    SELECT ref_products.prod_id
+    FROM ref_products, fk_inventory
+    WHERE fk_inventory.inv_prod_id = ref_products.prod_id
+) q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id);
+
+-- rejected, reason: view with WHERE on referenced side (R violated)
 CREATE VIEW v_products_filtered AS
     SELECT prod_id, prod_name FROM ref_products WHERE prod_id > 0;
+
+SELECT * FROM v_products_filtered v
+-- accepted
+JOIN fk_orders FOR KEY (ord_prod_id) -> v (prod_id);
+
+-- rejected, reason: subquery with LIMIT on referenced side (R violated)
+SELECT * FROM (SELECT prod_id FROM ref_products LIMIT 1) AS q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id);
 
 -- rejected, reason: TABLESAMPLE on referenced side (R violated)
 SELECT * FROM ref_products rp TABLESAMPLE SYSTEM (0)
 JOIN fk_orders FOR KEY (ord_prod_id) -> rp (prod_id);
+
+-- rejected, reason: wrapped TABLESAMPLE still does not preserve row coverage
+SELECT * FROM (SELECT prod_id FROM ref_products TABLESAMPLE SYSTEM (0)) AS q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id);
+
+-- rejected, reason: SKIP LOCKED on referenced side may remove rows at execution (R violated)
+SELECT * FROM (SELECT prod_id FROM ref_products FOR UPDATE SKIP LOCKED) AS q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (prod_id);
+
+-- rejected, reason: recursive CTE
+WITH RECURSIVE rcte AS (
+    SELECT prod_id FROM ref_products
+    UNION
+    SELECT prod_id FROM rcte
+)
+SELECT * FROM rcte JOIN fk_orders FOR KEY (ord_prod_id) -> rcte (prod_id);
+
+-- accepted, reason: two-level chain employees -> teams -> departments
+SELECT ref_departments.dept_name, ref_teams.team_id, fk_employees.emp_id
+FROM ref_departments
+JOIN
+    ref_teams JOIN fk_employees FOR KEY (emp_team_id) -> ref_teams (team_id)
+FOR KEY (team_dept_id) -> ref_departments (dept_id)
+ORDER BY emp_id;
+
+-- ============================================================
+-- 6. Outer join null semantics
+-- ============================================================
+
+-- accepted, reason: referenced on preserved side of LEFT JOIN
+SELECT COUNT(*)
+FROM (
+    SELECT ref_products.prod_id AS ref_id
+    FROM ref_products
+    LEFT JOIN fk_inventory FOR KEY (inv_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (ref_id);
+
+-- accepted, reason: FULL JOIN may null-extend ref_products, but ghost rows with NULL
+-- ref_id never match the outer FK equi-join condition, so they neither
+-- break uniqueness on q.ref_id nor prevent any fk_orders row from
+-- finding its match.
+SELECT COUNT(*)
+FROM (
+    SELECT ref_products.prod_id AS ref_id
+    FROM ref_products
+    FULL JOIN fk_returns FOR KEY (ret_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_orders FOR KEY (ord_prod_id) -> q (ref_id);
+
+-- rejected, reason: FULL JOIN can null-extend the referencing side too, so
+-- a NOT NULL fact on a referencing column must not be propagated through it.
+-- fko_clear_a has id=4 with no matching fko_clear_b, so the FULL JOIN emits
+-- a row with fko_clear_b.c_id IS NULL.  An INNER key join chained on c_id
+-- would silently drop that null-extended row, violating preservation.
+SELECT *
+FROM fko_clear_a
+FULL JOIN fko_clear_b FOR KEY (a_id) -> fko_clear_a (id)
+JOIN fko_clear_c FOR KEY (id) <- fko_clear_b (c_id);
+
+-- rejected, symmetric form: referencing on LEFT
+SELECT *
+FROM fko_clear_b
+FULL JOIN fko_clear_a FOR KEY (id) <- fko_clear_b (a_id)
+JOIN fko_clear_c FOR KEY (id) <- fko_clear_b (c_id);
+
+-- accepted, sanity: INNER preserved-side JOIN does not null-extend, so the
+-- chained INNER key join on c_id is still provable.
+SELECT *
+FROM fko_clear_a
+JOIN fko_clear_b FOR KEY (a_id) -> fko_clear_a (id)
+JOIN fko_clear_c FOR KEY (id) <- fko_clear_b (c_id)
+ORDER BY fko_clear_b.id;
+
+-- rejected, reason: non-unique key join inside subquery (U violated)
+SELECT * FROM
+(
+    SELECT ref_products.prod_id, fk_orders.ord_id
+    FROM ref_products
+    JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_reviews FOR KEY (rev_prod_id) -> q (prod_id);
 
 -- ============================================================
 -- 8. Constraint enforcement and timing
@@ -360,13 +524,55 @@ JOIN fk_initially_deferred_child FOR KEY (did_p_id) -> ref_products (prod_id)
 ORDER BY did_id;
 ROLLBACK;
 
+-- rejected, reason: DEFERRABLE UNIQUE does not preserve referenced-side uniqueness
+SELECT q.prod_id, fk_reviews.rev_id
+FROM (
+    SELECT ref_products.prod_id
+    FROM ref_products
+    LEFT JOIN fk_deferrable_unique_inventory
+        FOR KEY (dui_prod_id) -> ref_products (prod_id)
+) q
+JOIN fk_reviews FOR KEY (rev_prod_id) -> q (prod_id);
+
 -- ============================================================
 -- 9. Unsupported relation kinds
 -- ============================================================
 
+-- rejected, reason: function as FK source
+SELECT * FROM ref_products
+JOIN fn_products() AS f FOR KEY (prod_id) -> ref_products (prod_id);
+
 -- rejected, reason: materialized view
 SELECT * FROM mv_products
 JOIN fk_orders FOR KEY (ord_prod_id) -> mv_products (prod_id);
+
+-- rejected, reason: UNION ALL in derived table
+SELECT * FROM ref_products
+JOIN (
+    SELECT ord_id, ord_prod_id FROM fk_orders
+    UNION ALL
+    SELECT ord_id, ord_prod_id FROM fk_orders
+) AS u FOR KEY (ord_prod_id) -> ref_products (prod_id);
+
+-- ============================================================
+-- 10. Deep multi-feature stress test
+-- ============================================================
+
+-- rejected, reason: row-filtering WHERE buried under rename layers (R violated)
+SELECT rev.rev_id, deep.p_id
+FROM (
+    SELECT l3_id AS p_id FROM (
+        SELECT l2_id AS l3_id FROM (
+            SELECT l1_id AS l2_id FROM (
+                SELECT prod_id AS l1_id
+                FROM ref_products
+                WHERE prod_name <> 'Widget'
+            ) l1
+        ) l2
+    ) l3
+) deep
+JOIN fk_reviews rev FOR KEY (rev_prod_id) -> deep (p_id)
+ORDER BY rev.rev_id;
 
 -- ============================================================
 -- Cleanup

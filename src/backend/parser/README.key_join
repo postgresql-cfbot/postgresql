@@ -21,9 +21,10 @@ JoinExpr transformation in parse_clause.c alongside the ON and USING qual
 handlers, once both operands are transformed and their namespaces are
 available.  It:
 
-  1. Resolves the named columns against each operand's surface and gathers
-     facts about those surfaces from the catalog (foreign-key, unique, and
-     not-null constraints).
+  1. Resolves the named columns against each operand's surface, gathers facts
+     about those surfaces from the catalog (foreign-key, unique, and not-null
+     constraints), and propagates them up the query, deactivating any that
+     a step invalidates.
   2. Proves three things over the named columns: the referenced key values
      are unique, every non-null referencing value is contained in them, and
      referencing nulls cannot silently drop rows.  A failed proof rejects the
@@ -72,10 +73,30 @@ proof
     nulls.
 
 fact (KeyJoinFact)
-    One transient piece of evidence used while building a proof.  Three
-    kinds: unique, foreign-key, and not-null.
+    One transient piece of evidence used while building a proof.  Four
+    kinds: unique, foreign-key, row-coverage, and not-null.
 
 surface
     The set of columns a range-table entry exposes to the query level above
     it.  "Surface facts" are the facts attached to that exposed set; they are
     cached per RTE and computed on demand.
+
+row coverage (KJF_ROW_COVERAGE)
+    Evidence that every all-non-null referenced key value still reaches a
+    given point -- that is, needed referenced rows have not been filtered
+    away by a clause below.
+
+active / inactive fact
+    Whether a fact survived propagation.  An invalidated fact is not dropped
+    but kept inactive, stamped with a KeyJoinInactiveReason, so a later
+    rejection can explain why a needed fact was lost.
+
+propagation
+    Carrying facts upward through joins, grouping, and projection, marking
+    inactive any fact that a step invalidates (for example, DISTINCT or an
+    outer join can end row coverage).
+
+base-table vs derived proof
+    A proof grounded directly in base-table constraints, versus one carried
+    through views, subqueries, CTEs, or earlier key joins whose definitions
+    keep the needed facts visible.

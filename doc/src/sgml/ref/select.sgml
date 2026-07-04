@@ -792,7 +792,8 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
           Every all-non-null referencing key value present in the referencing
           operand must have a matching referenced value in the referenced
           operand.  This requires a matching usable foreign-key
-          constraint.
+          constraint and, for derived referenced inputs, enough row coverage to
+          show that needed referenced rows have not been filtered away.
          </para>
         </listitem>
 
@@ -807,8 +808,10 @@ TABLE [ ONLY ] <replaceable class="parameter">table_name</replaceable> [ * ]
 
        <para>
         Base-table proof uses enforced, validated, nondeferrable foreign-key
-        constraints and usable unique keys whose key identities match.
-        <literal>FOR KEY</literal> does not suppress
+        constraints and usable unique keys whose key identities match.  Derived
+        tables, views, common table expressions, and previous key joins can
+        participate when these facts remain visible through their query
+        definitions.  <literal>FOR KEY</literal> does not suppress
         duplicate output columns; its output column behavior is like
         <literal>JOIN ON</literal>.
        </para>

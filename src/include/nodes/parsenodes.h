@@ -1069,6 +1069,9 @@ typedef struct GraphElementPattern
  * KeyJoinKeyPosition -
  *	  position of a key participating in a key-join proof
  *
+ * A position may list multiple attnums when projection exposes the same
+ * key component through multiple direct aliases.
+ *
  * (typeOid, typmod, collationOid) is the surface Var type the position
  * exposes; the prover asserts it matches the corresponding Var's vartype,
  * vartypmod and collationOid exactly.
@@ -1080,7 +1083,7 @@ typedef struct GraphElementPattern
 typedef struct KeyJoinKeyPosition
 {
 	NodeTag		type;
-	AttrNumber	attnum;			/* attnum forming this position */
+	List	   *attnums;		/* attnums forming this position */
 
 	/* Surface Var type the position exposes: */
 	Oid			typeOid;
@@ -1098,16 +1101,40 @@ typedef struct KeyJoinKeyPosition
  *	  what kind of key-join proof fact a KeyJoinFact represents
  *
  * KJF_UNIQUE and KJF_FOREIGN_KEY use SQL null semantics: they prove
- * uniqueness and containment for all-non-null key values.  KJF_NOT_NULL is
- * separate evidence consumed only when a key join might otherwise discard
- * null referencing rows.
+ * uniqueness and containment for all-non-null key values.  KJF_ROW_COVERAGE
+ * likewise tracks coverage of all-non-null referenced key values, not literal
+ * preservation of every nullable referenced row.  KJF_NOT_NULL is separate
+ * evidence consumed only when a key join might otherwise discard null
+ * referencing rows.
  */
 typedef enum KeyJoinFactKind
 {
 	KJF_NOT_NULL,				/* attnum is proven non-null */
 	KJF_UNIQUE,					/* all-non-null keyPositions are unique */
 	KJF_FOREIGN_KEY,			/* baseAttnums reference referencedAttnums */
+	KJF_ROW_COVERAGE,			/* all-non-null relid key values reach here */
 } KeyJoinFactKind;
+
+/*
+ * KeyJoinInactiveReason -
+ *	  why a transient proof fact failed to survive propagation to a surface
+ *
+ * Diagnostic-only.  When a propagation step would have discarded a fact, the
+ * fact is instead retained with active=false and stamped with the reason
+ * here, so that a later rejection can explain itself.  KJI_NONE is set on
+ * every active fact.
+ */
+typedef enum KeyJoinInactiveReason
+{
+	KJI_NONE = 0,
+	KJI_NULL_EXTENDING_JOIN,	/* outer join null-extends a side */
+	KJI_JOIN_NOT_PRESERVED,		/* join does not retain all referenced rows */
+	KJI_JOIN_FANOUT,			/* join may match a referenced row more than once */
+	KJI_ROW_REMOVING_CLAUSE,	/* HAVING / LIMIT / OFFSET / FOR UPDATE / TABLESAMPLE */
+	KJI_GROUP_BY,				/* row coverage lost by GROUP BY */
+	KJI_DISTINCT,				/* row coverage lost by DISTINCT */
+	KJI_REFERENCED_FILTER,		/* the referenced input carries a filter */
+} KeyJoinInactiveReason;
 
 /*
  * KeyJoinFact -
@@ -1126,9 +1153,9 @@ typedef struct KeyJoinFact
 	AttrNumber	attnum;			/* surface column attnum */
 
 	/*
-	 * KJF_UNIQUE, KJF_FOREIGN_KEY.  relid is the base relation supplying the
-	 * proof.  baseAttnums has one entry per keyPositions entry: the base
-	 * relation attnums of the key.
+	 * KJF_UNIQUE, KJF_FOREIGN_KEY, KJF_ROW_COVERAGE.  relid is the base
+	 * relation supplying the proof.  baseAttnums has one entry per
+	 * keyPositions entry: the base relation attnums of the key.
 	 */
 	List	   *keyPositions;	/* list of KeyJoinKeyPosition */
 	Oid			relid;
@@ -1138,6 +1165,15 @@ typedef struct KeyJoinFact
 	Oid			referencedRelid;
 	List	   *referencedAttnums;
 	Oid			constraint;
+
+	/*
+	 * Diagnostic carry-over of discarded facts.  A fact starts active; if a
+	 * propagation step would have discarded it, the fact is instead retained
+	 * with active=false so a later rejection can point at it.
+	 */
+	bool		active;
+	KeyJoinInactiveReason inactiveReason;
+	Oid			inactiveOriginView;
 } KeyJoinFact;
 
 /*
@@ -1464,8 +1500,9 @@ typedef struct RangeTblEntry
 	List	   *securityQuals pg_node_attr(query_jumble_ignore);
 
 	/*
-	 * Transient proof caches for FOR KEY joins, populated lazily during
-	 * parse analysis.  Never read from stored query trees.
+	 * Transient proof caches for FOR KEY joins, populated lazily during live
+	 * parse analysis or view fact projection.  Never read from stored query
+	 * trees.
 	 */
 	bool		keyJoinFactsComputed pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(false));
 	KeyJoinSurfaceFacts *keyJoinFacts pg_node_attr(equal_ignore, query_jumble_ignore, read_write_ignore, read_as(NULL));

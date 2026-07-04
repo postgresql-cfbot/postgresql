@@ -48,7 +48,7 @@ dsimple_init(PG_FUNCTION_ARGS)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("multiple StopWords parameters")));
-			readstoplist(defGetString(defel), &d->stoplist, str_tolower);
+			readstoplist(defGetString(defel), &d->stoplist, str_casefold);
 			stoploaded = true;
 		}
 		else if (strcmp(defel->defname, "accept") == 0)
@@ -81,7 +81,7 @@ dsimple_lexize(PG_FUNCTION_ARGS)
 	char	   *txt;
 	TSLexeme   *res;
 
-	txt = str_tolower(in, len, DEFAULT_COLLATION_OID);
+	txt = str_casefold(in, len, DEFAULT_COLLATION_OID);
 
 	if (*txt == '\0' || searchstoplist(&(d->stoplist), txt))
 	{

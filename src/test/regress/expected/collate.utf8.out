@@ -169,6 +169,18 @@ select casefold('AbCd 123 #$% ıiIİ ẞ ß Ǆǅǆ Σσς' collate PG_C_UTF8);
  abcd 123 #$% ıiiİ ß ß ǆǆǆ σσσ
 (1 row)
 
+SELECT U&'ς' ILIKE U&'σ' COLLATE PG_C_UTF8;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT U&'straße' ILIKE U&'STRASSE' COLLATE PG_C_UTF8;
+ ?column? 
+----------
+ f
+(1 row)
+
 --
 -- Test PG_UNICODE_FAST
 --
@@ -336,5 +348,17 @@ select casefold('AbCd 123 #$% ıiIİ ẞ ß Ǆǅǆ Σσς' collate PG_UNICODE_FA
             casefold             
 ---------------------------------
  abcd 123 #$% ıiii̇ ss ss ǆǆǆ σσσ
+(1 row)
+
+SELECT U&'ς' ILIKE U&'σ' COLLATE PG_UNICODE_FAST;
+ ?column? 
+----------
+ t
+(1 row)
+
+SELECT U&'straße' ILIKE U&'STRASSE' COLLATE PG_UNICODE_FAST;
+ ?column? 
+----------
+ t
 (1 row)
 

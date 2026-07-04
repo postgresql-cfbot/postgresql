@@ -79,7 +79,7 @@ dispell_init(PG_FUNCTION_ARGS)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("multiple StopWords parameters")));
-			readstoplist(defGetString(defel), &(d->stoplist), str_tolower);
+			readstoplist(defGetString(defel), &(d->stoplist), str_casefold);
 			stoploaded = true;
 		}
 		else
@@ -128,7 +128,7 @@ dispell_lexize(PG_FUNCTION_ARGS)
 	if (len <= 0)
 		PG_RETURN_POINTER(NULL);
 
-	txt = str_tolower(in, len, DEFAULT_COLLATION_OID);
+	txt = str_casefold(in, len, DEFAULT_COLLATION_OID);
 	res = NINormalizeWord(&(d->obj), txt);
 
 	if (res == NULL)

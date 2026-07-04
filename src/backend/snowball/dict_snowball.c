@@ -251,7 +251,7 @@ dsnowball_init(PG_FUNCTION_ARGS)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 						 errmsg("multiple StopWords parameters")));
-			readstoplist(defGetString(defel), &d->stoplist, str_tolower);
+			readstoplist(defGetString(defel), &d->stoplist, str_casefold);
 			stoploaded = true;
 		}
 		else if (strcmp(defel->defname, "language") == 0)
@@ -287,7 +287,7 @@ dsnowball_lexize(PG_FUNCTION_ARGS)
 	DictSnowball *d = (DictSnowball *) PG_GETARG_POINTER(0);
 	char	   *in = (char *) PG_GETARG_POINTER(1);
 	int32		len = PG_GETARG_INT32(2);
-	char	   *txt = str_tolower(in, len, DEFAULT_COLLATION_OID);
+	char	   *txt = str_casefold(in, len, DEFAULT_COLLATION_OID);
 	TSLexeme   *res = palloc0_array(TSLexeme, 2);
 
 	/*

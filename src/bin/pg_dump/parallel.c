@@ -545,19 +545,10 @@ WaitForTerminatingWorkers(ParallelState *pstate)
  * Signal handler (Unix only)
  */
 static void
-sigTermHandler(SIGNAL_ARGS)
+sigTermHandler(int signo)
 {
 	int			i;
 	char		errbuf[1];
-
-	/*
-	 * Some platforms allow delivery of new signals to interrupt an active
-	 * signal handler.  That could muck up our attempt to send PQcancel, so
-	 * disable the signals that set_cancel_handler enabled.
-	 */
-	pqsignal(SIGINT, PG_SIG_IGN);
-	pqsignal(SIGTERM, PG_SIG_IGN);
-	pqsignal(SIGQUIT, PG_SIG_IGN);
 
 	/*
 	 * If we're in the leader, forward signal to all workers.  (It seems best
@@ -616,11 +607,24 @@ set_cancel_handler(void)
 	 */
 	if (!signal_info.handler_set)
 	{
+		struct sigaction sa = {0};
+
 		signal_info.handler_set = true;
 
-		pqsignal(SIGINT, sigTermHandler);
-		pqsignal(SIGTERM, sigTermHandler);
-		pqsignal(SIGQUIT, sigTermHandler);
+		/*
+		 * While any of these signals is handled, block all three to avoid
+		 * possible repeat cancellation.
+		 */
+		sigemptyset(&sa.sa_mask);
+		sigaddset(&sa.sa_mask, SIGINT);
+		sigaddset(&sa.sa_mask, SIGTERM);
+		sigaddset(&sa.sa_mask, SIGQUIT);
+
+		sa.sa_handler = sigTermHandler;
+
+		sigaction(SIGINT, &sa, NULL);
+		sigaction(SIGTERM, &sa, NULL);
+		sigaction(SIGQUIT, &sa, NULL);
 	}
 }
 

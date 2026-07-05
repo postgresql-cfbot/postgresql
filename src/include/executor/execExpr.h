@@ -17,6 +17,7 @@
 #include "executor/nodeAgg.h"
 #include "nodes/execnodes.h"
 #include "nodes/miscnodes.h"
+#include "utils/jsontypes.h"
 
 /* forward references to avoid circularity */
 struct ExprEvalStep;
@@ -827,12 +828,8 @@ typedef struct JsonConstructorExprState
 	JsonConstructorExpr *constructor;
 	Datum	   *arg_values;
 	bool	   *arg_nulls;
-	Oid		   *arg_types;
-	struct
-	{
-		int			category;
-		Oid			outfuncid;
-	}		   *arg_type_cache; /* cache for datum_to_json[b]() */
+	JsonTypeCategory *arg_categories;
+	FmgrInfo   *arg_outflinfos;
 	int			nargs;
 } JsonConstructorExprState;
 

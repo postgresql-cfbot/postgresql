@@ -162,6 +162,8 @@ extern ObjectAddress CreateTriggerFiringOn(const CreateTrigStmt *stmt, const cha
 										   Oid indexOid, Oid funcoid, Oid parentTriggerOid,
 										   Node *whenClause, bool isInternal, bool in_partition,
 										   char trigger_fires_when);
+extern CreateTrigStmt *transformTriggerStmt(Oid relid, CreateTrigStmt *stmt,
+											const char *queryString);
 
 extern void TriggerSetParentTrigger(Relation trigRel,
 									Oid childTrigId,
@@ -169,6 +171,7 @@ extern void TriggerSetParentTrigger(Relation trigRel,
 									Oid childTableId);
 extern void RemoveTriggerById(Oid trigOid);
 extern Oid	get_trigger_oid(Oid relid, const char *trigname, bool missing_ok);
+extern List *TriggerGetRelations(Oid trigId);
 
 extern ObjectAddress renametrig(RenameStmt *stmt);
 

@@ -3151,6 +3151,7 @@ JOIN keyjoin_nondet_fk f FOR KEY (b) -> p (x);
 ERROR:  key join from referencing relation f to referenced relation p cannot be proven
 LINE 3: JOIN keyjoin_nondet_fk f FOR KEY (b) -> p (x);
                                  ^
+DETAIL:  There is no matching foreign key constraint for f (b) referencing p (x).
 DROP TABLE keyjoin_nondet_fk, keyjoin_nondet_pk;
 -- partitioning
 CREATE TABLE test20 (a int, b text COLLATE case_insensitive) PARTITION BY LIST (b);

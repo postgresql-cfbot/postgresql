@@ -1551,6 +1551,7 @@ KeyJoinFactKind
 KeyJoinKeyPosition
 KeyJoinMatch
 KeyJoinNode
+KeyJoinReq
 KeyJoinSurfaceFacts
 KeySuffix
 KeyWord

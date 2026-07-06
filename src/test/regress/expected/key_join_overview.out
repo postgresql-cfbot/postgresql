@@ -184,12 +184,14 @@ JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_name);
 ERROR:  key join from referencing relation fk_orders to referenced relation ref_products cannot be proven
 LINE 2: JOIN fk_orders FOR KEY (ord_prod_id) -> ref_products (prod_n...
                        ^
+DETAIL:  Referenced columns ref_products (prod_name) are not proven unique.
 -- rejected, reason: wrong direction (fk_orders has no FK referencing ref_products that way)
 SELECT * FROM fk_orders
 JOIN ref_products FOR KEY (prod_id) -> fk_orders (ord_prod_id);
 ERROR:  key join from referencing relation ref_products to referenced relation fk_orders cannot be proven
 LINE 2: JOIN ref_products FOR KEY (prod_id) -> fk_orders (ord_prod_i...
                           ^
+DETAIL:  There is no matching foreign key constraint for ref_products (prod_id) referencing fk_orders (ord_prod_id).
 -- ============================================================
 -- 2. Join types (INNER, LEFT, RIGHT, FULL)
 -- ============================================================
@@ -275,6 +277,7 @@ JOIN fk_warehouses FOR KEY (wh_zip, wh_country) -> ref_locations (loc_country, l
 ERROR:  key join from referencing relation fk_warehouses to referenced relation ref_locations cannot be proven
 LINE 2: JOIN fk_warehouses FOR KEY (wh_zip, wh_country) -> ref_locat...
                            ^
+DETAIL:  The matching foreign key for fk_warehouses (wh_zip, wh_country) references different columns than ref_locations (loc_country, loc_zip).
 -- ============================================================
 -- 4. Derived tables (views, subqueries, CTEs)
 -- ============================================================
@@ -288,6 +291,7 @@ JOIN fk_orders FOR KEY (ord_prod_id) -> rp (prod_id);
 ERROR:  key join from referencing relation fk_orders to referenced relation rp cannot be proven
 LINE 2: JOIN fk_orders FOR KEY (ord_prod_id) -> rp (prod_id);
                        ^
+DETAIL:  There is no matching foreign key constraint for fk_orders (ord_prod_id) referencing rp (prod_id).
 -- ============================================================
 -- 8. Constraint enforcement and timing
 -- ============================================================
@@ -299,18 +303,21 @@ ORDER BY ne_id;
 ERROR:  key join from referencing relation fk_notenforced_child to referenced relation ref_products cannot be proven
 LINE 3: JOIN fk_notenforced_child FOR KEY (ne_p_id) -> ref_products ...
                                   ^
+DETAIL:  There is no matching foreign key constraint for fk_notenforced_child (ne_p_id) referencing ref_products (prod_id).
 -- rejected, reason: NOT VALID FK rejected
 SELECT * FROM ref_products
 JOIN fk_notvalid_child FOR KEY (nv_p_id) -> ref_products (prod_id);
 ERROR:  key join from referencing relation fk_notvalid_child to referenced relation ref_products cannot be proven
 LINE 2: JOIN fk_notvalid_child FOR KEY (nv_p_id) -> ref_products (pr...
                                ^
+DETAIL:  There is no matching foreign key constraint for fk_notvalid_child (nv_p_id) referencing ref_products (prod_id).
 -- rejected, reason: NOT VALID NOT NULL rejected
 SELECT * FROM ref_products
 JOIN fk_notvalid_notnull_child FOR KEY (nvn_p_id) -> ref_products (prod_id);
 ERROR:  key join from referencing relation fk_notvalid_notnull_child to referenced relation ref_products cannot be proven
 LINE 2: JOIN fk_notvalid_notnull_child FOR KEY (nvn_p_id) -> ref_pro...
                                        ^
+DETAIL:  This inner join could filter rows from fk_notvalid_notnull_child. Referencing columns fk_notvalid_notnull_child (nvn_p_id) can be null.
 -- accepted, reason: NOT DEFERRABLE key join works even after SET CONSTRAINTS ALL DEFERRED
 BEGIN;
 SET CONSTRAINTS ALL DEFERRED;
@@ -335,6 +342,7 @@ ORDER BY df_id;
 ERROR:  key join from referencing relation fk_deferrable_child to referenced relation ref_products cannot be proven
 LINE 3: JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_products (...
                                  ^
+DETAIL:  There is no matching foreign key constraint for fk_deferrable_child (df_p_id) referencing ref_products (prod_id).
 -- rejected, reason: stored key join rejected when it depends on a DEFERRABLE constraint
 CREATE VIEW v_deferrable_key_join AS
 SELECT ref_products.prod_id, fk_deferrable_child.df_id
@@ -352,6 +360,7 @@ ORDER BY df_id;
 ERROR:  key join from referencing relation fk_deferrable_child to referenced relation ref_products cannot be proven
 LINE 4: JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_products (...
                                  ^
+DETAIL:  There is no matching foreign key constraint for fk_deferrable_child (df_p_id) referencing ref_products (prod_id).
 -- rejected, reason: cursor key join rejected when it depends on a DEFERRABLE constraint
 BEGIN;
 DECLARE c_deferrable_key_join CURSOR FOR
@@ -363,6 +372,7 @@ ORDER BY df_id;
 ERROR:  key join from referencing relation fk_deferrable_child to referenced relation ref_products cannot be proven
 LINE 5: JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_products (...
                                  ^
+DETAIL:  There is no matching foreign key constraint for fk_deferrable_child (df_p_id) referencing ref_products (prod_id).
 ROLLBACK;
 -- rejected, reason: pulled-up subquery key join rejected at PREPARE
 PREPARE p_pulled_up_deferrable_key_join AS
@@ -376,6 +386,7 @@ ORDER BY df_id;
 ERROR:  key join from referencing relation fk_deferrable_child to referenced relation ref_products cannot be proven
 LINE 6:     JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_produc...
                                      ^
+DETAIL:  There is no matching foreign key constraint for fk_deferrable_child (df_p_id) referencing ref_products (prod_id).
 -- rejected, reason: inlined SQL function key join rejected when the body is planned
 PREPARE p_inlined_deferrable_key_join AS
 SELECT * FROM fn_deferrable_key_join()
@@ -384,6 +395,7 @@ EXECUTE p_inlined_deferrable_key_join;
 ERROR:  key join from referencing relation fk_deferrable_child to referenced relation ref_products cannot be proven
 LINE 4:     JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_produc...
                                      ^
+DETAIL:  There is no matching foreign key constraint for fk_deferrable_child (df_p_id) referencing ref_products (prod_id).
 QUERY:  
     SELECT ref_products.prod_id, fk_deferrable_child.df_id
     FROM ref_products
@@ -400,6 +412,7 @@ JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_products (prod_id);
 ERROR:  key join from referencing relation fk_deferrable_child to referenced relation ref_products cannot be proven
 LINE 3: JOIN fk_deferrable_child FOR KEY (df_p_id) -> ref_products (...
                                  ^
+DETAIL:  There is no matching foreign key constraint for fk_deferrable_child (df_p_id) referencing ref_products (prod_id).
 ROLLBACK;
 -- rejected, reason: INITIALLY DEFERRED constraint rejected by default
 BEGIN;
@@ -409,6 +422,7 @@ JOIN fk_initially_deferred_child FOR KEY (did_p_id) -> ref_products (prod_id);
 ERROR:  key join from referencing relation fk_initially_deferred_child to referenced relation ref_products cannot be proven
 LINE 3: JOIN fk_initially_deferred_child FOR KEY (did_p_id) -> ref_p...
                                          ^
+DETAIL:  There is no matching foreign key constraint for fk_initially_deferred_child (did_p_id) referencing ref_products (prod_id).
 ROLLBACK;
 -- rejected, reason: INITIALLY DEFERRED constraint rejected even after SET CONSTRAINTS IMMEDIATE
 BEGIN;
@@ -421,6 +435,7 @@ ORDER BY did_id;
 ERROR:  key join from referencing relation fk_initially_deferred_child to referenced relation ref_products cannot be proven
 LINE 4: JOIN fk_initially_deferred_child FOR KEY (did_p_id) -> ref_p...
                                          ^
+DETAIL:  There is no matching foreign key constraint for fk_initially_deferred_child (did_p_id) referencing ref_products (prod_id).
 ROLLBACK;
 -- ============================================================
 -- 9. Unsupported relation kinds
@@ -431,6 +446,7 @@ JOIN fk_orders FOR KEY (ord_prod_id) -> mv_products (prod_id);
 ERROR:  key join from referencing relation fk_orders to referenced relation mv_products cannot be proven
 LINE 2: JOIN fk_orders FOR KEY (ord_prod_id) -> mv_products (prod_id...
                        ^
+DETAIL:  There is no matching foreign key constraint for fk_orders (ord_prod_id) referencing mv_products (prod_id).
 -- ============================================================
 -- Cleanup
 -- ============================================================

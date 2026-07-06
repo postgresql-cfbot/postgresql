@@ -70,18 +70,22 @@ SELECT * FROM t1 JOIN t2 FOR KEY (c3) -> t1 (c2); -- rejected, reason: reference
 ERROR:  key join from referencing relation t2 to referenced relation t1 cannot be proven
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c3) -> t1 (c2);
                                  ^
+DETAIL:  Referenced columns t1 (c2) are not proven unique.
 SELECT * FROM t1 JOIN t2 FOR KEY (c4) -> t1 (c1); -- rejected, reason: referencing column is not backed by the FK
 ERROR:  key join from referencing relation t2 to referenced relation t1 cannot be proven
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c4) -> t1 (c1);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t2 (c4) referencing t1 (c1).
 SELECT * FROM t1 JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2); -- rejected, reason: selected key does not match the FK arity
 ERROR:  key join from referencing relation t2 to referenced relation t1 cannot be proven
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c3,c4) -> t1 (c1,c2);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t2 (c3, c4) referencing t1 (c1, c2).
 SELECT * FROM t1 JOIN t2 FOR KEY (c3) <- t1 (c1); -- rejected, reason: wrong direction for this table order
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c3) <- t1 (c1);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c1) referencing t2 (c3).
 SELECT * FROM t1 JOIN t2 FOR KEY (c1) <- t1 (c3); -- rejected, reason: wrong direction and wrong referencing column
 ERROR:  referenced column "c1" does not exist
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c1) <- t1 (c3);
@@ -90,18 +94,22 @@ SELECT * FROM t1 JOIN t2 FOR KEY (c3) <- t1 (c2); -- rejected, reason: wrong dir
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c3) <- t1 (c2);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c2) referencing t2 (c3).
 SELECT * FROM t1 JOIN t2 FOR KEY (c4) <- t1 (c1); -- rejected, reason: wrong direction and wrong referencing column
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c4) <- t1 (c1);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c1) referencing t2 (c4).
 SELECT * FROM t1 JOIN t2 FOR KEY (c3,c4) <- t1 (c1,c2); -- rejected, reason: wrong direction for the composite key
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t1 JOIN t2 FOR KEY (c3,c4) <- t1 (c1,c2);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c1, c2) referencing t2 (c3, c4).
 SELECT * FROM t1 AS a JOIN t2 AS b FOR KEY (c3) -> a (c2); -- rejected, reason: alias resolves to a non-referenced key column
 ERROR:  key join from referencing relation b to referenced relation a cannot be proven
 LINE 1: SELECT * FROM t1 AS a JOIN t2 AS b FOR KEY (c3) -> a (c2);
                                            ^
+DETAIL:  Referenced columns a (c2) are not proven unique.
 SELECT * FROM t2 JOIN t1 FOR KEY (c1) <- t2 (c3); -- accepted
  c3 | c4 | c1 | c2 
 ----+----+----+----
@@ -152,34 +160,42 @@ SELECT * FROM t2 JOIN t1 FOR KEY (c1) <- t2 (c4); -- rejected, reason: referenci
 ERROR:  key join from referencing relation t2 to referenced relation t1 cannot be proven
 LINE 1: SELECT * FROM t2 JOIN t1 FOR KEY (c1) <- t2 (c4);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t2 (c4) referencing t1 (c1).
 SELECT * FROM t2 JOIN t1 FOR KEY (c2) <- t2 (c3); -- rejected, reason: referenced column is not the FK target key
 ERROR:  key join from referencing relation t2 to referenced relation t1 cannot be proven
 LINE 1: SELECT * FROM t2 JOIN t1 FOR KEY (c2) <- t2 (c3);
                                  ^
+DETAIL:  Referenced columns t1 (c2) are not proven unique.
 SELECT * FROM t2 JOIN t1 FOR KEY (c1,c2) <- t2 (c3,c4); -- rejected, reason: selected key does not match the FK arity
 ERROR:  key join from referencing relation t2 to referenced relation t1 cannot be proven
 LINE 1: SELECT * FROM t2 JOIN t1 FOR KEY (c1,c2) <- t2 (c3,c4);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t2 (c3, c4) referencing t1 (c1, c2).
 SELECT * FROM t2 JOIN t1 FOR KEY (c1) -> t2 (c3); -- rejected, reason: wrong direction for this table order
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t2 JOIN t1 FOR KEY (c1) -> t2 (c3);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c1) referencing t2 (c3).
 SELECT * FROM t2 JOIN t1 FOR KEY (c1) -> t2 (c4); -- rejected, reason: wrong direction and wrong referencing column
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t2 JOIN t1 FOR KEY (c1) -> t2 (c4);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c1) referencing t2 (c4).
 SELECT * FROM t2 JOIN t1 FOR KEY (c2) -> t2 (c3); -- rejected, reason: wrong direction and wrong referenced column
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t2 JOIN t1 FOR KEY (c2) -> t2 (c3);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c2) referencing t2 (c3).
 SELECT * FROM t2 JOIN t1 FOR KEY (c1,c2) -> t2 (c3,c4); -- rejected, reason: wrong direction for the composite key
 ERROR:  key join from referencing relation t1 to referenced relation t2 cannot be proven
 LINE 1: SELECT * FROM t2 JOIN t1 FOR KEY (c1,c2) -> t2 (c3,c4);
                                  ^
+DETAIL:  There is no matching foreign key constraint for t1 (c1, c2) referencing t2 (c3, c4).
 SELECT * FROM t2 AS a JOIN t1 AS b FOR KEY (c1) <- a (c4); -- rejected, reason: alias resolves to a non-referencing FK column
 ERROR:  key join from referencing relation a to referenced relation b cannot be proven
 LINE 1: SELECT * FROM t2 AS a JOIN t1 AS b FOR KEY (c1) <- a (c4);
                                            ^
+DETAIL:  There is no matching foreign key constraint for a (c4) referencing b (c1).
 -- Self-join elimination must update stored key-join RT indexes when the
 -- duplicate relation is the referencing side.
 SET enable_self_join_elimination = on;
@@ -202,6 +218,7 @@ JOIN t2 FOR KEY (c3) -> pc (relname);
 ERROR:  key join from referencing relation t2 to referenced relation pc cannot be proven
 LINE 4: JOIN t2 FOR KEY (c3) -> pc (relname);
                 ^
+DETAIL:  Referenced columns pc (relname) are not proven unique.
 CREATE TABLE no_key_join_fact_parent (id int);
 CREATE TABLE no_key_join_fact_child (parent_id int);
 SELECT *
@@ -211,6 +228,7 @@ JOIN ONLY no_key_join_fact_child c
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4:   FOR KEY (parent_id) -> p (id);
           ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE no_key_join_fact_child, no_key_join_fact_parent;
 CREATE TABLE invalid_unique_parent (id int);
 CREATE TABLE invalid_unique_child (parent_id int);
@@ -227,6 +245,7 @@ JOIN invalid_unique_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN invalid_unique_child c FOR KEY (parent_id) -> p (id);
                                     ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE invalid_unique_child, invalid_unique_parent;
 CREATE TABLE expr_unique_parent (id int);
 CREATE TABLE expr_unique_child (parent_id int);
@@ -240,6 +259,7 @@ JOIN expr_unique_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN expr_unique_child c FOR KEY (parent_id) -> p (id);
                                  ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE expr_unique_child, expr_unique_parent;
 CREATE TABLE partial_unique_parent (id int);
 CREATE TABLE partial_unique_child (parent_id int);
@@ -254,6 +274,7 @@ JOIN partial_unique_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN partial_unique_child c FOR KEY (parent_id) -> p (id);
                                     ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE partial_unique_child, partial_unique_parent;
 CREATE TABLE collate_unique_parent (id text COLLATE "C");
 CREATE TABLE collate_unique_child (parent_id text COLLATE "C");
@@ -268,6 +289,7 @@ JOIN collate_unique_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN collate_unique_child c FOR KEY (parent_id) -> p (id);
                                     ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE collate_unique_child, collate_unique_parent;
 CREATE OPERATOR CLASS noeq_unique_int4_ops FOR TYPE int USING btree AS
     FUNCTION 1 btint4cmp(int, int);
@@ -325,6 +347,7 @@ JOIN domain_key_join_domain_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN domain_key_join_domain_child c FOR KEY (parent_id) -> p...
                                             ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE domain_key_join_domain_child, domain_key_join_base_parent;
 CREATE TABLE domain_key_join_domain_parent (id domain_key_join_int PRIMARY KEY);
 CREATE TABLE domain_key_join_base_child
@@ -342,6 +365,7 @@ JOIN domain_key_join_base_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN domain_key_join_base_child c FOR KEY (parent_id) -> p (...
                                           ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE domain_key_join_base_child, domain_key_join_domain_parent;
 DROP DOMAIN domain_key_join_int;
 CREATE TABLE key_join_self_syntax
@@ -404,6 +428,7 @@ ORDER BY c.id;
 ERROR:  key join from referencing relation c to referenced relation p1 cannot be proven
 LINE 4: JOIN kj_part_child c FOR KEY (pid) -> p1 (id)
                              ^
+DETAIL:  There is no matching foreign key constraint for c (pid) referencing p1 (id).
 CREATE TABLE kj_part_ref_parent (id int PRIMARY KEY);
 CREATE TABLE kj_part_ref_child
 (
@@ -609,6 +634,7 @@ JOIN t1_nn FOR KEY (t1_id) <- t2_nn (t2_t1_id_nullable);
 ERROR:  key join from referencing relation t2_nn to referenced relation t1_nn cannot be proven
 LINE 3: JOIN t1_nn FOR KEY (t1_id) <- t2_nn (t2_t1_id_nullable);
                    ^
+DETAIL:  This inner join could filter rows from t2_nn. Referencing columns t2_nn (t2_t1_id_nullable) can be null.
 -- N3: Nullable FK, LEFT JOIN preserving referencing side → accepted
 SELECT * FROM t2_nn
 -- accepted
@@ -648,6 +674,7 @@ LEFT JOIN t2_nn FOR KEY (t2_t1_id_nullable) -> t1_nn (t1_id);
 ERROR:  key join from referencing relation t2_nn to referenced relation t1_nn cannot be proven
 LINE 3: LEFT JOIN t2_nn FOR KEY (t2_t1_id_nullable) -> t1_nn (t1_id)...
                         ^
+DETAIL:  This join could filter rows from t2_nn. Referencing columns t2_nn (t2_t1_id_nullable) can be null.
 DROP TABLE t2_nn, t1_nn;
 --
 -- Test various error conditions
@@ -763,6 +790,7 @@ SELECT * FROM mv1 JOIN t2 FOR KEY (c3, c4) -> mv1 (c1, c2);
 ERROR:  key join from referencing relation t2 to referenced relation mv1 cannot be proven
 LINE 1: SELECT * FROM mv1 JOIN t2 FOR KEY (c3, c4) -> mv1 (c1, c2);
                                   ^
+DETAIL:  There is no matching foreign key constraint for t2 (c3, c4) referencing mv1 (c1, c2).
 DROP MATERIALIZED VIEW mv1;
 --
 -- Test PERIOD foreign keys (not key-join proof sources)
@@ -794,6 +822,7 @@ JOIN period_fk_child c FOR KEY (parent_id, valid_at) -> p (id, valid_at);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN period_fk_child c FOR KEY (parent_id, valid_at) -> p (i...
                                ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id, valid_at) referencing p (id, valid_at).
 DROP TABLE period_fk_child, period_fk_parent;
 --
 -- Test regular inheritance tables
@@ -818,6 +847,7 @@ JOIN inh_fk_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN inh_fk_child c FOR KEY (parent_id) -> p (id);
                             ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 SELECT p.id, c.id
 FROM ONLY inh_parent_ref p
 -- accepted
@@ -865,6 +895,7 @@ SELECT * FROM ONLY pt2 JOIN pt3 FOR KEY (c5) -> pt2 (c3);
 ERROR:  key join from referencing relation pt3 to referenced relation pt2 cannot be proven
 LINE 1: SELECT * FROM ONLY pt2 JOIN pt3 FOR KEY (c5) -> pt2 (c3);
                                         ^
+DETAIL:  There is no matching foreign key constraint for pt3 (c5) referencing pt2 (c3).
 DROP TABLE pt3;
 DROP TABLE pt2;
 CREATE TABLE shipments
@@ -943,6 +974,7 @@ ORDER BY c.id;
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: LEFT JOIN eq_sem_child c FOR KEY (parent_id) -> p (id)
                                  ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 SELECT q.id AS parent_id, r.id AS ref_id
 FROM (
     SELECT p.id
@@ -955,6 +987,7 @@ JOIN eq_sem_ref r FOR KEY (parent_id) -> q (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 6:     LEFT JOIN eq_sem_child c FOR KEY (parent_id) -> p (id)
                                      ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE eq_sem_ref, eq_sem_child, eq_sem_parent;
 --
 -- Key-join proof rejects cross-type FK/PK key identity.  PostgreSQL accepts
@@ -980,6 +1013,7 @@ JOIN cross_type_key_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN cross_type_key_child c FOR KEY (parent_id) -> p (id);
                                     ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 SELECT c.id AS child_id, p.id AS parent_id
 FROM cross_type_key_child c
 -- rejected, reason: FK and PK key types differ
@@ -987,6 +1021,7 @@ JOIN cross_type_key_parent p FOR KEY (id) <- c (parent_id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN cross_type_key_parent p FOR KEY (id) <- c (parent_id);
                                      ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE cross_type_key_child, cross_type_key_parent;
 --
 -- Key-join proof also requires exact typmod identity.
@@ -1011,6 +1046,7 @@ JOIN typmod_key_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN typmod_key_child c FOR KEY (parent_id) -> p (id);
                                 ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE typmod_key_child, typmod_key_parent;
 CREATE TABLE varchar_key_customers
 (
@@ -1060,6 +1096,7 @@ JOIN varchar_typmod_key_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN varchar_typmod_key_child c FOR KEY (parent_id) -> p (id...
                                         ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE varchar_typmod_key_child, varchar_typmod_key_parent;
 --
 -- Key-join proof requires exact collation identity, even for two
@@ -1086,6 +1123,7 @@ JOIN collation_key_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN collation_key_child c FOR KEY (parent_id) -> p (id);
                                    ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE collation_key_child, collation_key_parent;
 DROP COLLATION key_join_c_copy;
 --
@@ -1142,6 +1180,7 @@ JOIN timezone_key_timestamp_parent p FOR KEY (id) <- c (parent_id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN timezone_key_timestamp_parent p FOR KEY (id) <- c (pare...
                                              ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 SELECT c.id AS child_id, p.id AS parent_id
 FROM timezone_key_date_child c
 -- rejected, reason: FK equality operator is not immutable
@@ -1149,6 +1188,7 @@ JOIN timezone_key_date_parent p FOR KEY (id) <- c (parent_id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN timezone_key_date_parent p FOR KEY (id) <- c (parent_id...
                                         ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 RESET TimeZone;
 DROP TABLE timezone_key_timestamp_child, timezone_key_timestamp_parent;
 DROP TABLE timezone_key_date_child, timezone_key_date_parent;
@@ -1199,6 +1239,7 @@ LEFT JOIN key_join_nonstrict_parent p FOR KEY (id) <- c (parent_id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: LEFT JOIN key_join_nonstrict_parent p FOR KEY (id) <- c (par...
                                               ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE key_join_nonstrict_child,
            key_join_nonstrict_parent;
 DROP OPERATOR CLASS key_join_nonstrict_int4_ops USING btree;
@@ -1302,6 +1343,7 @@ JOIN key_join_ri_mismatch_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 4: JOIN key_join_ri_mismatch_child c FOR KEY (parent_id) -> p (...
                                           ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE key_join_ri_mismatch_child,
            key_join_ri_mismatch_parent;
 DROP OPERATOR CLASS key_join_ri_mismatch_dom_ops USING btree;
@@ -1396,6 +1438,7 @@ JOIN rls_key_join_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 3: JOIN rls_key_join_child c FOR KEY (parent_id) -> p (id);
                                   ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 ALTER TABLE rls_key_join_parent DISABLE ROW LEVEL SECURITY;
 ALTER TABLE rls_key_join_child ENABLE ROW LEVEL SECURITY;
 SELECT *
@@ -1404,6 +1447,7 @@ JOIN rls_key_join_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 3: JOIN rls_key_join_child c FOR KEY (parent_id) -> p (id);
                                   ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE rls_key_join_child, rls_key_join_parent;
 CREATE TABLE products_gbu (
     id integer PRIMARY KEY
@@ -1642,6 +1686,7 @@ JOIN key_join_srf_child c FOR KEY (parent_id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 3: JOIN key_join_srf_child c FOR KEY (parent_id) -> p (id);
                                   ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
 DROP TABLE key_join_srf_child,
            key_join_srf_parent;
 DROP OPERATOR CLASS key_join_srf_int4_ops USING btree;
@@ -1777,6 +1822,7 @@ SELECT * FROM kd_parent p JOIN kd_child c FOR KEY (id) -> p (id);
 ERROR:  key join from referencing relation c to referenced relation p cannot be proven
 LINE 1: SELECT * FROM kd_parent p JOIN kd_child c FOR KEY (id) -> p ...
                                                   ^
+DETAIL:  There is no matching foreign key constraint for c (id) referencing p (id).
 -- Missing: referencing columns point at a different referenced relation.
 SELECT *
 FROM kd_sale_order o
@@ -1784,6 +1830,7 @@ JOIN kd_customer c FOR KEY (id) <- o (cuid);
 ERROR:  key join from referencing relation o to referenced relation c cannot be proven
 LINE 3: JOIN kd_customer c FOR KEY (id) <- o (cuid);
                            ^
+DETAIL:  There is no matching foreign key constraint for o (cuid) referencing c (id).
 -- Accepted: the corrected FK target still succeeds.
 SELECT o.id AS order_id, c.id AS customer_id
 FROM kd_sale_order o

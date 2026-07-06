@@ -688,6 +688,17 @@ INSERT INTO gtest20c VALUES (1);  -- ok
 INSERT INTO gtest20c VALUES (NULL);  -- fails
 ERROR:  new row for relation "gtest20c" violates check constraint "whole_row_check"
 DETAIL:  Failing row contains (null, null).
+ALTER TABLE gtest20c ALTER COLUMN b SET EXPRESSION AS (nullif(a, 1)); -- fails
+ERROR:  check constraint "whole_row_check" of relation "gtest20c" is violated by some row
+CREATE INDEX gtest20c_expr_idx ON gtest20c ((gtest20c IS NOT NULL));
+SELECT pg_relation_filenode('gtest20c_expr_idx') AS gtest20c_expr_idx_filenode \gset
+ALTER TABLE gtest20c ALTER COLUMN b SET EXPRESSION AS (a * 3); -- ok, rebuilds index
+SELECT pg_relation_filenode('gtest20c_expr_idx') <> :gtest20c_expr_idx_filenode AS whole_row_index_rebuilt;
+ whole_row_index_rebuilt 
+-------------------------
+ t
+(1 row)
+
 -- not-null constraints
 CREATE TABLE gtest21a (a int PRIMARY KEY, b int GENERATED ALWAYS AS (nullif(a, 0)) STORED NOT NULL);
 INSERT INTO gtest21a (a) VALUES (1);  -- ok

@@ -43,6 +43,7 @@
 #include "catalog/pg_extension_d.h"
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_inherits.h"
+#include "catalog/pg_index.h"
 #include "catalog/pg_largeobject.h"
 #include "catalog/pg_largeobject_metadata.h"
 #include "catalog/pg_namespace.h"
@@ -693,6 +694,7 @@ static ObjectAddress ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 										   AlterTableCmd *cmd, LOCKMODE lockmode);
 static void RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 											  Relation rel, AttrNumber attnum, const char *colName);
+static void RememberWholeRowIndexesForRebuilding(AlteredTableInfo *tab, Relation rel);
 static void RememberConstraintForRebuilding(Oid conoid, AlteredTableInfo *tab);
 static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
@@ -8817,6 +8819,20 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 	RememberAllDependentForRebuilding(tab, AT_SetExpression, rel, attnum, colName);
 
 	/*
+	 * Whole-row expressions, such as "rel IS NOT NULL", depend on the
+	 * relation as a whole rather than on the generated column's attnum, but
+	 * they can observe the column's new computed value.
+	 */
+	RememberAllDependentForRebuilding(tab, AT_SetExpression, rel, 0, NULL);
+
+	/*
+	 * recordDependencyOnSingleRelExpr() does not emit dependencies for
+	 * whole-row Vars, so indexes with ordinary key columns and whole-row
+	 * predicates might not have a whole-relation dependency to find above.
+	 */
+	RememberWholeRowIndexesForRebuilding(tab, rel);
+
+	/*
 	 * Drop the dependency records of the GENERATED expression, in particular
 	 * its INTERNAL dependency on the column, which would otherwise cause
 	 * dependency.c to refuse to perform the deletion.
@@ -15564,9 +15580,87 @@ ATExecAlterColumnType(AlteredTableInfo *tab, Relation rel,
 }
 
 /*
+ * Return true if the expression contains a whole-row Var.
+ */
+static bool
+expr_has_whole_row_var(Node *expr)
+{
+	Bitmapset  *expr_attrs = NULL;
+	bool		result;
+
+	pull_varattnos(expr, 1, &expr_attrs);
+	result = bms_is_member(InvalidAttrNumber - FirstLowInvalidHeapAttributeNumber,
+						   expr_attrs);
+	bms_free(expr_attrs);
+
+	return result;
+}
+
+/*
+ * Find indexes whose expressions or predicates contain whole-row Vars, and
+ * remember them for rebuilding.
+ */
+static void
+RememberWholeRowIndexesForRebuilding(AlteredTableInfo *tab, Relation rel)
+{
+	Relation	pg_index;
+	ScanKeyData key;
+	SysScanDesc scan;
+	HeapTuple	indexTuple;
+
+	pg_index = table_open(IndexRelationId, AccessShareLock);
+
+	ScanKeyInit(&key,
+				Anum_pg_index_indrelid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(RelationGetRelid(rel)));
+
+	scan = systable_beginscan(pg_index, IndexIndrelidIndexId, true,
+							  NULL, 1, &key);
+
+	while (HeapTupleIsValid(indexTuple = systable_getnext(scan)))
+	{
+		Form_pg_index index = (Form_pg_index) GETSTRUCT(indexTuple);
+		bool		remember = false;
+		Datum		exprDatum;
+		char	   *exprString;
+		bool		isnull;
+
+		exprDatum = fastgetattr(indexTuple, Anum_pg_index_indexprs,
+								RelationGetDescr(pg_index), &isnull);
+		if (!isnull)
+		{
+			exprString = TextDatumGetCString(exprDatum);
+			remember = expr_has_whole_row_var((Node *) stringToNode(exprString));
+			pfree(exprString);
+		}
+
+		if (!remember)
+		{
+			exprDatum = fastgetattr(indexTuple, Anum_pg_index_indpred,
+									RelationGetDescr(pg_index), &isnull);
+			if (!isnull)
+			{
+				exprString = TextDatumGetCString(exprDatum);
+				remember = expr_has_whole_row_var((Node *) stringToNode(exprString));
+				pfree(exprString);
+			}
+		}
+
+		if (remember)
+			RememberIndexForRebuilding(index->indexrelid, tab);
+	}
+
+	systable_endscan(scan);
+	table_close(pg_index, AccessShareLock);
+}
+
+/*
  * Subroutine for ATExecAlterColumnType and ATExecSetExpression: Find everything
  * that depends on the column (constraints, indexes, etc), and record enough
- * information to let us recreate the objects.
+ * information to let us recreate the objects.  ATExecSetExpression can also
+ * pass attnum == 0 to find whole-row expression dependencies that observe a
+ * generated column's computed value.
  */
 static void
 RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
@@ -15578,6 +15672,7 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 	HeapTuple	depTup;
 
 	Assert(subtype == AT_AlterColumnType || subtype == AT_SetExpression);
+	Assert(attnum != 0 || subtype == AT_SetExpression);
 
 	depRel = table_open(DependRelationId, RowExclusiveLock);
 
@@ -15628,6 +15723,15 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 					}
 					else
 					{
+						/*
+						 * In a whole-relation scan for SET EXPRESSION, ignore
+						 * relation dependencies that are not indexes.  Objects
+						 * with expressions that need action, such as
+						 * constraints, are handled by their own cases.
+						 */
+						if (attnum == 0)
+							break;
+
 						/* Not expecting any other direct dependencies... */
 						elog(ERROR, "unexpected object depending on column: %s",
 							 getObjectDescription(&foundObject, false));
@@ -15637,7 +15741,14 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 
 			case ConstraintRelationId:
 				Assert(foundObject.objectSubId == 0);
-				RememberConstraintForRebuilding(foundObject.objectId, tab);
+				if (attnum == 0)
+				{
+					/* Whole-row CHECK constraints may need to be revalidated */
+					if (get_constraint_type(foundObject.objectId) == CONSTRAINT_CHECK)
+						RememberConstraintForRebuilding(foundObject.objectId, tab);
+				}
+				else
+					RememberConstraintForRebuilding(foundObject.objectId, tab);
 				break;
 
 			case ProcedureRelationId:
@@ -15778,8 +15889,14 @@ RememberAllDependentForRebuilding(AlteredTableInfo *tab, AlterTableType subtype,
 
 				/*
 				 * We don't expect any other sorts of objects to depend on a
-				 * column.
+				 * column.  A whole-relation scan can find the relation's row
+				 * type, which doesn't need rebuilding for SET EXPRESSION.
 				 */
+				if (attnum == 0 &&
+					foundObject.classId == TypeRelationId &&
+					get_typ_typrelid(foundObject.objectId) == RelationGetRelid(rel))
+					continue;
+
 				elog(ERROR, "unexpected object depending on column: %s",
 					 getObjectDescription(&foundObject, false));
 				break;

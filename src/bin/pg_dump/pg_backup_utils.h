@@ -16,6 +16,7 @@
 #define PG_BACKUP_UTILS_H
 
 #include "common/logging.h"
+#include "libpq-fe.h"
 
 /* bits returned by set_dump_section */
 #define DUMP_PRE_DATA		0x01
@@ -30,6 +31,12 @@ extern const char *progname;
 extern void set_dump_section(const char *arg, int *dumpSections);
 extern void on_exit_nicely(on_exit_nicely_callback function, void *arg);
 pg_noreturn extern void exit_nicely(int code);
+
+extern void quit_handler_setup(void);
+extern void quit_handler_add_connection(PGconn *connection);
+extern void quit_handler_remove_connection(PGconn *connection);
+extern void quit_handler_cancel_and_remove_connection(PGconn *connection);
+extern void quit_handler_cancel_and_remove_all_connections(void);
 
 /* In pg_dump, we modify pg_fatal to call exit_nicely instead of exit */
 #undef pg_fatal

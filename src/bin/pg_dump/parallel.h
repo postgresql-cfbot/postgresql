@@ -77,6 +77,8 @@ extern void DispatchJobForTocEntry(ArchiveHandle *AH,
 								   void *callback_data);
 extern void ParallelBackupEnd(ArchiveHandle *AH, ParallelState *pstate);
 
-extern void set_archive_cancel_info(ArchiveHandle *AH, PGconn *conn);
+extern void quit_cancel_set_add(PGconn *connection);
+extern void quit_cancel_set_remove(PGconn *connection);
+extern void quit_cancel_set_cancel_and_remove(PGconn *connection);
 
 #endif							/* PG_DUMP_PARALLEL_H */

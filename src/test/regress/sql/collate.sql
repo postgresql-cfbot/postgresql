@@ -302,6 +302,19 @@ CREATE COLLATION coll_dup_chk (LC_CTYPE = "POSIX", LOCALE = '');
 -- FROM conflicts with any other option
 CREATE COLLATION coll_dup_chk (FROM = "C", VERSION = "1");
 
+-- Regex exact-match optimization should use index even when the expression
+-- has COLLATE "default" and the index has a different (but deterministic)
+-- collation OID, because equality is collation-insensitive for deterministic
+-- collations.
+CREATE TABLE regex_idx_test (x text);
+CREATE INDEX ON regex_idx_test (x COLLATE "C");
+SET enable_seqscan = off;
+SET enable_bitmapscan = off;
+EXPLAIN (costs off)
+SELECT * FROM regex_idx_test WHERE x ~ '^(abc)$' COLLATE "default";
+RESET enable_seqscan;
+RESET enable_bitmapscan;
+
 --
 -- Clean up.  Many of these table names will be re-used if the user is
 -- trying to run any platform-specific collation tests later, so we

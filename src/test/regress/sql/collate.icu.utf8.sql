@@ -594,6 +594,18 @@ SELECT x FROM test3cs WHERE x LIKE 'a%';
 SELECT x FROM test3cs WHERE x ILIKE 'a%';
 SELECT x FROM test3cs WHERE x SIMILAR TO 'a%';
 SELECT x FROM test3cs WHERE x ~ 'a';
+-- An exact-match regex is converted to an "=" indexqual.  We can use an index
+-- whose collation differs from the expression's as long as the expression's
+-- collation is deterministic, even when the index's collation is
+-- nondeterministic.  Check that we get an index scan rather than a seqscan.
+CREATE INDEX test3cs_ci ON test3cs (x COLLATE case_insensitive);
+SET enable_seqscan = off;
+SET enable_bitmapscan = off;
+EXPLAIN (costs off)
+SELECT x FROM test3cs WHERE x ~ '^(abc)$';
+RESET enable_seqscan;
+RESET enable_bitmapscan;
+DROP INDEX test3cs_ci;
 SET enable_hashagg TO off;
 SELECT x FROM test1cs UNION SELECT x FROM test2cs ORDER BY x;
 SELECT x FROM test2cs UNION SELECT x FROM test1cs ORDER BY x;

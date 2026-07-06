@@ -70,7 +70,7 @@ static char *libpqrcv_get_option_from_conninfo(const char *connInfo,
 static int	libpqrcv_server_version(WalReceiverConn *conn);
 static void libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 											 TimeLineID tli, char **filename,
-											 char **content, int *len);
+											 char **content, size_t *len);
 static bool libpqrcv_startstreaming(WalReceiverConn *conn,
 									const WalRcvStreamOptions *options);
 static void libpqrcv_endstreaming(WalReceiverConn *conn,
@@ -738,7 +738,7 @@ libpqrcv_endstreaming(WalReceiverConn *conn, TimeLineID *next_tli)
 static void
 libpqrcv_readtimelinehistoryfile(WalReceiverConn *conn,
 								 TimeLineID tli, char **filename,
-								 char **content, int *len)
+								 char **content, size_t *len)
 {
 	PGresult   *res;
 	char		cmd[64];

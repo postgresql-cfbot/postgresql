@@ -136,7 +136,7 @@ copy_file(const char *fromfile, const char *tofile)
 	char	   *buffer;
 	int			srcfd;
 	int			dstfd;
-	int			nbytes;
+	ssize_t		nbytes;
 	off_t		offset;
 	off_t		flush_offset;
 
@@ -204,7 +204,7 @@ copy_file(const char *fromfile, const char *tofile)
 			break;
 		errno = 0;
 		pgstat_report_wait_start(WAIT_EVENT_COPY_FILE_WRITE);
-		if ((int) write(dstfd, buffer, nbytes) != nbytes)
+		if (write(dstfd, buffer, nbytes) != nbytes)
 		{
 			/* if write didn't set errno, assume problem is no disk space */
 			if (errno == 0)

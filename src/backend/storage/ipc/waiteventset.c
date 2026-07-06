@@ -1905,7 +1905,7 @@ latch_sigurg_handler(SIGNAL_ARGS)
 static void
 sendSelfPipeByte(void)
 {
-	int			rc;
+	ssize_t		rc;
 	char		dummy = 0;
 
 retry:
@@ -1947,7 +1947,7 @@ static void
 drain(void)
 {
 	char		buf[1024];
-	int			rc;
+	ssize_t		rc;
 	int			fd;
 
 #ifdef WAIT_USE_SELF_PIPE

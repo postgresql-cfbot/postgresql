@@ -647,8 +647,8 @@ static Oid
 lo_import_internal(PGconn *conn, const char *filename, Oid oid)
 {
 	int			fd;
-	int			nbytes,
-				tmp;
+	ssize_t		nbytes;
+	int			tmp;
 	char		buf[LO_BUFSIZE];
 	Oid			lobjOid;
 	int			lobj;
@@ -749,8 +749,7 @@ lo_export(PGconn *conn, Oid lobjId, const char *filename)
 {
 	int			result = 1;
 	int			fd;
-	int			nbytes,
-				tmp;
+	int			nbytes;
 	char		buf[LO_BUFSIZE];
 	int			lobj;
 	char		sebuf[PG_STRERROR_R_BUFLEN];
@@ -788,6 +787,8 @@ lo_export(PGconn *conn, Oid lobjId, const char *filename)
 	 */
 	while ((nbytes = lo_read(conn, lobj, buf, LO_BUFSIZE)) > 0)
 	{
+		ssize_t		tmp;
+
 		tmp = write(fd, buf, nbytes);
 		if (tmp != nbytes)
 		{

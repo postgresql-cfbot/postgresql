@@ -245,9 +245,9 @@ compare_files(const char *file1, const char *file2)
 
 	for (;;)
 	{
-		int			nbytes = 0;
-		int			buf1_len = 0;
-		int			buf2_len = 0;
+		ssize_t		nbytes = 0;
+		size_t		buf1_len = 0;
+		size_t		buf2_len = 0;
 
 		while (buf1_len < CMP_BUF_SIZE)
 		{

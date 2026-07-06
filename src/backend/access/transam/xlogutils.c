@@ -1056,14 +1056,14 @@ WALReadRaiseError(WALReadError *errinfo)
 		errno = errinfo->wre_errno;
 		ereport(ERROR,
 				(errcode_for_file_access(),
-				 errmsg("could not read from WAL segment %s, offset %d: %m",
+				 errmsg("could not read from WAL segment %s, offset %u: %m",
 						fname, errinfo->wre_off)));
 	}
 	else if (errinfo->wre_read == 0)
 	{
 		ereport(ERROR,
 				(errcode(ERRCODE_DATA_CORRUPTED),
-				 errmsg("could not read from WAL segment %s, offset %d: read %d of %d",
+				 errmsg("could not read from WAL segment %s, offset %u: read %zd of %zu",
 						fname, errinfo->wre_off, errinfo->wre_read,
 						errinfo->wre_req)));
 	}

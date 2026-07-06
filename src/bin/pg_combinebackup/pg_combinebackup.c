@@ -1229,7 +1229,6 @@ scan_for_existing_tablespaces(char *pathname, cb_options *opt)
 		Oid			oid;
 		char		tblspcdir[MAXPGPATH];
 		char		link_target[MAXPGPATH];
-		int			link_length;
 		cb_tablespace *ts;
 		cb_tablespace *otherts;
 		PGFileType	type;
@@ -1270,6 +1269,7 @@ scan_for_existing_tablespaces(char *pathname, cb_options *opt)
 		 */
 		if (type == PGFILETYPE_LNK)
 		{
+			ssize_t		link_length;
 			cb_tablespace_mapping *tsmap;
 
 			/* Read the link target. */
@@ -1346,6 +1346,7 @@ slurp_file(int fd, char *filename, StringInfo buf, int maxlen)
 {
 	struct stat st;
 	ssize_t		rb;
+	size_t		len;
 
 	/* Check file size, and complain if it's too large. */
 	if (fstat(fd, &st) != 0)
@@ -1353,23 +1354,25 @@ slurp_file(int fd, char *filename, StringInfo buf, int maxlen)
 	if (st.st_size > maxlen)
 		pg_fatal("file \"%s\" is too large", filename);
 
+	len = st.st_size;
+
 	/* Make sure we have enough space. */
-	enlargeStringInfo(buf, st.st_size);
+	enlargeStringInfo(buf, len);
 
 	/* Read the data. */
-	rb = read(fd, &buf->data[buf->len], st.st_size);
+	rb = read(fd, &buf->data[buf->len], len);
 
 	/*
 	 * We don't expect any concurrent changes, so we should read exactly the
 	 * expected number of bytes.
 	 */
-	if (rb != st.st_size)
+	if (rb != len)
 	{
 		if (rb < 0)
 			pg_fatal("could not read file \"%s\": %m", filename);
 		else
-			pg_fatal("could not read file \"%s\": read %zd of %lld",
-					 filename, rb, (long long int) st.st_size);
+			pg_fatal("could not read file \"%s\": read %zd of %zu",
+					 filename, rb, len);
 	}
 
 	/* Adjust buffer length for new data and restore trailing-\0 invariant */

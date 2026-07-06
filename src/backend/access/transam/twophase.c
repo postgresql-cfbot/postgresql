@@ -232,7 +232,7 @@ static void ProcessRecords(char *bufptr, FullTransactionId fxid,
 						   const TwoPhaseCallback callbacks[]);
 static void RemoveGXact(GlobalTransaction gxact);
 
-static void XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len);
+static void XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, size_t *len);
 static char *ProcessTwoPhaseBuffer(FullTransactionId fxid,
 								   XLogRecPtr prepare_start_lsn,
 								   bool fromdisk, bool setParent, bool setNextXid);
@@ -240,7 +240,7 @@ static void MarkAsPreparingGuts(GlobalTransaction gxact, FullTransactionId fxid,
 								const char *gid, TimestampTz prepared_at, Oid owner,
 								Oid databaseid);
 static void RemoveTwoPhaseFile(FullTransactionId fxid, bool giveWarning);
-static void RecreateTwoPhaseFile(FullTransactionId fxid, void *content, int len);
+static void RecreateTwoPhaseFile(FullTransactionId fxid, const void *content, size_t len);
 
 /*
  * Register shared memory for two-phase state.
@@ -1301,6 +1301,7 @@ static char *
 ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 {
 	char		path[MAXPGPATH];
+	size_t		buflen;
 	char	   *buf;
 	TwoPhaseFileHeader *hdr;
 	int			fd;
@@ -1308,7 +1309,7 @@ ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 	uint32		crc_offset;
 	pg_crc32c	calc_crc,
 				file_crc;
-	int			r;
+	ssize_t		r;
 
 	TwoPhaseFilePath(path, fxid);
 
@@ -1355,11 +1356,12 @@ ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 	/*
 	 * OK, slurp in the file.
 	 */
-	buf = (char *) palloc(stat.st_size);
+	buflen = stat.st_size;
+	buf = (char *) palloc(buflen);
 
 	pgstat_report_wait_start(WAIT_EVENT_TWOPHASE_FILE_READ);
-	r = read(fd, buf, stat.st_size);
-	if (r != stat.st_size)
+	r = read(fd, buf, buflen);
+	if (r != buflen)
 	{
 		if (r < 0)
 			ereport(ERROR,
@@ -1367,8 +1369,8 @@ ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
 					 errmsg("could not read file \"%s\": %m", path)));
 		else
 			ereport(ERROR,
-					(errmsg("could not read file \"%s\": read %d of %lld",
-							path, r, (long long int) stat.st_size)));
+					(errmsg("could not read file \"%s\": read %zd of %zu",
+							path, r, buflen)));
 	}
 
 	pgstat_report_wait_end();
@@ -1415,7 +1417,7 @@ ReadTwoPhaseFile(FullTransactionId fxid, bool missing_ok)
  * similarly to the way WALSender or Logical Decoding would do.
  */
 static void
-XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, int *len)
+XlogReadTwoPhaseData(XLogRecPtr lsn, char **buf, size_t *len)
 {
 	XLogRecord *record;
 	XLogReaderState *xlogreader;
@@ -1745,7 +1747,7 @@ RemoveTwoPhaseFile(FullTransactionId fxid, bool giveWarning)
  * Note: content and len don't include CRC.
  */
 static void
-RecreateTwoPhaseFile(FullTransactionId fxid, void *content, int len)
+RecreateTwoPhaseFile(FullTransactionId fxid, const void *content, size_t len)
 {
 	char		path[MAXPGPATH];
 	pg_crc32c	statefile_crc;
@@ -1865,7 +1867,7 @@ CheckPointTwoPhase(XLogRecPtr redo_horizon)
 			gxact->prepare_end_lsn <= redo_horizon)
 		{
 			char	   *buf;
-			int			len;
+			size_t		len;
 
 			XlogReadTwoPhaseData(gxact->prepare_start_lsn, &buf, &len);
 			RecreateTwoPhaseFile(gxact->fxid, buf, len);

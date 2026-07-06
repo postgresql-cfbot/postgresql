@@ -236,7 +236,7 @@ search_directory(const char *directory, const char *fname, int *WalSegSz)
 	if (fd >= 0)
 	{
 		PGAlignedXLogBlock buf;
-		int			r;
+		ssize_t		r;
 
 		r = read(fd, buf.data, XLOG_BLCKSZ);
 		if (r == XLOG_BLCKSZ)
@@ -259,8 +259,8 @@ search_directory(const char *directory, const char *fname, int *WalSegSz)
 			pg_fatal("could not read file \"%s\": %m",
 					 fname);
 		else
-			pg_fatal("could not read file \"%s\": read %d of %d",
-					 fname, r, XLOG_BLCKSZ);
+			pg_fatal("could not read file \"%s\": read %zd of %zu",
+					 fname, r, (size_t) XLOG_BLCKSZ);
 		close(fd);
 		return true;
 	}
@@ -430,11 +430,11 @@ WALDumpReadPage(XLogReaderState *state, XLogRecPtr targetPagePtr, int reqLen,
 		if (errinfo.wre_errno != 0)
 		{
 			errno = errinfo.wre_errno;
-			pg_fatal("could not read from file \"%s\", offset %d: %m",
+			pg_fatal("could not read from file \"%s\", offset %u: %m",
 					 fname, errinfo.wre_off);
 		}
 		else
-			pg_fatal("could not read from file \"%s\", offset %d: read %d of %d",
+			pg_fatal("could not read from file \"%s\", offset %u: read %zd of %zu",
 					 fname, errinfo.wre_off, errinfo.wre_read,
 					 errinfo.wre_req);
 	}

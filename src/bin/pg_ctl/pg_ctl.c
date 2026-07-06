@@ -317,11 +317,12 @@ readfile(const char *path, int *numlines)
 	int			fd;
 	int			nlines;
 	char	  **result;
+	size_t		buflen;
 	char	   *buffer;
 	char	   *linebegin;
 	int			i;
 	int			n;
-	int			len;
+	ssize_t		nread;
 	struct stat statbuf;
 
 	*numlines = 0;				/* in case of failure or empty file */
@@ -350,11 +351,13 @@ readfile(const char *path, int *numlines)
 		*result = NULL;
 		return result;
 	}
-	buffer = pg_malloc(statbuf.st_size + 1);
 
-	len = read(fd, buffer, statbuf.st_size + 1);
+	buflen = statbuf.st_size + 1;
+	buffer = pg_malloc(buflen);
+
+	nread = read(fd, buffer, buflen);
 	close(fd);
-	if (len != statbuf.st_size)
+	if (nread != buflen - 1)
 	{
 		/* oops, the file size changed between fstat and read */
 		pg_free(buffer);
@@ -367,7 +370,7 @@ readfile(const char *path, int *numlines)
 	 * any characters after the last newline will be ignored.
 	 */
 	nlines = 0;
-	for (i = 0; i < len; i++)
+	for (i = 0; i < nread; i++)
 	{
 		if (buffer[i] == '\n')
 			nlines++;
@@ -380,7 +383,7 @@ readfile(const char *path, int *numlines)
 	/* now split the buffer into lines */
 	linebegin = buffer;
 	n = 0;
-	for (i = 0; i < len; i++)
+	for (i = 0; i < nread; i++)
 	{
 		if (buffer[i] == '\n')
 		{

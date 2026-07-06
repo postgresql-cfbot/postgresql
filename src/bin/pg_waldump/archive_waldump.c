@@ -535,7 +535,7 @@ get_archive_wal_entry(const char *fname, XLogDumpPrivate *privateInfo)
 static bool
 read_archive_file(XLogDumpPrivate *privateInfo)
 {
-	int			rc;
+	ssize_t		rc;
 
 	/* Fail if we already reached EOF in a prior call. */
 	if (privateInfo->archive_fd_eof)

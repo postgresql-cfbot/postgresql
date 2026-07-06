@@ -15888,7 +15888,7 @@ fi
 LIBS_including_readline="$LIBS"
 LIBS=`echo "$LIBS" | sed -e 's/-ledit//g' -e 's/-lreadline//g'`
 
-for ac_func in backtrace_symbols copyfile copy_file_range elf_aux_info explicit_memset getauxval getifaddrs getpeerucred inet_pton kqueue localeconv_l mbstowcs_l memset_explicit posix_fallocate ppoll pthread_is_threaded_np setproctitle setproctitle_fast strsignal syncfs sync_file_range uselocale wcstombs_l
+for ac_func in backtrace_symbols copyfile copy_file_range elf_aux_info explicit_memset getauxval getifaddrs getpeerucred inet_pton kqueue localeconv_l mbstowcs_l memset_explicit posix_fallocate ppoll pthread_barrier_wait pthread_is_threaded_np setproctitle setproctitle_fast strsignal syncfs sync_file_range uselocale wcstombs_l
 do :
   as_ac_var=`$as_echo "ac_cv_func_$ac_func" | $as_tr_sh`
 ac_fn_c_check_func "$LINENO" "$ac_func" "$as_ac_var"
@@ -16556,21 +16556,6 @@ else
   case " $LIBOBJS " in
   *" timingsafe_bcmp.$ac_objext "* ) ;;
   *) LIBOBJS="$LIBOBJS timingsafe_bcmp.$ac_objext"
- ;;
-esac
-
-fi
-
-
-
-ac_fn_c_check_func "$LINENO" "pthread_barrier_wait" "ac_cv_func_pthread_barrier_wait"
-if test "x$ac_cv_func_pthread_barrier_wait" = xyes; then :
-  $as_echo "#define HAVE_PTHREAD_BARRIER_WAIT 1" >>confdefs.h
-
-else
-  case " $LIBOBJS " in
-  *" pthread_barrier_wait.$ac_objext "* ) ;;
-  *) LIBOBJS="$LIBOBJS pthread_barrier_wait.$ac_objext"
  ;;
 esac
 

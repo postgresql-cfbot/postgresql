@@ -1865,6 +1865,7 @@ AC_CHECK_FUNCS(m4_normalize([
 	memset_explicit
 	posix_fallocate
 	ppoll
+	pthread_barrier_wait
 	pthread_is_threaded_np
 	setproctitle
 	setproctitle_fast
@@ -1924,8 +1925,6 @@ AC_REPLACE_FUNCS(m4_normalize([
 	strsep
 	timingsafe_bcmp
 ]))
-
-AC_REPLACE_FUNCS(pthread_barrier_wait)
 
 if test "$PORTNAME" = "win32" -o "$PORTNAME" = "cygwin"; then
 	# Cygwin and (apparently, based on test results) Mingw both

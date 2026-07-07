@@ -415,6 +415,9 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 	 */
 	so->curPageLSN = BufferGetLSNAtomic(buffer);
 
+	/* save current item BlockNumber for gistkillitems() call */
+	so->curBlkno = pageItem->blkno;
+
 	/*
 	 * check all tuples on page
 	 */
@@ -729,9 +732,6 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 					return false;
 
 				CHECK_FOR_INTERRUPTS();
-
-				/* save current item BlockNumber for next gistkillitems() call */
-				so->curBlkno = item->blkno;
 
 				/*
 				 * While scanning a leaf page, ItemPointers of matching heap

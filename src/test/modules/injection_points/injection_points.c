@@ -17,17 +17,22 @@
 
 #include "postgres.h"
 
+#include <fcntl.h>
+#include <sys/stat.h>
+
+#include "common/file_utils.h"
 #include "fmgr.h"
 #include "funcapi.h"
 #include "injection_points.h"
 #include "miscadmin.h"
 #include "nodes/pg_list.h"
 #include "nodes/value.h"
-#include "storage/condition_variable.h"
 #include "storage/dsm_registry.h"
+#include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/lwlock.h"
 #include "storage/shmem.h"
+#include "storage/spin.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/injection_point.h"
@@ -40,6 +45,39 @@ PG_MODULE_MAGIC;
 /* Maximum number of waits usable in injection points at once */
 #define INJ_MAX_WAIT	8
 #define INJ_NAME_MAXLEN	64
+
+/*
+ * Filesystem markers used to drive wait points without any SQL connection, for
+ * code paths that run before the server can answer SQL (e.g. early postmaster
+ * startup).  They live under a directory in the data directory, one
+ * subdirectory per attached point and one file per parked process:
+ *
+ *	  pg_injection_points/<point>/         present = <point> attached as a wait;
+ *	  pg_injection_points/<point>/<pid>    present = that process is parked here.
+ *
+ * A test attaches a point by creating its directory (scanned at startup), sees
+ * who is waiting by listing the directory, and wakes a specific waiter by
+ * removing its PID file.  Everything is plain filesystem state checked with
+ * stat(), so there is no platform-specific logic and no out-of-process access
+ * to shared memory.  Paths are relative to the data directory, which is the
+ * working directory of the postmaster and every backend.
+ */
+#define INJ_POINTS_DIR		"pg_injection_points"
+
+/* "pg_injection_points/<point>" */
+static void
+injection_point_dir(char *buf, size_t bufsize, const char *name)
+{
+	snprintf(buf, bufsize, "%s/%s", INJ_POINTS_DIR, name);
+}
+
+/* "pg_injection_points/<point>/<pid>" */
+static void
+injection_point_waiter_path(char *buf, size_t bufsize,
+							const char *name, int pid)
+{
+	snprintf(buf, bufsize, "%s/%s/%d", INJ_POINTS_DIR, name, pid);
+}
 
 /*
  * List of injection points stored in TopMemoryContext attached
@@ -59,13 +97,10 @@ typedef struct InjectionPointSharedState
 	slock_t		lock;
 
 	/* Counters advancing when injection_points_wakeup() is called */
-	uint32		wait_counts[INJ_MAX_WAIT];
+	pg_atomic_uint32 wait_counts[INJ_MAX_WAIT];
 
 	/* Names of injection points attached to wait counters */
 	char		name[INJ_MAX_WAIT][INJ_NAME_MAXLEN];
-
-	/* Condition variable used for waits and wakeups */
-	ConditionVariable wait_point;
 } InjectionPointSharedState;
 
 /* Pointer to shared-memory state. */
@@ -102,9 +137,9 @@ injection_point_init_state(void *ptr, void *arg)
 	InjectionPointSharedState *state = (InjectionPointSharedState *) ptr;
 
 	SpinLockInit(&state->lock);
-	memset(state->wait_counts, 0, sizeof(state->wait_counts));
 	memset(state->name, 0, sizeof(state->name));
-	ConditionVariableInit(&state->wait_point);
+	for (int i = 0; i < INJ_MAX_WAIT; i++)
+		pg_atomic_init_u32(&state->wait_counts[i], 0);
 }
 
 static void
@@ -116,6 +151,60 @@ injection_shmem_request(void *arg)
 		);
 }
 
+/*
+ * Scan INJ_POINTS_DIR for point subdirectories and attach each as a wait point.
+ * Run once at postmaster startup so the points are in place before any process
+ * - the postmaster's own startup sequence or its children - reaches them, all
+ * without an SQL connection.  A point can therefore be attached, by creating
+ * its directory, before the server is started.
+ */
+static void
+injection_points_preload(void)
+{
+	DIR		   *dir;
+	struct dirent *de;
+
+	dir = AllocateDir(INJ_POINTS_DIR);
+	if (dir == NULL)
+		return;					/* no directory means nothing attached */
+
+	while ((de = ReadDir(dir, INJ_POINTS_DIR)) != NULL)
+	{
+		InjectionPointCondition condition = {.type = INJ_CONDITION_ALWAYS};
+		char		path[MAXPGPATH];
+		struct stat st;
+
+		if (strcmp(de->d_name, ".") == 0 || strcmp(de->d_name, "..") == 0)
+			continue;
+		if (strlen(de->d_name) >= INJ_NAME_MAXLEN)
+			continue;
+
+		/* Each subdirectory names a wait point to attach. */
+		injection_point_dir(path, sizeof(path), de->d_name);
+		if (stat(path, &st) != 0 || !S_ISDIR(st.st_mode))
+			continue;
+
+		InjectionPointAttach(de->d_name, "injection_points", "injection_wait",
+							 &condition, sizeof(condition));
+	}
+	FreeDir(dir);
+}
+
+/*
+ * proc_exit callback that removes INJ_POINTS_DIR so markers do not survive the
+ * cluster.  Forked children inherit this callback but must not run it, hence
+ * the IsUnderPostmaster guard: only the lifecycle owner (postmaster, or a
+ * standalone backend) cleans up.
+ */
+static void
+injection_points_dir_cleanup(int code, Datum arg)
+{
+	struct stat st;
+
+	if (!IsUnderPostmaster && stat(INJ_POINTS_DIR, &st) == 0)
+		(void) rmtree(INJ_POINTS_DIR, true);
+}
+
 static void
 injection_shmem_init(void *arg)
 {
@@ -124,6 +213,13 @@ injection_shmem_init(void *arg)
 	 * initialization using a DSM.
 	 */
 	injection_point_init_state(inj_state, NULL);
+
+	/*
+	 * Attach any wait points requested out of band through marker directories,
+	 * and make sure the directory does not outlive the cluster.
+	 */
+	injection_points_preload();
+	on_proc_exit(injection_points_dir_cleanup, 0);
 }
 
 /*
@@ -222,7 +318,7 @@ injection_notice(const char *name, const void *private_data, void *arg)
 		elog(NOTICE, "notice triggered for injection point %s", name);
 }
 
-/* Wait on a condition variable, awaken by injection_points_wakeup() */
+/* Wait until released by injection_points_wakeup() or a removed marker file */
 void
 injection_wait(const char *name, const void *private_data, void *arg)
 {
@@ -230,6 +326,8 @@ injection_wait(const char *name, const void *private_data, void *arg)
 	int			index = -1;
 	uint32		injection_wait_event = 0;
 	const InjectionPointCondition *condition = private_data;
+	char		waiter_path[MAXPGPATH];
+	bool		have_waiter_file = false;
 
 	if (inj_state == NULL)
 		injection_init_shmem();
@@ -254,31 +352,71 @@ injection_wait(const char *name, const void *private_data, void *arg)
 		{
 			index = i;
 			strlcpy(inj_state->name[i], name, INJ_NAME_MAXLEN);
-			old_wait_counts = inj_state->wait_counts[i];
+			old_wait_counts = pg_atomic_read_u32(&inj_state->wait_counts[i]);
 			break;
 		}
 	}
 	SpinLockRelease(&inj_state->lock);
 
 	if (index < 0)
-		elog(ERROR, "could not find free slot for wait of injection point %s ",
+		elog(ERROR, "could not find free slot for wait of injection point %s",
 			 name);
 
-	/* And sleep.. */
-	ConditionVariablePrepareToSleep(&inj_state->wait_point);
-	for (;;)
+	/*
+	 * Publish our presence in the filesystem so an out-of-process test can see
+	 * that we are parked here and release us with no SQL connection: create
+	 * "pg_injection_points/<name>/<pid>" and wait until it is removed.  The
+	 * directories are created on demand, so this works for points attached
+	 * through SQL too, not only those attached from a marker directory.
+	 */
 	{
-		uint32		new_wait_counts;
+		char		dirpath[MAXPGPATH];
+		int			fd;
 
-		SpinLockAcquire(&inj_state->lock);
-		new_wait_counts = inj_state->wait_counts[index];
-		SpinLockRelease(&inj_state->lock);
+		injection_point_dir(dirpath, sizeof(dirpath), name);
+		(void) MakePGDirectory(INJ_POINTS_DIR);
+		(void) MakePGDirectory(dirpath);
 
-		if (old_wait_counts != new_wait_counts)
-			break;
-		ConditionVariableSleep(&inj_state->wait_point, injection_wait_event);
+		injection_point_waiter_path(waiter_path, sizeof(waiter_path), name,
+									MyProcPid);
+		fd = OpenTransientFile(waiter_path, O_RDWR | O_CREAT | O_TRUNC);
+		if (fd >= 0)
+		{
+			CloseTransientFile(fd);
+			have_waiter_file = true;
+		}
 	}
-	ConditionVariableCancelSleep();
+
+	/*
+	 * Wait until released, either by injection_points_wakeup() bumping the
+	 * counter or by our waiter file being removed.  The latter needs no SQL
+	 * connection, so it works in code paths that run before the server can
+	 * answer queries.
+	 *
+	 * This loop starts with a short delay for responsiveness, enlarged to
+	 * ease the CPU workload in slower environments.
+	 */
+#define INJ_WAIT_INITIAL_US		10	/* 10us */
+#define INJ_WAIT_MAX_US			100000	/* 100ms */
+	pgstat_report_wait_start(injection_wait_event);
+	{
+		int			delay_us = INJ_WAIT_INITIAL_US;
+		struct stat st;
+
+		while (pg_atomic_read_u32(&inj_state->wait_counts[index]) == old_wait_counts &&
+			   (!have_waiter_file || stat(waiter_path, &st) == 0))
+		{
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(delay_us);
+			if (delay_us < INJ_WAIT_MAX_US)
+				delay_us *= 2;
+		}
+	}
+	pgstat_report_wait_end();
+
+	/* Clean up our waiter file; it may still exist after a counter wakeup. */
+	if (have_waiter_file)
+		(void) unlink(waiter_path);
 
 	/* Remove this injection point from the waiters. */
 	SpinLockAcquire(&inj_state->lock);
@@ -443,7 +581,7 @@ injection_points_wakeup(PG_FUNCTION_ARGS)
 	if (inj_state == NULL)
 		injection_init_shmem();
 
-	/* First bump the wait counter for the injection point to wake up */
+	/* Find the injection point then bump its wait counter */
 	SpinLockAcquire(&inj_state->lock);
 	for (int i = 0; i < INJ_MAX_WAIT; i++)
 	{
@@ -458,11 +596,9 @@ injection_points_wakeup(PG_FUNCTION_ARGS)
 		SpinLockRelease(&inj_state->lock);
 		elog(ERROR, "could not find injection point %s to wake up", name);
 	}
-	inj_state->wait_counts[index]++;
 	SpinLockRelease(&inj_state->lock);
 
-	/* And broadcast the change to the waiters */
-	ConditionVariableBroadcast(&inj_state->wait_point);
+	pg_atomic_fetch_add_u32(&inj_state->wait_counts[index], 1);
 	PG_RETURN_VOID();
 }
 

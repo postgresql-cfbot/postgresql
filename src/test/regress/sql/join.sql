@@ -886,7 +886,8 @@ where (hundred, thousand) in (select twothousand, twothousand from onek);
 reset enable_memoize;
 
 --
--- more antijoin recognition tests using NOT NULL constraints
+-- more antijoin recognition tests using various non-null proofs (NOT NULL
+-- constraints, strict join clauses within the RHS subtree)
 --
 
 begin;
@@ -909,6 +910,218 @@ explain (costs off)
 select * from tenk1 t1 left join
   (tbl_anti t2 left join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
 where t3.a is null;
+
+-- this is an antijoin: the strict join clause t2.c = t3.c guarantees t3.c is
+-- non-null
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_anti t2 inner join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
+where t3.c is null;
+
+-- this is an antijoin: the strict join clause t2.c = t3.c guarantees t2.c is
+-- non-null
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_anti t2 inner join tbl_anti t3 on t2.c = t3.c
+   left join tbl_anti t4 on t3.c = t4.c) on t1.unique1 = t2.b
+where t2.c is null;
+
+-- this is an antijoin: the strict join clause t2.c = t3.c guarantees t3.c is
+-- non-null
+explain (costs off)
+select * from tenk1 t1 left join
+  (select t2.b, t3.c from tbl_anti t2, tbl_anti t3
+   where t2.c = t3.c) ss on t1.unique1 = ss.b
+where ss.c is null;
+
+-- this is an antijoin: the strict join clause t2.c = t3.c guarantees t2.c is
+-- non-null
+explain (costs off)
+select * from tenk1 t1 left join
+  (select t2.c from tbl_anti t2
+   where exists (select 1 from tbl_anti t3 where t2.c = t3.c)) ss on true
+where ss.c is null;
+
+-- this is not an antijoin: the join clause t2.c = t3.c cannot guarantee t3.c
+-- is non-null
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_anti t2 left join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
+where t3.c is null;
+
+-- likewise with right join
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_anti t2 right join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
+where t3.c is null;
+
+-- likewise with full join
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_anti t2 full join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
+where t3.c is null;
+
+-- this is not an antijoin, even though the inner-join clause in the lateral
+-- subquery proves t1.b non-null
+explain (costs off)
+select * from tbl_anti t1
+  left join lateral (select t2.b from tbl_anti t2, tbl_anti t3
+                     where t2.c = t3.c and t3.b = t1.b) ss on true
+where t1.b is null;
+
+-- a full join can also reduce to an antijoin: the forced-null Var is defined
+-- not null
+explain (costs off)
+select * from tbl_anti t1 full join tbl_anti t2 on t1.b = t2.b
+where t2.a is null;
+
+-- the symmetric case, with the forced-null Var on the left side
+explain (costs off)
+select * from tbl_anti t1 full join tbl_anti t2 on t1.b = t2.b
+where t1.a is null;
+
+-- this is an antijoin: the forced-null Var is proven not null by the strict
+-- clause within its subtree
+explain (costs off)
+select * from tbl_anti t1 full join
+  (tbl_anti t2 join tbl_anti t3 on t2.c = t3.c) on t1.b = t2.b
+where t3.c is null;
+
+-- the symmetric case, with the forced-null Var on the left side
+explain (costs off)
+select * from (tbl_anti t1 join tbl_anti t4 on t1.c = t4.c)
+  full join tbl_anti t2 on t1.b = t2.b
+where t1.c is null;
+
+-- this is not an antijoin: the join clause cannot prove t2.b non-null in the
+-- full join's right-only rows
+explain (costs off)
+select * from tbl_anti t1 full join tbl_anti t2 on t1.b = t2.b
+where t2.b is null;
+
+-- the symmetric case: the join clause cannot prove t1.b non-null in the full
+-- join's left-only rows
+explain (costs off)
+select * from tbl_anti t1 full join tbl_anti t2 on t1.b = t2.b
+where t1.b is null;
+
+-- A USING join column becomes a merged (COALESCE) output, so reducing the
+-- full join also has to fix up its nulling rels.
+create temp table ma (x int not null, y int);
+create temp table mb (x int not null, y int);
+insert into ma values (1, 10), (2, 20);
+insert into mb values (3, 10), (4, 40);
+
+explain (verbose, costs off)
+select y, ma.x as ax, mb.x as bx
+from ma full join mb using (y) where mb.x is null order by y;
+select y, ma.x as ax, mb.x as bx
+from ma full join mb using (y) where mb.x is null order by y;
+
+explain (verbose, costs off)
+select y, ma.x as ax, mb.x as bx
+from ma full join mb using (y) where ma.x is null order by y;
+select y, ma.x as ax, mb.x as bx
+from ma full join mb using (y) where ma.x is null order by y;
+
+-- A whole-row Var IS NULL is true only when every column is NULL, so it
+-- works as an antijoin test whenever any column is provably non-null in
+-- matching rows.
+create temp table tbl_wr (b int, c int);
+
+-- this is an antijoin: t2.a is defined NOT NULL
+explain (costs off)
+select * from tenk1 t1 left join tbl_anti t2 on true
+where t2 is null;
+
+-- this is an antijoin: the strict join clause proves t2.b non-null
+explain (costs off)
+select * from tenk1 t1 left join tbl_wr t2 on t1.unique1 = t2.b
+where t2 is null;
+
+-- this is an antijoin: the strict join clause within the RHS subtree proves
+-- t2.c non-null
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_wr t2 join tbl_anti t3 on t2.c = t3.c) on true
+where t2 is null;
+
+-- this is not an antijoin: nothing proves any column of t2 non-null
+explain (costs off)
+select * from tenk1 t1 left join tbl_wr t2 on true
+where t2 is null;
+
+-- nor is this: the strict record comparison proves only that the whole-row
+-- datum is non-null, but record_eq treats NULL fields as equal, so a
+-- matching row can still have all columns NULL and pass the row-format test
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_wr t2 join tbl_wr t3 on t2 = t3) on true
+where t2 is null;
+
+-- nor is this: the join clause is strict only for t2's ctid, which is not
+-- part of the row value, so a matching row can still have all columns NULL
+explain (costs off)
+select * from tbl_wr t1 left join tbl_wr t2 on t2.ctid = t1.ctid
+where t2 is null;
+
+-- this is not an antijoin: t3 can be nulled by the lower outer join, so its
+-- NOT NULL constraint proves nothing here
+explain (costs off)
+select * from tenk1 t1 left join
+  (tbl_anti t2 left join tbl_anti t3 on t2.c = t3.c) on t1.unique1 = t2.b
+where t3 is null;
+
+-- whole-row tests work for full joins too: t2.a's NOT NULL constraint
+-- reduces this one ...
+explain (costs off)
+select * from tbl_wr t1 full join tbl_anti t2 on t1.b = t2.b
+where t2 is null;
+
+-- ... but nothing proves a column of t1 non-null, since the join clause
+-- cannot serve as the proof here
+explain (costs off)
+select * from tbl_wr t1 full join tbl_anti t2 on t1.b = t2.b
+where t1 is null;
+
+-- The IS NOT NULL counterpart: a row-format IS NOT NULL test is false both
+-- for a null-extended row and when any column is NULL, so it reduces join
+-- strength like any strict qual.
+
+-- reduced to an inner join
+explain (costs off)
+select * from tenk1 t1 left join tbl_wr t2 on t1.unique1 = t2.b
+where t2 is not null;
+
+-- reduced to a left join
+explain (costs off)
+select * from tbl_wr t1 full join tbl_wr t2 on t1.b = t2.b
+where t1 is not null;
+
+-- composite-type columns: reduced to an inner join
+create temp table tbl_comp (a int, w tbl_wr);
+explain (costs off)
+select * from tenk1 t1 left join tbl_comp t2 on t1.unique1 = t2.a
+where t2.w is not null;
+
+-- composite-type columns: reduced to an antijoin
+explain (costs off)
+select * from tenk1 t1 left join tbl_comp t2 on t2.w is not null
+where t2 is null;
+
+-- For a zero-field row, IS NULL and IS NOT NULL are both true, so the join
+-- clause here proves only that t2's datum is non-null, which must not refute
+-- the whole-row IS NULL above: matched rows pass both tests.
+create temp table tbl_zero ();
+insert into tbl_zero default values;
+
+-- should not be reduced
+explain (costs off)
+select * from (values (1), (2)) v(x) left join tbl_zero t2 on t2 is not null
+where t2 is null;
+-- should return 2 rows
+select * from (values (1), (2)) v(x) left join tbl_zero t2 on t2 is not null
+where t2 is null;
 
 rollback;
 

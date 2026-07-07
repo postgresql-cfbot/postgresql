@@ -31,8 +31,6 @@ extern void assign_application_name(const char *newval, void *extra);
 extern const char *show_archive_command(void);
 extern bool check_autovacuum_work_mem(int *newval, void **extra,
 									  GucSource source);
-extern bool check_vacuum_buffer_usage_limit(int *newval, void **extra,
-											GucSource source);
 extern bool check_backtrace_functions(char **newval, void **extra,
 									  GucSource source);
 extern void assign_backtrace_functions(const char *newval, void *extra);

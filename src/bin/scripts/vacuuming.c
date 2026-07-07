@@ -264,13 +264,6 @@ vacuum_one_database(ConnParams *cparams,
 				 "--parallel", "13");
 	}
 
-	if (vacopts->buffer_usage_limit && PQserverVersion(conn) < 160000)
-	{
-		PQfinish(conn);
-		pg_fatal("cannot use the \"%s\" option on server versions older than PostgreSQL %s",
-				 "--buffer-usage-limit", "16");
-	}
-
 	if (vacopts->missing_stats_only && PQserverVersion(conn) < 150000)
 	{
 		PQfinish(conn);
@@ -865,13 +858,6 @@ prepare_vacuum_command(PGconn *conn, PQExpBuffer sql,
 				appendPQExpBuffer(sql, "%sVERBOSE", sep);
 				sep = comma;
 			}
-			if (vacopts->buffer_usage_limit)
-			{
-				Assert(serverVersion >= 160000);
-				appendPQExpBuffer(sql, "%sBUFFER_USAGE_LIMIT '%s'", sep,
-								  vacopts->buffer_usage_limit);
-				sep = comma;
-			}
 			if (sep != paren)
 				appendPQExpBufferChar(sql, ')');
 		}
@@ -972,13 +958,6 @@ prepare_vacuum_command(PGconn *conn, PQExpBuffer sql,
 				Assert(serverVersion >= 130000);
 				appendPQExpBuffer(sql, "%sPARALLEL %d", sep,
 								  vacopts->parallel_workers);
-				sep = comma;
-			}
-			if (vacopts->buffer_usage_limit)
-			{
-				Assert(serverVersion >= 160000);
-				appendPQExpBuffer(sql, "%sBUFFER_USAGE_LIMIT '%s'", sep,
-								  vacopts->buffer_usage_limit);
 				sep = comma;
 			}
 			if (sep != paren)

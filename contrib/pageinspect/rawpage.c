@@ -188,7 +188,7 @@ get_raw_page_internal(text *relname, ForkNumber forknum, BlockNumber blkno)
 
 	/* Take a verbatim copy of the page */
 
-	buf = ReadBufferExtended(rel, forknum, blkno, RBM_NORMAL, NULL);
+	buf = ReadBufferExtended(rel, forknum, blkno, RBM_NORMAL);
 	LockBuffer(buf, BUFFER_LOCK_SHARE);
 
 	memcpy(raw_page_data, BufferGetPage(buf), BLCKSZ);

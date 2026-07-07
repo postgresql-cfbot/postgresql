@@ -689,8 +689,7 @@ typedef struct TableAmRoutine
 	 * integrate with autovacuum's scheduling.
 	 */
 	void		(*relation_vacuum) (Relation rel,
-									const VacuumParams *params,
-									BufferAccessStrategy bstrategy);
+									const VacuumParams *params);
 
 	/*
 	 * Prepare to analyze block `blockno` of `scan`. The scan has been started
@@ -1774,10 +1773,9 @@ table_relation_copy_for_cluster(Relation OldTable, Relation NewTable,
  * routine, even if (for ANALYZE) it is part of the same VACUUM command.
  */
 static inline void
-table_relation_vacuum(Relation rel, const VacuumParams *params,
-					  BufferAccessStrategy bstrategy)
+table_relation_vacuum(Relation rel, const VacuumParams *params)
 {
-	rel->rd_tableam->relation_vacuum(rel, params, bstrategy);
+	rel->rd_tableam->relation_vacuum(rel, params);
 }
 
 /*

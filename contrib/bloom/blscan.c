@@ -80,7 +80,6 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	BlockNumber blkno,
 				npages;
 	int			i;
-	BufferAccessStrategy bas;
 	BloomScanOpaque so = (BloomScanOpaque) scan->opaque;
 	BlockRangeReadStreamPrivate p;
 	ReadStream *stream;
@@ -113,11 +112,6 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 		}
 	}
 
-	/*
-	 * We're going to read the whole index. This is why we use appropriate
-	 * buffer access strategy.
-	 */
-	bas = GetAccessStrategy(BAS_BULKREAD);
 	npages = RelationGetNumberOfBlocks(scan->indexRelation);
 	pgstat_count_index_scan(scan->indexRelation);
 	if (scan->instrument)
@@ -133,7 +127,6 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 	 */
 	stream = read_stream_begin_relation(READ_STREAM_FULL |
 										READ_STREAM_USE_BATCHING,
-										bas,
 										scan->indexRelation,
 										MAIN_FORKNUM,
 										block_range_read_stream_cb,
@@ -184,7 +177,6 @@ blgetbitmap(IndexScanDesc scan, TIDBitmap *tbm)
 
 	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
 	read_stream_end(stream);
-	FreeAccessStrategy(bas);
 
 	return ntids;
 }

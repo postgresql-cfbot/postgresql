@@ -72,7 +72,6 @@ int			default_statistics_target = 100;
 
 /* A few variables that don't seem worth passing around as parameters */
 static MemoryContext anl_context = NULL;
-static BufferAccessStrategy vac_strategy;
 
 
 static void do_analyze_rel(Relation onerel,
@@ -108,8 +107,7 @@ static Datum ind_fetch_func(VacAttrStatsP stats, int rownum, bool *isNull);
  */
 void
 analyze_rel(Oid relid, RangeVar *relation,
-			const VacuumParams *params, List *va_cols, bool in_outer_xact,
-			BufferAccessStrategy bstrategy)
+			const VacuumParams *params, List *va_cols, bool in_outer_xact)
 {
 	Relation	onerel;
 	int			elevel;
@@ -124,7 +122,6 @@ analyze_rel(Oid relid, RangeVar *relation,
 		elevel = DEBUG2;
 
 	/* Set up static variables */
-	vac_strategy = bstrategy;
 
 	/*
 	 * Check for user-requested abort.
@@ -730,7 +727,6 @@ do_analyze_rel(Relation onerel, const VacuumParams *params,
 			ivinfo.estimated_count = true;
 			ivinfo.message_level = elevel;
 			ivinfo.num_heap_tuples = onerel->rd_rel->reltuples;
-			ivinfo.strategy = vac_strategy;
 
 			stats = index_vacuum_cleanup(&ivinfo, NULL);
 
@@ -1302,7 +1298,6 @@ acquire_sample_rows(Relation onerel, int elevel,
 	 */
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_USE_BATCHING,
-										vac_strategy,
 										scan->rs_rd,
 										MAIN_FORKNUM,
 										block_sampling_read_stream_next,

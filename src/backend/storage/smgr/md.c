@@ -1540,15 +1540,8 @@ register_dirty_segment(SMgrRelation reln, ForkNumber forknum, MdfdVec *seg)
 							FilePathName(seg->mdfd_vfd))));
 
 		/*
-		 * We have no way of knowing if the current IOContext is
-		 * IOCONTEXT_NORMAL or IOCONTEXT_[BULKREAD, BULKWRITE, VACUUM] at this
-		 * point, so count the fsync as being in the IOCONTEXT_NORMAL
-		 * IOContext. This is probably okay, because the number of backend
-		 * fsyncs doesn't say anything about the efficacy of the
-		 * BufferAccessStrategy. And counting both fsyncs done in
-		 * IOCONTEXT_NORMAL and IOCONTEXT_[BULKREAD, BULKWRITE, VACUUM] under
-		 * IOCONTEXT_NORMAL is likely clearer when investigating the number of
-		 * backend fsyncs.
+		 * Count the fsync in the IOCONTEXT_NORMAL IOContext, the only
+		 * IOContext relations are read/written under.
 		 */
 		pgstat_count_io_op_time(IOOBJECT_RELATION, IOCONTEXT_NORMAL,
 								IOOP_FSYNC, io_start, 1, 0);

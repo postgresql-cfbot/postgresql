@@ -126,12 +126,6 @@ typedef struct PVShared
 	int			maintenance_work_mem_worker;
 
 	/*
-	 * The number of buffers each worker's Buffer Access Strategy ring should
-	 * contain.
-	 */
-	int			ring_nbuffers;
-
-	/*
 	 * Shared vacuum cost balance.  During parallel vacuum,
 	 * VacuumSharedCostBalance points to this value and it accumulates the
 	 * balance of each parallel vacuum worker.
@@ -257,9 +251,6 @@ struct ParallelVacuumState
 	int			nindexes_parallel_cleanup;
 	int			nindexes_parallel_condcleanup;
 
-	/* Buffer access strategy used by leader process */
-	BufferAccessStrategy bstrategy;
-
 	/*
 	 * Error reporting state.  The error callback is set only for workers
 	 * processes during parallel index vacuum.
@@ -304,7 +295,7 @@ static void parallel_vacuum_dsm_detach(dsm_segment *seg, Datum arg);
 ParallelVacuumState *
 parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 					 int nrequested_workers, int vac_work_mem,
-					 int elevel, BufferAccessStrategy bstrategy)
+					 int elevel)
 {
 	ParallelVacuumState *pvs;
 	ParallelContext *pcxt;
@@ -345,7 +336,6 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	pvs->indrels = indrels;
 	pvs->nindexes = nindexes;
 	pvs->will_parallel_vacuum = will_parallel_vacuum;
-	pvs->bstrategy = bstrategy;
 	pvs->heaprel = rel;
 
 	EnterParallelMode();
@@ -446,9 +436,6 @@ parallel_vacuum_init(Relation rel, Relation *indrels, int nindexes,
 	pvs->dead_items = dead_items;
 	shared->dead_items_handle = TidStoreGetHandle(dead_items);
 	shared->dead_items_dsa_handle = dsa_get_handle(TidStoreGetDSA(dead_items));
-
-	/* Use the same buffer size for all workers */
-	shared->ring_nbuffers = GetAccessStrategyBufferCount(bstrategy);
 
 	pg_atomic_init_u32(&(shared->cost_balance), 0);
 	pg_atomic_init_u32(&(shared->active_nworkers), 0);
@@ -1091,7 +1078,6 @@ parallel_vacuum_process_one_index(ParallelVacuumState *pvs, Relation indrel,
 	ivinfo.message_level = DEBUG2;
 	ivinfo.estimated_count = pvs->shared->estimated_count;
 	ivinfo.num_heap_tuples = pvs->shared->reltuples;
-	ivinfo.strategy = pvs->bstrategy;
 
 	/* Update error traceback information */
 	pvs->indname = pstrdup(RelationGetRelationName(indrel));
@@ -1294,10 +1280,6 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 	pvs.indname = NULL;
 	pvs.status = PARALLEL_INDVAC_STATUS_INITIAL;
 
-	/* Each parallel VACUUM worker gets its own access strategy. */
-	pvs.bstrategy = GetAccessStrategyWithSize(BAS_VACUUM,
-											  shared->ring_nbuffers * (BLCKSZ / 1024));
-
 	/* Setup error traceback support for ereport() */
 	errcallback.callback = parallel_vacuum_error_callback;
 	errcallback.arg = &pvs;
@@ -1328,7 +1310,6 @@ parallel_vacuum_main(dsm_segment *seg, shm_toc *toc)
 
 	vac_close_indexes(nindexes, indrels, RowExclusiveLock);
 	table_close(rel, ShareUpdateExclusiveLock);
-	FreeAccessStrategy(pvs.bstrategy);
 
 	if (shared->is_autovacuum)
 		pv_shared_cost_params = NULL;

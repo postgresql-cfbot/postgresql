@@ -757,7 +757,6 @@ read_stream_look_ahead(ReadStream *stream)
  */
 static ReadStream *
 read_stream_begin_impl(int flags,
-					   BufferAccessStrategy strategy,
 					   Relation rel,
 					   SMgrRelation smgr,
 					   char persistence,
@@ -771,7 +770,6 @@ read_stream_begin_impl(int flags,
 	int16		queue_size;
 	int16		queue_overflow;
 	int			max_ios;
-	int			strategy_pin_limit;
 	uint32		max_pinned_buffers;
 	uint32		max_possible_buffer_limit;
 	Oid			tablespace_id;
@@ -834,10 +832,6 @@ read_stream_begin_impl(int flags,
 	max_pinned_buffers = (max_ios + 1) * io_combine_limit;
 	max_pinned_buffers = Min(max_pinned_buffers,
 							 PG_INT16_MAX - queue_overflow - 1);
-
-	/* Give the strategy a chance to limit the number of buffers we pin. */
-	strategy_pin_limit = GetAccessStrategyPinLimit(strategy);
-	max_pinned_buffers = Min(strategy_pin_limit, max_pinned_buffers);
 
 	/*
 	 * Also limit our queue to the maximum number of pins we could ever be
@@ -962,7 +956,6 @@ read_stream_begin_impl(int flags,
 		stream->ios[i].op.smgr = smgr;
 		stream->ios[i].op.persistence = persistence;
 		stream->ios[i].op.forknum = forknum;
-		stream->ios[i].op.strategy = strategy;
 	}
 
 	return stream;
@@ -974,7 +967,6 @@ read_stream_begin_impl(int flags,
  */
 ReadStream *
 read_stream_begin_relation(int flags,
-						   BufferAccessStrategy strategy,
 						   Relation rel,
 						   ForkNumber forknum,
 						   ReadStreamBlockNumberCB callback,
@@ -982,7 +974,6 @@ read_stream_begin_relation(int flags,
 						   size_t per_buffer_data_size)
 {
 	return read_stream_begin_impl(flags,
-								  strategy,
 								  rel,
 								  RelationGetSmgr(rel),
 								  rel->rd_rel->relpersistence,
@@ -998,7 +989,6 @@ read_stream_begin_relation(int flags,
  */
 ReadStream *
 read_stream_begin_smgr_relation(int flags,
-								BufferAccessStrategy strategy,
 								SMgrRelation smgr,
 								char smgr_persistence,
 								ForkNumber forknum,
@@ -1007,7 +997,6 @@ read_stream_begin_smgr_relation(int flags,
 								size_t per_buffer_data_size)
 {
 	return read_stream_begin_impl(flags,
-								  strategy,
 								  NULL,
 								  smgr,
 								  smgr_persistence,
@@ -1370,13 +1359,11 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
  * Transitional support for code that would like to perform or skip reads
  * itself, without using the stream.  Returns, and consumes, the next block
  * number that would be read by the stream's look-ahead algorithm, or
- * InvalidBlockNumber if the end of the stream is reached.  Also reports the
- * strategy that would be used to read it.
+ * InvalidBlockNumber if the end of the stream is reached.
  */
 BlockNumber
-read_stream_next_block(ReadStream *stream, BufferAccessStrategy *strategy)
+read_stream_next_block(ReadStream *stream)
 {
-	*strategy = stream->ios[0].op.strategy;
 	return read_stream_get_block(stream, NULL);
 }
 

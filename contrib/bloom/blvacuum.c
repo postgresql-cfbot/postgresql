@@ -66,7 +66,6 @@ blbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_FULL |
 										READ_STREAM_USE_BATCHING,
-										info->strategy,
 										index,
 										MAIN_FORKNUM,
 										block_range_read_stream_cb,
@@ -219,7 +218,6 @@ blvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_FULL |
 										READ_STREAM_USE_BATCHING,
-										info->strategy,
 										index,
 										MAIN_FORKNUM,
 										block_range_read_stream_cb,

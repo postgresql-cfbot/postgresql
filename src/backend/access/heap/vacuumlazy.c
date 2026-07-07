@@ -257,7 +257,6 @@ typedef struct LVRelState
 	int			nindexes;
 
 	/* Buffer access strategy and parallel vacuum state */
-	BufferAccessStrategy bstrategy;
 	ParallelVacuumState *pvs;
 
 	/* Aggressive VACUUM? (must set relfrozenxid >= FreezeLimit) */
@@ -621,8 +620,7 @@ heap_vacuum_eager_scan_setup(LVRelState *vacrel, const VacuumParams *params)
  *		and locked the relation.
  */
 void
-heap_vacuum_rel(Relation rel, const VacuumParams *params,
-				BufferAccessStrategy bstrategy)
+heap_vacuum_rel(Relation rel, const VacuumParams *params)
 {
 	LVRelState *vacrel;
 	bool		verbose,
@@ -699,7 +697,6 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	vacrel->rel = rel;
 	vac_open_indexes(vacrel->rel, RowExclusiveLock, &vacrel->nindexes,
 					 &vacrel->indrels);
-	vacrel->bstrategy = bstrategy;
 	if (instrument && vacrel->nindexes > 0)
 	{
 		/* Copy index names used by instrumentation (not error reporting) */
@@ -1311,7 +1308,6 @@ lazy_scan_heap(LVRelState *vacrel)
 	 * explicit work in heap_vac_scan_next_block.
 	 */
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE,
-										vacrel->bstrategy,
 										vacrel->rel,
 										MAIN_FORKNUM,
 										heap_vac_scan_next_block,
@@ -2670,7 +2666,6 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 	 */
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_USE_BATCHING,
-										vacrel->bstrategy,
 										vacrel->rel,
 										MAIN_FORKNUM,
 										vacuum_reap_lp_read_stream_next,
@@ -2904,13 +2899,6 @@ lazy_check_wraparound_failsafe(LVRelState *vacrel)
 
 		VacuumFailsafeActive = true;
 
-		/*
-		 * Abandon use of a buffer access strategy to allow use of all of
-		 * shared buffers.  We assume the caller who allocated the memory for
-		 * the BufferAccessStrategy will free it.
-		 */
-		vacrel->bstrategy = NULL;
-
 		/* Disable index vacuuming, index cleanup, and heap rel truncation */
 		vacrel->do_index_vacuuming = false;
 		vacrel->do_index_cleanup = false;
@@ -3023,7 +3011,6 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	ivinfo.estimated_count = true;
 	ivinfo.message_level = DEBUG2;
 	ivinfo.num_heap_tuples = reltuples;
-	ivinfo.strategy = vacrel->bstrategy;
 
 	/*
 	 * Update error traceback information.
@@ -3074,7 +3061,6 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	ivinfo.message_level = DEBUG2;
 
 	ivinfo.num_heap_tuples = reltuples;
-	ivinfo.strategy = vacrel->bstrategy;
 
 	/*
 	 * Update error traceback information.
@@ -3354,8 +3340,7 @@ count_nondeletable_pages(LVRelState *vacrel, bool *lock_waiter_detected)
 			prefetchedUntil = prefetchStart;
 		}
 
-		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-								 vacrel->bstrategy);
+		buf = ReadBufferExtended(vacrel->rel, MAIN_FORKNUM, blkno, RBM_NORMAL);
 
 		/* In this phase we only need shared access to the buffer */
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
@@ -3446,8 +3431,7 @@ dead_items_alloc(LVRelState *vacrel, int nworkers)
 			vacrel->pvs = parallel_vacuum_init(vacrel->rel, vacrel->indrels,
 											   vacrel->nindexes, nworkers,
 											   vac_work_mem,
-											   vacrel->verbose ? INFO : DEBUG2,
-											   vacrel->bstrategy);
+											   vacrel->verbose ? INFO : DEBUG2);
 
 		/*
 		 * If parallel mode started, dead_items and dead_items_info spaces are

@@ -630,7 +630,6 @@ autoprewarm_database_main(Datum main_arg)
 			stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 												READ_STREAM_DEFAULT |
 												READ_STREAM_USE_BATCHING,
-												NULL,
 												rel,
 												p.forknum,
 												apw_read_stream_next_block,

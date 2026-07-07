@@ -960,7 +960,7 @@ _bt_allocbuf(Relation rel, Relation heaprel)
 	 * otherwise would make, as we can't use _bt_lockbuf() without introducing
 	 * a race.
 	 */
-	buf = ExtendBufferedRel(BMR_REL(rel), MAIN_FORKNUM, NULL, EB_LOCK_FIRST);
+	buf = ExtendBufferedRel(BMR_REL(rel), MAIN_FORKNUM, EB_LOCK_FIRST);
 	if (!RelationUsesLocalBuffers(rel))
 		VALGRIND_MAKE_MEM_DEFINED(BufferGetPage(buf), BLCKSZ);
 

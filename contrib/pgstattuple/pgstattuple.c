@@ -64,22 +64,18 @@ typedef struct pgstattuple_type
 	uint64		free_space;		/* free/reusable space in bytes */
 } pgstattuple_type;
 
-typedef void (*pgstat_page) (pgstattuple_type *, Relation, BlockNumber,
-							 BufferAccessStrategy);
+typedef void (*pgstat_page) (pgstattuple_type *, Relation, BlockNumber);
 
 static Datum build_pgstattuple_type(pgstattuple_type *stat,
 									FunctionCallInfo fcinfo);
 static Datum pgstat_relation(Relation rel, FunctionCallInfo fcinfo);
 static Datum pgstat_heap(Relation rel, FunctionCallInfo fcinfo);
 static void pgstat_btree_page(pgstattuple_type *stat,
-							  Relation rel, BlockNumber blkno,
-							  BufferAccessStrategy bstrategy);
+							  Relation rel, BlockNumber blkno);
 static void pgstat_hash_page(pgstattuple_type *stat,
-							 Relation rel, BlockNumber blkno,
-							 BufferAccessStrategy bstrategy);
+							 Relation rel, BlockNumber blkno);
 static void pgstat_gist_page(pgstattuple_type *stat,
-							 Relation rel, BlockNumber blkno,
-							 BufferAccessStrategy bstrategy);
+							 Relation rel, BlockNumber blkno);
 static Datum pgstat_index(Relation rel, BlockNumber start,
 						  pgstat_page pagefn, FunctionCallInfo fcinfo);
 static void pgstat_index_page(pgstattuple_type *stat, Page page,
@@ -376,7 +372,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 			CHECK_FOR_INTERRUPTS();
 
 			buffer = ReadBufferExtended(rel, MAIN_FORKNUM, block,
-										RBM_NORMAL, hscan->rs_strategy);
+										RBM_NORMAL);
 			LockBuffer(buffer, BUFFER_LOCK_SHARE);
 			stat.free_space += PageGetExactFreeSpace(BufferGetPage(buffer));
 			UnlockReleaseBuffer(buffer);
@@ -389,7 +385,7 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
 		CHECK_FOR_INTERRUPTS();
 
 		buffer = ReadBufferExtended(rel, MAIN_FORKNUM, block,
-									RBM_NORMAL, hscan->rs_strategy);
+									RBM_NORMAL);
 		LockBuffer(buffer, BUFFER_LOCK_SHARE);
 		stat.free_space += PageGetExactFreeSpace(BufferGetPage(buffer));
 		UnlockReleaseBuffer(buffer);
@@ -408,13 +404,12 @@ pgstat_heap(Relation rel, FunctionCallInfo fcinfo)
  * pgstat_btree_page -- check tuples in a btree page
  */
 static void
-pgstat_btree_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
-				  BufferAccessStrategy bstrategy)
+pgstat_btree_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno)
 {
 	Buffer		buf;
 	Page		page;
 
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL, bstrategy);
+	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL);
 	LockBuffer(buf, BT_READ);
 	page = BufferGetPage(buf);
 
@@ -452,13 +447,12 @@ pgstat_btree_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
  * pgstat_hash_page -- check tuples in a hash page
  */
 static void
-pgstat_hash_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
-				 BufferAccessStrategy bstrategy)
+pgstat_hash_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno)
 {
 	Buffer		buf;
 	Page		page;
 
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL, bstrategy);
+	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL);
 	LockBuffer(buf, HASH_READ);
 	page = BufferGetPage(buf);
 
@@ -500,13 +494,12 @@ pgstat_hash_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
  * pgstat_gist_page -- check tuples in a gist page
  */
 static void
-pgstat_gist_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno,
-				 BufferAccessStrategy bstrategy)
+pgstat_gist_page(pgstattuple_type *stat, Relation rel, BlockNumber blkno)
 {
 	Buffer		buf;
 	Page		page;
 
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL, bstrategy);
+	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL);
 	LockBuffer(buf, GIST_SHARE);
 	page = BufferGetPage(buf);
 	if (PageIsNew(page))
@@ -539,11 +532,7 @@ pgstat_index(Relation rel, BlockNumber start, pgstat_page pagefn,
 {
 	BlockNumber nblocks;
 	BlockNumber blkno;
-	BufferAccessStrategy bstrategy;
 	pgstattuple_type stat = {0};
-
-	/* prepare access strategy for this index */
-	bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
 	blkno = start;
 	for (;;)
@@ -565,7 +554,7 @@ pgstat_index(Relation rel, BlockNumber start, pgstat_page pagefn,
 		{
 			CHECK_FOR_INTERRUPTS();
 
-			pagefn(&stat, rel, blkno, bstrategy);
+			pagefn(&stat, rel, blkno);
 		}
 	}
 

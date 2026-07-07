@@ -704,8 +704,7 @@ spgprocesspending(spgBulkDeleteState *bds)
 
 		/* examine the referenced page */
 		blkno = ItemPointerGetBlockNumber(&pitem->tid);
-		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
-									RBM_NORMAL, bds->info->strategy);
+		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno, RBM_NORMAL);
 		LockBuffer(buffer, BUFFER_LOCK_EXCLUSIVE);
 		page = BufferGetPage(buffer);
 
@@ -830,7 +829,6 @@ spgvacuumscan(spgBulkDeleteState *bds)
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_FULL |
 										READ_STREAM_USE_BATCHING,
-										bds->info->strategy,
 										index,
 										MAIN_FORKNUM,
 										block_range_read_stream_cb,

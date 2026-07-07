@@ -491,8 +491,7 @@ _hash_firstfreebit(uint32 map)
 BlockNumber
 _hash_freeovflpage(Relation rel, Buffer bucketbuf, Buffer ovflbuf,
 				   Buffer wbuf, IndexTuple *itups, OffsetNumber *itup_offsets,
-				   Size *tups_size, uint16 nitups,
-				   BufferAccessStrategy bstrategy)
+				   Size *tups_size, uint16 nitups)
 {
 	HashMetaPage metap;
 	Buffer		metabuf;
@@ -539,20 +538,16 @@ _hash_freeovflpage(Relation rel, Buffer bucketbuf, Buffer ovflbuf,
 		if (prevblkno == writeblkno)
 			prevbuf = wbuf;
 		else
-			prevbuf = _hash_getbuf_with_strategy(rel,
-												 prevblkno,
-												 HASH_WRITE,
-												 LH_BUCKET_PAGE | LH_OVERFLOW_PAGE,
-												 bstrategy);
+			prevbuf = _hash_getbuf(rel,
+								   prevblkno,
+								   HASH_WRITE,
+								   LH_BUCKET_PAGE | LH_OVERFLOW_PAGE);
 	}
 	if (BlockNumberIsValid(nextblkno))
-		nextbuf = _hash_getbuf_with_strategy(rel,
-											 nextblkno,
-											 HASH_WRITE,
-											 LH_OVERFLOW_PAGE,
-											 bstrategy);
-
-	/* Note: bstrategy is intentionally not used for metapage and bitmap */
+		nextbuf = _hash_getbuf(rel,
+							   nextblkno,
+							   HASH_WRITE,
+							   LH_OVERFLOW_PAGE);
 
 	/* Read the metapage so we can determine which bitmap page to use */
 	metabuf = _hash_getbuf(rel, HASH_METAPAGE, HASH_READ, LH_META_PAGE);
@@ -843,8 +838,7 @@ void
 _hash_squeezebucket(Relation rel,
 					Bucket bucket,
 					BlockNumber bucket_blkno,
-					Buffer bucket_buf,
-					BufferAccessStrategy bstrategy)
+					Buffer bucket_buf)
 {
 	BlockNumber wblkno;
 	BlockNumber rblkno;
@@ -886,11 +880,10 @@ _hash_squeezebucket(Relation rel,
 		rblkno = ropaque->hasho_nextblkno;
 		if (rbuf != InvalidBuffer)
 			_hash_relbuf(rel, rbuf);
-		rbuf = _hash_getbuf_with_strategy(rel,
-										  rblkno,
-										  HASH_WRITE,
-										  LH_OVERFLOW_PAGE,
-										  bstrategy);
+		rbuf = _hash_getbuf(rel,
+							rblkno,
+							HASH_WRITE,
+							LH_OVERFLOW_PAGE);
 		rpage = BufferGetPage(rbuf);
 		ropaque = HashPageGetOpaque(rpage);
 		Assert(ropaque->hasho_bucket == bucket);
@@ -952,11 +945,10 @@ readpage:
 
 				/* don't need to move to next page if we reached the read page */
 				if (wblkno != rblkno)
-					next_wbuf = _hash_getbuf_with_strategy(rel,
-														   wblkno,
-														   HASH_WRITE,
-														   LH_OVERFLOW_PAGE,
-														   bstrategy);
+					next_wbuf = _hash_getbuf(rel,
+											 wblkno,
+											 HASH_WRITE,
+											 LH_OVERFLOW_PAGE);
 
 				if (nitups > 0)
 				{
@@ -1098,7 +1090,7 @@ readpage:
 
 		/* free this overflow page (releases rbuf) */
 		_hash_freeovflpage(rel, bucket_buf, rbuf, wbuf, itups, itup_offsets,
-						   tups_size, nitups, bstrategy);
+						   tups_size, nitups);
 
 		/* be tidy */
 		for (i = 0; i < nitups; i++)
@@ -1115,11 +1107,10 @@ readpage:
 			return;
 		}
 
-		rbuf = _hash_getbuf_with_strategy(rel,
-										  rblkno,
-										  HASH_WRITE,
-										  LH_OVERFLOW_PAGE,
-										  bstrategy);
+		rbuf = _hash_getbuf(rel,
+							rblkno,
+							HASH_WRITE,
+							LH_OVERFLOW_PAGE);
 		rpage = BufferGetPage(rbuf);
 		ropaque = HashPageGetOpaque(rpage);
 		Assert(ropaque->hasho_bucket == bucket);

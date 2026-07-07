@@ -72,8 +72,6 @@ typedef struct HeapScanDescData
 	Buffer		rs_cbuf;		/* current buffer in scan, if any */
 	/* NB: if rs_cbuf is not InvalidBuffer, we hold a pin on that buffer */
 
-	BufferAccessStrategy rs_strategy;	/* access strategy for reads */
-
 	HeapTupleData rs_ctup;		/* current tuple in scan, if any */
 
 	/* For scans that stream reads */
@@ -466,7 +464,7 @@ extern void log_heap_prune_and_freeze(Relation relation, Buffer buffer,
 
 /* in heap/vacuumlazy.c */
 extern void heap_vacuum_rel(Relation rel,
-							const VacuumParams *params, BufferAccessStrategy bstrategy);
+							const VacuumParams *params);
 #ifdef USE_ASSERT_CHECKING
 extern bool heap_page_is_all_visible(Relation rel, Buffer buf,
 									 GlobalVisState *vistest,

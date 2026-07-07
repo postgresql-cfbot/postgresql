@@ -149,7 +149,6 @@ int			autovacuum_max_parallel_workers = 0;
 int			MaxBackends = 0;
 
 /* GUC parameters for vacuum */
-int			VacuumBufferUsageLimit = 2048;
 
 int			VacuumCostPageHit = 1;
 int			VacuumCostPageMiss = 2;

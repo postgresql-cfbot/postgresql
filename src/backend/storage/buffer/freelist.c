@@ -78,40 +78,6 @@ const ShmemCallbacks StrategyCtlShmemCallbacks = {
 };
 
 /*
- * Private (non-shared) state for managing a ring of shared buffers to re-use.
- * This is currently the only kind of BufferAccessStrategy object, but someday
- * we might have more kinds.
- */
-typedef struct BufferAccessStrategyData
-{
-	/* Overall strategy type */
-	BufferAccessStrategyType btype;
-	/* Number of elements in buffers[] array */
-	int			nbuffers;
-
-	/*
-	 * Index of the "current" slot in the ring, ie, the one most recently
-	 * returned by GetBufferFromRing.
-	 */
-	int			current;
-
-	/*
-	 * Array of buffer numbers.  InvalidBuffer (that is, zero) indicates we
-	 * have not yet selected a buffer for this ring slot.  For allocation
-	 * simplicity this is palloc'd together with the fixed fields of the
-	 * struct.
-	 */
-	Buffer		buffers[FLEXIBLE_ARRAY_MEMBER];
-}			BufferAccessStrategyData;
-
-
-/* Prototypes for internal functions */
-static BufferDesc *GetBufferFromRing(BufferAccessStrategy strategy,
-									 uint64 *buf_state);
-static void AddBufferToRing(BufferAccessStrategy strategy,
-							BufferDesc *buf);
-
-/*
  * Per-backend state for the batched clock sweep.  Each backend claims a run
  * of consecutive clock-hand values with a single atomic fetch-add and then
  * iterates through them privately, so the contended nextVictimBuffer cache
@@ -157,8 +123,8 @@ ClockSweepTick(void)
 			 * must hold the spinlock so StrategySyncStart() can read
 			 * nextVictimBuffer and completePasses consistently.
 			 *
-			 * With batching, multiple backends may each land a fetch-add
-			 * that returns a value past NBuffers in the same pass.  After
+			 * With batching, multiple backends may each land a fetch-add that
+			 * returns a value past NBuffers in the same pass.  After
 			 * acquiring the spinlock we re-read the counter: if another
 			 * backend already wrapped it below NBuffers we are done.
 			 */
@@ -214,8 +180,6 @@ ClockSweepTick(void)
  *	GetVictimBuffer(). The only hard requirement GetVictimBuffer() has is that
  *	the selected buffer must not currently be pinned by anyone.
  *
- *	strategy is a BufferAccessStrategy object, or NULL for default strategy.
- *
  *	It is the callers responsibility to ensure the buffer ownership can be
  *	tracked via TrackNewBufferPin().
  *
@@ -223,28 +187,12 @@ ClockSweepTick(void)
  *	before returning.
  */
 BufferDesc *
-StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_ring)
+StrategyGetBuffer(uint64 *buf_state)
 {
 	BufferDesc *buf;
 	int			bgwprocno;
 	int			trycounter;
 	bool		force_cool;
-
-	*from_ring = false;
-
-	/*
-	 * If given a strategy object, see whether it can select a buffer. We
-	 * assume strategy objects don't need buffer_strategy_lock.
-	 */
-	if (strategy != NULL)
-	{
-		buf = GetBufferFromRing(strategy, buf_state);
-		if (buf != NULL)
-		{
-			*from_ring = true;
-			return buf;
-		}
-	}
 
 	/*
 	 * If asked, we need to waken the bgwriter. Since we don't want to rely on
@@ -274,8 +222,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 
 	/*
 	 * We count buffer allocation requests so that the bgwriter can estimate
-	 * the rate of buffer consumption.  Note that buffers recycled by a
-	 * strategy object are intentionally not counted here.
+	 * the rate of buffer consumption.
 	 */
 	pg_atomic_fetch_add_u32(&StrategyControl->numBufferAllocs, 1);
 
@@ -347,7 +294,7 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 				if (!force_cool)
 				{
 					no_progress = true;
-					break;			/* advance the hand, look for COOL */
+					break;		/* advance the hand, look for COOL */
 				}
 
 				if (BUF_STATE_GET_REFBIT(local_buf_state))
@@ -387,8 +334,6 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 												   local_buf_state))
 				{
 					/* Found a usable buffer */
-					if (strategy != NULL)
-						AddBufferToRing(strategy, buf);
 					*buf_state = local_buf_state;
 
 					TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
@@ -399,11 +344,12 @@ StrategyGetBuffer(BufferAccessStrategy strategy, uint64 *buf_state, bool *from_r
 		}
 
 		/*
-		 * A tick that made no progress toward a victim counts down trycounter.
-		 * A full unproductive pass escalates to force_cool (cool HOT buffers
-		 * into victims); a second unproductive full pass means everything is
-		 * pinned, so fail rather than spin forever.  (A failed CAS above is
-		 * neither progress nor a full miss: we simply retry the same buffer.)
+		 * A tick that made no progress toward a victim counts down
+		 * trycounter. A full unproductive pass escalates to force_cool (cool
+		 * HOT buffers into victims); a second unproductive full pass means
+		 * everything is pinned, so fail rather than spin forever.  (A failed
+		 * CAS above is neither progress nor a full miss: we simply retry the
+		 * same buffer.)
 		 */
 		if (no_progress && --trycounter == 0)
 		{
@@ -530,362 +476,4 @@ StrategyCtlShmemInit(void *arg)
 										 (uint32) NBuffers);
 	else
 		StrategyControl->batchSize = 1;
-}
-
-
-/* ----------------------------------------------------------------
- *				Backend-private buffer ring management
- * ----------------------------------------------------------------
- */
-
-
-/*
- * GetAccessStrategy -- create a BufferAccessStrategy object
- *
- * The object is allocated in the current memory context.
- */
-BufferAccessStrategy
-GetAccessStrategy(BufferAccessStrategyType btype)
-{
-	int			ring_size_kb;
-
-	/*
-	 * Select ring size to use.  See buffer/README for rationales.
-	 *
-	 * Note: if you change the ring size for BAS_BULKREAD, see also
-	 * SYNC_SCAN_REPORT_INTERVAL in access/heap/syncscan.c.
-	 */
-	switch (btype)
-	{
-		case BAS_NORMAL:
-			/* if someone asks for NORMAL, just give 'em a "default" object */
-			return NULL;
-
-		case BAS_BULKREAD:
-			{
-				int			ring_max_kb;
-
-				/*
-				 * The ring always needs to be large enough to allow some
-				 * separation in time between providing a buffer to the user
-				 * of the strategy and that buffer being reused. Otherwise the
-				 * user's pin will prevent reuse of the buffer, even without
-				 * concurrent activity.
-				 *
-				 * We also need to ensure the ring always is large enough for
-				 * SYNC_SCAN_REPORT_INTERVAL, as noted above.
-				 *
-				 * Thus we start out a minimal size and increase the size
-				 * further if appropriate.
-				 */
-				ring_size_kb = 256;
-
-				/*
-				 * There's no point in a larger ring if we won't be allowed to
-				 * pin sufficiently many buffers.  But we never limit to less
-				 * than the minimal size above.
-				 */
-				ring_max_kb = GetPinLimit() * (BLCKSZ / 1024);
-				ring_max_kb = Max(ring_size_kb, ring_max_kb);
-
-				/*
-				 * We would like the ring to additionally have space for the
-				 * configured degree of IO concurrency. While being read in,
-				 * buffers can obviously not yet be reused.
-				 *
-				 * Each IO can be up to io_combine_limit blocks large, and we
-				 * want to start up to effective_io_concurrency IOs.
-				 *
-				 * Note that effective_io_concurrency may be 0, which disables
-				 * AIO.
-				 */
-				ring_size_kb += (BLCKSZ / 1024) *
-					io_combine_limit * effective_io_concurrency;
-
-				if (ring_size_kb > ring_max_kb)
-					ring_size_kb = ring_max_kb;
-				break;
-			}
-		case BAS_BULKWRITE:
-			ring_size_kb = 16 * 1024;
-			break;
-		case BAS_VACUUM:
-			ring_size_kb = 2048;
-			break;
-
-		default:
-			elog(ERROR, "unrecognized buffer access strategy: %d",
-				 (int) btype);
-			return NULL;		/* keep compiler quiet */
-	}
-
-	return GetAccessStrategyWithSize(btype, ring_size_kb);
-}
-
-/*
- * GetAccessStrategyWithSize -- create a BufferAccessStrategy object with a
- *		number of buffers equivalent to the passed in size.
- *
- * If the given ring size is 0, no BufferAccessStrategy will be created and
- * the function will return NULL.  ring_size_kb must not be negative.
- */
-BufferAccessStrategy
-GetAccessStrategyWithSize(BufferAccessStrategyType btype, int ring_size_kb)
-{
-	int			ring_buffers;
-	BufferAccessStrategy strategy;
-
-	Assert(ring_size_kb >= 0);
-
-	/* Figure out how many buffers ring_size_kb is */
-	ring_buffers = ring_size_kb / (BLCKSZ / 1024);
-
-	/* 0 means unlimited, so no BufferAccessStrategy required */
-	if (ring_buffers == 0)
-		return NULL;
-
-	/* Cap to 1/8th of shared_buffers */
-	ring_buffers = Min(NBuffers / 8, ring_buffers);
-
-	/* NBuffers should never be less than 16, so this shouldn't happen */
-	Assert(ring_buffers > 0);
-
-	/* Allocate the object and initialize all elements to zeroes */
-	strategy = (BufferAccessStrategy)
-		palloc0(offsetof(BufferAccessStrategyData, buffers) +
-				ring_buffers * sizeof(Buffer));
-
-	/* Set fields that don't start out zero */
-	strategy->btype = btype;
-	strategy->nbuffers = ring_buffers;
-
-	return strategy;
-}
-
-/*
- * GetAccessStrategyBufferCount -- an accessor for the number of buffers in
- *		the ring
- *
- * Returns 0 on NULL input to match behavior of GetAccessStrategyWithSize()
- * returning NULL with 0 size.
- */
-int
-GetAccessStrategyBufferCount(BufferAccessStrategy strategy)
-{
-	if (strategy == NULL)
-		return 0;
-
-	return strategy->nbuffers;
-}
-
-/*
- * GetAccessStrategyPinLimit -- get cap of number of buffers that should be pinned
- *
- * When pinning extra buffers to look ahead, users of a ring-based strategy are
- * in danger of pinning too much of the ring at once while performing look-ahead.
- * For some strategies, that means "escaping" from the ring, and in others it
- * means forcing dirty data to disk very frequently with associated WAL
- * flushing.  Since external code has no insight into any of that, allow
- * individual strategy types to expose a clamp that should be applied when
- * deciding on a maximum number of buffers to pin at once.
- *
- * Callers should combine this number with other relevant limits and take the
- * minimum.
- */
-int
-GetAccessStrategyPinLimit(BufferAccessStrategy strategy)
-{
-	if (strategy == NULL)
-		return NBuffers;
-
-	switch (strategy->btype)
-	{
-		case BAS_BULKREAD:
-
-			/*
-			 * Since BAS_BULKREAD uses StrategyRejectBuffer(), dirty buffers
-			 * shouldn't be a problem and the caller is free to pin up to the
-			 * entire ring at once.
-			 */
-			return strategy->nbuffers;
-
-		default:
-
-			/*
-			 * Tell caller not to pin more than half the buffers in the ring.
-			 * This is a trade-off between look ahead distance and deferring
-			 * writeback and associated WAL traffic.
-			 */
-			return strategy->nbuffers / 2;
-	}
-}
-
-/*
- * FreeAccessStrategy -- release a BufferAccessStrategy object
- *
- * A simple pfree would do at the moment, but we would prefer that callers
- * don't assume that much about the representation of BufferAccessStrategy.
- */
-void
-FreeAccessStrategy(BufferAccessStrategy strategy)
-{
-	/* don't crash if called on a "default" strategy */
-	if (strategy != NULL)
-		pfree(strategy);
-}
-
-/*
- * GetBufferFromRing -- returns a buffer from the ring, or NULL if the
- *		ring is empty / not usable.
- *
- * The buffer is pinned and marked as owned, using TrackNewBufferPin(), before
- * returning.
- */
-static BufferDesc *
-GetBufferFromRing(BufferAccessStrategy strategy, uint64 *buf_state)
-{
-	BufferDesc *buf;
-	Buffer		bufnum;
-	uint64		old_buf_state;
-	uint64		local_buf_state;	/* to avoid repeated (de-)referencing */
-
-
-	/* Advance to next ring slot */
-	if (++strategy->current >= strategy->nbuffers)
-		strategy->current = 0;
-
-	/*
-	 * If the slot hasn't been filled yet, tell the caller to allocate a new
-	 * buffer with the normal allocation strategy.  He will then fill this
-	 * slot by calling AddBufferToRing with the new buffer.
-	 */
-	bufnum = strategy->buffers[strategy->current];
-	if (bufnum == InvalidBuffer)
-		return NULL;
-
-	buf = GetBufferDescriptor(bufnum - 1);
-
-	/*
-	 * Check whether the buffer can be used and pin it if so. Do this using a
-	 * CAS loop, to avoid having to lock the buffer header.
-	 */
-	old_buf_state = pg_atomic_read_u64(&buf->state);
-	for (;;)
-	{
-		local_buf_state = old_buf_state;
-
-		/*
-		 * If the buffer is pinned we cannot use it under any circumstances.
-		 *
-		 * With the cooling-state replacement the field holds only COOL or HOT,
-		 * so the stock "usage_count > 1 means another backend touched it"
-		 * heuristic no longer applies: a ring element is reusable whenever it
-		 * is unpinned.  (The whole ring mechanism is removed in a later patch;
-		 * scan resistance is now intrinsic to the sweep.)
-		 */
-		if (BUF_STATE_GET_REFCOUNT(local_buf_state) != 0)
-			break;
-
-		/* See equivalent code in PinBuffer() */
-		if (unlikely(local_buf_state & BM_LOCKED))
-		{
-			old_buf_state = WaitBufHdrUnlocked(buf);
-			continue;
-		}
-
-		/* pin the buffer if the CAS succeeds */
-		local_buf_state += BUF_REFCOUNT_ONE;
-
-		if (pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state,
-										   local_buf_state))
-		{
-			*buf_state = local_buf_state;
-
-			TrackNewBufferPin(BufferDescriptorGetBuffer(buf));
-			return buf;
-		}
-	}
-
-	/*
-	 * Tell caller to allocate a new buffer with the normal allocation
-	 * strategy.  He'll then replace this ring element via AddBufferToRing.
-	 */
-	return NULL;
-}
-
-/*
- * AddBufferToRing -- add a buffer to the buffer ring
- *
- * Caller must hold the buffer header spinlock on the buffer.  Since this
- * is called with the spinlock held, it had better be quite cheap.
- */
-static void
-AddBufferToRing(BufferAccessStrategy strategy, BufferDesc *buf)
-{
-	strategy->buffers[strategy->current] = BufferDescriptorGetBuffer(buf);
-}
-
-/*
- * Utility function returning the IOContext of a given BufferAccessStrategy's
- * strategy ring.
- */
-IOContext
-IOContextForStrategy(BufferAccessStrategy strategy)
-{
-	if (!strategy)
-		return IOCONTEXT_NORMAL;
-
-	switch (strategy->btype)
-	{
-		case BAS_NORMAL:
-
-			/*
-			 * Currently, GetAccessStrategy() returns NULL for
-			 * BufferAccessStrategyType BAS_NORMAL, so this case is
-			 * unreachable.
-			 */
-			pg_unreachable();
-			return IOCONTEXT_NORMAL;
-		case BAS_BULKREAD:
-			return IOCONTEXT_BULKREAD;
-		case BAS_BULKWRITE:
-			return IOCONTEXT_BULKWRITE;
-		case BAS_VACUUM:
-			return IOCONTEXT_VACUUM;
-	}
-
-	elog(ERROR, "unrecognized BufferAccessStrategyType: %d", strategy->btype);
-	pg_unreachable();
-}
-
-/*
- * StrategyRejectBuffer -- consider rejecting a dirty buffer
- *
- * When a nondefault strategy is used, the buffer manager calls this function
- * when it turns out that the buffer selected by StrategyGetBuffer needs to
- * be written out and doing so would require flushing WAL too.  This gives us
- * a chance to choose a different victim.
- *
- * Returns true if buffer manager should ask for a new victim, and false
- * if this buffer should be written and re-used.
- */
-bool
-StrategyRejectBuffer(BufferAccessStrategy strategy, BufferDesc *buf, bool from_ring)
-{
-	/* We only do this in bulkread mode */
-	if (strategy->btype != BAS_BULKREAD)
-		return false;
-
-	/* Don't muck with behavior of normal buffer-replacement strategy */
-	if (!from_ring ||
-		strategy->buffers[strategy->current] != BufferDescriptorGetBuffer(buf))
-		return false;
-
-	/*
-	 * Remove the dirty buffer from the ring; necessary to prevent infinite
-	 * loop if all ring members are dirty.
-	 */
-	strategy->buffers[strategy->current] = InvalidBuffer;
-
-	return true;
 }

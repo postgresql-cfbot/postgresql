@@ -386,8 +386,7 @@ static void relation_needs_vacanalyze(Oid relid, AutoVacOpts *relopts,
 									  bool *dovacuum, bool *doanalyze, bool *wraparound,
 									  AutoVacuumScores *scores);
 
-static void autovacuum_do_vac_analyze(autovac_table *tab,
-									  BufferAccessStrategy bstrategy);
+static void autovacuum_do_vac_analyze(autovac_table *tab);
 static AutoVacOpts *extract_autovac_opts(HeapTuple tup,
 										 TupleDesc pg_class_desc);
 static void perform_work_item(AutoVacuumWorkItem *workitem);
@@ -1936,7 +1935,6 @@ do_autovacuum(void)
 	HASHCTL		ctl;
 	HTAB	   *table_toast_map;
 	ListCell   *volatile cell;
-	BufferAccessStrategy bstrategy;
 	ScanKeyData key;
 	TupleDesc	pg_class_desc;
 	int			effective_multixact_freeze_max_age;
@@ -2323,23 +2321,6 @@ do_autovacuum(void)
 		list_sort(tables_to_process, TableToProcessComparator);
 
 	/*
-	 * Optionally, create a buffer access strategy object for VACUUM to use.
-	 * We use the same BufferAccessStrategy object for all tables VACUUMed by
-	 * this worker to prevent autovacuum from blowing out shared buffers.
-	 *
-	 * VacuumBufferUsageLimit being set to 0 results in
-	 * GetAccessStrategyWithSize returning NULL, effectively meaning we can
-	 * use up to all of shared buffers.
-	 *
-	 * If we later enter failsafe mode on any of the tables being vacuumed, we
-	 * will cease use of the BufferAccessStrategy only for that table.
-	 *
-	 * XXX should we consider adding code to adjust the size of this if
-	 * VacuumBufferUsageLimit changes?
-	 */
-	bstrategy = GetAccessStrategyWithSize(BAS_VACUUM, VacuumBufferUsageLimit);
-
-	/*
 	 * create a memory context to act as fake PortalContext, so that the
 	 * contexts created in the vacuum code are cleaned up for each table.
 	 */
@@ -2516,7 +2497,7 @@ do_autovacuum(void)
 			MemoryContextSwitchTo(PortalContext);
 
 			/* have at it */
-			autovacuum_do_vac_analyze(tab, bstrategy);
+			autovacuum_do_vac_analyze(tab);
 
 			/*
 			 * Clear a possible query-cancel signal, to avoid a late reaction
@@ -2636,8 +2617,6 @@ deleted:
 #ifdef USE_VALGRIND
 	hash_destroy(table_toast_map);
 	FreeTupleDesc(pg_class_desc);
-	if (bstrategy)
-		pfree(bstrategy);
 #endif
 
 	/* Run the rest in xact context, mainly to avoid Valgrind leak warnings */
@@ -3348,7 +3327,7 @@ relation_needs_vacanalyze(Oid relid,
  * disappear at transaction commit.
  */
 static void
-autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
+autovacuum_do_vac_analyze(autovac_table *tab)
 {
 	RangeVar   *rangevar;
 	VacuumRelation *rel;
@@ -3371,7 +3350,7 @@ autovacuum_do_vac_analyze(autovac_table *tab, BufferAccessStrategy bstrategy)
 	rel_list = list_make1(rel);
 	MemoryContextSwitchTo(old_context);
 
-	vacuum(rel_list, &tab->at_params, bstrategy, vac_context, true);
+	vacuum(rel_list, &tab->at_params, vac_context, true);
 
 	MemoryContextDelete(vac_context);
 }

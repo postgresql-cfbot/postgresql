@@ -360,7 +360,6 @@ static void
 initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 {
 	ParallelBlockTableScanDesc bpscan = NULL;
-	bool		allow_strat;
 	bool		allow_sync;
 
 	/*
@@ -397,24 +396,10 @@ initscan(HeapScanDesc scan, ScanKey key, bool keep_startblock)
 	if (!RelationUsesLocalBuffers(scan->rs_base.rs_rd) &&
 		scan->rs_nblocks > NBuffers / 4)
 	{
-		allow_strat = (scan->rs_base.rs_flags & SO_ALLOW_STRAT) != 0;
 		allow_sync = (scan->rs_base.rs_flags & SO_ALLOW_SYNC) != 0;
 	}
 	else
-		allow_strat = allow_sync = false;
-
-	if (allow_strat)
-	{
-		/* During a rescan, keep the previous strategy object. */
-		if (scan->rs_strategy == NULL)
-			scan->rs_strategy = GetAccessStrategy(BAS_BULKREAD);
-	}
-	else
-	{
-		if (scan->rs_strategy != NULL)
-			FreeAccessStrategy(scan->rs_strategy);
-		scan->rs_strategy = NULL;
-	}
+		allow_sync = false;
 
 	if (scan->rs_base.rs_parallel != NULL)
 	{
@@ -1203,7 +1188,6 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	scan->rs_base.rs_flags = flags;
 	scan->rs_base.rs_parallel = parallel_scan;
 	scan->rs_base.rs_instrument = NULL;
-	scan->rs_strategy = NULL;	/* set in initscan */
 	scan->rs_cbuf = InvalidBuffer;
 
 	/*
@@ -1274,8 +1258,7 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 
 	/*
 	 * Set up a read stream for sequential scans and TID range scans. This
-	 * should be done after initscan() because initscan() allocates the
-	 * BufferAccessStrategy object passed to the read stream API.
+	 * should be done after initscan().
 	 */
 	if (scan->rs_base.rs_flags & SO_TYPE_SEQSCAN ||
 		scan->rs_base.rs_flags & SO_TYPE_TIDRANGESCAN)
@@ -1296,7 +1279,6 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 		 */
 		scan->rs_read_stream = read_stream_begin_relation(READ_STREAM_SEQUENTIAL |
 														  READ_STREAM_USE_BATCHING,
-														  scan->rs_strategy,
 														  scan->rs_base.rs_rd,
 														  MAIN_FORKNUM,
 														  cb,
@@ -1307,7 +1289,6 @@ heap_beginscan(Relation relation, Snapshot snapshot,
 	{
 		scan->rs_read_stream = read_stream_begin_relation(READ_STREAM_DEFAULT |
 														  READ_STREAM_USE_BATCHING,
-														  scan->rs_strategy,
 														  scan->rs_base.rs_rd,
 														  MAIN_FORKNUM,
 														  bitmapheap_stream_read_next,
@@ -1403,9 +1384,6 @@ heap_endscan(TableScanDesc sscan)
 	if (BufferIsValid(scan->rs_vmbuffer))
 		ReleaseBuffer(scan->rs_vmbuffer);
 
-	/*
-	 * Must free the read stream before freeing the BufferAccessStrategy.
-	 */
 	if (scan->rs_read_stream)
 		read_stream_end(scan->rs_read_stream);
 
@@ -1416,9 +1394,6 @@ heap_endscan(TableScanDesc sscan)
 
 	if (scan->rs_base.rs_key)
 		pfree(scan->rs_base.rs_key);
-
-	if (scan->rs_strategy != NULL)
-		FreeAccessStrategy(scan->rs_strategy);
 
 	if (scan->rs_parallelworkerdata != NULL)
 		pfree(scan->rs_parallelworkerdata);
@@ -1940,7 +1915,6 @@ GetBulkInsertState(void)
 	BulkInsertState bistate;
 
 	bistate = (BulkInsertState) palloc_object(BulkInsertStateData);
-	bistate->strategy = GetAccessStrategy(BAS_BULKWRITE);
 	bistate->current_buf = InvalidBuffer;
 	bistate->next_free = InvalidBlockNumber;
 	bistate->last_free = InvalidBlockNumber;
@@ -1956,7 +1930,6 @@ FreeBulkInsertState(BulkInsertState bistate)
 {
 	if (bistate->current_buf != InvalidBuffer)
 		ReleaseBuffer(bistate->current_buf);
-	FreeAccessStrategy(bistate->strategy);
 	pfree(bistate);
 }
 

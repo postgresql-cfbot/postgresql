@@ -287,14 +287,11 @@ typedef enum IOObject
 
 typedef enum IOContext
 {
-	IOCONTEXT_BULKREAD,
-	IOCONTEXT_BULKWRITE,
 	IOCONTEXT_INIT,
 	IOCONTEXT_NORMAL,
-	IOCONTEXT_VACUUM,
 } IOContext;
 
-#define IOCONTEXT_NUM_TYPES (IOCONTEXT_VACUUM + 1)
+#define IOCONTEXT_NUM_TYPES (IOCONTEXT_NORMAL + 1)
 
 /*
  * Enumeration of IO operations.

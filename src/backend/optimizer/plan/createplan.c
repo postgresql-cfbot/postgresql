@@ -231,14 +231,18 @@ static BitmapOr *make_bitmap_or(List *bitmapplans);
 static NestLoop *make_nestloop(List *tlist,
 							   List *joinclauses, List *otherclauses, List *nestParams,
 							   Plan *lefttree, Plan *righttree,
-							   JoinType jointype, bool inner_unique);
+							   JoinType jointype,
+							   Relids ojrelids,
+							   bool inner_unique);
 static HashJoin *make_hashjoin(List *tlist,
 							   List *joinclauses, List *otherclauses,
 							   List *hashclauses,
 							   List *hashoperators, List *hashcollations,
 							   List *hashkeys,
 							   Plan *lefttree, Plan *righttree,
-							   JoinType jointype, bool inner_unique);
+							   JoinType jointype,
+							   Relids ojrelids,
+							   bool inner_unique);
 static Hash *make_hash(Plan *lefttree,
 					   List *hashkeys,
 					   Oid skewTable,
@@ -252,7 +256,9 @@ static MergeJoin *make_mergejoin(List *tlist,
 								 bool *mergereversals,
 								 bool *mergenullsfirst,
 								 Plan *lefttree, Plan *righttree,
-								 JoinType jointype, bool inner_unique,
+								 JoinType jointype,
+								 Relids ojrelids,
+								 bool inner_unique,
 								 bool skip_mark_restore);
 static Sort *make_sort(Plan *lefttree, int numCols,
 					   AttrNumber *sortColIdx, Oid *sortOperators,
@@ -4191,6 +4197,7 @@ create_nestloop_plan(PlannerInfo *root,
 	Plan	   *outer_plan;
 	Plan	   *inner_plan;
 	Relids		outerrelids;
+	Relids		ojrelids;
 	List	   *tlist = build_path_tlist(root, &best_path->jpath.path);
 	List	   *joinrestrictclauses = best_path->jpath.joinrestrictinfo;
 	List	   *joinclauses;
@@ -4256,6 +4263,11 @@ create_nestloop_plan(PlannerInfo *root,
 		otherclauses = (List *)
 			replace_nestloop_params(root, (Node *) otherclauses);
 	}
+
+	/* Identify any outer joins computed at this level */
+	ojrelids = bms_difference(best_path->jpath.path.parent->relids,
+							  bms_union(best_path->jpath.outerjoinpath->parent->relids,
+										best_path->jpath.innerjoinpath->parent->relids));
 
 	/*
 	 * Identify any nestloop parameters that should be supplied by this join
@@ -4328,6 +4340,7 @@ create_nestloop_plan(PlannerInfo *root,
 							  outer_plan,
 							  inner_plan,
 							  best_path->jpath.jointype,
+							  ojrelids,
 							  best_path->jpath.inner_unique);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
@@ -4342,6 +4355,7 @@ create_mergejoin_plan(PlannerInfo *root,
 	MergeJoin  *join_plan;
 	Plan	   *outer_plan;
 	Plan	   *inner_plan;
+	Relids		ojrelids;
 	List	   *tlist = build_path_tlist(root, &best_path->jpath.path);
 	List	   *joinclauses;
 	List	   *otherclauses;
@@ -4419,6 +4433,11 @@ create_mergejoin_plan(PlannerInfo *root,
 	 */
 	mergeclauses = get_switched_clauses(best_path->path_mergeclauses,
 										best_path->jpath.outerjoinpath->parent->relids);
+
+	/* Identify any outer joins computed at this level */
+	ojrelids = bms_difference(best_path->jpath.path.parent->relids,
+							  bms_union(outer_path->parent->relids,
+										inner_path->parent->relids));
 
 	/*
 	 * Create explicit sort nodes for the outer and inner paths if necessary.
@@ -4680,6 +4699,7 @@ create_mergejoin_plan(PlannerInfo *root,
 							   outer_plan,
 							   inner_plan,
 							   best_path->jpath.jointype,
+							   ojrelids,
 							   best_path->jpath.inner_unique,
 							   best_path->skip_mark_restore);
 
@@ -4697,6 +4717,7 @@ create_hashjoin_plan(PlannerInfo *root,
 	Hash	   *hash_plan;
 	Plan	   *outer_plan;
 	Plan	   *inner_plan;
+	Relids		ojrelids;
 	List	   *tlist = build_path_tlist(root, &best_path->jpath.path);
 	List	   *joinclauses;
 	List	   *otherclauses;
@@ -4845,6 +4866,11 @@ create_hashjoin_plan(PlannerInfo *root,
 		hash_plan->rows_total = best_path->inner_rows_total;
 	}
 
+	/* Identify any outer joins computed at this level */
+	ojrelids = bms_difference(best_path->jpath.path.parent->relids,
+							  bms_union(best_path->jpath.outerjoinpath->parent->relids,
+										best_path->jpath.innerjoinpath->parent->relids));
+
 	join_plan = make_hashjoin(tlist,
 							  joinclauses,
 							  otherclauses,
@@ -4855,6 +4881,7 @@ create_hashjoin_plan(PlannerInfo *root,
 							  outer_plan,
 							  (Plan *) hash_plan,
 							  best_path->jpath.jointype,
+							  ojrelids,
 							  best_path->jpath.inner_unique);
 
 	copy_generic_path_info(&join_plan->join.plan, &best_path->jpath.path);
@@ -5933,6 +5960,7 @@ make_nestloop(List *tlist,
 			  Plan *lefttree,
 			  Plan *righttree,
 			  JoinType jointype,
+			  Relids ojrelids,
 			  bool inner_unique)
 {
 	NestLoop   *node = makeNode(NestLoop);
@@ -5945,6 +5973,7 @@ make_nestloop(List *tlist,
 	node->join.jointype = jointype;
 	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
+	node->join.ojrelids = ojrelids;
 	node->nestParams = nestParams;
 
 	return node;
@@ -5961,6 +5990,7 @@ make_hashjoin(List *tlist,
 			  Plan *lefttree,
 			  Plan *righttree,
 			  JoinType jointype,
+			  Relids ojrelids,
 			  bool inner_unique)
 {
 	HashJoin   *node = makeNode(HashJoin);
@@ -5977,6 +6007,7 @@ make_hashjoin(List *tlist,
 	node->join.jointype = jointype;
 	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
+	node->join.ojrelids = ojrelids;
 
 	return node;
 }
@@ -6016,6 +6047,7 @@ make_mergejoin(List *tlist,
 			   Plan *lefttree,
 			   Plan *righttree,
 			   JoinType jointype,
+			   Relids ojrelids,
 			   bool inner_unique,
 			   bool skip_mark_restore)
 {
@@ -6035,6 +6067,7 @@ make_mergejoin(List *tlist,
 	node->join.jointype = jointype;
 	node->join.inner_unique = inner_unique;
 	node->join.joinqual = joinclauses;
+	node->join.ojrelids = ojrelids;
 
 	return node;
 }

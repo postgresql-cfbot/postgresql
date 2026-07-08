@@ -1344,17 +1344,6 @@ transformForPortionOfClause(ParseState *pstate,
 				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
 				errmsg("WHERE CURRENT OF with FOR PORTION OF is not implemented"));
 
-	/* We don't support FOR PORTION OF on views with INSTEAD OF triggers. */
-	if (targetrel->rd_rel->relkind == RELKIND_VIEW &&
-		targetrel->rd_rel->relhastriggers &&
-		targetrel->trigdesc != NULL &&
-		(isUpdate ? targetrel->trigdesc->trig_update_instead_row
-				  : targetrel->trigdesc->trig_delete_instead_row))
-		ereport(ERROR,
-				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-				 errmsg("views with INSTEAD OF triggers do not support FOR PORTION OF"),
-				 parser_errposition(pstate, forPortionOf->location)));
-
 	result = makeNode(ForPortionOfExpr);
 
 	/* Look up the FOR PORTION OF name requested. */

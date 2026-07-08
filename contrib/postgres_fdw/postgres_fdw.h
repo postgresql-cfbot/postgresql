@@ -13,6 +13,7 @@
 #ifndef POSTGRES_FDW_H
 #define POSTGRES_FDW_H
 
+#include "commands/explain_state.h"
 #include "foreign/foreign.h"
 #include "lib/stringinfo.h"
 #include "libpq/libpq-be-fe.h"
@@ -151,6 +152,22 @@ typedef enum PgFdwSamplingMethod
 	ANALYZE_SAMPLE_BERNOULLI,	/* TABLESAMPLE bernoulli */
 } PgFdwSamplingMethod;
 
+typedef struct PgFdwExplainRemotePlans
+{
+	int			plan_node_id;
+	StringInfoData explain_plan;
+
+} PgFdwExplainRemotePlans;
+
+typedef struct PgFdwExplainState
+{
+	List	   *all_remote_plans;
+
+	/* EXPLAIN options */
+	bool		remote_plans;
+	List	   *options;		/* raw user DefElem list, for forwarding */
+} PgFdwExplainState;
+
 /* in postgres_fdw.c */
 extern int	set_transmission_modes(void);
 extern void reset_transmission_modes(int nestlevel);
@@ -178,6 +195,16 @@ extern int	ExtractConnectionOptions(List *defelems,
 extern List *ExtractExtensionList(const char *extensionsString,
 								  bool warnOnMissing);
 extern char *process_pgfdw_appname(const char *appname);
+extern void postgresExplainPerNode(PlanState *planstate, List *ancestors,
+								   const char *relationship,
+								   const char *plan_name,
+								   ExplainState *es);
+extern void postgresExplainPerPlan(PlannedStmt *plannedstmt,
+								   IntoClause *into,
+								   ExplainState *es,
+								   const char *queryString,
+								   ParamListInfo params,
+								   QueryEnvironment *queryEnv);
 extern char *pgfdw_application_name;
 
 /* in deparse.c */

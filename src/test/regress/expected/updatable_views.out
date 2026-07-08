@@ -4179,28 +4179,20 @@ update uv_fpo_instead_view
   for portion of valid_at from '2015-01-01' to '2020-01-01'
   set b = 99 where id = '[1,1]'; -- error
 ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
-LINE 2:   for portion of valid_at from '2015-01-01' to '2020-01-01'
-                         ^
 delete from uv_fpo_instead_view
   for portion of valid_at from '2017-01-01' to '2022-01-01'
   where id = '[1,1]'; -- error
 ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
-LINE 2:   for portion of valid_at from '2017-01-01' to '2022-01-01'
-                         ^
 -- The check does not depend on which rows match, so it errors even when
 -- no rows do.
 update uv_fpo_instead_view
   for portion of valid_at from '2015-01-01' to '2020-01-01'
   set b = 99 where id = '[9,9]'; -- error, even with no matching rows
 ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
-LINE 2:   for portion of valid_at from '2015-01-01' to '2020-01-01'
-                         ^
 delete from uv_fpo_instead_view
   for portion of valid_at from '2017-01-01' to '2022-01-01'
   where id = '[9,9]'; -- error, even with no matching rows
 ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
-LINE 2:   for portion of valid_at from '2017-01-01' to '2022-01-01'
-                         ^
 drop view uv_fpo_instead_view;
 drop function uv_fpo_instead_trig();
 -- Forbid INSTEAD OF triggers with FOR PORTION OF even if the FOR PORTION OF

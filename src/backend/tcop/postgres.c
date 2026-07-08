@@ -1085,10 +1085,7 @@ exec_simple_query(const char *query_string)
 	/* Log immediately if dictated by log_statement */
 	if (check_log_statement(parsetree_list))
 	{
-		char	   *truncated_stmt = NULL;
-
-		if (log_statement_max_length >= 0)
-			truncated_stmt = truncate_query_log(query_string);
+		char	   *truncated_stmt = truncate_query_log(query_string);
 
 		ereport(LOG,
 				(errmsg("statement: %s",
@@ -1392,10 +1389,7 @@ exec_simple_query(const char *query_string)
 			break;
 		case 2:
 			{
-				char	   *truncated_stmt = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_stmt = truncate_query_log(query_string);
+				char	   *truncated_stmt = truncate_query_log(query_string);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  statement: %s",
@@ -1638,10 +1632,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 			break;
 		case 2:
 			{
-				char	   *truncated_stmt = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_stmt = truncate_query_log(query_string);
+				char	   *truncated_stmt = truncate_query_log(query_string);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  parse %s: %s",
@@ -2125,10 +2116,7 @@ exec_bind_message(StringInfo input_message)
 			break;
 		case 2:
 			{
-				char	   *truncated_stmt = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_stmt = truncate_query_log(psrc->query_string);
+				char	   *truncated_stmt = truncate_query_log(psrc->query_string);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  bind %s%s%s: %s",
@@ -2282,10 +2270,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	/* Log immediately if dictated by log_statement */
 	if (check_log_statement(portal->stmts))
 	{
-		char	   *truncated_source = NULL;
-
-		if (log_statement_max_length >= 0)
-			truncated_source = truncate_query_log(sourceText);
+		char	   *truncated_source = truncate_query_log(sourceText);
 
 		ereport(LOG,
 				(errmsg("%s %s%s%s: %s",
@@ -2414,10 +2399,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 			break;
 		case 2:
 			{
-				char	   *truncated_source = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_source = truncate_query_log(sourceText);
+				char	   *truncated_source = truncate_query_log(sourceText);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  %s %s%s%s: %s",

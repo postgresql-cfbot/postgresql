@@ -4165,3 +4165,41 @@ select * from base_tab order by a;
 
 drop view base_tab_view;
 drop table base_tab;
+-- FOR PORTION OF is not supported on views with INSTEAD OF triggers
+create view uv_fpo_instead_view as select id, valid_at, b from uv_fpo_tab;
+create function uv_fpo_instead_trig() returns trigger language plpgsql as
+$$ begin return null; end $$;
+create trigger uv_fpo_instead_upd_trig
+  instead of update on uv_fpo_instead_view
+  for each row execute function uv_fpo_instead_trig();
+create trigger uv_fpo_instead_del_trig
+  instead of delete on uv_fpo_instead_view
+  for each row execute function uv_fpo_instead_trig();
+update uv_fpo_instead_view
+  for portion of valid_at from '2015-01-01' to '2020-01-01'
+  set b = 99 where id = '[1,1]'; -- error
+ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
+LINE 2:   for portion of valid_at from '2015-01-01' to '2020-01-01'
+                         ^
+delete from uv_fpo_instead_view
+  for portion of valid_at from '2017-01-01' to '2022-01-01'
+  where id = '[1,1]'; -- error
+ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
+LINE 2:   for portion of valid_at from '2017-01-01' to '2022-01-01'
+                         ^
+-- The check does not depend on which rows match, so it errors even when
+-- no rows do.
+update uv_fpo_instead_view
+  for portion of valid_at from '2015-01-01' to '2020-01-01'
+  set b = 99 where id = '[9,9]'; -- error, even with no matching rows
+ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
+LINE 2:   for portion of valid_at from '2015-01-01' to '2020-01-01'
+                         ^
+delete from uv_fpo_instead_view
+  for portion of valid_at from '2017-01-01' to '2022-01-01'
+  where id = '[9,9]'; -- error, even with no matching rows
+ERROR:  views with INSTEAD OF triggers do not support FOR PORTION OF
+LINE 2:   for portion of valid_at from '2017-01-01' to '2022-01-01'
+                         ^
+drop view uv_fpo_instead_view;
+drop function uv_fpo_instead_trig();

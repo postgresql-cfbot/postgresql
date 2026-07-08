@@ -2182,3 +2182,42 @@ delete from uv_fpo_instead_view
 
 drop view uv_fpo_instead_view;
 drop function uv_fpo_instead_trig();
+
+-- Forbid INSTEAD OF triggers with FOR PORTION OF even if the FOR PORTION OF
+-- statement is parsed before the trigger exists.
+-- This can happen in at least a couple ways: a rewrite rule or a BEGIN ATOMIC function.
+create function uv_fpo_instead_trig() returns trigger language plpgsql as
+$$ begin return new; end $$;
+
+-- via a rewrite rule
+create table uv_fpo_rule_tab (id int4range, valid_at tsrange, b float);
+insert into uv_fpo_rule_tab values ('[1,1]', '[2000-01-01, 2030-01-01)', 0);
+create view uv_fpo_rule_view as select id, valid_at, b from uv_fpo_rule_tab;
+create rule uv_fpo_rule as on insert to uv_fpo_rule_tab do also
+  update uv_fpo_rule_view
+    for portion of valid_at from '2010-01-01' to '2020-01-01'
+    set b = 99 where id = '[1,1]';
+create trigger uv_fpo_rule_instead
+  instead of update on uv_fpo_rule_view
+  for each row execute function uv_fpo_instead_trig();
+-- Would crash if we checked at parse-time:
+insert into uv_fpo_rule_tab values ('[2,2]', '[2000-01-01,2030-01-01)', 0);
+drop table uv_fpo_rule_tab cascade;
+
+-- via a BEGIN ATOMIC function body
+create table uv_fpo_atomic_tab (id int4range, valid_at tsrange, b float);
+insert into uv_fpo_atomic_tab values ('[1,1]', '[2000-01-01, 2030-01-01)', 0);
+create view uv_fpo_atomic_view as select id, valid_at, b from uv_fpo_atomic_tab;
+create function uv_fpo_atomic_fn() returns void language sql begin atomic
+  update uv_fpo_atomic_view
+    for portion of valid_at from '2010-01-01' to '2020-01-01'
+    set b = 99 where id = '[1,1]';
+end;
+create trigger uv_fpo_atomic_instead
+  instead of update on uv_fpo_atomic_view
+  for each row execute function uv_fpo_instead_trig();
+-- Would crash if we checked at parse-time:
+select uv_fpo_atomic_fn();
+drop function uv_fpo_atomic_fn();
+drop table uv_fpo_atomic_tab cascade;
+drop function uv_fpo_instead_trig();

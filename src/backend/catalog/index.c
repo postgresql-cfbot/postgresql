@@ -2053,6 +2053,7 @@ index_constraint_create(Relation heapRelation,
 		CreateTrigStmt *trigger = makeNode(CreateTrigStmt);
 
 		trigger->replace = false;
+		trigger->tgenabled = TRIGGER_FIRES_ON_ORIGIN;
 		trigger->isconstraint = true;
 		trigger->trigname = (constraintType == CONSTRAINT_PRIMARY) ?
 			"PK_ConstraintTrigger" :
@@ -2069,6 +2070,8 @@ index_constraint_create(Relation heapRelation,
 		trigger->deferrable = true;
 		trigger->initdeferred = initdeferred;
 		trigger->constrrel = NULL;
+		trigger->trigcomment = NULL;
+		trigger->transformed = true;
 
 		(void) CreateTrigger(trigger, NULL, RelationGetRelid(heapRelation),
 							 InvalidOid, conOid, indexRelationId, InvalidOid,

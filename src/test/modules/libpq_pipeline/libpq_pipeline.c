@@ -264,6 +264,12 @@ copy_connection(PGconn *conn)
 	{
 		if (opt->val)
 		{
+			/*
+			 * We don't want the copied connection to have tracing enabled, so
+			 * skip the trace_file parameter
+			 */
+			if (strcmp(opt->keyword, "trace_file") == 0)
+				continue;
 			keywords[i] = opt->keyword;
 			vals[i] = opt->val;
 			i++;
@@ -294,6 +300,7 @@ test_cancel(PGconn *conn)
 	PGcancelConn *cancelConn;
 	PGconn	   *monitorConn;
 	char		errorbuf[256];
+	char	   *pgtrace;
 
 	fprintf(stderr, "test cancellations... ");
 
@@ -302,10 +309,18 @@ test_cancel(PGconn *conn)
 
 	/*
 	 * Make a separate connection to the database to monitor the query on the
-	 * main connection.
+	 * main connection. Tracing needs to be disabled for this connection.
 	 */
+	pgtrace = getenv("PGTRACE");
+	if (pgtrace != NULL)
+	{
+		pgtrace = pg_strdup(pgtrace);
+		unsetenv("PGTRACE");
+	}
 	monitorConn = copy_connection(conn);
 	Assert(PQstatus(monitorConn) == CONNECTION_OK);
+	if (pgtrace != NULL)
+		setenv("PGTRACE", pgtrace, 1);
 
 	/* test PQcancel */
 	send_cancellable_query(conn, monitorConn);

@@ -56,6 +56,7 @@
 #include "utils/spccache.h"
 #include "utils/syscache.h"
 
+void		(*add_index_delete_hook) (Relation indexRelation, const ItemPointerData *heap_tid, TransactionId xmin) = NULL;
 
 static HeapTuple heap_prepare_insert(Relation relation, HeapTuple tup,
 									 TransactionId xid, CommandId cid, uint32 options);
@@ -2736,6 +2737,7 @@ heap_delete(Relation relation, const ItemPointerData *tid,
 	bool		all_visible_cleared = false;
 	HeapTuple	old_key_tuple = NULL;	/* replica identity of the tuple */
 	bool		old_key_copied = false;
+	TransactionId old_xmin;
 
 	Assert(ItemPointerIsValid(tid));
 
@@ -2983,6 +2985,8 @@ l1:
 							  xid, LockTupleExclusive, true,
 							  &new_xmax, &new_infomask, &new_infomask2);
 
+	old_xmin = HeapTupleHeaderGetXmin(tp.t_data);
+
 	START_CRIT_SECTION();
 
 	/*
@@ -3138,6 +3142,9 @@ l1:
 	if (old_key_tuple != NULL && old_key_copied)
 		heap_freetuple(old_key_tuple);
 
+	if (add_index_delete_hook)
+		add_index_delete_hook(relation, tid, old_xmin);
+
 	return TM_Ok;
 }
 
@@ -3244,6 +3251,7 @@ heap_update(Relation relation, const ItemPointerData *otid, HeapTuple newtup,
 				infomask2_old_tuple,
 				infomask_new_tuple,
 				infomask2_new_tuple;
+	TransactionId old_xmin;
 
 	Assert(ItemPointerIsValid(otid));
 
@@ -3689,6 +3697,8 @@ l2:
 							  xid, *lockmode, true,
 							  &xmax_old_tuple, &infomask_old_tuple,
 							  &infomask2_old_tuple);
+
+	old_xmin = HeapTupleHeaderGetRawXmin(oldtup.t_data);
 
 	/*
 	 * And also prepare an Xmax value for the new copy of the tuple.  If there
@@ -4175,6 +4185,9 @@ l2:
 	bms_free(id_attrs);
 	bms_free(modified_attrs);
 	bms_free(interesting_attrs);
+
+	if (add_index_delete_hook)
+		add_index_delete_hook(relation, otid, old_xmin);
 
 	return TM_Ok;
 }

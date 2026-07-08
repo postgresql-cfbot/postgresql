@@ -132,6 +132,8 @@ static double compute_parallel_delay(void);
 static VacOptValue get_vacoptval_from_boolean(DefElem *def);
 static bool vac_tid_reaped(ItemPointer itemptr, void *state);
 
+bool		(*add_skip_vacuum_hook) (Relation rel) = NULL;
+
 /*
  * GUC check function to ensure GUC value specified is within the allowable
  * range.
@@ -2138,6 +2140,20 @@ vacuum_rel(Oid relid, RangeVar *relation, VacuumParams params,
 		PopActiveSnapshot();
 		CommitTransactionCommand();
 		return false;
+	}
+
+	/*
+	 * Silently ignore if it's a VCI internal table.
+	 */
+	if (add_skip_vacuum_hook)
+	{
+		if (add_skip_vacuum_hook(rel))
+		{
+			relation_close(rel, lmode);
+			PopActiveSnapshot();
+			CommitTransactionCommand();
+			return false;
+		}
 	}
 
 	/*

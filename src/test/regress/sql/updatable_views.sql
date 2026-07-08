@@ -2170,15 +2170,15 @@ delete from uv_fpo_instead_view
   for portion of valid_at from '2017-01-01' to '2022-01-01'
   where id = '[1,1]'; -- error
 
--- The check does not depend on which rows match, so it errors even when
--- no rows do.
+-- Here the check runs per row in the executor, so a statement that matches
+-- no rows never reaches it and is allowed.
 update uv_fpo_instead_view
   for portion of valid_at from '2015-01-01' to '2020-01-01'
-  set b = 99 where id = '[9,9]'; -- error, even with no matching rows
+  set b = 99 where id = '[9,9]'; -- ok, no rows affected
 
 delete from uv_fpo_instead_view
   for portion of valid_at from '2017-01-01' to '2022-01-01'
-  where id = '[9,9]'; -- error, even with no matching rows
+  where id = '[9,9]'; -- ok, no rows affected
 
 drop view uv_fpo_instead_view;
 drop function uv_fpo_instead_trig();

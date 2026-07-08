@@ -12834,7 +12834,7 @@ get_json_table(TableFunc *tf, deparse_context *context, bool showimplicit)
 
 	appendStringInfoString(buf, ", ");
 
-	get_const_expr(root->path->value, context, -1);
+	get_rule_expr(jexpr->path_spec, context, showimplicit);
 
 	appendStringInfo(buf, " AS %s", quote_identifier(root->path->name));
 

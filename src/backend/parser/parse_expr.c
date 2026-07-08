@@ -4715,6 +4715,35 @@ transformJsonFuncExpr(ParseState *pstate, JsonFuncExpr *func)
 													 func->on_empty,
 													 JSON_BEHAVIOR_NULL,
 													 jsexpr->returning);
+
+			/* --- [DEBUG] INSERTED LOGIC --- */
+			if (func->on_mismatch)
+			{
+				jsexpr->on_mismatch = transformJsonBehavior(pstate,
+															jsexpr,
+															func->on_mismatch,
+															JSON_BEHAVIOR_NULL,
+															jsexpr->returning);
+
+				/* Validate behaviors: JSON_QUERY allows EMPTY ARRAY/OBJECT */
+				if (jsexpr->on_mismatch->btype != JSON_BEHAVIOR_ERROR &&
+					jsexpr->on_mismatch->btype != JSON_BEHAVIOR_NULL &&
+					jsexpr->on_mismatch->btype != JSON_BEHAVIOR_EMPTY_ARRAY &&
+					jsexpr->on_mismatch->btype != JSON_BEHAVIOR_EMPTY_OBJECT &&
+					jsexpr->on_mismatch->btype != JSON_BEHAVIOR_DEFAULT)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("invalid %s behavior for %s()", "ON MISMATCH", "JSON_QUERY"),
+							 errdetail("Only ERROR, NULL, EMPTY ARRAY, EMPTY OBJECT, or DEFAULT is allowed.")));
+				}
+			}
+			else
+			{
+				/* Explicit NULL so executor knows to skip mismatch check */
+				jsexpr->on_mismatch = NULL;
+			}
+
 			/* Assume NULL ON ERROR when ON ERROR is not specified. */
 			jsexpr->on_error = transformJsonBehavior(pstate,
 													 jsexpr,
@@ -4761,7 +4790,28 @@ transformJsonFuncExpr(ParseState *pstate, JsonFuncExpr *func)
 													 func->on_empty,
 													 JSON_BEHAVIOR_NULL,
 													 jsexpr->returning);
-			/* Assume NULL ON ERROR when ON ERROR is not specified. */
+			if (func->on_mismatch)
+			{
+				jsexpr->on_mismatch = transformJsonBehavior(pstate,
+															jsexpr,
+															func->on_mismatch,
+															JSON_BEHAVIOR_NULL,
+															jsexpr->returning);
+				if (jsexpr->on_mismatch->btype != JSON_BEHAVIOR_ERROR &&
+					jsexpr->on_mismatch->btype != JSON_BEHAVIOR_NULL &&
+					jsexpr->on_mismatch->btype != JSON_BEHAVIOR_DEFAULT)
+				{
+					ereport(ERROR,
+							(errcode(ERRCODE_SYNTAX_ERROR),
+							 errmsg("invalid %s behavior for %s()", "ON MISMATCH", "JSON_VALUE"),
+							 errdetail("Only ERROR, NULL, EMPTY ARRAY, EMPTY OBJECT, or DEFAULT is allowed.")));
+				}
+			}
+			else
+			{
+				/* Important: Set to NULL so Executor knows it's missing */
+				jsexpr->on_mismatch = NULL;
+			}
 			jsexpr->on_error = transformJsonBehavior(pstate,
 													 jsexpr,
 													 func->on_error,

@@ -790,7 +790,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED LSN_P
 
 	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE MERGE_ACTION METHOD
-	MINUTE_P MINVALUE MODE MONTH_P MOVE
+	MINUTE_P MINVALUE MISMATCH MODE MONTH_P MOVE
 
 	NAME_P NAMES NATIONAL NATURAL NCHAR NESTED NEW NEXT NFC NFD NFKC NFKD NO NODE
 	NONE NORMALIZE NORMALIZED
@@ -15249,7 +15249,8 @@ json_table_column_definition:
 					n->wrapper = $4;
 					n->quotes = $5;
 					n->on_empty = (JsonBehavior *) linitial($6);
-					n->on_error = (JsonBehavior *) lsecond($6);
+					n->on_mismatch = (JsonBehavior *) lsecond($6);
+					n->on_error = (JsonBehavior *) lthird($6);
 					n->location = @1;
 					$$ = (Node *) n;
 				}
@@ -15269,7 +15270,8 @@ json_table_column_definition:
 					n->wrapper = $5;
 					n->quotes = $6;
 					n->on_empty = (JsonBehavior *) linitial($7);
-					n->on_error = (JsonBehavior *) lsecond($7);
+					n->on_mismatch = (JsonBehavior *) lsecond($7);
+					n->on_error = (JsonBehavior *) lthird($7);
 					n->location = @1;
 					$$ = (Node *) n;
 				}
@@ -17132,7 +17134,8 @@ func_expr_common_subexpr:
 					n->wrapper = $8;
 					n->quotes = $9;
 					n->on_empty = (JsonBehavior *) linitial($10);
-					n->on_error = (JsonBehavior *) lsecond($10);
+					n->on_mismatch = (JsonBehavior *) lsecond($10);
+					n->on_error = (JsonBehavior *) lthird($10);
 					n->location = @1;
 					$$ = (Node *) n;
 				}
@@ -17166,7 +17169,8 @@ func_expr_common_subexpr:
 					n->passing = $6;
 					n->output = (JsonOutput *) $7;
 					n->on_empty = (JsonBehavior *) linitial($8);
-					n->on_error = (JsonBehavior *) lsecond($8);
+					n->on_mismatch = (JsonBehavior *) lsecond($8);
+					n->on_error = (JsonBehavior *) lthird($8);
 					n->location = @1;
 					$$ = (Node *) n;
 				}
@@ -17967,15 +17971,26 @@ json_behavior_type:
 		;
 
 json_behavior_clause_opt:
-			json_behavior ON EMPTY_P
-				{ $$ = list_make2($1, NULL); }
-			| json_behavior ON ERROR_P
-				{ $$ = list_make2(NULL, $1); }
-			| json_behavior ON EMPTY_P json_behavior ON ERROR_P
-				{ $$ = list_make2($1, $4); }
-			| /* EMPTY */
-				{ $$ = list_make2(NULL, NULL); }
-		;
+          json_behavior ON EMPTY_P json_behavior ON MISMATCH json_behavior ON ERROR_P
+             { $$ = list_make3($1, $4, $7); }
+
+          | json_behavior ON EMPTY_P json_behavior ON ERROR_P
+             { $$ = list_make3($1, NULL, $4); }
+          | json_behavior ON EMPTY_P json_behavior ON MISMATCH
+             { $$ = list_make3($1, $4, NULL); }
+          | json_behavior ON MISMATCH json_behavior ON ERROR_P
+             { $$ = list_make3(NULL, $1, $4); }
+
+          | json_behavior ON EMPTY_P
+             { $$ = list_make3($1, NULL, NULL); }
+          | json_behavior ON ERROR_P
+             { $$ = list_make3(NULL, NULL, $1); }
+          | json_behavior ON MISMATCH
+             { $$ = list_make3(NULL, $1, NULL); }
+
+          | /* EMPTY */
+             { $$ = list_make3(NULL, NULL, NULL); }
+       ;
 
 json_on_error_clause_opt:
 			json_behavior ON ERROR_P
@@ -18986,6 +19001,7 @@ unreserved_keyword:
 			| METHOD
 			| MINUTE_P
 			| MINVALUE
+			| MISMATCH
 			| MODE
 			| MONTH_P
 			| MOVE
@@ -19618,6 +19634,7 @@ bare_label_keyword:
 			| MERGE_ACTION
 			| METHOD
 			| MINVALUE
+			| MISMATCH
 			| MODE
 			| MOVE
 			| NAME_P

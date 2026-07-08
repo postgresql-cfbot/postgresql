@@ -1879,6 +1879,13 @@ ExecDelete(ModifyTableContext *context,
 		bool		dodelete;
 
 		Assert(oldtuple != NULL);
+
+		/* We don't support FOR PORTION OF on views with INSTEAD OF triggers. */
+		if (((ModifyTable *) context->mtstate->ps.plan)->forPortionOf)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("views with INSTEAD OF triggers do not support FOR PORTION OF")));
+
 		dodelete = ExecIRDeleteTriggers(estate, resultRelInfo, oldtuple);
 
 		if (!dodelete)			/* "do nothing" */
@@ -2772,6 +2779,12 @@ ExecUpdate(ModifyTableContext *context, ResultRelInfo *resultRelInfo,
 	if (resultRelInfo->ri_TrigDesc &&
 		resultRelInfo->ri_TrigDesc->trig_update_instead_row)
 	{
+		/* We don't support FOR PORTION OF on views with INSTEAD OF triggers. */
+		if (((ModifyTable *) context->mtstate->ps.plan)->forPortionOf)
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("views with INSTEAD OF triggers do not support FOR PORTION OF")));
+
 		if (!ExecIRUpdateTriggers(estate, resultRelInfo,
 								  oldtuple, slot))
 			return NULL;		/* "do nothing" */

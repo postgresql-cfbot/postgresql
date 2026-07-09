@@ -237,6 +237,21 @@ DROP VIEW jsonb_table_view5;
 DROP VIEW jsonb_table_view6;
 DROP DOMAIN jsonb_test_domain;
 
+-- Parentheses around a nested parent/child plan must survive a dump, so the
+-- plan parses back to the same tree.
+CREATE VIEW jsonb_table_view_plan AS
+SELECT * FROM JSON_TABLE(
+	jsonb 'null', '$' AS p0
+	COLUMNS (
+		NESTED PATH '$.a[*]' AS p1 COLUMNS (
+			NESTED PATH '$.b[*]' AS p11 COLUMNS (b int PATH '$')
+		)
+	)
+	PLAN (p0 OUTER (p1 INNER p11))
+);
+\sv jsonb_table_view_plan
+DROP VIEW jsonb_table_view_plan;
+
 -- JSON_TABLE: only one FOR ORDINALITY columns allowed
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (id FOR ORDINALITY, id2 FOR ORDINALITY, a int PATH '$.a' ERROR ON EMPTY)) jt;
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (id FOR ORDINALITY, a int PATH '$' ERROR ON EMPTY)) jt;

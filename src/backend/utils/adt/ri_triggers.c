@@ -42,6 +42,7 @@
 #include "miscadmin.h"
 #include "parser/parse_coerce.h"
 #include "parser/parse_relation.h"
+#include "storage/lmgr.h"
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/datum.h"
@@ -56,6 +57,7 @@
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "storage/locktag.h"
 
 /*
  * Local definitions
@@ -97,6 +99,9 @@
 #define RI_TRIGTYPE_UPDATE 2
 #define RI_TRIGTYPE_DELETE 3
 
+#define RI_FKEY_INDEXLOCK_KEY_READ		RowExclusiveLock
+#define RI_FKEY_INDEXLOCK_KEY_UPDATE	ShareRowExclusiveLock
+
 typedef struct FastPathMeta FastPathMeta;
 
 /*
@@ -121,6 +126,7 @@ typedef struct RI_ConstraintInfo
 	Oid			fk_relid;		/* referencing relation */
 	char		confupdtype;	/* foreign key's ON UPDATE action */
 	char		confdeltype;	/* foreign key's ON DELETE action */
+	bool		conflockkeyindex;	/* foreign key's marked READ OPTIMIZED */
 	int			ndelsetcols;	/* number of columns referenced in ON DELETE
 								 * SET clause */
 	int16		confdelsetcols[RI_MAX_NUMKEYS]; /* attnums of cols to set on
@@ -457,6 +463,17 @@ RI_FKey_check(TriggerData *trigdata)
 	}
 
 	/*
+	 * Lock the backing index if the FK was so defined, to avoid concurrent
+	 * removal of referenced key values without having to lock all contained
+	 * key values' rows.
+	 */
+	if (riinfo->conflockkeyindex)
+	{
+		Assert(OidIsValid(riinfo->conindid));
+		LockRelationOid(riinfo->conindid, RI_FKEY_INDEXLOCK_KEY_READ);
+	}
+
+	/*
 	 * Fast path: probe the PK unique index directly, bypassing SPI.
 	 *
 	 * For non-partitioned, non-temporal FKs, we can skip the SPI machinery
@@ -541,6 +558,10 @@ RI_FKey_check(TriggerData *trigdata)
 		 *  HAVING $n <@ range_agg(x1.r)
 		 * Note if FOR KEY SHARE ever allows GROUP BY and HAVING
 		 * we can make this a bit simpler.
+		 *
+		 * For read-optimized FKs we can skip the FOR KEY SHARE
+		 * row locks, because the keyspace that's referenced is
+		 * locked by the RowExclusive lock on the backing index 
 		 * ----------
 		 */
 		initStringInfo(&querybuf);
@@ -577,7 +598,8 @@ RI_FKey_check(TriggerData *trigdata)
 			querysep = "AND";
 			queryoids[i] = fk_type;
 		}
-		appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
+		if (!riinfo->conflockkeyindex)
+			appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
 		if (riinfo->hasperiod)
 		{
 			Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[riinfo->nkeys - 1]);
@@ -712,6 +734,10 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 		 *  HAVING $n <@ range_agg(x1.r)
 		 * Note if FOR KEY SHARE ever allows GROUP BY and HAVING
 		 * we can make this a bit simpler.
+		 *
+		 * For read-optimized FKs we can skip the FOR KEY SHARE
+		 * row locks, because the keyspace that's referenced is
+		 * locked by the RowExclusive lock on the backing index 
 		 * ----------
 		 */
 		initStringInfo(&querybuf);
@@ -746,7 +772,10 @@ ri_Check_Pk_Match(Relation pk_rel, Relation fk_rel,
 			querysep = "AND";
 			queryoids[i] = pk_type;
 		}
-		appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
+
+		if (!riinfo->conflockkeyindex)
+			appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
+
 		if (riinfo->hasperiod)
 		{
 			Oid			fk_type = RIAttType(fk_rel, riinfo->fk_attnums[riinfo->nkeys - 1]);
@@ -886,6 +915,18 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 	oldslot = trigdata->tg_trigslot;
 
 	/*
+	 * Lock the backing index if the FK was so defined, to avoid concurrent
+	 * insertions of referenced key values without other backends having to
+	 * lock all referenced key values' rows.
+	 */
+	if (riinfo->conflockkeyindex)
+	{
+		Assert(OidIsValid(riinfo->conindid));
+
+		LockRelationOid(riinfo->conindid, RI_FKEY_INDEXLOCK_KEY_UPDATE);
+	}
+
+	/*
 	 * If another PK row now exists providing the old key values, we should
 	 * not do anything.  However, this check should only be made in the NO
 	 * ACTION case; in RESTRICT cases we don't wish to allow another row to be
@@ -975,6 +1016,10 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 		 * We need the coalesce in case the first subquery returns no rows.
 		 * We need the second subquery because FOR KEY SHARE doesn't support
 		 * aggregate queries.
+		 *
+		 * For read-optimized FKs we can skip the FOR KEY SHARE
+		 * row locks, because the keyspace that's referenced is
+		 * locked by the RowExclusive lock on the backing index 
 		 */
 		if (riinfo->hasperiod && is_no_action)
 		{
@@ -1024,7 +1069,9 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 				querysep = "AND";
 				queryoids[i] = pk_type;
 			}
-			appendStringInfoString(&replacementsbuf, " FOR KEY SHARE OF y) y2)");
+
+			if (!riinfo->conflockkeyindex)
+				appendStringInfoString(&replacementsbuf, " FOR KEY SHARE OF y) y2)");
 
 			ri_GenerateQual(&querybuf, "",
 							intersectbuf.data, fk_period_type,
@@ -1034,7 +1081,8 @@ ri_restrict(TriggerData *trigdata, bool is_no_action)
 			appendStringInfoString(&querybuf, ", false)");
 		}
 
-		appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
+		if (!riinfo->conflockkeyindex)
+			appendStringInfoString(&querybuf, " FOR KEY SHARE OF x");
 
 		/* Prepare and save the plan */
 		qplan = ri_PlanCheck(querybuf.data, riinfo->nkeys, queryoids,
@@ -1091,6 +1139,18 @@ RI_FKey_cascade_del(PG_FUNCTION_ARGS)
 	fk_rel = table_open(riinfo->fk_relid, RowExclusiveLock);
 	pk_rel = trigdata->tg_relation;
 	oldslot = trigdata->tg_trigslot;
+
+	/*
+	 * Lock the backing index if the FK was so defined, to avoid concurrent
+	 * insertions of referenced key values without other backends having to
+	 * lock all referenced key values' rows.
+	 */
+	if (riinfo->conflockkeyindex)
+	{
+		Assert(OidIsValid(riinfo->conindid));
+
+		LockRelationOid(riinfo->conindid, RI_FKEY_INDEXLOCK_KEY_UPDATE);
+	}
 
 	SPI_connect();
 
@@ -1196,6 +1256,18 @@ RI_FKey_cascade_upd(PG_FUNCTION_ARGS)
 	pk_rel = trigdata->tg_relation;
 	newslot = trigdata->tg_newslot;
 	oldslot = trigdata->tg_trigslot;
+
+	/*
+	 * Lock the backing index if the FK was so defined, to avoid concurrent
+	 * insertions of referenced key values without other backends having to
+	 * lock all referenced key values' rows.
+	 */
+	if (riinfo->conflockkeyindex)
+	{
+		Assert(OidIsValid(riinfo->conindid));
+
+		LockRelationOid(riinfo->conindid, RI_FKEY_INDEXLOCK_KEY_UPDATE);
+	}
 
 	SPI_connect();
 
@@ -1368,6 +1440,18 @@ ri_set(TriggerData *trigdata, bool is_set_null, int tgkind)
 	fk_rel = table_open(riinfo->fk_relid, RowExclusiveLock);
 	pk_rel = trigdata->tg_relation;
 	oldslot = trigdata->tg_trigslot;
+
+	/*
+	 * Lock the backing index if the FK was so defined, to avoid concurrent
+	 * insertions of referenced key values without other backends having to
+	 * lock all referenced key values' rows.
+	 */
+	if (riinfo->conflockkeyindex)
+	{
+		Assert(OidIsValid(riinfo->conindid));
+
+		LockRelationOid(riinfo->conindid, RI_FKEY_INDEXLOCK_KEY_UPDATE);
+	}
 
 	SPI_connect();
 
@@ -2472,6 +2556,7 @@ ri_LoadConstraintInfo(Oid constraintOid)
 	riinfo->confupdtype = conForm->confupdtype;
 	riinfo->confdeltype = conForm->confdeltype;
 	riinfo->confmatchtype = conForm->confmatchtype;
+	riinfo->conflockkeyindex = conForm->conflockkeyindex;
 	riinfo->hasperiod = conForm->conperiod;
 
 	DeconstructFkConstraintRow(tup,
@@ -3181,27 +3266,44 @@ ri_FastPathFlushArray(RI_FastPathEntry *fpentry, TupleTableSlot *fk_slot,
 		bool		concurrently_updated;
 		ScanKeyData recheck_skey[1];
 
-		if (!ri_LockPKTuple(pk_rel, pk_slot, snapshot, &concurrently_updated))
-			continue;
-
-		/* Extract the PK value from the matched and locked tuple */
-		found_val = slot_getattr(pk_slot, riinfo->pk_attnums[0], &found_null);
-		Assert(!found_null);
-
-		if (concurrently_updated)
+		/*
+		 * If the FK is configured to lock the index (with conflockkeyindex),
+		 * then we don't need to lock tuples nor check for concurrent
+		 * updates, as those would've had to lock the index to be effective.
+		 * We do need to take a predicate lock on the heap page, though, 
+		 */
+		if (riinfo->conflockkeyindex)
 		{
-			/*
-			 * Build a single-key scankey for recheck.  We need the actual PK
-			 * value that was found, not the FK search value.
-			 */
-			ScanKeyEntryInitialize(&recheck_skey[0], 0, 1,
-								   fpmeta->strats[0],
-								   fpmeta->subtypes[0],
-								   idx_rel->rd_indcollation[0],
-								   fpmeta->regops[0],
-								   found_val);
-			if (!recheck_matched_pk_tuple(idx_rel, recheck_skey, 1, pk_slot))
+			/* nothing to do */
+		}
+		else
+		{
+			if (!ri_LockPKTuple(pk_rel, pk_slot, snapshot,
+								&concurrently_updated))
 				continue;
+
+			/* Extract the PK value from the matched and locked tuple */
+			found_val = slot_getattr(pk_slot, riinfo->pk_attnums[0],
+									 &found_null);
+			Assert(!found_null);
+
+			if (concurrently_updated)
+			{
+				/*
+				 * Build a single-key scankey for recheck.  We need the actual PK
+				 * value that was found, not the FK search value.
+				 */
+				ScanKeyEntryInitialize(&recheck_skey[0], 0, 1,
+									   fpmeta->strats[0],
+									   fpmeta->subtypes[0],
+									   idx_rel->rd_indcollation[0],
+									   fpmeta->regops[0],
+									   found_val);
+
+				if (!recheck_matched_pk_tuple(idx_rel, recheck_skey, 1,
+											  pk_slot))
+					continue;
+			}
 		}
 
 		/*
@@ -3251,8 +3353,16 @@ ri_FastPathProbeOne(Relation pk_rel, Relation idx_rel,
 	{
 		bool		concurrently_updated;
 
-		if (ri_LockPKTuple(pk_rel, slot, snapshot,
-						   &concurrently_updated))
+		if (riinfo->conflockkeyindex)
+		{
+			/*
+			 * index_getscan_next only produces visible tuples; and our
+			 * read-lock on the index precludes any concurrent key removals.
+			 */
+			found = true;
+		}
+		else if (ri_LockPKTuple(pk_rel, slot, snapshot,
+								&concurrently_updated))
 		{
 			if (concurrently_updated)
 				found = recheck_matched_pk_tuple(idx_rel, skey, nkeys, slot);

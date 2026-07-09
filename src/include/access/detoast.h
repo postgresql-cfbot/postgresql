@@ -44,6 +44,15 @@ do { \
 extern varlena *detoast_external_attr(varlena *attr);
 
 /* ----------
+ * detoast_external_attr_extended() -
+ *
+ *		Like detoast_external_attr, but returns NULL if toast chunks
+ *		are missing (instead of raising an error).
+ * ----------
+ */
+extern varlena *detoast_external_attr_extended(varlena *attr);
+
+/* ----------
  * detoast_attr() -
  *
  *		Fully detoasts one attribute, fetching and/or decompressing

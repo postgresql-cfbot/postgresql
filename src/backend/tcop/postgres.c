@@ -1085,10 +1085,7 @@ exec_simple_query(const char *query_string)
 	/* Log immediately if dictated by log_statement */
 	if (check_log_statement(parsetree_list))
 	{
-		char	   *truncated_stmt = NULL;
-
-		if (log_statement_max_length >= 0)
-			truncated_stmt = truncate_query_log(query_string);
+		char	   *truncated_stmt = truncate_query_log(query_string);
 
 		ereport(LOG,
 				(errmsg("statement: %s",
@@ -1392,10 +1389,7 @@ exec_simple_query(const char *query_string)
 			break;
 		case 2:
 			{
-				char	   *truncated_stmt = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_stmt = truncate_query_log(query_string);
+				char	   *truncated_stmt = truncate_query_log(query_string);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  statement: %s",
@@ -1638,10 +1632,7 @@ exec_parse_message(const char *query_string,	/* string to execute */
 			break;
 		case 2:
 			{
-				char	   *truncated_stmt = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_stmt = truncate_query_log(query_string);
+				char	   *truncated_stmt = truncate_query_log(query_string);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  parse %s: %s",
@@ -2125,10 +2116,7 @@ exec_bind_message(StringInfo input_message)
 			break;
 		case 2:
 			{
-				char	   *truncated_stmt = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_stmt = truncate_query_log(psrc->query_string);
+				char	   *truncated_stmt = truncate_query_log(psrc->query_string);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  bind %s%s%s: %s",
@@ -2282,10 +2270,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 	/* Log immediately if dictated by log_statement */
 	if (check_log_statement(portal->stmts))
 	{
-		char	   *truncated_source = NULL;
-
-		if (log_statement_max_length >= 0)
-			truncated_source = truncate_query_log(sourceText);
+		char	   *truncated_source = truncate_query_log(sourceText);
 
 		ereport(LOG,
 				(errmsg("%s %s%s%s: %s",
@@ -2414,10 +2399,7 @@ exec_execute_message(const char *portal_name, long max_rows)
 			break;
 		case 2:
 			{
-				char	   *truncated_source = NULL;
-
-				if (log_statement_max_length >= 0)
-					truncated_source = truncate_query_log(sourceText);
+				char	   *truncated_source = truncate_query_log(sourceText);
 
 				ereport(LOG,
 						(errmsg("duration: %s ms  %s %s%s%s: %s",
@@ -2553,8 +2535,9 @@ check_log_duration(char *msec_str, bool was_logged)
  * truncate_query_log
  *		Truncate query string if needed for logging
  *
- * Returns a palloc'd truncated copy if truncation is needed,
- * or NULL if no truncation is required.
+ * Returns a palloc'd copy of the query truncated for logging, with an
+ * ellipsis appended if truncation occurs, or NULL if no truncation is
+ * required.
  */
 static char *
 truncate_query_log(const char *query)
@@ -2567,7 +2550,7 @@ truncate_query_log(const char *query)
 	if (!query || log_statement_max_length < 0)
 		return NULL;
 
-	query_len = strlen(query);
+	query_len = strnlen(query, (size_t) log_statement_max_length + MAX_MULTIBYTE_CHAR_LEN);
 
 	/*
 	 * No need to allocate a truncated copy if the query is shorter than
@@ -2578,9 +2561,10 @@ truncate_query_log(const char *query)
 
 	/* Truncate at a multibyte character boundary */
 	truncated_len = pg_mbcliplen(query, query_len, log_statement_max_length);
-	truncated_query = (char *) palloc(truncated_len + 1);
+	truncated_query = (char *) palloc(truncated_len + 4);
 	memcpy(truncated_query, query, truncated_len);
-	truncated_query[truncated_len] = '\0';
+	memcpy(truncated_query + truncated_len, "...", 3);
+	truncated_query[truncated_len + 3] = '\0';
 
 	return truncated_query;
 }
@@ -2608,7 +2592,13 @@ errdetail_execute(List *raw_parsetree_list)
 			pstmt = FetchPreparedStatement(stmt->name, false);
 			if (pstmt)
 			{
-				errdetail("prepare: %s", pstmt->plansource->query_string);
+				char *truncated_stmt = truncate_query_log(pstmt->plansource->query_string);
+
+				errdetail("prepare: %s", truncated_stmt ? truncated_stmt : pstmt->plansource->query_string);
+
+				if (truncated_stmt != NULL)
+					pfree(truncated_stmt);
+
 				return 0;
 			}
 		}

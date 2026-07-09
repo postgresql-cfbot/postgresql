@@ -65,6 +65,7 @@ typedef enum InstrumentOption
 	INSTRUMENT_ROWS = 1 << 2,	/* needs row count */
 	INSTRUMENT_WAL = 1 << 3,	/* needs WAL usage */
 	INSTRUMENT_IO = 1 << 4,		/* needs IO usage */
+	INSTRUMENT_WAITS = 1 << 5,	/* needs wait event usage */
 	INSTRUMENT_ALL = PG_INT32_MAX
 } InstrumentOption;
 

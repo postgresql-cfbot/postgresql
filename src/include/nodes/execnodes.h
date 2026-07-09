@@ -69,6 +69,7 @@ typedef struct Tuplestorestate Tuplestorestate;
 typedef struct TupleTableSlot TupleTableSlot;
 typedef struct TupleTableSlotOps TupleTableSlotOps;
 typedef struct WalUsage WalUsage;
+typedef struct WaitEventUsage WaitEventUsage;
 typedef struct WorkerNodeInstrumentation WorkerNodeInstrumentation;
 
 
@@ -755,6 +756,7 @@ typedef struct EState
 
 	int			es_top_eflags;	/* eflags passed to ExecutorStart */
 	int			es_instrument;	/* OR of InstrumentOption flags */
+	WaitEventUsage *es_wait_event_usage;	/* EXPLAIN WAITS accumulator */
 	bool		es_finished;	/* true when ExecutorFinish is done */
 
 	List	   *es_exprcontexts;	/* List of ExprContexts within EState */
@@ -1211,6 +1213,7 @@ typedef struct PlanState
 
 	NodeInstrumentation *instrument;	/* Optional runtime stats for this
 										 * node */
+	WaitEventUsage *wait_event_usage; /* Optional wait event usage */
 	WorkerNodeInstrumentation *worker_instrument;	/* per-worker
 													 * instrumentation */
 

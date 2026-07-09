@@ -19,6 +19,7 @@
 #include "executor/instrument.h"
 #include "executor/nodeAppend.h"
 #include "executor/nodeForeignscan.h"
+#include "utils/wait_event.h"
 
 /*
  * Asynchronously request a tuple from a designed async-capable node.
@@ -26,12 +27,17 @@
 void
 ExecAsyncRequest(AsyncRequest *areq)
 {
+	WaitEventUsage *previous_wait_event_usage = NULL;
+
 	if (areq->requestee->chgParam != NULL)	/* something changed? */
 		ExecReScan(areq->requestee);	/* let ReScan handle this */
 
 	/* must provide our own instrumentation support */
 	if (areq->requestee->instrument)
 		InstrStartNode(areq->requestee->instrument);
+	if (areq->requestee->wait_event_usage)
+		previous_wait_event_usage =
+			pgstat_enter_wait_event_usage(areq->requestee->wait_event_usage);
 
 	switch (nodeTag(areq->requestee))
 	{
@@ -47,6 +53,8 @@ ExecAsyncRequest(AsyncRequest *areq)
 	ExecAsyncResponse(areq);
 
 	/* must provide our own instrumentation support */
+	if (areq->requestee->wait_event_usage)
+		pgstat_restore_wait_event_usage(previous_wait_event_usage);
 	if (areq->requestee->instrument)
 		InstrStopNode(areq->requestee->instrument,
 					  TupIsNull(areq->result) ? 0.0 : 1.0);
@@ -62,9 +70,14 @@ ExecAsyncRequest(AsyncRequest *areq)
 void
 ExecAsyncConfigureWait(AsyncRequest *areq)
 {
+	WaitEventUsage *previous_wait_event_usage = NULL;
+
 	/* must provide our own instrumentation support */
 	if (areq->requestee->instrument)
 		InstrStartNode(areq->requestee->instrument);
+	if (areq->requestee->wait_event_usage)
+		previous_wait_event_usage =
+			pgstat_enter_wait_event_usage(areq->requestee->wait_event_usage);
 
 	switch (nodeTag(areq->requestee))
 	{
@@ -78,6 +91,8 @@ ExecAsyncConfigureWait(AsyncRequest *areq)
 	}
 
 	/* must provide our own instrumentation support */
+	if (areq->requestee->wait_event_usage)
+		pgstat_restore_wait_event_usage(previous_wait_event_usage);
 	if (areq->requestee->instrument)
 		InstrStopNode(areq->requestee->instrument, 0.0);
 }
@@ -88,9 +103,14 @@ ExecAsyncConfigureWait(AsyncRequest *areq)
 void
 ExecAsyncNotify(AsyncRequest *areq)
 {
+	WaitEventUsage *previous_wait_event_usage = NULL;
+
 	/* must provide our own instrumentation support */
 	if (areq->requestee->instrument)
 		InstrStartNode(areq->requestee->instrument);
+	if (areq->requestee->wait_event_usage)
+		previous_wait_event_usage =
+			pgstat_enter_wait_event_usage(areq->requestee->wait_event_usage);
 
 	switch (nodeTag(areq->requestee))
 	{
@@ -106,6 +126,8 @@ ExecAsyncNotify(AsyncRequest *areq)
 	ExecAsyncResponse(areq);
 
 	/* must provide our own instrumentation support */
+	if (areq->requestee->wait_event_usage)
+		pgstat_restore_wait_event_usage(previous_wait_event_usage);
 	if (areq->requestee->instrument)
 		InstrStopNode(areq->requestee->instrument,
 					  TupIsNull(areq->result) ? 0.0 : 1.0);

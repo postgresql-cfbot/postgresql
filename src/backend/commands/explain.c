@@ -45,6 +45,7 @@
 #include "utils/tuplesort.h"
 #include "utils/tuplestore.h"
 #include "utils/typcache.h"
+#include "utils/wait_event.h"
 #include "utils/xml.h"
 
 
@@ -149,6 +150,9 @@ static const char *explain_get_index_name(Oid indexId);
 static bool peek_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_buffer_usage(ExplainState *es, const BufferUsage *usage);
 static void show_wal_usage(ExplainState *es, const WalUsage *usage);
+static int	wait_event_usage_cmp(const void *a, const void *b);
+static void show_wait_event_usage(ExplainState *es, const char *labelname,
+								  const WaitEventUsage *usage);
 static void show_memory_counters(ExplainState *es,
 								 const MemoryContextCounters *mem_counters);
 static void show_result_replacement_info(Result *result, ExplainState *es);
@@ -215,7 +219,7 @@ ExplainQuery(ParseState *pstate, ExplainStmt *stmt,
 		 * In the case of an INSTEAD NOTHING, tell at least that.  But in
 		 * non-text format, the output is delimited, so this isn't necessary.
 		 */
-		if (es->format == EXPLAIN_FORMAT_TEXT)
+	if (es->format == EXPLAIN_FORMAT_TEXT)
 			appendStringInfoString(es->str, "Query rewrites to nothing\n");
 	}
 	else
@@ -510,6 +514,7 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 	int			eflags;
 	int			instrument_option = 0;
 	SerializeMetrics serializeMetrics = {0};
+	WaitEventUsage *waitEventUsagePtr = NULL;
 
 	Assert(plannedstmt->commandType != CMD_UTILITY);
 
@@ -524,6 +529,8 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		instrument_option |= INSTRUMENT_WAL;
 	if (es->io)
 		instrument_option |= INSTRUMENT_IO;
+	if (es->waits)
+		instrument_option |= INSTRUMENT_WAITS;
 
 	/*
 	 * We always collect timing for the entire statement, even when node-level
@@ -583,11 +590,30 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 		else
 			dir = ForwardScanDirection;
 
-		/* run the plan */
-		ExecutorRun(queryDesc, dir, 0);
+		if (es->waits)
+		{
+			waitEventUsagePtr =
+				pgstat_begin_wait_event_usage(queryDesc->estate->es_query_cxt);
+			queryDesc->estate->es_wait_event_usage = waitEventUsagePtr;
+		}
 
-		/* run cleanup too */
-		ExecutorFinish(queryDesc);
+		/* run the plan */
+		PG_TRY();
+		{
+			ExecutorRun(queryDesc, dir, 0);
+
+			/* run cleanup too */
+			ExecutorFinish(queryDesc);
+		}
+		PG_FINALLY();
+		{
+			if (waitEventUsagePtr)
+			{
+				pgstat_end_wait_event_usage(waitEventUsagePtr);
+				queryDesc->estate->es_wait_event_usage = NULL;
+			}
+		}
+		PG_END_TRY();
 
 		/* We can't run ExecutorEnd 'till we're done printing the stats... */
 		totaltime += elapsed_time(&starttime);
@@ -604,6 +630,9 @@ ExplainOnePlan(PlannedStmt *plannedstmt, IntoClause *into, ExplainState *es,
 
 	/* Create textual dump of plan tree */
 	ExplainPrintPlan(es, queryDesc);
+
+	if (waitEventUsagePtr)
+		show_wait_event_usage(es, "Statement Wait Events", waitEventUsagePtr);
 
 	/* Show buffer and/or memory usage in planning */
 	if (peek_buffer_usage(es, bufusage) || mem_counters)
@@ -2303,6 +2332,8 @@ ExplainNode(PlanState *planstate, List *ancestors,
 		show_buffer_usage(es, &planstate->instrument->instr.bufusage);
 	if (es->wal && planstate->instrument)
 		show_wal_usage(es, &planstate->instrument->instr.walusage);
+	if (es->waits)
+		show_wait_event_usage(es, "Wait Events", planstate->wait_event_usage);
 
 	/* Prepare per-worker buffer/WAL usage */
 	if (es->workers_state && (es->buffers || es->wal) && es->verbose)
@@ -4501,6 +4532,139 @@ show_wal_usage(ExplainState *es, const WalUsage *usage)
 		ExplainPropertyInteger("WAL Buffers Full", NULL,
 							   usage->wal_buffers_full, es);
 	}
+}
+
+static int
+wait_event_usage_cmp(const void *a, const void *b)
+{
+	const WaitEventUsageEntry *ea = (const WaitEventUsageEntry *) a;
+	const WaitEventUsageEntry *eb = (const WaitEventUsageEntry *) b;
+	int64		ta = INSTR_TIME_GET_MICROSEC(ea->time);
+	int64		tb = INSTR_TIME_GET_MICROSEC(eb->time);
+
+	if (ta < tb)
+		return 1;
+	if (ta > tb)
+		return -1;
+	if (ea->wait_event_info < eb->wait_event_info)
+		return -1;
+	if (ea->wait_event_info > eb->wait_event_info)
+		return 1;
+	return 0;
+}
+
+static void
+show_wait_event_usage(ExplainState *es, const char *labelname,
+					  const WaitEventUsage *usage)
+{
+	const WaitEventUsageEntry *usage_entries;
+	WaitEventUsageEntry *entries;
+	uint64		overflowed_calls;
+	instr_time	overflowed_time;
+	int			nentries;
+
+	if (usage == NULL)
+		return;
+
+	if (pgstat_wait_event_usage_is_empty(usage))
+		return;
+
+	nentries = pgstat_get_wait_event_usage_entries(usage, &usage_entries);
+	pgstat_get_wait_event_usage_overflow(usage,
+										 &overflowed_calls,
+										 &overflowed_time);
+
+	if (nentries > 0)
+	{
+		entries = palloc_array(WaitEventUsageEntry, nentries);
+		memcpy(entries, usage_entries,
+			   sizeof(WaitEventUsageEntry) * nentries);
+		qsort(entries, nentries, sizeof(WaitEventUsageEntry),
+			  wait_event_usage_cmp);
+	}
+	else
+		entries = NULL;
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		ExplainIndentText(es);
+		appendStringInfo(es->str, "%s:\n", labelname);
+		es->indent++;
+
+		for (int i = 0; i < nentries; i++)
+		{
+			const char *event_type;
+			const char *event_name;
+
+			event_type = pgstat_get_wait_event_type(entries[i].wait_event_info);
+			event_name = pgstat_get_wait_event(entries[i].wait_event_info);
+
+			ExplainIndentText(es);
+			appendStringInfo(es->str, "%s:%s calls=%" PRIu64 " time=%0.3f ms\n",
+							 event_type ? event_type : "Unknown",
+							 event_name ? event_name : "unknown",
+							 entries[i].calls,
+							 INSTR_TIME_GET_MILLISEC(entries[i].time));
+		}
+
+		if (overflowed_calls > 0)
+		{
+			ExplainIndentText(es);
+			appendStringInfo(es->str,
+							 "Unrecorded Wait Event Calls: calls=%" PRIu64 " time=%0.3f ms\n",
+							 overflowed_calls,
+							 INSTR_TIME_GET_MILLISEC(overflowed_time));
+		}
+
+		es->indent--;
+	}
+	else
+	{
+		if (nentries > 0)
+		{
+			ExplainOpenGroup("Wait-Events", labelname, false, es);
+
+			for (int i = 0; i < nentries; i++)
+			{
+				const char *event_type;
+				const char *event_name;
+
+				event_type = pgstat_get_wait_event_type(entries[i].wait_event_info);
+				event_name = pgstat_get_wait_event(entries[i].wait_event_info);
+
+				ExplainOpenGroup("Wait-Event", NULL, true, es);
+				ExplainPropertyText("Wait Event Type",
+									event_type ? event_type : "Unknown",
+									es);
+				ExplainPropertyText("Wait Event",
+									event_name ? event_name : "unknown",
+									es);
+				ExplainPropertyUInteger("Calls", NULL, entries[i].calls, es);
+				ExplainPropertyFloat("Time", "ms",
+									 INSTR_TIME_GET_MILLISEC(entries[i].time),
+									 3, es);
+				ExplainCloseGroup("Wait-Event", NULL, true, es);
+			}
+
+			ExplainCloseGroup("Wait-Events", labelname, false, es);
+		}
+
+		if (overflowed_calls > 0)
+		{
+			/*
+			 * This is not a wait event identity, so keep it outside the
+			 * Wait Events array in structured output.
+			 */
+			ExplainPropertyUInteger("Unrecorded Wait Event Calls", NULL,
+									overflowed_calls, es);
+			ExplainPropertyFloat("Unrecorded Wait Event Time", "ms",
+								 INSTR_TIME_GET_MILLISEC(overflowed_time),
+								 3, es);
+		}
+	}
+
+	if (entries)
+		pfree(entries);
 }
 
 /*

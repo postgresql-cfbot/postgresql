@@ -591,7 +591,8 @@ RangeVarGetRelidExtended(const RangeVar *relation, LOCKMODE lockmode,
 			AcceptInvalidationMessages();
 		else if (!(flags & (RVR_NOWAIT | RVR_SKIP_LOCKED)))
 			LockRelationOid(relId, lockmode);
-		else if (!ConditionalLockRelationOid(relId, lockmode))
+		else if (!ConditionalLockRelationOid(relId, lockmode,
+											 (flags & RVR_NOWAIT) && log_lock_failures))
 		{
 			int			elevel = (flags & RVR_SKIP_LOCKED) ? DEBUG1 : ERROR;
 

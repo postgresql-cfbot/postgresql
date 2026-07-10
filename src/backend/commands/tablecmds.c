@@ -17812,7 +17812,7 @@ AlterTableMoveAll(AlterTableMoveAllStmt *stmt)
 						   NameStr(relForm->relname));
 
 		if (stmt->nowait &&
-			!ConditionalLockRelationOid(relOid, AccessExclusiveLock))
+			!ConditionalLockRelationOid(relOid, AccessExclusiveLock, false))
 			ereport(ERROR,
 					(errcode(ERRCODE_OBJECT_IN_USE),
 					 errmsg("aborting because lock on relation \"%s.%s\" is not available",

@@ -461,15 +461,49 @@ ExecInsertIndexTuples(ResultRelInfo *resultRelInfo,
 		indexUnchanged = (flags & EIIT_IS_UPDATE) ?
 			indexInfo->ii_IndexUnchanged : false;
 
-		satisfiesConstraint =
-			index_insert(indexRelation, /* index relation */
-						 values,	/* array of index Datums */
-						 isnull,	/* null flags */
-						 tupleid,	/* tid of heap tuple */
-						 heapRelation,	/* heap relation */
-						 checkUnique,	/* type of uniqueness check to do */
-						 indexUnchanged,	/* UPDATE without logical change? */
-						 indexInfo);	/* index AM may need this */
+		/*
+		 * A fresh entry planted here under a HOT-indexed update points at the
+		 * new heap-only tuple itself (tupleid), not at the chain's root the
+		 * way every other index entry does -- that positional distinction is
+		 * what lets the read side judge staleness from the crossed-attribute
+		 * bitmap without a value recheck (see hot_indexed.h).  A bitmap scan
+		 * combines two indexes' TID sets at raw block+offset granularity
+		 * before either side touches the heap, so an unrelated, unchanged
+		 * index's root-pointing entry for this same row will not agree with
+		 * this entry's offset, and BitmapAnd/BitmapOr can silently drop a
+		 * matching row.  Flag the copy of tupleid handed to this index's
+		 * insert (never the slot's own tts_tid, which other indexes in this
+		 * same loop -- and the caller -- still need unflagged) so every
+		 * amgetbitmap implementation can recognize the hazard from the TID
+		 * alone and fall back to a page-level bitmap contribution instead of
+		 * an exact one; see ItemPointerSIUMaybeStaleFlag in itemptr.h.
+		 */
+		if ((flags & EIIT_IS_HOT_INDEXED) && !indexInfo->ii_Summarizing)
+		{
+			ItemPointerData siu_tid = *tupleid;
+
+			ItemPointerSetSIUMaybeStale(&siu_tid);
+
+			satisfiesConstraint =
+				index_insert(indexRelation, /* index relation */
+							 values,	/* array of index Datums */
+							 isnull,	/* null flags */
+							 &siu_tid,	/* tid of heap tuple, SIU-flagged */
+							 heapRelation,	/* heap relation */
+							 checkUnique,	/* type of uniqueness check to do */
+							 indexUnchanged,	/* UPDATE without logical change? */
+							 indexInfo);	/* index AM may need this */
+		}
+		else
+			satisfiesConstraint =
+				index_insert(indexRelation, /* index relation */
+							 values,	/* array of index Datums */
+							 isnull,	/* null flags */
+							 tupleid,	/* tid of heap tuple */
+							 heapRelation,	/* heap relation */
+							 checkUnique,	/* type of uniqueness check to do */
+							 indexUnchanged,	/* UPDATE without logical change? */
+							 indexInfo);	/* index AM may need this */
 
 		/*
 		 * If the index has an associated exclusion constraint, check that.

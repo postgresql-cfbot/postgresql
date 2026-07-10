@@ -1489,6 +1489,33 @@ bt_target_page_check(BtreeCheckState *state)
 		if (state->heapallindexed && P_ISLEAF(topaque) && !ItemIdIsDead(itemid))
 		{
 			IndexTuple	norm;
+			ItemPointerData saved_tid;
+			bool		siu_stripped = false;
+
+			/*
+			 * A HOT-indexed (SIU) fresh entry stores its heap TID with the
+			 * ItemPointerSIUMaybeStaleFlag marker bit set in the offset field
+			 * (see storage/itemptr.h).  The marker is a bitmap-scan hint, not
+			 * part of the tuple's heap address, and the heapallindexed callback
+			 * (bt_tuple_present_callback) fingerprints the plain heap TID it
+			 * gets from the heap scan.  Strip the marker from this leaf tuple's
+			 * TID for the duration of fingerprinting so the two normalized
+			 * images match; restore it immediately afterward, since later
+			 * checks in this loop still read itup from the (immutable) page
+			 * image.  Posting-list tuples can carry the marker too -- nbtree
+			 * deduplication copies a flagged heap TID verbatim into a posting
+			 * list's heap-TID array -- so those are stripped per element below,
+			 * on the palloc'd plain tuple bt_posting_plain_tuple() produces.
+			 */
+			if (!BTreeTupleIsPosting(itup) &&
+				ItemPointerIsSIUMaybeStale(&itup->t_tid))
+			{
+				saved_tid = itup->t_tid;
+				/* Strip on the raw offset (no validity assert); restore below. */
+				itup->t_tid.ip_posid =
+					ItemPointerOffsetNumberStrip(itup->t_tid.ip_posid);
+				siu_stripped = true;
+			}
 
 			if (BTreeTupleIsPosting(itup))
 			{
@@ -1498,6 +1525,16 @@ bt_target_page_check(BtreeCheckState *state)
 					IndexTuple	logtuple;
 
 					logtuple = bt_posting_plain_tuple(itup, i);
+					/*
+					 * A posting element's heap TID may carry the SIU
+					 * may-be-stale marker (see above); strip it on this
+					 * palloc'd copy so its fingerprint matches the plain heap
+					 * TID from the heap scan.  logtuple is a fresh tuple, so
+					 * no restore is needed.
+					 */
+					if (ItemPointerIsSIUMaybeStale(&logtuple->t_tid))
+						logtuple->t_tid.ip_posid =
+							ItemPointerOffsetNumberStrip(logtuple->t_tid.ip_posid);
 					norm = bt_normalize_tuple(state, logtuple);
 					bloom_add_element(state->filter, (unsigned char *) norm,
 									  IndexTupleSize(norm));
@@ -1516,6 +1553,10 @@ bt_target_page_check(BtreeCheckState *state)
 				if (norm != itup)
 					pfree(norm);
 			}
+
+			/* Restore the SIU marker bit stripped for fingerprinting, if any. */
+			if (siu_stripped)
+				itup->t_tid = saved_tid;
 		}
 
 		/*

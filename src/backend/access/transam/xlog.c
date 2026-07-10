@@ -8049,7 +8049,6 @@ static void
 CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 {
 	CheckPointRelationMap();
-	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
 	CheckPointSnapBuild();
 	CheckPointLogicalRewriteHeap();
 	CheckPointReplicationOrigin();
@@ -8071,7 +8070,11 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckpointStats.ckpt_sync_end_t = GetCurrentTimestamp();
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_DONE();
 
-	/* We deliberately delay 2PC checkpointing as long as possible */
+	/*
+	 * We deliberately delay checkpointing of replication slots and 2PC for
+	 * as long as possible.
+	 */
+	CheckPointReplicationSlots(flags & CHECKPOINT_IS_SHUTDOWN);
 	CheckPointTwoPhase(checkPointRedo);
 }
 

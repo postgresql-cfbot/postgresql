@@ -487,6 +487,20 @@ typedef struct PgStat_StatTabEntry
 	TimestampTz stat_reset_time;
 } PgStat_StatTabEntry;
 
+typedef struct PgStat_StatIdxEntry
+{
+	PgStat_Counter numscans;
+	TimestampTz lastscan;
+
+	PgStat_Counter tuples_returned;
+	PgStat_Counter tuples_fetched;
+
+	PgStat_Counter blocks_fetched;
+	PgStat_Counter blocks_hit;
+
+	TimestampTz stat_reset_time;
+} PgStat_StatIdxEntry;
+
 /* ------
  * PgStat_WalCounters	WAL activity data gathered from WalUsage
  *
@@ -779,6 +793,12 @@ extern PgStat_StatTabEntry *pgstat_fetch_stat_tabentry_ext(bool shared,
 														   Oid reloid,
 														   bool *may_free);
 extern PgStat_TableStatus *find_tabstat_entry(Oid rel_id);
+extern PgStat_TableStatus *find_tabstat_entry_kind(PgStat_Kind kind, Oid rel_id);
+
+extern PgStat_StatIdxEntry *pgstat_fetch_stat_idxentry(Oid relid);
+extern PgStat_StatIdxEntry *pgstat_fetch_stat_idxentry_ext(bool shared,
+														   Oid reloid,
+														   bool *may_free);
 
 
 /*

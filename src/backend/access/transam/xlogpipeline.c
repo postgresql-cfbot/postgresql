@@ -48,6 +48,7 @@
 #include "tcop/tcopprot.h"
 #include "utils/elog.h"
 #include "utils/memutils.h"
+#include "utils/pg_rusage.h"
 #include "utils/resowner.h"
 #include "utils/rel.h"
 #include "utils/timeout.h"
@@ -121,6 +122,108 @@ typedef struct XLogPageReadPrivate
 	TimeLineID	replayTLI;
 } XLogPageReadPrivate;
 
+
+/*
+ * Helpers to track and compute rusage
+ */
+
+static struct timeval
+timeval_subtract(struct timeval end, const struct timeval *start)
+{
+	if (end.tv_usec < start->tv_usec)
+	{
+		end.tv_sec--;
+		end.tv_usec += 1000000;
+	}
+
+	end.tv_sec -= start->tv_sec;
+	end.tv_usec -= start->tv_usec;
+
+	return end;
+}
+
+static void
+timeval_add(struct timeval *a, const struct timeval *b)
+{
+	a->tv_sec += b->tv_sec;
+	a->tv_usec += b->tv_usec;
+
+	if (a->tv_usec >= 1000000)
+	{
+		a->tv_sec++;
+		a->tv_usec -= 1000000;
+	}
+}
+
+/*
+ * Called by Producer.
+ *
+ * Compute final rusage delta by the producer proc and save across shmem so
+ * consumer can access it and use to compute final recovery resource usage.
+ * Note that we don't care about the wal clock time val at this point.
+ */
+static PGRUsageDelta
+pipeline_save_rusage(const PGRUsage *ru0)
+{
+	PGRUsage		ru1;
+	PGRUsageDelta	delta;
+
+	pg_rusage_init(&ru1);
+
+	delta.utime = timeval_subtract(ru1.ru.ru_utime, &ru0->ru.ru_utime);
+	delta.stime = timeval_subtract(ru1.ru.ru_stime, &ru0->ru.ru_stime);
+
+	SpinLockAcquire(&WalPipelineShm->mutex);
+	WalPipelineShm->producer_rusage = delta;
+	SpinLockRelease(&WalPipelineShm->mutex);
+
+	return delta;
+}
+
+/*
+ * Called by Consumer.
+ *
+ * Compute and return string having final resouce usage.
+ *
+ * ru0: initial snapshot of consumer/startup process
+*/
+const char *
+pipeline_final_rusage(const PGRUsage *ru0)
+{
+	static char 	result[100];
+	PGRUsage		ru1;
+	PGRUsageDelta	producer_delta;
+
+
+	Assert(!WalPipeline_CheckProducerAlive());
+
+	SpinLockAcquire(&WalPipelineShm->mutex);
+	producer_delta = WalPipelineShm->producer_rusage;
+	SpinLockRelease(&WalPipelineShm->mutex);
+
+	/* get final snapshot to compute delta against */
+	pg_rusage_init(&ru1);
+
+	/* compute consumer delta */
+	ru1.tv = timeval_subtract(ru1.tv, &ru0->tv);
+	ru1.ru.ru_utime = timeval_subtract(ru1.ru.ru_utime, &ru0->ru.ru_utime);
+	ru1.ru.ru_stime = timeval_subtract(ru1.ru.ru_stime, &ru0->ru.ru_stime);
+
+	/* add producer proc delta (user & sys) */
+	timeval_add(&ru1.ru.ru_utime, &producer_delta.utime);
+	timeval_add(&ru1.ru.ru_stime, &producer_delta.stime);
+
+	snprintf(result, sizeof(result),
+			_("CPU: user: %d.%02d s, system: %d.%02d s, elapsed: %d.%02d s"),
+			(int) ru1.ru.ru_utime.tv_sec,
+			(int) ru1.ru.ru_utime.tv_usec / 10000,
+			(int) ru1.ru.ru_stime.tv_sec,
+			(int) ru1.ru.ru_stime.tv_usec / 10000,
+			(int) ru1.tv.tv_sec,
+			(int) ru1.tv.tv_usec / 10000);
+
+	return result;
+}
 
 /*
  * Register shared memory for WAL Pipeline
@@ -343,6 +446,7 @@ WalPipeline_ProducerMain(Datum main_arg)
 	bool 				 end_of_wal = false;
 	uint64				 records_sent;
 	uint64				 records_received;
+	PGRUsage			 ru0;
 
 	/*
 	 * Properly accept or ignore signals the postmaster might send us.
@@ -419,6 +523,8 @@ WalPipeline_ProducerMain(Datum main_arg)
 	/* Handle the signal if we were promoted before the pipeline launch */
 	promote_signaled = params->promotedBeforeLaunch;
 
+	pg_rusage_init(&ru0);
+
 	/* Main decoding loop */
 	while (true)
 	{
@@ -469,6 +575,9 @@ WalPipeline_ProducerMain(Datum main_arg)
 		WalPipeline_SendShutdown();
 		WalPipeline_WaitForConsumerShutdownRequest();
 	}
+
+	/* compute and set rusage delta */
+	pipeline_save_rusage(&ru0);
 
 	SpinLockAcquire(&WalPipelineShm->mutex);
 	records_sent = WalPipelineShm->records_sent;

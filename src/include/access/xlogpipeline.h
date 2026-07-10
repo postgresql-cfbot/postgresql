@@ -20,17 +20,27 @@
 #ifndef WAL_PIPELINE_H
 #define WAL_PIPELINE_H
 
+#include <sys/time.h>			/* for struct timeval */
+
 #include "access/xlogreader.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
 #include "storage/dsm.h"
 #include "storage/shm_mq.h"
 #include "storage/spin.h"
+#include "utils/pg_rusage.h"
 
 /*
  * Magic number for shared memory TOC
  */
 #define PG_WAL_PIPELINE_MAGIC 0x57414C50  /* "WALP" */
+
+
+typedef struct PGRUsageDelta
+{
+	struct timeval utime;
+	struct timeval stime;
+} PGRUsageDelta;
 
 /*
  * Message types sent through the pipeline
@@ -130,6 +140,9 @@ typedef struct WalPipelineShmCtl
 	uint64          records_received;
 	uint64          bytes_sent;
 	uint64          bytes_received;
+
+	/* cpu usage delta by the producer */
+	PGRUsageDelta	producer_rusage;
 } WalPipelineShmCtl;
 
 /* consumer may have to compute prefetecher stats */
@@ -156,6 +169,7 @@ extern bool WalPipeline_CheckProducerAlive(void);
 extern bool WalPipeline_IsActive(void);
 extern pid_t WalPipeline_GetProducerPid(void);
 extern void WalPipeline_WaitForConsumerCatchup(void);
+extern const char *pipeline_final_rusage(const PGRUsage *ru0);
 extern void WalPipeline_GetStats(uint64 *records_sent, uint64 *records_received,
 								  XLogRecPtr *producer_lsn, XLogRecPtr *consumer_lsn);
 extern bool AmWalPipeline(void);

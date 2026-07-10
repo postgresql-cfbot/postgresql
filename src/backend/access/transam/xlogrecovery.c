@@ -2023,7 +2023,9 @@ PerformWalRecovery(void)
 		ereport(LOG,
 				errmsg("redo done at %X/%08X system usage: %s",
 					   LSN_FORMAT_ARGS(xlogreader->ReadRecPtr),
-					   pg_rusage_show(&ru0)));
+					   wal_pipeline_enabled ?
+					   pipeline_final_rusage(&ru0) : pg_rusage_show(&ru0)));
+
 		xtime = GetLatestXTime();
 		if (xtime)
 			ereport(LOG,

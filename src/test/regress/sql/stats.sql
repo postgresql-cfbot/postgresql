@@ -219,27 +219,27 @@ SELECT pg_stat_get_function_calls(:stats_test_func2_oid);
 -- by oid after the DROP TABLE. Save oids.
 CREATE TABLE drop_stats_test();
 INSERT INTO drop_stats_test DEFAULT VALUES;
-SELECT 'drop_stats_test'::regclass::oid AS drop_stats_test_oid \gset
+SELECT pg_relation_filenode('drop_stats_test'::regclass) AS drop_stats_test_oid \gset
 
 CREATE TABLE drop_stats_test_xact();
 INSERT INTO drop_stats_test_xact DEFAULT VALUES;
-SELECT 'drop_stats_test_xact'::regclass::oid AS drop_stats_test_xact_oid \gset
+SELECT pg_relation_filenode('drop_stats_test_xact'::regclass) AS drop_stats_test_xact_oid \gset
 
 CREATE TABLE drop_stats_test_subxact();
 INSERT INTO drop_stats_test_subxact DEFAULT VALUES;
-SELECT 'drop_stats_test_subxact'::regclass::oid AS drop_stats_test_subxact_oid \gset
+SELECT pg_relation_filenode('drop_stats_test_subxact'::regclass) AS drop_stats_test_subxact_oid \gset
 
 SELECT pg_stat_force_next_flush();
 
-SELECT pg_stat_get_live_tuples(:drop_stats_test_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_oid);
 DROP TABLE drop_stats_test;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_oid);
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_oid);
 
 -- check that rollback protects against having stats dropped and that local
 -- modifications don't pose a problem
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
 BEGIN;
 INSERT INTO drop_stats_test_xact DEFAULT VALUES;
@@ -248,12 +248,12 @@ DROP TABLE drop_stats_test_xact;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
 ROLLBACK;
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
 
 -- transactional drop
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
 BEGIN;
 INSERT INTO drop_stats_test_xact DEFAULT VALUES;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
@@ -261,11 +261,11 @@ DROP TABLE drop_stats_test_xact;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
 COMMIT;
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
 
 -- savepoint rollback (2 levels)
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
 BEGIN;
 INSERT INTO drop_stats_test_subxact DEFAULT VALUES;
 SAVEPOINT sp1;
@@ -277,27 +277,27 @@ ROLLBACK TO SAVEPOINT sp2;
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_subxact_oid);
 COMMIT;
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
 
 -- savepoint rolback (1 level)
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
 BEGIN;
 SAVEPOINT sp1;
 DROP TABLE drop_stats_test_subxact;
 SAVEPOINT sp2;
 ROLLBACK TO SAVEPOINT sp1;
 COMMIT;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
 
 -- and now actually drop
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
 BEGIN;
 SAVEPOINT sp1;
 DROP TABLE drop_stats_test_subxact;
 SAVEPOINT sp2;
 RELEASE SAVEPOINT sp1;
 COMMIT;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
 
 DROP TABLE trunc_stats_test, trunc_stats_test1, trunc_stats_test2, trunc_stats_test3, trunc_stats_test4;
 DROP TABLE prevstats;
@@ -898,7 +898,7 @@ DECLARE
 BEGIN
   -- we don't want to wait forever; loop will exit after 30 seconds
   FOR i IN 1 .. 300 LOOP
-    SELECT (pg_stat_get_tuples_hot_updated('brin_hot'::regclass::oid) > 0) INTO updated;
+    SELECT (pg_stat_get_rfn_tuples_hot_updated(pg_relation_filenode('brin_hot'::regclass::oid)) > 0) INTO updated;
     EXIT WHEN updated;
 
     -- wait a little
@@ -923,7 +923,7 @@ UPDATE brin_hot SET val = -3 WHERE id = 42;
 \c -
 
 SELECT wait_for_hot_stats();
-SELECT pg_stat_get_tuples_hot_updated('brin_hot'::regclass::oid);
+SELECT pg_stat_get_rfn_tuples_hot_updated(pg_relation_filenode('brin_hot'::regclass::oid));
 
 DROP TABLE brin_hot;
 DROP FUNCTION wait_for_hot_stats();

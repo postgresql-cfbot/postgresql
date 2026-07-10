@@ -333,6 +333,21 @@ static const PgStat_KindInfo pgstat_kind_builtin_infos[PGSTAT_KIND_BUILTIN_SIZE]
 		.reset_timestamp_cb = pgstat_index_reset_timestamp_cb,
 	},
 
+	[PGSTAT_KIND_RELFILENODE] = {
+		.name = "relfilenode",
+
+		.fixed_amount = false,
+		.write_to_file = true,
+
+		.shared_size = sizeof(PgStatShared_RelFileNode),
+		.shared_data_off = offsetof(PgStatShared_RelFileNode, stats),
+		.shared_data_len = sizeof(((PgStatShared_RelFileNode *) 0)->stats),
+		.pending_size = sizeof(PgStat_RelationStatus),
+
+		.flush_pending_cb = pgstat_relfilenode_flush_cb,
+		.reset_timestamp_cb = pgstat_relfilenode_reset_timestamp_cb,
+	},
+
 	[PGSTAT_KIND_FUNCTION] = {
 		.name = "function",
 

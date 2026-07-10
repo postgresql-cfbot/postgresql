@@ -37,6 +37,7 @@ typedef struct TwoPhasePgStatRecord
 	PgStat_Counter updated_pre_truncdrop;
 	PgStat_Counter deleted_pre_truncdrop;
 	Oid			id;				/* table's OID */
+	RelFileNumber relfilenode;	/* table's relfilenode at prepare time */
 	bool		shared;			/* is it a shared catalog? */
 	bool		truncdropped;	/* was the relation truncated/dropped? */
 } TwoPhasePgStatRecord;
@@ -182,6 +183,13 @@ pgstat_assoc_relation(Relation rel)
 													RelationGetRelid(rel),
 													rel->rd_rel->relisshared);
 
+	/* Store relfilenode for PGSTAT_KIND_RELFILENODE flush */
+	if (rel->rd_rel->relkind != RELKIND_PARTITIONED_TABLE &&
+		rel->rd_rel->relkind != RELKIND_INDEX)
+		rel->pgstat_info->tab.relfilenode = rel->rd_locator.relNumber;
+	else
+		rel->pgstat_info->tab.relfilenode = InvalidRelFileNumber;
+
 	/* don't allow link a stats to multiple relcache entries */
 	Assert(rel->pgstat_info->relation == NULL);
 
@@ -264,8 +272,11 @@ pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 					 PgStat_Counter deadtuples, TimestampTz starttime)
 {
 	PgStat_EntryRef *entry_ref;
+	PgStat_EntryRef *rfn_ref;
 	PgStatShared_Relation *shtabentry;
+	PgStatShared_RelFileNode *shrfnstats;
 	PgStat_StatTabEntry *tabentry;
+	PgStat_StatRFNodeEntry *rfnentry;
 	Oid			dboid = (rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId);
 	TimestampTz ts;
 	PgStat_Counter elapsedtime;
@@ -284,21 +295,6 @@ pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 	shtabentry = (PgStatShared_Relation *) entry_ref->shared_stats;
 	tabentry = &shtabentry->stats;
 
-	tabentry->live_tuples = livetuples;
-	tabentry->dead_tuples = deadtuples;
-
-	/*
-	 * It is quite possible that a non-aggressive VACUUM ended up skipping
-	 * various pages, however, we'll zero the insert counter here regardless.
-	 * It's currently used only to track when we need to perform an "insert"
-	 * autovacuum, which are mainly intended to freeze newly inserted tuples.
-	 * Zeroing this may just mean we'll not try to vacuum the table again
-	 * until enough tuples have been inserted to trigger another insert
-	 * autovacuum.  An anti-wraparound autovacuum will catch any persistent
-	 * stragglers.
-	 */
-	tabentry->ins_since_vacuum = 0;
-
 	if (AmAutoVacuumWorkerProcess())
 	{
 		tabentry->last_autovacuum_time = ts;
@@ -313,6 +309,34 @@ pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 	}
 
 	pgstat_unlock_entry(entry_ref);
+
+	/* Update the relfilenode entry */
+	rfn_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELFILENODE,
+										  dboid,
+										  (uint64) rel->rd_locator.relNumber,
+										  false);
+	if (rfn_ref)
+	{
+		shrfnstats = (PgStatShared_RelFileNode *) rfn_ref->shared_stats;
+		rfnentry = &shrfnstats->stats;
+
+		rfnentry->live_tuples = livetuples;
+		rfnentry->dead_tuples = deadtuples;
+
+		/*
+		 * It is quite possible that a non-aggressive VACUUM ended up
+		 * skipping various pages, however, we'll zero the insert counter
+		 * here regardless.  It's currently used only to track when we need
+		 * to perform an "insert" autovacuum, which are mainly intended to
+		 * freeze newly inserted tuples.  Zeroing this may just mean we'll
+		 * not try to vacuum the table again until enough tuples have been
+		 * inserted to trigger another insert autovacuum.  An
+		 * anti-wraparound autovacuum will catch any persistent stragglers.
+		 */
+		rfnentry->ins_since_vacuum = 0;
+
+		pgstat_unlock_entry(rfn_ref);
+	}
 
 	/*
 	 * Flush IO statistics now. pgstat_report_stat() will flush IO stats,
@@ -336,8 +360,11 @@ pgstat_report_analyze(Relation rel,
 					  bool resetcounter, TimestampTz starttime)
 {
 	PgStat_EntryRef *entry_ref;
+	PgStat_EntryRef *rfn_ref;
 	PgStatShared_Relation *shtabentry;
+	PgStatShared_RelFileNode *shrfnstats;
 	PgStat_StatTabEntry *tabentry;
+	PgStat_StatRFNodeEntry *rfnentry;
 	Oid			dboid = (rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId);
 	TimestampTz ts;
 	PgStat_Counter elapsedtime;
@@ -388,17 +415,6 @@ pgstat_report_analyze(Relation rel,
 	shtabentry = (PgStatShared_Relation *) entry_ref->shared_stats;
 	tabentry = &shtabentry->stats;
 
-	tabentry->live_tuples = livetuples;
-	tabentry->dead_tuples = deadtuples;
-
-	/*
-	 * If commanded, reset mod_since_analyze to zero.  This forgets any
-	 * changes that were committed while the ANALYZE was in progress, but we
-	 * have no good way to estimate how many of those there were.
-	 */
-	if (resetcounter)
-		tabentry->mod_since_analyze = 0;
-
 	if (AmAutoVacuumWorkerProcess())
 	{
 		tabentry->last_autoanalyze_time = ts;
@@ -413,6 +429,30 @@ pgstat_report_analyze(Relation rel,
 	}
 
 	pgstat_unlock_entry(entry_ref);
+
+	/* Update the relfilenode entry */
+	rfn_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELFILENODE,
+										  dboid,
+										  (uint64) rel->rd_locator.relNumber,
+										  false);
+	if (rfn_ref)
+	{
+		shrfnstats = (PgStatShared_RelFileNode *) rfn_ref->shared_stats;
+		rfnentry = &shrfnstats->stats;
+
+		rfnentry->live_tuples = livetuples;
+		rfnentry->dead_tuples = deadtuples;
+
+		/*
+		 * If commanded, reset mod_since_analyze to zero.  This forgets any
+		 * changes that were committed while the ANALYZE was in progress, but
+		 * we have no good way to estimate how many of those there were.
+		 */
+		if (resetcounter)
+			rfnentry->mod_since_analyze = 0;
+
+		pgstat_unlock_entry(rfn_ref);
+	}
 
 	/* see pgstat_report_vacuum() */
 	pgstat_flush_io(false);
@@ -767,6 +807,7 @@ AtPrepare_PgStat_Relations(PgStat_SubXactStatus *xact_state)
 		record.updated_pre_truncdrop = trans->updated_pre_truncdrop;
 		record.deleted_pre_truncdrop = trans->deleted_pre_truncdrop;
 		record.id = tabstat->tab.id;
+		record.relfilenode = tabstat->tab.relfilenode;
 		record.shared = tabstat->tab.shared;
 		record.truncdropped = trans->truncdropped;
 
@@ -811,6 +852,7 @@ pgstat_twophase_postcommit(FullTransactionId fxid, uint16 info,
 
 	/* Find or create a tabstat entry for the rel */
 	pgstat_info = pgstat_prep_relation_pending(PGSTAT_KIND_RELATION, rec->id, rec->shared);
+	pgstat_info->tab.relfilenode = rec->relfilenode;
 
 	/* Same math as in AtEOXact_PgStat, commit case */
 	pgstat_info->tab.counts.tuples_inserted += rec->tuples_inserted;
@@ -847,6 +889,7 @@ pgstat_twophase_postabort(FullTransactionId fxid, uint16 info,
 
 	/* Find or create a tabstat entry for the rel */
 	pgstat_info = pgstat_prep_relation_pending(PGSTAT_KIND_RELATION, rec->id, rec->shared);
+	pgstat_info->tab.relfilenode = rec->relfilenode;
 
 	/* Same math as in AtEOXact_PgStat, abort case */
 	if (rec->truncdropped)
@@ -875,10 +918,14 @@ bool
 pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 {
 	Oid			dboid;
+	RelFileNumber rfn;
 	PgStat_RelationStatus *lstats; /* pending stats entry  */
 	PgStatShared_Relation *shtabstats;
 	PgStat_StatTabEntry *tabentry;	/* table entry of shared stats */
 	PgStat_StatDBEntry *dbentry;	/* pending database entry */
+	PgStat_EntryRef *rfn_ref;
+	PgStatShared_RelFileNode *shrfnstats;
+	PgStat_StatRFNodeEntry *rfnentry;
 
 	dboid = entry_ref->shared_entry->key.dboid;
 	lstats = (PgStat_RelationStatus *) entry_ref->pending;
@@ -908,44 +955,69 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	}
 	tabentry->tuples_returned += lstats->tab.counts.tuples_returned;
 	tabentry->tuples_fetched += lstats->tab.counts.tuples_fetched;
-	tabentry->tuples_inserted += lstats->tab.counts.tuples_inserted;
-	tabentry->tuples_updated += lstats->tab.counts.tuples_updated;
-	tabentry->tuples_deleted += lstats->tab.counts.tuples_deleted;
-	tabentry->tuples_hot_updated += lstats->tab.counts.tuples_hot_updated;
-	tabentry->tuples_newpage_updated += lstats->tab.counts.tuples_newpage_updated;
-
-	/*
-	 * If table was truncated/dropped, first reset the live/dead counters.
-	 */
-	if (lstats->tab.counts.truncdropped)
-	{
-		tabentry->live_tuples = 0;
-		tabentry->dead_tuples = 0;
-		tabentry->ins_since_vacuum = 0;
-	}
-
-	tabentry->live_tuples += lstats->tab.counts.delta_live_tuples;
-	tabentry->dead_tuples += lstats->tab.counts.delta_dead_tuples;
-	tabentry->mod_since_analyze += lstats->tab.counts.changed_tuples;
-
-	/*
-	 * Using tuples_inserted to update ins_since_vacuum does mean that we'll
-	 * track aborted inserts too.  This isn't ideal, but otherwise probably
-	 * not worth adding an extra field for.  It may just amount to autovacuums
-	 * triggering for inserts more often than they maybe should, which is
-	 * probably not going to be common enough to be too concerned about here.
-	 */
-	tabentry->ins_since_vacuum += lstats->tab.counts.tuples_inserted;
 
 	tabentry->blocks_fetched += lstats->tab.counts.blocks_fetched;
 	tabentry->blocks_hit += lstats->tab.counts.blocks_hit;
 
-	/* Clamp live_tuples in case of negative delta_live_tuples */
-	tabentry->live_tuples = Max(tabentry->live_tuples, 0);
-	/* Likewise for dead_tuples */
-	tabentry->dead_tuples = Max(tabentry->dead_tuples, 0);
-
 	pgstat_unlock_entry(entry_ref);
+
+	/*
+	 * Flush tuple counters to the relfilenode entry.
+	 *
+	 * Use the current relfilenode from the relation (if available) since it
+	 * may have changed due to TRUNCATE.  Fall back to the cached value.
+	 */
+	rfn = InvalidRelFileNumber;
+
+	if (lstats->relation)
+		rfn = lstats->relation->rd_locator.relNumber;
+	else if (lstats->tab.relfilenode != InvalidRelFileNumber)
+		rfn = lstats->tab.relfilenode;
+
+	if (rfn != InvalidRelFileNumber)
+	{
+		rfn_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELFILENODE,
+											  dboid,
+											  (uint64) rfn,
+											  nowait);
+		if (rfn_ref)
+		{
+			shrfnstats = (PgStatShared_RelFileNode *) rfn_ref->shared_stats;
+			rfnentry = &shrfnstats->stats;
+
+			rfnentry->tuples_inserted += lstats->tab.counts.tuples_inserted;
+			rfnentry->tuples_updated += lstats->tab.counts.tuples_updated;
+			rfnentry->tuples_deleted += lstats->tab.counts.tuples_deleted;
+			rfnentry->tuples_hot_updated += lstats->tab.counts.tuples_hot_updated;
+			rfnentry->tuples_newpage_updated += lstats->tab.counts.tuples_newpage_updated;
+
+			if (lstats->tab.counts.truncdropped)
+			{
+				rfnentry->live_tuples = 0;
+				rfnentry->dead_tuples = 0;
+				rfnentry->ins_since_vacuum = 0;
+			}
+
+			rfnentry->live_tuples += lstats->tab.counts.delta_live_tuples;
+			rfnentry->dead_tuples += lstats->tab.counts.delta_dead_tuples;
+			rfnentry->mod_since_analyze += lstats->tab.counts.changed_tuples;
+
+			/*
+			 * Using tuples_inserted to update ins_since_vacuum means we
+			 * track aborted inserts too.  This isn't ideal, but not worth
+			 * adding an extra field for — it may just trigger autovacuums
+			 * slightly more often than necessary.
+			 */
+			rfnentry->ins_since_vacuum += lstats->tab.counts.tuples_inserted;
+
+			/* Clamp live_tuples in case of negative delta_live_tuples */
+			rfnentry->live_tuples = Max(rfnentry->live_tuples, 0);
+			/* Likewise for dead_tuples */
+			rfnentry->dead_tuples = Max(rfnentry->dead_tuples, 0);
+
+			pgstat_unlock_entry(rfn_ref);
+		}
+	}
 
 	/* The entry was successfully flushed, add the same to database stats */
 	dbentry = pgstat_prep_database_pending(dboid);

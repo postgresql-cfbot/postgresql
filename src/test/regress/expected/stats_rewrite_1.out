@@ -230,7 +230,7 @@ SELECT n_tup_ins, n_live_tup, n_dead_tup
   FROM pg_stat_all_tables WHERE relname = 'test_alone';
  n_tup_ins | n_live_tup | n_dead_tup 
 -----------+------------+------------
-         1 |          1 |          0
+         0 |          0 |          0
 (1 row)
 
 DROP TABLE test_alone;
@@ -253,7 +253,7 @@ SELECT n_tup_ins, n_live_tup, n_dead_tup
   FROM pg_stat_all_tables WHERE relname = 'test';
  n_tup_ins | n_live_tup | n_dead_tup 
 -----------+------------+------------
-         4 |          4 |          0
+         0 |          0 |          0
 (1 row)
 
 DROP TABLE test;
@@ -279,7 +279,7 @@ SELECT n_tup_ins, n_live_tup, n_dead_tup
   FROM pg_stat_all_tables WHERE relname = 'test_multi';
  n_tup_ins | n_live_tup | n_dead_tup 
 -----------+------------+------------
-         6 |          6 |          0
+         0 |          0 |          0
 (1 row)
 
 DROP TABLE test_multi;
@@ -352,7 +352,7 @@ SELECT n_tup_ins, n_live_tup, n_dead_tup
   FROM pg_stat_all_tables WHERE relname = 'test_savepoint';
  n_tup_ins | n_live_tup | n_dead_tup 
 -----------+------------+------------
-         6 |          3 |          3
+         0 |          0 |          0
 (1 row)
 
 DROP TABLE test_savepoint;

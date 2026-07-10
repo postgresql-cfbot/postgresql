@@ -12,6 +12,7 @@
 #define PGSTAT_H
 
 #include "datatype/timestamp.h"
+#include "common/relpath.h"
 #include "portability/instr_time.h"
 #include "postmaster/pgarch.h"	/* for MAX_XFN_CHARS */
 #include "replication/conflict.h"
@@ -210,6 +211,7 @@ typedef struct PgStat_RelationStatus
 		{
 			Oid			id;				/* table's OID */
 			bool		shared;			/* is it a shared catalog? */
+			RelFileNumber relfilenode;	/* table's relfilenode */
 			struct PgStat_RelXactStatus *trans;	/* lowest subxact's counts */
 			PgStat_TableCounts counts;	/* event counts to be sent */
 		}		tab;
@@ -489,17 +491,6 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter tuples_returned;
 	PgStat_Counter tuples_fetched;
 
-	PgStat_Counter tuples_inserted;
-	PgStat_Counter tuples_updated;
-	PgStat_Counter tuples_deleted;
-	PgStat_Counter tuples_hot_updated;
-	PgStat_Counter tuples_newpage_updated;
-
-	PgStat_Counter live_tuples;
-	PgStat_Counter dead_tuples;
-	PgStat_Counter mod_since_analyze;
-	PgStat_Counter ins_since_vacuum;
-
 	PgStat_Counter blocks_fetched;
 	PgStat_Counter blocks_hit;
 
@@ -533,6 +524,22 @@ typedef struct PgStat_StatIdxEntry
 
 	TimestampTz stat_reset_time;
 } PgStat_StatIdxEntry;
+
+typedef struct PgStat_StatRFNodeEntry
+{
+	PgStat_Counter tuples_inserted;
+	PgStat_Counter tuples_updated;
+	PgStat_Counter tuples_deleted;
+	PgStat_Counter tuples_hot_updated;
+	PgStat_Counter tuples_newpage_updated;
+
+	PgStat_Counter live_tuples;
+	PgStat_Counter dead_tuples;
+	PgStat_Counter mod_since_analyze;
+	PgStat_Counter ins_since_vacuum;
+
+	TimestampTz stat_reset_time;
+} PgStat_StatRFNodeEntry;
 
 /* ------
  * PgStat_WalCounters	WAL activity data gathered from WalUsage
@@ -847,6 +854,16 @@ extern PgStat_StatIdxEntry *pgstat_fetch_stat_idxentry(Oid relid);
 extern PgStat_StatIdxEntry *pgstat_fetch_stat_idxentry_ext(bool shared,
 														   Oid reloid,
 														   bool *may_free);
+
+extern PgStat_StatRFNodeEntry *pgstat_fetch_stat_rfnodeentry(Oid dboid,
+															 RelFileNumber rfn);
+
+/* WAL replay helpers for relfilenode stats */
+extern void pgstat_wal_replay_insert(Oid dboid, RelFileNumber relfilenode,
+									 int ntuples);
+extern void pgstat_wal_replay_update(Oid dboid, RelFileNumber relfilenode,
+									 bool hot, bool newpage);
+extern void pgstat_wal_replay_delete(Oid dboid, RelFileNumber relfilenode);
 
 
 /*

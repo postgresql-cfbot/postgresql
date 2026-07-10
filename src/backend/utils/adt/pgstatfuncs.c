@@ -69,44 +69,64 @@ PG_STAT_GET_RELENTRY_INT64(blocks_fetched)
 /* pg_stat_get_blocks_hit */
 PG_STAT_GET_RELENTRY_INT64(blocks_hit)
 
-/* pg_stat_get_dead_tuples */
-PG_STAT_GET_RELENTRY_INT64(dead_tuples)
-
-/* pg_stat_get_ins_since_vacuum */
-PG_STAT_GET_RELENTRY_INT64(ins_since_vacuum)
-
-/* pg_stat_get_live_tuples */
-PG_STAT_GET_RELENTRY_INT64(live_tuples)
-
-/* pg_stat_get_mod_since_analyze */
-PG_STAT_GET_RELENTRY_INT64(mod_since_analyze)
-
 /* pg_stat_get_numscans */
 PG_STAT_GET_RELENTRY_INT64(numscans)
-
-/* pg_stat_get_tuples_deleted */
-PG_STAT_GET_RELENTRY_INT64(tuples_deleted)
 
 /* pg_stat_get_tuples_fetched */
 PG_STAT_GET_RELENTRY_INT64(tuples_fetched)
 
-/* pg_stat_get_tuples_hot_updated */
-PG_STAT_GET_RELENTRY_INT64(tuples_hot_updated)
-
-/* pg_stat_get_tuples_newpage_updated */
-PG_STAT_GET_RELENTRY_INT64(tuples_newpage_updated)
-
-/* pg_stat_get_tuples_inserted */
-PG_STAT_GET_RELENTRY_INT64(tuples_inserted)
-
 /* pg_stat_get_tuples_returned */
 PG_STAT_GET_RELENTRY_INT64(tuples_returned)
 
-/* pg_stat_get_tuples_updated */
-PG_STAT_GET_RELENTRY_INT64(tuples_updated)
-
 /* pg_stat_get_vacuum_count */
 PG_STAT_GET_RELENTRY_INT64(vacuum_count)
+
+/*
+ * Accessor macro for relfilenode stats entries (PgStat_StatRFNodeEntry).
+ * Takes a relfilenode number as input (from pg_class.relfilenode).
+ */
+#define PG_STAT_GET_RFNENTRY_INT64(stat)						\
+Datum															\
+CppConcat(pg_stat_get_rfn_,stat)(PG_FUNCTION_ARGS)				\
+{																\
+	Oid			rfn = PG_GETARG_OID(0);							\
+	int64		result;											\
+	PgStat_StatRFNodeEntry *rfnentry;							\
+																\
+	if ((rfnentry = pgstat_fetch_stat_rfnodeentry(MyDatabaseId, rfn)) == NULL) \
+		result = 0;												\
+	else														\
+		result = (int64) (rfnentry->stat);						\
+																\
+	PG_RETURN_INT64(result);									\
+}
+
+/* pg_stat_get_rfn_tuples_inserted */
+PG_STAT_GET_RFNENTRY_INT64(tuples_inserted)
+
+/* pg_stat_get_rfn_tuples_updated */
+PG_STAT_GET_RFNENTRY_INT64(tuples_updated)
+
+/* pg_stat_get_rfn_tuples_deleted */
+PG_STAT_GET_RFNENTRY_INT64(tuples_deleted)
+
+/* pg_stat_get_rfn_tuples_hot_updated */
+PG_STAT_GET_RFNENTRY_INT64(tuples_hot_updated)
+
+/* pg_stat_get_rfn_tuples_newpage_updated */
+PG_STAT_GET_RFNENTRY_INT64(tuples_newpage_updated)
+
+/* pg_stat_get_rfn_live_tuples */
+PG_STAT_GET_RFNENTRY_INT64(live_tuples)
+
+/* pg_stat_get_rfn_dead_tuples */
+PG_STAT_GET_RFNENTRY_INT64(dead_tuples)
+
+/* pg_stat_get_rfn_mod_since_analyze */
+PG_STAT_GET_RFNENTRY_INT64(mod_since_analyze)
+
+/* pg_stat_get_rfn_ins_since_vacuum */
+PG_STAT_GET_RFNENTRY_INT64(ins_since_vacuum)
 
 /*
  * Accessor macro for index stats entries (PgStat_StatIdxEntry).

@@ -114,8 +114,92 @@ copy copytest to stdout (format json, force_not_null *);
 copy copytest to stdout (format json, force_null *);
 copy copytest to stdout (format json, on_error ignore);
 copy copytest to stdout (format json, reject_limit 1);
-copy copytest from stdin(format json);
 -- all of the above should yield error
+
+-- COPY FROM JSON: each array element is a row, object keys match column names
+create temp table copytest_from_json (like copytest);
+copy copytest_from_json (style, test) from stdin (format json);
+[  {"style":"DOS","test":"abc\r\ndef"} ,{"style":"Unix","test":"abc\ndef"} ,{"style":"Mac","test":"abc\rdef"} ,{"style":"esc\\ape","test":"a\\r\\\r\\\n\\nb"} ]
+\.
+select * from copytest_from_json order by style;
+
+-- Round trip: COPY TO JSON file, then COPY FROM JSON file
+\set copy_json_rt :abs_builddir '/results/copytest_roundtrip.json'
+truncate copytest2;
+copy copytest to :'copy_json_rt' (format json);
+copy copytest2 from :'copy_json_rt' (format json);
+select * from copytest except select * from copytest2;
+
+truncate copytest2;
+copy copytest to :'copy_json_rt' (format json, force_array true);
+copy copytest2 from :'copy_json_rt' (format json);
+select * from copytest except select * from copytest2;
+
+-- COPY FROM JSON edge cases: invalid input, non-array, missing required field
+copy copytest_from_json from stdin (format json);
+not valid json
+\.
+copy copytest_from_json from stdin (format json);
+{\}
+\.
+copy copytest_from_json from stdin (format json);
+[1, 2, 3]
+\.
+copy copytest_from_json from stdin (format json);
+[null, true, "string"]
+\.
+copy copytest_from_json from stdin (format json);
+[{"style":"a","test":"b"} {"style":"c","test":"d"}]
+\.
+copy copytest_from_json from stdin (format json);
+{"style":"a","test":"b"}, {"style":"c","test":"d"}
+\.
+copy copytest_from_json from stdin (format json);
+[{"style":"a","test":"b"},{"style":"c","test":"d"}
+\.
+copy copytest_from_json from stdin (format json);
+[{"style":"a","test":"b"},{"style":"c","test":"d"},
+\.
+copy copytest_from_json from stdin (format json);
+[{"style":
+\.
+copy copytest_from_json from stdin (format json);
+{"style":"unterminated
+\.
+copy copytest_from_json from stdin (format json);
+[{"style":"a","test":"b"},]
+\.
+copy copytest_from_json from stdin (format json);
+[{"style":"a","test":"b"}]{"style":"c","test":"d"}
+\.
+copy copytest_from_json from stdin (format json);
+[{"style":"a","test":"b"}] garbage
+\.
+create temp table copyjson_req (style text NOT NULL, test text);
+copy copyjson_req from stdin (format json);
+[{"test":"only test"}]
+\.
+copy copyjson_req from stdin (format json);
+[{"style":"ok","test":"both"}]
+\.
+select * from copyjson_req;
+truncate copytest_from_json;
+copy copytest_from_json (style, test) from stdin (format json);
+[{"style":"a","test":"b","extra":"ignored","filler":999}]
+\.
+select style, test, filler from copytest_from_json;
+
+\set copy_json_boundary :abs_builddir '/results/copytest_json_boundary.json'
+copy (select '[{"style":"' || repeat('x', 65512) || '","test":"a"},{"style":"b","test":"c"}]') to :'copy_json_boundary';
+truncate copytest_from_json;
+copy copytest_from_json (style, test) from :'copy_json_boundary' (format json);
+select length(style), test from copytest_from_json order by length(style);
+
+create temp table copyjsontest_scalars (js json, jsb jsonb);
+copy copyjsontest_scalars from stdin (format json);
+[{"js":"foo","jsb":true},{"js":false,"jsb":"bar"}]
+\.
+select js, jsb from copyjsontest_scalars;
 
 -- column list with json format
 copy copytest (style, test, filler) to stdout (format json);

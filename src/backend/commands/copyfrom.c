@@ -52,6 +52,7 @@
 #include "utils/rel.h"
 #include "utils/snapmgr.h"
 #include "utils/typcache.h"
+#include "utils/fmgrprotos.h"
 
 /*
  * No more than this many tuples per CopyMultiInsertBuffer
@@ -153,6 +154,19 @@ static const CopyFromRoutine CopyFromRoutineBinary = {
 	.CopyFromEnd = CopyFromBinaryEnd,
 };
 
+/* JSON format */
+static void CopyFromJsonInFunc(CopyFromState cstate, Oid atttypid, FmgrInfo *finfo,
+							   Oid *typioparam);
+static void CopyFromJsonStart(CopyFromState cstate, TupleDesc tupDesc);
+static void CopyFromJsonEnd(CopyFromState cstate);
+
+static const CopyFromRoutine CopyFromRoutineJson = {
+	.CopyFromInFunc = CopyFromJsonInFunc,
+	.CopyFromStart = CopyFromJsonStart,
+	.CopyFromOneRow = CopyFromJsonOneRow,
+	.CopyFromEnd = CopyFromJsonEnd,
+};
+
 /* Return a COPY FROM routine for the given options */
 static const CopyFromRoutine *
 CopyFromGetRoutine(const CopyFormatOptions *opts)
@@ -161,6 +175,8 @@ CopyFromGetRoutine(const CopyFormatOptions *opts)
 		return &CopyFromRoutineCSV;
 	else if (opts->format == COPY_FORMAT_BINARY)
 		return &CopyFromRoutineBinary;
+	else if (opts->format == COPY_FORMAT_JSON)
+		return &CopyFromRoutineJson;
 
 	/* default is text */
 	return &CopyFromRoutineText;
@@ -194,7 +210,7 @@ CopyFromTextLikeStart(CopyFromState cstate, TupleDesc tupDesc)
 	 */
 	attr_count = list_length(cstate->attnumlist);
 	cstate->max_fields = attr_count;
-	cstate->raw_fields = (char **) palloc(attr_count * sizeof(char *));
+	cstate->raw_fields = palloc_array(char *, attr_count);
 }
 
 /*
@@ -245,6 +261,59 @@ static void
 CopyFromBinaryEnd(CopyFromState cstate)
 {
 	/* nothing to do */
+}
+
+/* Implementation of the infunc callback for JSON format */
+static void
+CopyFromJsonInFunc(CopyFromState cstate, Oid atttypid, FmgrInfo *finfo,
+				   Oid *typioparam)
+{
+	Oid			func_oid;
+
+	getTypeInputInfo(atttypid, &func_oid, typioparam);
+	fmgr_info(func_oid, finfo);
+}
+
+/* Implementation of the start callback for JSON format */
+static void
+CopyFromJsonStart(CopyFromState cstate, TupleDesc tupDesc)
+{
+	CopyFromJsonState *json_state;
+
+	/*
+	 * Set up input_buf for encoding conversion, same as text format.
+	 */
+	if (cstate->need_transcoding)
+	{
+		cstate->input_buf = (char *) palloc(INPUT_BUF_SIZE + 1);
+		cstate->input_buf_index = cstate->input_buf_len = 0;
+	}
+	else
+		cstate->input_buf = cstate->raw_buf;
+	cstate->input_reached_eof = false;
+
+	initStringInfo(&cstate->line_buf);
+
+	/* Store state for CopyFromJsonOneRow (JSON scan uses line_buf) */
+	json_state = palloc0_object(CopyFromJsonState);
+	/* Accept [...] or auto-detect concatenated objects {...}{...} */
+	json_state->parse_state = COPY_JSON_BEFORE_ARRAY;
+	json_state->row_text_start = -1;
+	json_state->row_text_end = -1;
+	cstate->format_private = json_state;
+
+	/*
+	 * Create workspace for raw_fields (used by error reporting).
+	 */
+	cstate->max_fields = list_length(cstate->attnumlist);
+	cstate->raw_fields = palloc_array(char *, cstate->max_fields);
+}
+
+/* Implementation of the end callback for JSON format */
+static void
+CopyFromJsonEnd(CopyFromState cstate)
+{
+	/* format_private (CopyFromJsonState) is freed with copycontext */
 }
 
 /*

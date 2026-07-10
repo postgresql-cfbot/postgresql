@@ -234,10 +234,6 @@ COPY { <replaceable class="parameter">table_name</replaceable> [ ( <replaceable 
       The default is <literal>text</literal>.
       See <xref linkend="sql-copy-file-formats"/> below for details.
      </para>
-     <para>
-      The <literal>json</literal> option is allowed only in
-      <command>COPY TO</command>.
-     </para>
      <note>
       <para>
        In JSON format, SQL <literal>NULL</literal> values are output as
@@ -390,7 +386,8 @@ COPY (SELECT j FROM (VALUES ('null'::json), (NULL::json)) v(j))
       Force output of square brackets as array decorations at the beginning
       and end of output, and commas between the rows. It is allowed only in
       <command>COPY TO</command>, and only when using
-      <literal>json</literal> format. The default is
+      <literal>json</literal> format. It is not supported for
+      <command>COPY FROM</command>. The default is
       <literal>false</literal>.
      </para>
     </listitem>
@@ -1121,6 +1118,73 @@ versions of <productname>PostgreSQL</productname>.
     </para>
    </refsect3>
   </refsect2>
+
+  <refsect2 id="sql-copy-json-format" xreflabel="JSON Format">
+   <title>JSON Format</title>
+
+   <refsect3 id="sql-copy-json-format-to">
+    <title><command>COPY TO</command></title>
+
+    <para>
+     By default, <command>COPY TO</command> writes one JSON object per line
+     (record), in column order, using the column names as object keys.
+     With <literal>FORCE_ARRAY</literal>, the whole output is wrapped as a
+     single JSON array: an opening <literal>[</literal>, objects separated
+     by commas (with a line break after the opening bracket, matching
+     <command>COPY TO</command> row boundaries), and a closing
+     <literal>]</literal>.
+    </para>
+   </refsect3>
+
+   <refsect3 id="sql-copy-json-format-from">
+    <title><command>COPY FROM</command></title>
+
+    <para>
+     <command>COPY FROM</command> with <literal>FORMAT JSON</literal> accepts
+     either of these shapes.
+    </para>
+
+    <itemizedlist>
+     <listitem>
+      <para>
+       A JSON <emphasis>array</emphasis> whose elements are objects, one
+       object per table row, e.g.
+       <literal>[{<replaceable>row1</replaceable>},{<replaceable>row2</replaceable>}]</literal>.
+       Standard JSON rules apply: a comma is required between array elements,
+       the array must be closed with <literal>]</literal>, and a trailing
+       comma after the last element is not allowed.
+      </para>
+     </listitem>
+     <listitem>
+      <para>
+       A stream of JSON <emphasis>objects</emphasis> concatenated back-to-back
+       (optionally separated by white space), with <emphasis>no</emphasis>
+       comma between objects, e.g.
+       <literal>{<replaceable>row1</replaceable>}{<replaceable>row2</replaceable>}</literal>.
+       This form is recognized when the document begins with
+       <literal>{</literal>.
+      </para>
+     </listitem>
+    </itemizedlist>
+
+    <para>
+     For each row object, keys are matched to the target columns by name.
+     Keys that do not correspond to a column in the <command>COPY</command>
+     column list are ignored.  Missing keys are treated as
+     <literal>NULL</literal> for the corresponding column.  When no column
+     list is given, column names are those of the table (excluding generated
+     columns).
+    </para>
+
+    <para>
+     Values are parsed with the same input semantics as for JSON/JSONB:
+     each field is converted from its JSON representation to the column's
+     data type.  Options that only apply to text or CSV line parsing
+     (such as <literal>DELIMITER</literal>, <literal>NULL</literal>,
+     <literal>HEADER</literal>, <literal>ON_ERROR</literal> row skipping)are not used with JSON format.
+    </para>
+   </refsect3>
+  </refsect2>
  </refsect1>
 
  <refsect1 id="sql-copy-examples">
@@ -1148,6 +1212,16 @@ The output is as follows:
 ]
 </screen>
 </para>
+
+  <para>
+   To load rows from a JSON file (for example one produced by
+   <command>COPY TO</command> with <literal>FORMAT JSON</literal>):
+<programlisting>
+COPY mytable FROM '/path/to/rows.json' (FORMAT JSON);
+</programlisting>
+   The file may be either a JSON array of row objects or a concatenation
+   of row objects; see <xref linkend="sql-copy-json-format-from"/>.
+  </para>
 
 
   <para>

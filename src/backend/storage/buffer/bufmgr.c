@@ -649,10 +649,10 @@ static inline BufferDesc *BufferAlloc(SMgrRelation smgr,
 static bool AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress);
 static void CheckReadBuffersOperation(ReadBuffersOperation *operation, bool is_complete);
 
-static pg_attribute_always_inline void TrackBufferHit(IOObject io_object,
-													  IOContext io_context,
-													  Relation rel, char persistence, SMgrRelation smgr,
-													  ForkNumber forknum, BlockNumber blocknum);
+static pg_always_inline void TrackBufferHit(IOObject io_object,
+											IOContext io_context,
+											Relation rel, char persistence, SMgrRelation smgr,
+											ForkNumber forknum, BlockNumber blocknum);
 static Buffer GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context);
 static void FlushUnlockedBuffer(BufferDesc *buf, SMgrRelation reln,
 								IOObject io_object, IOContext io_context);
@@ -1219,7 +1219,7 @@ ZeroAndLockBuffer(Buffer buffer, ReadBufferMode mode, bool already_valid)
  * already present, or false if more work is required to either read it in or
  * zero it.
  */
-static pg_attribute_always_inline Buffer
+static pg_always_inline Buffer
 PinBufferForBlock(Relation rel,
 				  SMgrRelation smgr,
 				  char persistence,
@@ -1272,7 +1272,7 @@ PinBufferForBlock(Relation rel,
  *
  * smgr is required, rel is optional unless using P_NEW.
  */
-static pg_attribute_always_inline Buffer
+static pg_always_inline Buffer
 ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 				  ForkNumber forkNum,
 				  BlockNumber blockNum, ReadBufferMode mode,
@@ -1367,7 +1367,7 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 	return buffer;
 }
 
-static pg_attribute_always_inline bool
+static pg_always_inline bool
 StartReadBuffersImpl(ReadBuffersOperation *operation,
 					 Buffer *buffers,
 					 BlockNumber blockNum,
@@ -1679,7 +1679,7 @@ CheckReadBuffersOperation(ReadBuffersOperation *operation, bool is_complete)
  * We track various stats related to buffer hits. Because this is done in a
  * few separate places, this helper exists for convenience.
  */
-static pg_attribute_always_inline void
+static pg_always_inline void
 TrackBufferHit(IOObject io_object, IOContext io_context,
 			   Relation rel, char persistence, SMgrRelation smgr,
 			   ForkNumber forknum, BlockNumber blocknum)
@@ -2193,7 +2193,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
  *
  * No locks are held either at entry or exit.
  */
-static pg_attribute_always_inline BufferDesc *
+static pg_always_inline BufferDesc *
 BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			BlockNumber blockNum,
 			BufferAccessStrategy strategy,
@@ -8326,7 +8326,7 @@ MarkDirtyAllUnpinnedBuffers(int32 *buffers_dirtied,
  * part of error handling, which in turn could lead to the buffer being
  * replaced while IO is ongoing.
  */
-static pg_attribute_always_inline void
+static pg_always_inline void
 buffer_stage_common(PgAioHandle *ioh, bool is_write, bool is_temp)
 {
 	uint64	   *io_data;
@@ -8570,7 +8570,7 @@ buffer_readv_encode_error(PgAioResult *result,
  * Helper for AIO readv completion callbacks, supporting both shared and temp
  * buffers. Gets called once for each buffer in a multi-page read.
  */
-static pg_attribute_always_inline void
+static pg_always_inline void
 buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
 						  uint8 flags, bool failed, bool is_temp,
 						  bool *buffer_invalid,
@@ -8721,7 +8721,7 @@ buffer_readv_complete_one(PgAioTargetData *td, uint8 buf_off, Buffer buffer,
  *
  * Shared between shared and local buffers, to reduce code duplication.
  */
-static pg_attribute_always_inline PgAioResult
+static pg_always_inline PgAioResult
 buffer_readv_complete(PgAioHandle *ioh, PgAioResult prior_result,
 					  uint8 cb_data, bool is_temp)
 {

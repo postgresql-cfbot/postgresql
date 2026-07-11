@@ -107,17 +107,25 @@ transformJsonTable(ParseState *pstate, JsonTable *jt)
 	cxt.pathNameId = 0;
 
 	/*
+	 * Collect the user-supplied path and column names, checking that they are
+	 * distinct.  If the row pattern path has an explicit name, it shares this
+	 * namespace, so seed the list with it.
+	 */
+	if (rootPathSpec->name != NULL)
+		cxt.pathNames = list_make1(rootPathSpec->name);
+	CheckDuplicateColumnOrPathNames(&cxt, jt->columns);
+
+	/*
 	 * Generate a name for the row pattern path if it was not given one.  Path
 	 * names are optional for every path, including when a PLAN clause is
 	 * present; a specific PLAN() can only reference named paths, so an
 	 * unnamed path that the plan must mention is caught later as a path name
-	 * mismatch or a path not covered by the plan.
+	 * mismatch or a path not covered by the plan.  We generate the name only
+	 * after collecting the user-supplied names above, so that it cannot
+	 * collide with any of them.
 	 */
 	if (rootPathSpec->name == NULL)
 		rootPathSpec->name = generateJsonTablePathName(&cxt);
-
-	cxt.pathNames = list_make1(rootPathSpec->name);
-	CheckDuplicateColumnOrPathNames(&cxt, jt->columns);
 
 	/*
 	 * We make lateral_only names of this level visible, whether or not the
@@ -249,12 +257,21 @@ static char *
 generateJsonTablePathName(JsonTableParseContext *cxt)
 {
 	char		namebuf[32];
-	char	   *name = namebuf;
+	char	   *name;
 
-	snprintf(namebuf, sizeof(namebuf), "json_table_path_%d",
-			 cxt->pathNameId++);
+	/*
+	 * Bump the counter until we produce a name that is not already used as a
+	 * path or column name.  Otherwise a generated name could coincide with a
+	 * user-supplied one, which would confuse PLAN clause matching and could
+	 * silently drop a column.
+	 */
+	do
+	{
+		snprintf(namebuf, sizeof(namebuf), "json_table_path_%d",
+				 cxt->pathNameId++);
+	} while (LookupPathOrColumnName(cxt, namebuf));
 
-	name = pstrdup(name);
+	name = pstrdup(namebuf);
 	cxt->pathNames = lappend(cxt->pathNames, name);
 
 	return name;

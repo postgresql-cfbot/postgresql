@@ -98,6 +98,12 @@ PQcancelCreate(PGconn *conn)
 	 */
 	cancelConn->cancelRequest = true;
 
+	/*
+	 * Copy Pfdebug and trace flags from the original connection.
+	 */
+	cancelConn->Pfdebug = conn->Pfdebug;
+	cancelConn->traceFlags = conn->traceFlags;
+
 	if (!pqCopyPGconn(conn, cancelConn))
 		return (PGcancelConn *) cancelConn;
 

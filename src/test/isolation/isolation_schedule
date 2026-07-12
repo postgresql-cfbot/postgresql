@@ -125,6 +125,7 @@ test: key-join-plain-function-dependent-lock
 test: key-join-plain-function-ownercheck-lock
 test: key-join-plain-function-alter-owner-lock
 test: key-join-sqlbody-function-prelock
+test: key-join-policy-function-deadlock
 test: key-join-recursive-revalidation-lock
 test: key-join-lazy-facts-lock
 test: key-join-select-blocks-dml
@@ -136,6 +137,7 @@ test: key-join-plain-view-rls-lock
 test: key-join-plain-relation-dependent-lock
 test: key-join-stale-rule-dependency
 test: key-join-stale-table-rule-dependency
+test: key-join-stale-policy-dependency
 test: key-join-proof-allows-maintenance
 test: key-join-select-blocks-inherits
 test: cluster-toast-value-reuse

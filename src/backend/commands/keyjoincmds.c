@@ -25,6 +25,7 @@
 #include "catalog/pg_class.h"
 #include "catalog/pg_constraint.h"
 #include "catalog/pg_depend.h"
+#include "catalog/pg_policy.h"
 #include "catalog/pg_proc.h"
 #include "catalog/pg_rewrite.h"
 #include "common/int.h"
@@ -49,6 +50,7 @@ static int	object_address_list_cmp(const ListCell *a, const ListCell *b);
 static ObjectAddress *make_object_address(Oid classId, Oid objectId);
 static void revalidate_dependent_key_join_relation(Oid relationOid);
 static void revalidate_dependent_key_join_function(Oid procOid);
+static void revalidate_dependent_key_join_policy(Oid policy_id);
 static Node *revalidate_key_join_node(Node *stored);
 static void reconcile_key_join_dependencies(const ObjectAddress *owner,
 											List *revalidated);
@@ -131,6 +133,11 @@ find_dependent_key_join_objects(Oid refclassid, Oid refobjid)
 			classid = ProcedureRelationId;
 			objectid = dep->objid;
 		}
+		else if (dep->classid == PolicyRelationId)
+		{
+			classid = PolicyRelationId;
+			objectid = dep->objid;
+		}
 		else
 			elog(ERROR, "unexpected class %u for key join proof dependent",
 				 dep->classid);
@@ -173,6 +180,9 @@ revalidate_dependent_key_join_object(const ObjectAddress *object)
 			break;
 		case ProcedureRelationId:
 			revalidate_dependent_key_join_function(object->objectId);
+			break;
+		case PolicyRelationId:
+			revalidate_dependent_key_join_policy(object->objectId);
 			break;
 		default:
 			elog(ERROR, "unexpected class %u for key join proof dependent",
@@ -281,6 +291,82 @@ revalidate_dependent_key_join_function(Oid procOid)
 		ObjectAddressSet(owner, ProcedureRelationId, procOid);
 		reconcile_key_join_dependencies(&owner, node ? list_make1(node) : NIL);
 	}
+}
+
+static void
+revalidate_dependent_key_join_policy(Oid policy_id)
+{
+	Relation	pg_policy_rel;
+	ScanKeyData skey[1];
+	SysScanDesc sscan;
+	HeapTuple	policy_tuple;
+	TupleDesc	policy_desc;
+	Datum		expr_datum;
+	bool		expr_isnull;
+
+	/*
+	 * Read the policy's expressions from pg_policy rather than locking the
+	 * guarded table.  ALTER POLICY locks that table and then the functions
+	 * its expressions use; a concurrent ALTER FUNCTION drives revalidation
+	 * here with the function already locked, so locking the table too would
+	 * invert that order and deadlock.
+	 */
+	pg_policy_rel = table_open(PolicyRelationId, AccessShareLock);
+
+	ScanKeyInit(&skey[0],
+				Anum_pg_policy_oid,
+				BTEqualStrategyNumber, F_OIDEQ,
+				ObjectIdGetDatum(policy_id));
+
+	sscan = systable_beginscan(pg_policy_rel, PolicyOidIndexId, true, NULL,
+							   1, skey);
+	policy_tuple = systable_getnext(sscan);
+
+	if (!HeapTupleIsValid(policy_tuple))
+	{
+		/*
+		 * A policy can be dropped after pg_depend is scanned but before this
+		 * lookup acquires pg_policy.  In that case its stored proof is gone.
+		 */
+		systable_endscan(sscan);
+		table_close(pg_policy_rel, AccessShareLock);
+		return;
+	}
+
+	policy_desc = RelationGetDescr(pg_policy_rel);
+
+	{
+		ObjectAddress owner;
+		List	   *revalidated = NIL;
+		Node	   *node;
+
+		expr_datum = heap_getattr(policy_tuple, Anum_pg_policy_polqual,
+								  policy_desc, &expr_isnull);
+		if (!expr_isnull)
+		{
+			node = revalidate_key_join_node(
+				stringToNode(TextDatumGetCString(expr_datum)));
+			if (node != NULL)
+				revalidated = lappend(revalidated, node);
+		}
+
+		expr_datum = heap_getattr(policy_tuple, Anum_pg_policy_polwithcheck,
+								  policy_desc, &expr_isnull);
+		if (!expr_isnull)
+		{
+			node = revalidate_key_join_node(
+				stringToNode(TextDatumGetCString(expr_datum)));
+			if (node != NULL)
+				revalidated = lappend(revalidated, node);
+		}
+
+		/* The policy's proof dependencies are recorded under the policy OID. */
+		ObjectAddressSet(owner, PolicyRelationId, policy_id);
+		reconcile_key_join_dependencies(&owner, revalidated);
+	}
+
+	systable_endscan(sscan);
+	table_close(pg_policy_rel, AccessShareLock);
 }
 
 /*

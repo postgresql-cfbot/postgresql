@@ -31,6 +31,7 @@
 #include "nodes/pg_list.h"
 #include "parser/parse_clause.h"
 #include "parser/parse_collate.h"
+#include "parser/parse_key_join.h"
 #include "parser/parse_node.h"
 #include "parser/parse_relation.h"
 #include "rewrite/rewriteManip.h"
@@ -630,8 +631,10 @@ CreatePolicy(CreatePolicyStmt *stmt)
 	/* Parse the supplied clause */
 	qual_pstate = make_parsestate(NULL);
 	qual_pstate->p_creating_stored_object = true;
+	qual_pstate->p_stored_object_supports_key_join = true;
 	with_check_pstate = make_parsestate(NULL);
 	with_check_pstate->p_creating_stored_object = true;
+	with_check_pstate->p_stored_object_supports_key_join = true;
 
 	/* zero-clear */
 	memset(values, 0, sizeof(values));
@@ -740,9 +743,11 @@ CreatePolicy(CreatePolicyStmt *stmt)
 
 	recordDependencyOnExpr(&myself, qual, qual_pstate->p_rtable,
 						   DEPENDENCY_NORMAL);
+	recordDependencyOnKeyJoinProofs(&myself, qual);
 
 	recordDependencyOnExpr(&myself, with_check_qual,
 						   with_check_pstate->p_rtable, DEPENDENCY_NORMAL);
+	recordDependencyOnKeyJoinProofs(&myself, with_check_qual);
 
 	/* Register role dependencies */
 	target.classId = AuthIdRelationId;
@@ -828,6 +833,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 		ParseState *qual_pstate = make_parsestate(NULL);
 
 		qual_pstate->p_creating_stored_object = true;
+		qual_pstate->p_stored_object_supports_key_join = true;
 		nsitem = addRangeTableEntryForRelation(qual_pstate, target_table,
 											   AccessShareLock,
 											   NULL, false, false);
@@ -852,6 +858,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 		ParseState *with_check_pstate = make_parsestate(NULL);
 
 		with_check_pstate->p_creating_stored_object = true;
+		with_check_pstate->p_stored_object_supports_key_join = true;
 		nsitem = addRangeTableEntryForRelation(with_check_pstate, target_table,
 											   AccessShareLock,
 											   NULL, false, false);
@@ -996,6 +1003,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 			/* parsestate is built just to build the range table */
 			qual_pstate = make_parsestate(NULL);
 			qual_pstate->p_creating_stored_object = true;
+			qual_pstate->p_stored_object_supports_key_join = true;
 
 			qual_value = TextDatumGetCString(value_datum);
 			qual = stringToNode(qual_value);
@@ -1039,6 +1047,7 @@ AlterPolicy(AlterPolicyStmt *stmt)
 			/* parsestate is built just to build the range table */
 			with_check_pstate = make_parsestate(NULL);
 			with_check_pstate->p_creating_stored_object = true;
+			with_check_pstate->p_stored_object_supports_key_join = true;
 
 			with_check_value = TextDatumGetCString(value_datum);
 			with_check_qual = stringToNode(with_check_value);
@@ -1075,8 +1084,22 @@ AlterPolicy(AlterPolicyStmt *stmt)
 
 	recordDependencyOnExpr(&myself, qual, qual_parse_rtable, DEPENDENCY_NORMAL);
 
+	/*
+	 * Key-join proof dependencies are no longer serialized in the stored
+	 * expression (KeyJoinNode evidence is read_write_ignore), so when the qual
+	 * was reloaded from the catalog its proof evidence is empty.  Re-derive it
+	 * against the current catalog before re-recording, otherwise the proof's
+	 * pg_depend edges would be silently dropped.
+	 */
+	if (qual != NULL && storedNodeContainsKeyJoin(qual))
+		revalidateStoredKeyJoinProofsInNode(qual);
+	recordDependencyOnKeyJoinProofs(&myself, qual);
+
 	recordDependencyOnExpr(&myself, with_check_qual, with_check_parse_rtable,
 						   DEPENDENCY_NORMAL);
+	if (with_check_qual != NULL && storedNodeContainsKeyJoin(with_check_qual))
+		revalidateStoredKeyJoinProofsInNode(with_check_qual);
+	recordDependencyOnKeyJoinProofs(&myself, with_check_qual);
 
 	/* Register role dependencies */
 	deleteSharedDependencyRecordsFor(PolicyRelationId, policy_id, 0);

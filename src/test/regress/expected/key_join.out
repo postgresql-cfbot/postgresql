@@ -6412,6 +6412,174 @@ DETAIL:  Referenced columns q (parent_id) are not proven unique. A preceding joi
 DROP TABLE output_unique_sqlbody_grandchild,
            output_unique_sqlbody_child,
            output_unique_sqlbody_parent;
+-- RLS policy USING expressions store analyzed key-join proofs and must be
+-- revalidated when their proof dependencies change.
+CREATE TABLE policy_using_kj_parent (id int PRIMARY KEY);
+CREATE TABLE policy_using_kj_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES policy_using_kj_parent (id)
+);
+CREATE TABLE policy_using_kj_guarded (id int);
+INSERT INTO policy_using_kj_parent VALUES (1);
+INSERT INTO policy_using_kj_child VALUES (10, 1);
+ALTER TABLE policy_using_kj_guarded ENABLE ROW LEVEL SECURITY;
+CREATE POLICY policy_using_kj ON policy_using_kj_guarded
+USING (EXISTS (
+    SELECT 1
+    FROM policy_using_kj_parent p
+    -- accepted
+    JOIN policy_using_kj_child c FOR KEY (parent_id) -> p (id)
+));
+-- rejected, reason: stored policy USING expression depends on the FK proof
+ALTER TABLE policy_using_kj_child
+    ALTER CONSTRAINT policy_using_kj_child_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- After dropping the policy, the same DDL succeeds.
+DROP POLICY policy_using_kj ON policy_using_kj_guarded;
+ALTER TABLE policy_using_kj_child
+    ALTER CONSTRAINT policy_using_kj_child_parent_id_fkey NOT ENFORCED;
+SELECT *
+FROM policy_using_kj_parent p
+-- rejected, reason: FK is now not enforced
+JOIN policy_using_kj_child c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN policy_using_kj_child c FOR KEY (parent_id) -> p (id);
+                                     ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+DROP TABLE policy_using_kj_guarded,
+           policy_using_kj_child,
+           policy_using_kj_parent;
+-- RLS policy WITH CHECK expressions follow the same revalidation path.
+CREATE TABLE policy_check_kj_parent (id int PRIMARY KEY);
+CREATE TABLE policy_check_kj_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES policy_check_kj_parent (id)
+);
+CREATE TABLE policy_check_kj_guarded (id int);
+INSERT INTO policy_check_kj_parent VALUES (1);
+INSERT INTO policy_check_kj_child VALUES (10, 1);
+ALTER TABLE policy_check_kj_guarded ENABLE ROW LEVEL SECURITY;
+CREATE POLICY policy_check_kj ON policy_check_kj_guarded
+FOR INSERT
+WITH CHECK (EXISTS (
+    SELECT 1
+    FROM policy_check_kj_parent p
+    -- accepted
+    JOIN policy_check_kj_child c FOR KEY (parent_id) -> p (id)
+));
+-- rejected, reason: stored policy WITH CHECK expression depends on the FK proof
+ALTER TABLE policy_check_kj_child
+    ALTER CONSTRAINT policy_check_kj_child_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- After dropping the policy, the same DDL succeeds.
+DROP POLICY policy_check_kj ON policy_check_kj_guarded;
+ALTER TABLE policy_check_kj_child
+    ALTER CONSTRAINT policy_check_kj_child_parent_id_fkey NOT ENFORCED;
+SELECT *
+FROM policy_check_kj_parent p
+-- rejected, reason: FK is now not enforced
+JOIN policy_check_kj_child c FOR KEY (parent_id) -> p (id);
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+LINE 4: JOIN policy_check_kj_child c FOR KEY (parent_id) -> p (id);
+                                     ^
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+DROP TABLE policy_check_kj_guarded,
+           policy_check_kj_child,
+           policy_check_kj_parent;
+-- ALTER POLICY must keep each stored proof's dependencies recorded, whether
+-- the expression is re-supplied in the command or reloaded from the catalog.
+-- Separate FK pairs let each probe target one expression's proof.
+CREATE TABLE policy_alter_kj_uparent (id int PRIMARY KEY);
+CREATE TABLE policy_alter_kj_uchild
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES policy_alter_kj_uparent (id)
+);
+CREATE TABLE policy_alter_kj_wparent (id int PRIMARY KEY);
+CREATE TABLE policy_alter_kj_wchild
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES policy_alter_kj_wparent (id)
+);
+CREATE TABLE policy_alter_kj_guarded (id int);
+ALTER TABLE policy_alter_kj_guarded ENABLE ROW LEVEL SECURITY;
+CREATE POLICY policy_alter_kj ON policy_alter_kj_guarded
+USING (EXISTS (
+    SELECT 1
+    FROM policy_alter_kj_uparent p
+    -- accepted
+    JOIN policy_alter_kj_uchild c FOR KEY (parent_id) -> p (id)
+))
+WITH CHECK (EXISTS (
+    SELECT 1
+    FROM policy_alter_kj_wparent p
+    -- accepted
+    JOIN policy_alter_kj_wchild c FOR KEY (parent_id) -> p (id)
+));
+-- Re-supplying USING re-proves it from source; WITH CHECK is reloaded from
+-- the catalog and must keep its recorded proof dependencies.
+ALTER POLICY policy_alter_kj ON policy_alter_kj_guarded
+USING (EXISTS (
+    SELECT 1
+    FROM policy_alter_kj_uparent p
+    -- accepted
+    JOIN policy_alter_kj_uchild c FOR KEY (parent_id) -> p (id)
+));
+-- rejected, reason: the re-supplied USING proof depends on the FK
+ALTER TABLE policy_alter_kj_uchild
+    ALTER CONSTRAINT policy_alter_kj_uchild_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- rejected, reason: the reloaded WITH CHECK proof depends on the FK
+ALTER TABLE policy_alter_kj_wchild
+    ALTER CONSTRAINT policy_alter_kj_wchild_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- Re-supplying WITH CHECK re-proves it from source; USING is reloaded.
+ALTER POLICY policy_alter_kj ON policy_alter_kj_guarded
+WITH CHECK (EXISTS (
+    SELECT 1
+    FROM policy_alter_kj_wparent p
+    -- accepted
+    JOIN policy_alter_kj_wchild c FOR KEY (parent_id) -> p (id)
+));
+-- rejected, reason: the reloaded USING proof depends on the FK
+ALTER TABLE policy_alter_kj_uchild
+    ALTER CONSTRAINT policy_alter_kj_uchild_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- rejected, reason: the re-supplied WITH CHECK proof depends on the FK
+ALTER TABLE policy_alter_kj_wchild
+    ALTER CONSTRAINT policy_alter_kj_wchild_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- Changing only the roles reloads both expressions from the catalog.
+ALTER POLICY policy_alter_kj ON policy_alter_kj_guarded TO PUBLIC;
+-- rejected, reason: the reloaded USING proof depends on the FK
+ALTER TABLE policy_alter_kj_uchild
+    ALTER CONSTRAINT policy_alter_kj_uchild_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- rejected, reason: the reloaded WITH CHECK proof depends on the FK
+ALTER TABLE policy_alter_kj_wchild
+    ALTER CONSTRAINT policy_alter_kj_wchild_parent_id_fkey NOT ENFORCED;
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+DETAIL:  There is no matching foreign key constraint for c (parent_id) referencing p (id).
+-- After dropping the policy, the same DDL succeeds.
+DROP POLICY policy_alter_kj ON policy_alter_kj_guarded;
+ALTER TABLE policy_alter_kj_uchild
+    ALTER CONSTRAINT policy_alter_kj_uchild_parent_id_fkey NOT ENFORCED;
+ALTER TABLE policy_alter_kj_wchild
+    ALTER CONSTRAINT policy_alter_kj_wchild_parent_id_fkey NOT ENFORCED;
+DROP TABLE policy_alter_kj_guarded,
+           policy_alter_kj_uchild,
+           policy_alter_kj_uparent,
+           policy_alter_kj_wchild,
+           policy_alter_kj_wparent;
 -- Old-style quoted SQL functions do not have stored prosqlbody proofs; they
 -- still revalidate when their text is parsed for execution.
 CREATE TABLE sqlbody_kj_old_parent (id int PRIMARY KEY);
@@ -6530,3 +6698,15 @@ SELECT * FROM keyjoin_dump_func();
 ----------
 (0 rows)
 
+-- Also leave a stored policy proof behind for the pg_upgrade dump tests:
+-- its 'k' edges must order CREATE POLICY after the constraints it needs.
+CREATE TABLE keyjoin_dump_guarded (id int, kdc_ref int);
+ALTER TABLE keyjoin_dump_guarded ENABLE ROW LEVEL SECURITY;
+CREATE POLICY keyjoin_dump_policy ON keyjoin_dump_guarded
+USING (EXISTS (
+    SELECT 1
+    FROM keyjoin_dump_parent p
+    -- accepted
+    JOIN keyjoin_dump_child c FOR KEY (kdc_parent_id) -> p (kdp_id)
+    WHERE c.kdc_id = keyjoin_dump_guarded.kdc_ref
+));

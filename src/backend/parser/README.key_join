@@ -35,7 +35,7 @@ available.  It:
 
 The clause is not rewritten away: the join executes as an ordinary equijoin
 through the generated quals, while the retained KeyJoinNode records the
-proof.  When the query is stored (a view, rule, function body, and so on),
+proof.  When the query is stored (a view, policy, function body, and so on),
 its dependencies are recorded as DEPENDENCY_KEYJOIN so the join can be
 revalidated if a referenced object later changes.
 

@@ -504,6 +504,35 @@ DROP VIEW jsonb_table_view4;
 DROP VIEW jsonb_table_view5;
 DROP VIEW jsonb_table_view6;
 DROP DOMAIN jsonb_test_domain;
+-- Parentheses around a nested parent/child plan must survive a dump, so the
+-- plan parses back to the same tree.
+CREATE VIEW jsonb_table_view_plan AS
+SELECT * FROM JSON_TABLE(
+	jsonb 'null', '$' AS p0
+	COLUMNS (
+		NESTED PATH '$.a[*]' AS p1 COLUMNS (
+			NESTED PATH '$.b[*]' AS p11 COLUMNS (b int PATH '$')
+		)
+	)
+	PLAN (p0 OUTER (p1 INNER p11))
+);
+\sv jsonb_table_view_plan
+CREATE OR REPLACE VIEW public.jsonb_table_view_plan AS
+ SELECT b
+   FROM JSON_TABLE(
+            'null'::jsonb, '$' AS p0
+            COLUMNS (
+                NESTED PATH '$."a"[*]' AS p1
+                COLUMNS (
+                    NESTED PATH '$."b"[*]' AS p11
+                    COLUMNS (
+                        b integer PATH '$'
+                    )
+                )
+            )
+            PLAN (p0 OUTER (p1 INNER p11))
+        )
+DROP VIEW jsonb_table_view_plan;
 -- JSON_TABLE: only one FOR ORDINALITY columns allowed
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (id FOR ORDINALITY, id2 FOR ORDINALITY, a int PATH '$.a' ERROR ON EMPTY)) jt;
 ERROR:  only one FOR ORDINALITY column is allowed
@@ -547,6 +576,15 @@ SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'strict $.a' ERROR O
 ERROR:  jsonpath member accessor can only be applied to an object
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'lax $.a' ERROR ON EMPTY) ERROR ON ERROR) jt;
 ERROR:  no SQL/JSON item found for specified path of column "a"
+-- Table-level ERROR ON ERROR is not propagated to a column lacking its own
+-- ON ERROR clause: the column keeps the default NULL ON ERROR behavior, so a
+-- conversion failure yields NULL rather than raising an error.
+SELECT * FROM JSON_TABLE(jsonb '"err"', '$' COLUMNS (a int PATH '$') ERROR ON ERROR) jt;
+ a 
+---
+  
+(1 row)
+
 SELECT * FROM JSON_TABLE(jsonb '"a"', '$' COLUMNS (a int PATH '$'   DEFAULT 1 ON EMPTY DEFAULT 2 ON ERROR)) jt;
  a 
 ---
@@ -1028,6 +1066,31 @@ ERROR:  invalid JSON_TABLE plan clause
 LINE 12:        PLAN ((p1 INNER (p12 CROSS p11)) CROSS (p2 INNER p21)...
                       ^
 DETAIL:  Expected INNER or OUTER.
+-- An unnamed NESTED path whose generated name would clash with a
+-- user-supplied path name must not silently drop columns: the generated
+-- name is made unique, so the still-uncovered path is reported instead.
+SELECT * FROM JSON_TABLE(
+       jsonb '[{"x":[1],"y":[2]}]', '$[*]' AS p0
+       COLUMNS (
+               NESTED PATH '$.x[*]' AS json_table_path_0 COLUMNS (x int PATH '$'),
+               NESTED PATH '$.y[*]' COLUMNS (y int PATH '$')
+       )
+       PLAN (p0 OUTER json_table_path_0)
+) jt;
+ERROR:  invalid JSON_TABLE specification
+LINE 5:                NESTED PATH '$.y[*]' COLUMNS (y int PATH '$')
+                       ^
+DETAIL:  PLAN clause for nested path json_table_path_1 was not found.
+-- A user-supplied name matching the pattern of generated path names must not
+-- trigger a spurious duplicate-name error: the unnamed row pattern path is
+-- named only after the user-supplied names are collected, so its generated
+-- name avoids them.
+SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (json_table_path_0 int PATH '$')) jt;
+ json_table_path_0 
+-------------------
+                 1
+(1 row)
+
 -- JSON_TABLE: plan execution
 CREATE TEMP TABLE jsonb_table_test (js jsonb);
 INSERT INTO jsonb_table_test
@@ -1821,7 +1884,7 @@ CREATE OR REPLACE VIEW public.json_table_view9 AS
    FROM JSON_TABLE(
             '"a"'::text, '$' AS json_table_path_0
             COLUMNS (
-                a text PATH '$' NULL ON EMPTY
+                a text PATH '$'
             ) ERROR ON ERROR
         )
 DROP VIEW json_table_view8, json_table_view9;
@@ -1847,3 +1910,19 @@ CREATE OR REPLACE VIEW public.json_table_view9 AS
             )
         )
 DROP VIEW json_table_view8, json_table_view9;
+-- Test JSON_TABLE() column deparsing -- a non-default ON EMPTY behavior of a
+-- column must be preserved
+CREATE VIEW json_table_view_on_empty AS
+SELECT * FROM JSON_TABLE(jsonb '{}', '$' AS p0
+	COLUMNS (a int PATH '$.nosuch' ERROR ON EMPTY)
+	ERROR ON ERROR);
+\sv json_table_view_on_empty;
+CREATE OR REPLACE VIEW public.json_table_view_on_empty AS
+ SELECT a
+   FROM JSON_TABLE(
+            '{}'::jsonb, '$' AS p0
+            COLUMNS (
+                a integer PATH '$."nosuch"' ERROR ON EMPTY
+            ) ERROR ON ERROR
+        )
+DROP VIEW json_table_view_on_empty;

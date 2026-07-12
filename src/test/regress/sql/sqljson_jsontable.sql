@@ -237,6 +237,21 @@ DROP VIEW jsonb_table_view5;
 DROP VIEW jsonb_table_view6;
 DROP DOMAIN jsonb_test_domain;
 
+-- Parentheses around a nested parent/child plan must survive a dump, so the
+-- plan parses back to the same tree.
+CREATE VIEW jsonb_table_view_plan AS
+SELECT * FROM JSON_TABLE(
+	jsonb 'null', '$' AS p0
+	COLUMNS (
+		NESTED PATH '$.a[*]' AS p1 COLUMNS (
+			NESTED PATH '$.b[*]' AS p11 COLUMNS (b int PATH '$')
+		)
+	)
+	PLAN (p0 OUTER (p1 INNER p11))
+);
+\sv jsonb_table_view_plan
+DROP VIEW jsonb_table_view_plan;
+
 -- JSON_TABLE: only one FOR ORDINALITY columns allowed
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (id FOR ORDINALITY, id2 FOR ORDINALITY, a int PATH '$.a' ERROR ON EMPTY)) jt;
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (id FOR ORDINALITY, a int PATH '$' ERROR ON EMPTY)) jt;
@@ -265,6 +280,11 @@ FROM
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH '$.a' ERROR ON EMPTY)) jt;
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'strict $.a' ERROR ON ERROR) ERROR ON ERROR) jt;
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'lax $.a' ERROR ON EMPTY) ERROR ON ERROR) jt;
+
+-- Table-level ERROR ON ERROR is not propagated to a column lacking its own
+-- ON ERROR clause: the column keeps the default NULL ON ERROR behavior, so a
+-- conversion failure yields NULL rather than raising an error.
+SELECT * FROM JSON_TABLE(jsonb '"err"', '$' COLUMNS (a int PATH '$') ERROR ON ERROR) jt;
 
 SELECT * FROM JSON_TABLE(jsonb '"a"', '$' COLUMNS (a int PATH '$'   DEFAULT 1 ON EMPTY DEFAULT 2 ON ERROR)) jt;
 SELECT * FROM JSON_TABLE(jsonb '"a"', '$' COLUMNS (a int PATH 'strict $.a' DEFAULT 1 ON EMPTY DEFAULT 2 ON ERROR)) jt;
@@ -566,6 +586,24 @@ SELECT * FROM JSON_TABLE(
        )
        PLAN ((p1 INNER (p12 CROSS p11)) CROSS (p2 INNER p21))
 ) jt;
+
+-- An unnamed NESTED path whose generated name would clash with a
+-- user-supplied path name must not silently drop columns: the generated
+-- name is made unique, so the still-uncovered path is reported instead.
+SELECT * FROM JSON_TABLE(
+       jsonb '[{"x":[1],"y":[2]}]', '$[*]' AS p0
+       COLUMNS (
+               NESTED PATH '$.x[*]' AS json_table_path_0 COLUMNS (x int PATH '$'),
+               NESTED PATH '$.y[*]' COLUMNS (y int PATH '$')
+       )
+       PLAN (p0 OUTER json_table_path_0)
+) jt;
+
+-- A user-supplied name matching the pattern of generated path names must not
+-- trigger a spurious duplicate-name error: the unnamed row pattern path is
+-- named only after the user-supplied names are collected, so its generated
+-- name avoids them.
+SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (json_table_path_0 int PATH '$')) jt;
 
 -- JSON_TABLE: plan execution
 
@@ -1004,3 +1042,13 @@ CREATE VIEW json_table_view9 AS SELECT * from JSON_TABLE('"a"', '$' COLUMNS (a t
 \sv json_table_view9;
 
 DROP VIEW json_table_view8, json_table_view9;
+
+-- Test JSON_TABLE() column deparsing -- a non-default ON EMPTY behavior of a
+-- column must be preserved
+CREATE VIEW json_table_view_on_empty AS
+SELECT * FROM JSON_TABLE(jsonb '{}', '$' AS p0
+	COLUMNS (a int PATH '$.nosuch' ERROR ON EMPTY)
+	ERROR ON ERROR);
+\sv json_table_view_on_empty;
+
+DROP VIEW json_table_view_on_empty;

@@ -4698,32 +4698,18 @@ JsonTablePlanNextRow(JsonTablePlanState *planstate)
 }
 
 /*
- * Fetch next row from a JsonTablePlan's path evaluation result and from
- * any child nested path(s).
+ * Advance a JsonTablePlan's path scan to its next row pattern match.
  *
- * Returns true if any of the paths (this or the nested) has more rows to
- * return.
- *
- * By fetching the nested path(s)'s rows based on the parent row at each
- * level, this essentially joins the rows of different levels.  If a nested
- * path at a given level has no matching rows, the columns of that level will
- * compute to NULL, making it an OUTER join.
+ * This only moves this plan's own row pattern iterator forward and makes the
+ * matched item the current row; driving and joining of any nested plan is the
+ * responsibility of JsonTablePlanNextRow().  Returns false when this scan's
+ * row pattern matches are exhausted.
  */
 static bool
 JsonTablePlanScanNextRow(JsonTablePlanState *planstate)
 {
 	JsonbValue *jbv;
 	MemoryContext oldcxt;
-
-	/*
-	 * If planstate already has an active row and there is a nested plan,
-	 * check if it has an active row to join with the former.
-	 */
-	if (!planstate->current.isnull)
-	{
-		if (planstate->nested && JsonTablePlanNextRow(planstate->nested))
-			return true;
-	}
 
 	/* Fetch new row from the list of found values to set as active. */
 	jbv = JsonValueListNext(&planstate->iter);
@@ -4747,21 +4733,6 @@ JsonTablePlanScanNextRow(JsonTablePlanState *planstate)
 
 	/* Next row! */
 	planstate->ordinal++;
-
-	/* Process nested plan(s), if any. */
-	if (planstate->nested)
-	{
-		/* Re-evaluate the nested path using the above parent row. */
-		JsonTableResetNestedPlan(planstate->nested);
-
-		/*
-		 * Now fetch the nested plan's current row to be joined against the
-		 * parent row.  Any further nested plans' paths will be re-evaluated
-		 * recursively, level at a time, after setting each nested plan's
-		 * current row.
-		 */
-		(void) JsonTablePlanNextRow(planstate->nested);
-	}
 
 	/* There are more rows. */
 	return true;
@@ -4787,11 +4758,14 @@ JsonTableResetNestedPlan(JsonTablePlanState *planstate)
 			JsonTableResetNestedPlan(planstate->nested);
 
 		/*
-		 * If this plan itself has a child nested plan, it will be reset when
-		 * the caller calls JsonTablePlanNextRow() on this plan.
+		 * Reset this plan's transient scan state so that its columns read as
+		 * NULL until it is actually advanced.  Re-evaluating the path against
+		 * the new parent row is deferred (see the reset flag) until the plan
+		 * is advanced by JsonTablePlanNextRow(), so that the path is not
+		 * evaluated more than once per parent row.
 		 */
 		if (!parent->current.isnull)
-			JsonTableResetRowPattern(planstate, parent->current.value);
+			JsonTableRescan(planstate);
 	}
 	else if (IsA(planstate->plan, JsonTableSiblingJoin))
 	{

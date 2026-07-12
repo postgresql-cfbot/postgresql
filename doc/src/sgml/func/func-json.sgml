@@ -3640,8 +3640,8 @@ DETAIL:  Missing "]" after array dimensions.
    against the row constructed from the columns specified in the parent
    <literal>COLUMNS</literal> clause to get the row in the final view.  Child
    columns themselves may contain a <literal>NESTED PATH</literal>
-   specification thus allowing to extract data located at arbitrary nesting
-   levels.  Columns produced by multiple <literal>NESTED PATH</literal>s at the
+   specification, thus allowing extraction of data located at arbitrary
+   nesting levels.  Columns produced by multiple <literal>NESTED PATH</literal>s at the
    same level are considered to be <firstterm>siblings</firstterm> of each
    other and their rows after joining with the parent row are combined using
    UNION.
@@ -3662,12 +3662,12 @@ DETAIL:  Missing "]" after array dimensions.
 JSON_TABLE (
     <replaceable>context_item</replaceable>, <replaceable>path_expression</replaceable> <optional> AS <replaceable>json_path_name</replaceable> </optional> <optional> PASSING { <replaceable>value</replaceable> AS <replaceable>varname</replaceable> } <optional>, ...</optional> </optional>
     COLUMNS ( <replaceable class="parameter">json_table_column</replaceable> <optional>, ...</optional> )
-    <optional> { <literal>ERROR</literal> | <literal>EMPTY</literal> <optional>ARRAY</optional>} <literal>ON ERROR</literal> </optional>
     <optional>
         PLAN ( <replaceable class="parameter">json_table_plan</replaceable> ) |
-        PLAN DEFAULT ( { INNER | OUTER } <optional> , { CROSS | UNION } </optional>
-                     | { CROSS | UNION } <optional> , { INNER | OUTER } </optional> )
+        PLAN DEFAULT ( { OUTER | INNER } <optional> , { CROSS | UNION } </optional>
+                     | { CROSS | UNION } <optional> , { OUTER | INNER } </optional> )
     </optional>
+    <optional> { <literal>ERROR</literal> | <literal>EMPTY</literal> <optional>ARRAY</optional>} <literal>ON ERROR</literal> </optional>
 )
 
 <phrase>
@@ -3853,7 +3853,7 @@ where <replaceable class="parameter">json_table_column</replaceable> is:
      The <literal>NESTED PATH</literal> syntax is recursive,
      so you can go down multiple nested levels by specifying several
      <literal>NESTED PATH</literal> subclauses within each other.
-     It allows to unnest the hierarchy of JSON objects and arrays
+     It allows you to unnest the hierarchy of JSON objects and arrays
      in a single function invocation rather than chaining several
      <function>JSON_TABLE</function> expressions in an SQL statement.
     </para>
@@ -3886,7 +3886,7 @@ where <replaceable class="parameter">json_table_column</replaceable> is:
 
     <para>
      The optional <replaceable>json_path_name</replaceable> serves as an
-     identifier of the provided <replaceable>json_path_specification</replaceable>.
+     identifier of the provided <replaceable>path_expression</replaceable>.
      The path name must be unique and distinct from the column names.  Each
      path name can appear in the <literal>PLAN</literal> clause only once.
     </para>
@@ -3920,20 +3920,6 @@ where <replaceable class="parameter">json_table_column</replaceable> is:
   <variablelist>
    <varlistentry>
     <term>
-     <literal>INNER</literal>
-    </term>
-    <listitem>
-
-    <para>
-     Use <literal>INNER JOIN</literal>, so that the parent row
-     is omitted from the output if it does not have any child rows
-     after joining the data returned by <literal>NESTED PATH</literal>.
-    </para>
-    </listitem>
-   </varlistentry>
-
-   <varlistentry>
-    <term>
      <literal>OUTER</literal>
     </term>
     <listitem>
@@ -3947,6 +3933,20 @@ where <replaceable class="parameter">json_table_column</replaceable> is:
     </para>
     <para>
      This is the default option for joining columns with parent/child relationship.
+    </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry>
+    <term>
+     <literal>INNER</literal>
+    </term>
+    <listitem>
+
+    <para>
+     Use <literal>INNER JOIN</literal>, so that the parent row
+     is omitted from the output if it does not have any child rows
+     after joining the data returned by <literal>NESTED PATH</literal>.
     </para>
     </listitem>
    </varlistentry>
@@ -3991,7 +3991,7 @@ where <replaceable class="parameter">json_table_column</replaceable> is:
 
    <varlistentry>
     <term>
-     <literal>PLAN DEFAULT</literal> ( <literal><replaceable>OUTER | INNER</replaceable> <optional>, <replaceable>UNION | CROSS</replaceable> </optional></literal> )
+     <literal>PLAN DEFAULT</literal> ( { <literal>OUTER</literal> | <literal>INNER</literal> } <optional>, { <literal>UNION</literal> | <literal>CROSS</literal> } </optional> )
     </term>
     <listitem>
      <para>

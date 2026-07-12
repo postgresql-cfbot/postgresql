@@ -49,8 +49,7 @@ static JsonTablePlan *transformJsonTableNestedColumns(JsonTableParseContext *cxt
 													  List *columns);
 static JsonFuncExpr *transformJsonTableColumn(JsonTableColumn *jtc,
 											  Node *contextItemExpr,
-											  List *passingArgs,
-											  bool errorOnError);
+											  List *passingArgs);
 static bool isCompositeType(Oid typid);
 static JsonTablePlan *makeJsonTablePathScan(JsonTableParseContext *cxt,
 											JsonTablePathSpec *pathspec,
@@ -108,17 +107,25 @@ transformJsonTable(ParseState *pstate, JsonTable *jt)
 	cxt.pathNameId = 0;
 
 	/*
+	 * Collect the user-supplied path and column names, checking that they are
+	 * distinct.  If the row pattern path has an explicit name, it shares this
+	 * namespace, so seed the list with it.
+	 */
+	if (rootPathSpec->name != NULL)
+		cxt.pathNames = list_make1(rootPathSpec->name);
+	CheckDuplicateColumnOrPathNames(&cxt, jt->columns);
+
+	/*
 	 * Generate a name for the row pattern path if it was not given one.  Path
 	 * names are optional for every path, including when a PLAN clause is
 	 * present; a specific PLAN() can only reference named paths, so an
 	 * unnamed path that the plan must mention is caught later as a path name
-	 * mismatch or a path not covered by the plan.
+	 * mismatch or a path not covered by the plan.  We generate the name only
+	 * after collecting the user-supplied names above, so that it cannot
+	 * collide with any of them.
 	 */
 	if (rootPathSpec->name == NULL)
 		rootPathSpec->name = generateJsonTablePathName(&cxt);
-
-	cxt.pathNames = list_make1(rootPathSpec->name);
-	CheckDuplicateColumnOrPathNames(&cxt, jt->columns);
 
 	/*
 	 * We make lateral_only names of this level visible, whether or not the
@@ -250,12 +257,21 @@ static char *
 generateJsonTablePathName(JsonTableParseContext *cxt)
 {
 	char		namebuf[32];
-	char	   *name = namebuf;
+	char	   *name;
 
-	snprintf(namebuf, sizeof(namebuf), "json_table_path_%d",
-			 cxt->pathNameId++);
+	/*
+	 * Bump the counter until we produce a name that is not already used as a
+	 * path or column name.  Otherwise a generated name could coincide with a
+	 * user-supplied one, which would confuse PLAN clause matching and could
+	 * silently drop a column.
+	 */
+	do
+	{
+		snprintf(namebuf, sizeof(namebuf), "json_table_path_%d",
+				 cxt->pathNameId++);
+	} while (LookupPathOrColumnName(cxt, namebuf));
 
-	name = pstrdup(name);
+	name = pstrdup(namebuf);
 	cxt->pathNames = lappend(cxt->pathNames, name);
 
 	return name;
@@ -363,12 +379,8 @@ appendJsonTableColumns(JsonTableParseContext *cxt, List *columns, List *passingA
 {
 	ListCell   *col;
 	ParseState *pstate = cxt->pstate;
-	JsonTable  *jt = cxt->jt;
 	TableFunc  *tf = cxt->tf;
 	bool		ordinality_found = false;
-	JsonBehavior *on_error = jt->on_error;
-	bool		errorOnError = on_error &&
-		on_error->btype == JSON_BEHAVIOR_ERROR;
 	Oid			contextItemTypid = exprType(tf->docexpr);
 
 	foreach(col, columns)
@@ -427,7 +439,7 @@ appendJsonTableColumns(JsonTableParseContext *cxt, List *columns, List *passingA
 					param->typeMod = -1;
 
 					jfe = transformJsonTableColumn(rawc, (Node *) param,
-												   passingArgs, errorOnError);
+												   passingArgs);
 
 					colexpr = transformExpr(pstate, (Node *) jfe,
 											EXPR_KIND_FROM_FUNCTION);
@@ -482,7 +494,7 @@ isCompositeType(Oid typid)
  */
 static JsonFuncExpr *
 transformJsonTableColumn(JsonTableColumn *jtc, Node *contextItemExpr,
-						 List *passingArgs, bool errorOnError)
+						 List *passingArgs)
 {
 	Node	   *pathspec;
 	JsonFuncExpr *jfexpr = makeNode(JsonFuncExpr);
@@ -524,8 +536,6 @@ transformJsonTableColumn(JsonTableColumn *jtc, Node *contextItemExpr,
 	jfexpr->output->returning->format = jtc->format;
 	jfexpr->on_empty = jtc->on_empty;
 	jfexpr->on_error = jtc->on_error;
-	if (jfexpr->on_error == NULL && errorOnError)
-		jfexpr->on_error = makeJsonBehavior(JSON_BEHAVIOR_ERROR, NULL, -1);
 	jfexpr->quotes = jtc->quotes;
 	jfexpr->wrapper = jtc->wrapper;
 	jfexpr->location = jtc->location;
@@ -637,13 +647,12 @@ transformJsonTableNestedColumns(JsonTableParseContext *cxt,
 	else
 		elog(ERROR, "invalid JSON_TABLE plan type %d", planspec->plan_type);
 
-	if (!jtc)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("invalid JSON_TABLE plan clause"),
-				 errdetail("PATH name was %s not found in nested columns list.",
-						   planspec->pathname),
-				 parser_errposition(cxt->pstate, planspec->location)));
+	/*
+	 * The plan's path names were already matched one-to-one against the
+	 * nested columns by validateJsonTableChildPlan(), so a nested column with
+	 * this path name must exist.
+	 */
+	Assert(jtc != NULL);
 
 	return transformJsonTableColumns(cxt, planspec, jtc->columns,
 									 passingArgs,

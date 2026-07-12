@@ -282,6 +282,13 @@ typedef struct HeapTupleTableSlot
 	HeapTupleData tupdata;		/* optional workspace for storing tuple */
 } HeapTupleTableSlot;
 
+typedef struct HeapPageBatch
+{
+	const OffsetNumber *offsets;	/* visible offsets on slot's page, or NULL */
+	int			ntuples;		/* number of offsets */
+	int			current;		/* index of slot's tuple in offsets */
+} HeapPageBatch;
+
 /* heap tuple residing in a buffer */
 typedef struct BufferHeapTupleTableSlot
 {
@@ -296,6 +303,7 @@ typedef struct BufferHeapTupleTableSlot
 	 * such a case, since presumably base.tuple is pointing into the buffer.)
 	 */
 	Buffer		buffer;			/* tuple's buffer, or InvalidBuffer */
+	HeapPageBatch batch;
 } BufferHeapTupleTableSlot;
 
 typedef struct MinimalTupleTableSlot

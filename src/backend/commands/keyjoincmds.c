@@ -33,8 +33,11 @@
 #include "nodes/parsenodes.h"
 #include "parser/parse_key_join.h"
 #include "storage/lmgr.h"
+#include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/injection_point.h"
 #include "utils/rel.h"
+#include "utils/syscache.h"
 
 static Oid	get_rule_event_relation(Oid ruleOid);
 static List *find_dependent_key_join_objects(Oid refclassid, Oid refobjid);
@@ -45,6 +48,7 @@ static bool object_address_list_member(List *objects, Oid classId,
 static int	object_address_list_cmp(const ListCell *a, const ListCell *b);
 static ObjectAddress *make_object_address(Oid classId, Oid objectId);
 static void revalidate_dependent_key_join_relation(Oid relationOid);
+static void revalidate_dependent_key_join_function(Oid procOid);
 static Node *revalidate_key_join_node(Node *stored);
 static void reconcile_key_join_dependencies(const ObjectAddress *owner,
 											List *revalidated);
@@ -122,9 +126,24 @@ find_dependent_key_join_objects(Oid refclassid, Oid refobjid)
 			if (!OidIsValid(objectid))
 				continue;
 		}
+		else if (dep->classid == ProcedureRelationId)
+		{
+			classid = ProcedureRelationId;
+			objectid = dep->objid;
+		}
 		else
 			elog(ERROR, "unexpected class %u for key join proof dependent",
 				 dep->classid);
+
+		/*
+		 * RevalidateDependentKeyJoinObjectsOnProcedure pre-validates the
+		 * procedure's own body before walking its dependents; skip the
+		 * depender entry for the procedure itself so its body is not
+		 * revalidated twice.
+		 */
+		if (classid == ProcedureRelationId &&
+			refclassid == ProcedureRelationId && objectid == refobjid)
+			continue;
 
 		if (!object_address_list_member(result, classid, objectid))
 			result = lappend(result, make_object_address(classid, objectid));
@@ -151,6 +170,9 @@ revalidate_dependent_key_join_object(const ObjectAddress *object)
 	{
 		case RelationRelationId:
 			revalidate_dependent_key_join_relation(object->objectId);
+			break;
+		case ProcedureRelationId:
+			revalidate_dependent_key_join_function(object->objectId);
 			break;
 		default:
 			elog(ERROR, "unexpected class %u for key join proof dependent",
@@ -219,6 +241,46 @@ revalidate_dependent_key_join_relation(Oid relationOid)
 	}
 
 	relation_close(rel, NoLock);
+}
+
+static void
+revalidate_dependent_key_join_function(Oid procOid)
+{
+	HeapTuple	tup;
+	Datum		datum;
+	bool		isnull;
+	Node	   *body;
+
+	INJECTION_POINT("key-join-before-dependent-function-lookup", NULL);
+
+	tup = SearchSysCache1(PROCOID, ObjectIdGetDatum(procOid));
+	if (!HeapTupleIsValid(tup))
+	{
+		/*
+		 * A function can be dropped after pg_depend is scanned but before
+		 * this lookup reaches pg_proc.  Its stored proof no longer exists.
+		 */
+		return;
+	}
+
+	datum = SysCacheGetAttr(PROCOID, tup, Anum_pg_proc_prosqlbody, &isnull);
+	if (isnull)
+	{
+		ReleaseSysCache(tup);
+		return;
+	}
+
+	body = stringToNode(TextDatumGetCString(datum));
+	ReleaseSysCache(tup);
+
+	{
+		ObjectAddress owner;
+		Node	   *node = revalidate_key_join_node(body);
+
+		/* The function's proof dependencies are recorded under the proc OID. */
+		ObjectAddressSet(owner, ProcedureRelationId, procOid);
+		reconcile_key_join_dependencies(&owner, node ? list_make1(node) : NIL);
+	}
 }
 
 /*
@@ -304,6 +366,14 @@ RevalidateDependentKeyJoinObjectsOnProcedure(Oid procOid)
 
 	Assert(OidIsValid(procOid));
 
+	/*
+	 * CREATE OR REPLACE FUNCTION transforms a new-style SQL function body
+	 * before the replacement tuple is visible.  If that body proves a key
+	 * join through objects that refer back to the function, it may have used
+	 * the old function properties; validate the function's own body once
+	 * against the final catalog state before checking direct dependents.
+	 */
+	revalidate_dependent_key_join_function(procOid);
 	objects = find_dependent_key_join_objects(ProcedureRelationId, procOid);
 	revalidate_dependent_key_join_objects(objects);
 }

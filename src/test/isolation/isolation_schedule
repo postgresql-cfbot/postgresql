@@ -124,6 +124,7 @@ test: key-join-plain-function-prelock
 test: key-join-plain-function-dependent-lock
 test: key-join-plain-function-ownercheck-lock
 test: key-join-plain-function-alter-owner-lock
+test: key-join-sqlbody-function-prelock
 test: key-join-recursive-revalidation-lock
 test: key-join-lazy-facts-lock
 test: key-join-select-blocks-dml

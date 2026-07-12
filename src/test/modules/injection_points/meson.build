@@ -61,6 +61,7 @@ tests += {
       'key_join_proof_race_operator_prelock',
       'key_join_proof_race_producer_view',
       'key_join_proof_race_relation_state',
+      'key_join_stale_function_dependency',
       'key_join_cached_plan_inherit',
     ],
     'runningcheck': false, # see syscache-update-pruned

@@ -5124,6 +5124,58 @@ DROP VIEW pf_kj_vp, pf_kj_vr;
 DROP TABLE pf_kj_r, pf_kj_p;
 DROP FUNCTION pf_kj_pick();
 
+-- A function's own SQL body must also be revalidated after replacement.
+-- The body is transformed while the old function properties are still
+-- visible, but it is stored with dependencies against the replaced function.
+CREATE FUNCTION pf_kj_self_replace_pick() RETURNS int
+    LANGUAGE sql STABLE RETURN 1;
+CREATE TABLE pf_kj_self_replace_p (id int PRIMARY KEY);
+CREATE TABLE pf_kj_self_replace_r (id int NOT NULL REFERENCES pf_kj_self_replace_p (id));
+INSERT INTO pf_kj_self_replace_p VALUES (1);
+INSERT INTO pf_kj_self_replace_r VALUES (1);
+CREATE VIEW pf_kj_self_replace_vp AS
+SELECT id FROM pf_kj_self_replace_p WHERE id = pf_kj_self_replace_pick();
+CREATE VIEW pf_kj_self_replace_vr AS
+SELECT id FROM pf_kj_self_replace_r WHERE id = pf_kj_self_replace_pick();
+-- rejected, reason: the function's own stored proof sees final VOLATILE state
+CREATE OR REPLACE FUNCTION pf_kj_self_replace_pick() RETURNS int
+    LANGUAGE sql VOLATILE
+    RETURN CASE WHEN false THEN (
+        SELECT count(*)::int
+        FROM pf_kj_self_replace_vp p
+        JOIN pf_kj_self_replace_vr r FOR KEY (id) -> p (id)
+    ) ELSE 1 END;
+DROP VIEW pf_kj_self_replace_vp, pf_kj_self_replace_vr;
+DROP TABLE pf_kj_self_replace_r, pf_kj_self_replace_p;
+DROP FUNCTION pf_kj_self_replace_pick();
+
+-- ALTER FUNCTION must revalidate the function's own stored SQL body too.
+CREATE FUNCTION pf_kj_self_alter_pick() RETURNS int
+    LANGUAGE sql STABLE RETURN 1;
+CREATE TABLE pf_kj_self_alter_p (id int PRIMARY KEY);
+CREATE TABLE pf_kj_self_alter_r (id int NOT NULL REFERENCES pf_kj_self_alter_p (id));
+INSERT INTO pf_kj_self_alter_p VALUES (1);
+INSERT INTO pf_kj_self_alter_r VALUES (1);
+CREATE VIEW pf_kj_self_alter_vp AS
+SELECT id FROM pf_kj_self_alter_p WHERE id = pf_kj_self_alter_pick();
+CREATE VIEW pf_kj_self_alter_vr AS
+SELECT id FROM pf_kj_self_alter_r WHERE id = pf_kj_self_alter_pick();
+-- accepted
+CREATE OR REPLACE FUNCTION pf_kj_self_alter_pick() RETURNS int
+    LANGUAGE sql STABLE
+    RETURN CASE WHEN false THEN (
+        SELECT count(*)::int
+        FROM pf_kj_self_alter_vp p
+        JOIN pf_kj_self_alter_vr r FOR KEY (id) -> p (id)
+    ) ELSE 1 END;
+-- rejected, reason: the function's own stored proof sees final VOLATILE state
+ALTER FUNCTION pf_kj_self_alter_pick() VOLATILE;
+CREATE OR REPLACE FUNCTION pf_kj_self_alter_pick() RETURNS int
+    LANGUAGE sql STABLE RETURN 1;
+DROP VIEW pf_kj_self_alter_vp, pf_kj_self_alter_vr;
+DROP TABLE pf_kj_self_alter_r, pf_kj_self_alter_p;
+DROP FUNCTION pf_kj_self_alter_pick();
+
 -- CoerceViaIO proof filters must depend on hidden type I/O functions too.
 -- Otherwise ALTER FUNCTION can make a stored proof stale without revalidation.
 SET client_min_messages = warning;
@@ -5173,6 +5225,125 @@ DROP CAST (pf_kj_io_type AS integer);
 SET client_min_messages = warning;
 DROP TYPE pf_kj_io_type CASCADE;
 RESET client_min_messages;
+
+-- New-style SQL function bodies store analyzed key-join proofs, so DDL that
+-- changes a consumed proof dependency must revalidate those stored bodies.
+CREATE TABLE sqlbody_kj_view_parent (id int PRIMARY KEY);
+CREATE TABLE sqlbody_kj_view_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES sqlbody_kj_view_parent (id)
+);
+INSERT INTO sqlbody_kj_view_parent VALUES (1), (2);
+INSERT INTO sqlbody_kj_view_child VALUES (10, 1), (20, 2);
+CREATE VIEW sqlbody_kj_view_parent_v AS
+SELECT id FROM sqlbody_kj_view_parent;
+CREATE FUNCTION sqlbody_kj_view_dep() RETURNS TABLE(child_id int)
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT c.id AS child_id
+    FROM sqlbody_kj_view_parent_v p
+    -- accepted
+    JOIN sqlbody_kj_view_child c FOR KEY (parent_id) -> p (id)
+    ORDER BY c.id;
+END;
+
+-- rejected, reason: stored SQL function body depends on referenced rows
+-- being preserved by the view.
+CREATE OR REPLACE VIEW sqlbody_kj_view_parent_v AS
+SELECT id FROM sqlbody_kj_view_parent WHERE id = 1;
+SELECT * FROM sqlbody_kj_view_dep();
+DROP FUNCTION sqlbody_kj_view_dep();
+DROP VIEW sqlbody_kj_view_parent_v;
+DROP TABLE sqlbody_kj_view_child, sqlbody_kj_view_parent;
+
+-- Stored SQL function bodies must also be revalidated when FK proof flags
+-- change.
+CREATE TABLE sqlbody_kj_fk_parent (id int PRIMARY KEY);
+CREATE TABLE sqlbody_kj_fk_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL,
+    CONSTRAINT sqlbody_kj_fk_child_parent_id_fkey
+        FOREIGN KEY (parent_id) REFERENCES sqlbody_kj_fk_parent (id)
+);
+INSERT INTO sqlbody_kj_fk_parent VALUES (1);
+INSERT INTO sqlbody_kj_fk_child VALUES (10, 1);
+CREATE FUNCTION sqlbody_kj_fk_dep() RETURNS TABLE(child_id int)
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT c.id AS child_id
+    FROM sqlbody_kj_fk_parent p
+    -- accepted
+    JOIN sqlbody_kj_fk_child c FOR KEY (parent_id) -> p (id);
+END;
+
+-- rejected, reason: stored SQL function body depends on the FK proof
+ALTER TABLE sqlbody_kj_fk_child
+    ALTER CONSTRAINT sqlbody_kj_fk_child_parent_id_fkey NOT ENFORCED;
+-- rejected, reason: stored SQL function body depends on the non-deferrable FK proof
+ALTER TABLE sqlbody_kj_fk_child
+    ALTER CONSTRAINT sqlbody_kj_fk_child_parent_id_fkey
+    DEFERRABLE INITIALLY IMMEDIATE;
+SELECT * FROM sqlbody_kj_fk_dep();
+DROP FUNCTION sqlbody_kj_fk_dep();
+DROP TABLE sqlbody_kj_fk_child, sqlbody_kj_fk_parent;
+
+-- Revalidating a SQL function body must reject producer replacement when
+-- replay would require a new proof dependency.  Explicit recreation stores
+-- the new proof source and stops blocking the old one.
+CREATE TABLE sqlbody_kj_refresh_parent_a (id int PRIMARY KEY);
+CREATE TABLE sqlbody_kj_refresh_parent_b (id int PRIMARY KEY);
+CREATE TABLE sqlbody_kj_refresh_child
+(
+    id int PRIMARY KEY,
+    ref int NOT NULL,
+    CONSTRAINT sqlbody_kj_refresh_child_ref_a_fkey
+        FOREIGN KEY (ref) REFERENCES sqlbody_kj_refresh_parent_a (id),
+    CONSTRAINT sqlbody_kj_refresh_child_ref_b_fkey
+        FOREIGN KEY (ref) REFERENCES sqlbody_kj_refresh_parent_b (id)
+);
+INSERT INTO sqlbody_kj_refresh_parent_a VALUES (1);
+INSERT INTO sqlbody_kj_refresh_parent_b VALUES (1);
+INSERT INTO sqlbody_kj_refresh_child VALUES (10, 1);
+CREATE VIEW sqlbody_kj_refresh_parent_v AS
+SELECT id FROM sqlbody_kj_refresh_parent_a;
+CREATE FUNCTION sqlbody_kj_refresh_dep() RETURNS TABLE(child_id int)
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT c.id AS child_id
+    FROM sqlbody_kj_refresh_parent_v p
+    -- accepted
+    JOIN sqlbody_kj_refresh_child c FOR KEY (ref) -> p (id);
+END;
+-- accepted: the function body's proof re-pins to parent_b's FK;
+-- pg_depend is reconciled to the re-derived evidence
+CREATE OR REPLACE VIEW sqlbody_kj_refresh_parent_v AS
+SELECT id FROM sqlbody_kj_refresh_parent_b;
+
+DROP FUNCTION sqlbody_kj_refresh_dep();
+CREATE OR REPLACE VIEW sqlbody_kj_refresh_parent_v AS
+SELECT id FROM sqlbody_kj_refresh_parent_b;
+CREATE FUNCTION sqlbody_kj_refresh_dep() RETURNS TABLE(child_id int)
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT c.id AS child_id
+    FROM sqlbody_kj_refresh_parent_v p
+    -- accepted
+    JOIN sqlbody_kj_refresh_child c FOR KEY (ref) -> p (id);
+END;
+SELECT * FROM sqlbody_kj_refresh_dep();
+ALTER TABLE sqlbody_kj_refresh_child
+    DROP CONSTRAINT sqlbody_kj_refresh_child_ref_a_fkey;
+-- rejected, reason: recreated SQL function body depends on the new FK proof
+ALTER TABLE sqlbody_kj_refresh_child
+    DROP CONSTRAINT sqlbody_kj_refresh_child_ref_b_fkey;
+SELECT * FROM sqlbody_kj_refresh_dep();
+DROP FUNCTION sqlbody_kj_refresh_dep();
+DROP VIEW sqlbody_kj_refresh_parent_v;
+DROP TABLE sqlbody_kj_refresh_child,
+           sqlbody_kj_refresh_parent_b,
+           sqlbody_kj_refresh_parent_a;
 
 -- Producer-side DDL may affect key-join proofs stored in dependent
 -- objects owned by other roles.  If those proofs still validate and
@@ -5267,6 +5438,88 @@ DROP TABLE output_unique_kj_grandchild,
            output_unique_kj_child,
            output_unique_kj_parent;
 
+-- New-style SQL function bodies follow the same stored dependency path.
+CREATE TABLE output_unique_sqlbody_parent (id int PRIMARY KEY);
+CREATE TABLE output_unique_sqlbody_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL,
+    CONSTRAINT output_unique_sqlbody_child_parent_id_key UNIQUE (parent_id),
+    CONSTRAINT output_unique_sqlbody_child_parent_id_fkey
+        FOREIGN KEY (parent_id) REFERENCES output_unique_sqlbody_parent (id)
+);
+CREATE TABLE output_unique_sqlbody_grandchild
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES output_unique_sqlbody_parent (id)
+);
+INSERT INTO output_unique_sqlbody_parent VALUES (1), (2);
+INSERT INTO output_unique_sqlbody_child VALUES (10, 1);
+INSERT INTO output_unique_sqlbody_grandchild VALUES (100, 1), (200, 2);
+CREATE FUNCTION output_unique_sqlbody_dep()
+RETURNS TABLE(parent_id int, child_id int, grandchild_id int)
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT q.parent_id, q.child_id, gc.id AS grandchild_id
+    FROM (
+        SELECT p.id AS parent_id, c.id AS child_id
+        FROM output_unique_sqlbody_parent p
+        LEFT JOIN output_unique_sqlbody_child c FOR KEY (parent_id) -> p (id)
+    ) q
+    -- accepted because output_unique_sqlbody_child.parent_id is unique
+    JOIN output_unique_sqlbody_grandchild gc FOR KEY (parent_id) -> q (parent_id);
+END;
+
+-- rejected, reason: the stored function body depends on the referencing-side
+-- uniqueness that preserved q.parent_id uniqueness.
+ALTER TABLE output_unique_sqlbody_child
+    DROP CONSTRAINT output_unique_sqlbody_child_parent_id_key;
+
+-- After dropping the consumer function, the same DDL succeeds and the raw
+-- nested key join is no longer provable.
+DROP FUNCTION output_unique_sqlbody_dep();
+ALTER TABLE output_unique_sqlbody_child
+    DROP CONSTRAINT output_unique_sqlbody_child_parent_id_key;
+SELECT q.parent_id, q.child_id, gc.id AS grandchild_id
+FROM (
+    SELECT p.id AS parent_id, c.id AS child_id
+    FROM output_unique_sqlbody_parent p
+    LEFT JOIN output_unique_sqlbody_child c FOR KEY (parent_id) -> p (id)
+) q
+JOIN output_unique_sqlbody_grandchild gc
+    FOR KEY (parent_id) -> q (parent_id);
+DROP TABLE output_unique_sqlbody_grandchild,
+           output_unique_sqlbody_child,
+           output_unique_sqlbody_parent;
+
+-- Old-style quoted SQL functions do not have stored prosqlbody proofs; they
+-- still revalidate when their text is parsed for execution.
+CREATE TABLE sqlbody_kj_old_parent (id int PRIMARY KEY);
+CREATE TABLE sqlbody_kj_old_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES sqlbody_kj_old_parent (id)
+);
+INSERT INTO sqlbody_kj_old_parent VALUES (1), (2);
+INSERT INTO sqlbody_kj_old_child VALUES (10, 1), (20, 2);
+CREATE VIEW sqlbody_kj_old_parent_v AS
+SELECT id FROM sqlbody_kj_old_parent;
+CREATE FUNCTION sqlbody_kj_old_dep() RETURNS TABLE(child_id int)
+LANGUAGE sql SECURITY DEFINER AS $$
+    SELECT c.id AS child_id
+    FROM sqlbody_kj_old_parent_v p
+    JOIN sqlbody_kj_old_child c FOR KEY (parent_id) -> p (id)
+    ORDER BY c.id
+$$;
+SELECT * FROM sqlbody_kj_old_dep();
+CREATE OR REPLACE VIEW sqlbody_kj_old_parent_v AS
+SELECT id FROM sqlbody_kj_old_parent WHERE id = 1;
+-- rejected, reason: old-style function text is revalidated at execution
+SELECT * FROM sqlbody_kj_old_dep();
+DROP FUNCTION sqlbody_kj_old_dep();
+DROP VIEW sqlbody_kj_old_parent_v;
+DROP TABLE sqlbody_kj_old_child, sqlbody_kj_old_parent;
+
 -- Recreate the diagnostics schema and fixtures (the diagnostics section above dropped them).
 CREATE SCHEMA key_join_diag;
 SET search_path = key_join_diag;
@@ -5319,3 +5572,15 @@ FROM keyjoin_dump_parent p
 -- accepted
 JOIN keyjoin_dump_child c FOR KEY (kdc_parent_id) -> p (kdp_id);
 SELECT * FROM keyjoin_dump_v;
+
+-- Also leave a stored SQL-body proof behind for the pg_upgrade dump tests:
+-- its 'k' edges must postpone the function past the constraints it needs.
+CREATE FUNCTION keyjoin_dump_func() RETURNS TABLE(child_id int)
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT c.kdc_id
+    FROM keyjoin_dump_parent p
+    -- accepted
+    JOIN keyjoin_dump_child c FOR KEY (kdc_parent_id) -> p (kdp_id);
+END;
+SELECT * FROM keyjoin_dump_func();

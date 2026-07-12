@@ -718,6 +718,10 @@ ProcedureCreate(const char *procedureName,
 
 	free_object_addresses(addrs);
 
+	/* Record FOR KEY proof dependencies separately from ordinary references. */
+	if (languageObjectId == SQLlanguageId && prosqlbody)
+		recordDependencyOnKeyJoinProofs(&myself, prosqlbody);
+
 	/* dependency on owner */
 	if (!is_update)
 		recordDependencyOnOwner(ProcedureRelationId, retval, proowner);

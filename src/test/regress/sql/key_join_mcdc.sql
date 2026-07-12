@@ -567,6 +567,21 @@ FROM (mcdc_plain_v v
       JOIN mcdc_reader r FOR KEY (parent_id) -> v (id))
 JOIN mcdc_child c ON c.parent_id = v.id;
 
+CREATE FUNCTION mcdc_rule_search_func() RETURNS TABLE(id int)
+LANGUAGE sql
+BEGIN ATOMIC
+    SELECT v.id
+    FROM mcdc_plain_v v
+    JOIN mcdc_reader r FOR KEY (parent_id) -> v (id);
+END;
+
+CREATE OR REPLACE VIEW mcdc_plain_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id);
+
+DROP FUNCTION mcdc_rule_search_func();
+
 SELECT r.id, v.id
 FROM mcdc_plain_v v
 JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)

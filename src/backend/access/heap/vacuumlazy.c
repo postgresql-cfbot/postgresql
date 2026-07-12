@@ -800,6 +800,21 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 	 * to increase the number of dead tuples it can prune away.)
 	 */
 	vacrel->aggressive = vacuum_get_cutoffs(rel, params, &vacrel->cutoffs);
+
+	/*
+	 * If the current vacuum cutoff (OldestXmin) is being held back by a
+	 * replication slot that has exceeded max_slot_xid_age, attempt to
+	 * invalidate such slots.
+	 */
+	if (maybe_invalidate_xid_aged_slots(vacrel->cutoffs.OldestXmin,
+										vacrel->cutoffs.OldestSlotXmin,
+										vacrel->cutoffs.OldestSlotCatalogXmin))
+	{
+		/* Some slots have been invalidated; re-compute the vacuum cutoffs */
+		vacrel->aggressive = vacuum_get_cutoffs(rel, params,
+												&vacrel->cutoffs);
+	}
+
 	vacrel->rel_pages = orig_rel_pages = RelationGetNumberOfBlocks(rel);
 	vacrel->vistest = GlobalVisTestFor(rel);
 

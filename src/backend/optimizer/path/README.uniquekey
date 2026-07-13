@@ -1,0 +1,220 @@
+Here is a design document and a part of implementation.
+
+What is UniqueKey?
+-----------------
+
+UniqueKey represents a uniqueness information for a RelOptInfo. for
+example:
+
+SELECT id FROM t;
+
+where the ID is the UniqueKey for the RelOptInfo (t).  In the real world,
+it has the following attributes:
+
+1). It should be EquivalenceClass based. for example:
+
+SELECT a FROM t WHERE a = id;
+
+In this case, the UniqueKey should be 1 EC with two members
+- EC(EM(a), EM(id)).
+
+
+2). Each UniqueKey may be made up with 1+ EquivalenceClass. for example:
+
+CREATE TABLE t(a int not null,  b int not null);
+CREATE UNIQUE INDEX on t(a, b);
+SELECT * FROM t;
+
+Where the UniqueKey for RelOptInfo (t) will be 2 ECs with each one has 1
+member.
+
+- EC(em=a), EC(em=b)
+
+3). Each RelOptInfo may have 1+ UniqueKeys.
+
+CREATE TABLE t(a int not null,  b int not null, c int not null);
+CREATE UNIQUE INDEX on t(a, b);
+CREATE UNIQUE INDEX on t(c);
+
+SELECT * FROM t;
+
+Where the UniqueKey for RelOptInfo (t) will be
+- [EC(em=a), EC(em=b)].
+- [EC(em=c)]
+
+4). A special case is about the one-row case. It works like:
+SELECT * FROM t WHERE id = 1;
+Here every single expression in the RelOptInfo (t) is unique since only
+one row here.
+
+Where can we use it?
+--------------------
+1. mark the distinct as no-op.  SELECT DISTINCT uniquekey FROM v; This
+  optimization has been required several times in our threads.
+
+2. Figure out more pathkey within the onerow case, then some planning
+  time can be reduced to be big extend. This user case is not absurd,
+  a real user case like this:
+
+  CREATE TABLE small_t (id int primary key, b int, c int .. u int);
+  CREATE INDEX ON small_t(b);
+  CREATE INDEX ON small_t(c);
+  ..
+
+  SELECT * FROM small_t s
+    JOIN t1 on t1.sb = s.b
+    JOIN T2 on t2.sc = s.c
+    ..
+    JOIN t20 on t20.su = s.u
+  WHERE s.id = 1;
+
+  Without the above optimization, we don't know s.b /s.c is ordered
+  already, so it might keep more different paths for small_t because of
+  they have different interesting pathkey, and use more planning time
+  for sorting to support merge join.
+
+  With the above optimization, the planning time should be reduced since
+  the seq scan can produce a ordered result for every expression.
+
+3. Figure out more interesting pathkey after join with normal UniqueKey.
+
+  CREATE TABLE t(id int primary key, b int, c int);
+  CREATE INDEX on t(c);
+  ANALYZE t;
+
+  explain (costs off)
+  select t1.id, t2.c from t t1
+    join t1 t2 on t1.id = t2.b
+    and t2.c > 3
+  order by t1.id, t2.c;
+
+		    QUERY PLAN
+  --------------------------------------------------
+  Sort Key: t1.id, t2.c   <---  this sort can be avoided actually.
+  ->  Nested Loop
+	Join Filter: (t1.id = t2.b)
+	->  Index Only Scan using t_pkey on t t1
+	->  Index Scan using t1_c_idx on t1 t2
+	      Index Cond: (c > 3)
+
+  *Without knowing the t1.id is unique*,  which means there are some
+  duplicated data in t1.id, the duplication data in t1 will break the
+  order of (t1.id, t2.c), but if we know the t1.id is unique, the sort
+  will be not needed.  I'm pretty happy with this finding.
+
+4. Optimize some group by case, like
+
+  SELECT id, sum(b) FROM t GROUP BY id
+  is same with
+  SELECT id, b from t;
+
+  I'm not sure how often it is in the real life, I'm not so excited with
+  this for now.
+
+
+How to present ECs in UniqueKey?
+--------------------------------
+
+I choose "Bitmapset *eclass_indexes;" finally, which is because
+Bitmapset is memory compact and good at bms_union,  bms_is_subset
+stuffs. The value in the bitmap is the positions in root->eq_classes. It
+is also be able to present the UniqueKey which is made up from multi
+relations or upper relation.
+
+How to present single row in UniqueKey
+-------------------------------------
+
+I just use a 'Index relid', an non-zero value means the
+RelOptInfo[relid] is single row.  For the case like
+
+SELECT * FROM t WHERE id = 1;
+The UniqueKey is:
+- UniqueKey(eclass_indexes=NULL, relid=1)
+
+during a join, any unique keys join with single row, it's uniqueness can
+be kept.
+
+SELECT t1.uk, t2.a FROM t WHERE t2.id = 1 and any-qual(t1, t2);
+- UniqueKey (t1.uk)
+
+more specially, join two single row like:
+
+SELECT * FROM t1 join t2 on true where t1.id = 1 and t2.id = 2;
+
+the UniqueKey for the JoinRel will be:
+- UniqueKey(eclass_indexes=NULL, relid=1)
+- UniqueKey(eclass_indexes=NULL, relid=2)
+
+However, the current single row presentation can't works well with Upper
+relation, which I think it would be acceptable. See the following case:
+
+SELECT count(*) FROM t1 JOIN t2 on true;
+
+
+How to maintain the uniquekey?
+-------------------------------
+the uniquekey is maintained from baserel to join rel then to upper
+relation. In the base rel, it comes from unique index. From the join
+relation, it is maintained with two rules:
+
+- the uniquekey in one side is still unique if it can't be duplicated
+  after the join. for example:
+
+  SELECT t1.pk FROM t1 JOIN t2 ON t1.a = t2.pk;
+  UniqueKey on t1:  t1.pk
+  UniqueKey on t1 Join t2:  t1.pk
+
+- The combined unique key from both sides are unique all the times.
+  SELECT t1.pk , t2.pk FROM t1 join t2 on true;
+  UniqueKey on t1 join t2:  (t1.pk, t2.pk)
+
+Some other operations like DISTINCT, GROUP BY can produce UniqueKey as well.
+
+NULL values
+-----------
+notnullattrs are added into RelOptInfo, which present if these attributes
+may not be NULL after the baserestrictinfo is executed. not-null-attributes
+may be generated by not-null constraint in catalog or baserestrictinfo
+(only) filter. However it is possible become NULLs because of outer
+join, then Var.varnullingrels is used in this case. see
+'var_is_nullable' function call.
+
+To simplify the UniqueKey module, it doesn't care about the null values
+during the maintaining, which means it may contains multi NULL values
+all the time by design. However whenever a user case care about that,
+the user case can get the answer with the above logic, that is what
+'mark-distinct-as-noop' does.
+
+How to reduce the overhead
+----------------------------------
+UniqueKey employs the similar strategy like PathKey, it only maintain
+the interesting PathKey. Currently the interesting UniqueKey includes:
+1). It is subset of distinct_pathkeys.
+2). It is used in mergeable join clauses for unique key deduction (for
+the join rel case, rule 1). In this case, it can be discarded quickly if
+the join has been done.
+
+To avoid to check if an uniquekey is subset of distinct clause again and
+again, I cached the result into UnqiueKey struct during the UniqueKey
+creation.
+
+Since our first goal is just used for marking distinct as no-op, so if
+there is no distinct clause at all, unique key will be not maintained at
+the beginning. so we can have some codes like:
+
+if (root->distinct_pathkeys == NULL)
+return;
+
+This fast path is NOT added for now for better code coverage.
+
+What I have now:
+----------------
+
+The current patch just maintain the UniqueKey at the baserel/joinrel level
+and used it for mark-distinct-as-noop purpose. including the basic idea of
+
+- How the UniqueKey is defined.
+- How to find out the interesting pathkey in the baserel/joinrel level.
+- How to figure out the unique key contains NULL values.
+
+Also the test cases are prepared, see uniquekey.sql.

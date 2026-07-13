@@ -740,9 +740,9 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 						 Oid collation,
 						 Index sortref,
 						 Relids rel,
+						 JoinDomain *jdomain,
 						 bool create_it)
 {
-	JoinDomain *jdomain;
 	Relids		expr_relids;
 	EquivalenceClass *newec;
 	EquivalenceMember *newem;
@@ -758,7 +758,8 @@ get_eclass_for_sort_expr(PlannerInfo *root,
 	 * Since SortGroupClause nodes are top-level expressions (GROUP BY, ORDER
 	 * BY, etc), they can be presumed to belong to the top JoinDomain.
 	 */
-	jdomain = linitial_node(JoinDomain, root->join_domains);
+	if (jdomain == NULL)
+		jdomain = linitial_node(JoinDomain, root->join_domains);
 
 	/*
 	 * Scan through the existing EquivalenceClasses for a match

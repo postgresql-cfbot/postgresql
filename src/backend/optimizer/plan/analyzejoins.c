@@ -1117,6 +1117,13 @@ reduce_unique_semijoins(PlannerInfo *root)
 static bool
 rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel)
 {
+	/*
+	 * If uniquekeys could already be setup, the relation definitely supports
+	 * distinctness.
+	 */
+	if (rel->uniquekeys)
+		return true;
+
 	/* We only know about baserels ... */
 	if (rel->reloptkind != RELOPT_BASEREL)
 		return false;
@@ -1178,6 +1185,45 @@ static bool
 rel_is_distinct_for(PlannerInfo *root, RelOptInfo *rel, List *clause_list,
 					List **extra_clauses)
 {
+	/*
+	 * Use unique keys if already available, but do not skip filling of
+	 * extra_clauses if caller is interested in it.
+	 */
+	if (rel->uniquekeys && extra_clauses == NULL)
+	{
+		Relids		ecs = NULL;
+		ListCell	*l;
+
+		/* First, express the clauses in the form of EC indexes. */
+		foreach(l, clause_list)
+		{
+			RestrictInfo *rinfo = lfirst_node(RestrictInfo, l);
+			EquivalenceClass	*ec;
+
+			if (rinfo->outer_is_left)
+				ec = rinfo->right_ec;
+			else
+				ec = rinfo->left_ec;
+
+			/* EC pointers might not have been updated yet. */
+			while (ec->ec_merged)
+				ec = ec->ec_merged;
+
+			ecs = bms_add_member(ecs,
+								 list_member_ptr_pos(root->eq_classes, ec));
+		}
+
+		/* Now check if a clause exists for each unique key expression. */
+		foreach(l, rel->uniquekeys)
+		{
+			UniqueKey  *ukey = lfirst_node(UniqueKey, l);
+
+			if (bms_is_subset(ukey->item_indexes, ecs) &&
+				!uniquekey_contains_multinulls(root, rel, ukey))
+				return true;
+		}
+	}
+
 	/*
 	 * We could skip a couple of tests here if we assume all callers checked
 	 * rel_supports_distinctness first, but it doesn't seem worth taking any

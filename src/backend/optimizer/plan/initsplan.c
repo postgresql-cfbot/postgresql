@@ -1063,7 +1063,7 @@ get_eclass_for_sortgroupclause(PlannerInfo *root, SortGroupClause *sgc,
 	/* Now find a matching EquivalenceClass */
 	return get_eclass_for_sort_expr(root, expr, opfamilies, opcintype,
 									collation, sgc->tleSortGroupRef,
-									NULL, false);
+									NULL, NULL, false);
 }
 
 /*****************************************************************************
@@ -3475,7 +3475,15 @@ add_base_clause_to_rel(PlannerInfo *root, Index relid,
 	}
 
 	/* Add clause to rel's restriction list */
-	rel->baserestrictinfo = lappend(rel->baserestrictinfo, restrictinfo);
+	rel->baserestrictinfo = lappend(rel->baserestrictinfo,
+									restrictinfo);
+	{
+		List	   *not_null_vars = find_nonnullable_vars((Node *) restrictinfo->clause);
+
+		if (not_null_vars != NIL)
+			rel->notnullattrs = bms_union(rel->notnullattrs,
+										  list_nth(not_null_vars, rel->relid));
+	}
 
 	/* Update security level info */
 	rel->baserestrict_min_security = Min(rel->baserestrict_min_security,

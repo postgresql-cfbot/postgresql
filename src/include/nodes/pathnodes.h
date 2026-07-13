@@ -1043,6 +1043,7 @@ typedef struct RelOptInfo
 	 * Vars/Exprs, cost, width
 	 */
 	struct PathTarget *reltarget;
+	List	   *uniquekeys;		/* A list of UniqueKey. */
 
 	/*
 	 * materialization information
@@ -1079,7 +1080,13 @@ typedef struct RelOptInfo
 	Relids	   *attr_needed pg_node_attr(read_write_ignore);
 	/* array indexed [min_attr .. max_attr] */
 	int32	   *attr_widths pg_node_attr(read_write_ignore);
-	/* zero-based set containing attnums of NOT NULL columns */
+	/* The not null attrs from catalogs or baserestrictinfo. */
+	Bitmapset  *notnullattrs;
+
+	/*
+	 * Zero-based set containing attnums of NOT NULL columns.  Not populated
+	 * for rels corresponding to non-partitioned inh==true RTEs.
+	 */
 	Bitmapset  *notnullattnums;
 	/* relids of outer joins that can null this baserel */
 	Relids		nulling_relids;
@@ -1832,6 +1839,41 @@ typedef struct GroupByOrdering
 	List	   *pathkeys;
 	List	   *clauses;
 } GroupByOrdering;
+
+
+typedef struct UniqueKey
+{
+	pg_node_attr(no_read, no_query_jumble)
+
+	NodeTag		type;
+
+	/*
+	 * A subset of columns that is unique across the output rows of the
+	 * underlying relation.
+	 *
+	 * For base relations and joins, the indexes point to equivalence classes
+	 * the columns belong to. (Essentially it's a subset of
+	 * RelOptInfo.eclass_indexes)
+	 *
+	 * For upper relations, the indexes point to the items of the relation
+	 * target.
+	 */
+	Bitmapset  *item_indexes;
+
+	/*
+	 * Here we store the operator families for each member of
+	 * 'item_indexes'. (i-th item of the list corresponds to i-th member of
+	 * 'item_indexes'). This is needed to create ECs in the parent query if
+	 * the upper relation represents a subquery.
+	 */
+	List	*opfamily_lists;
+
+	int			relid;
+	bool		use_for_distinct;	/* true if it is used in distinct-pathkey,
+									 * in this case we would never check if we
+									 * should discard it during join search. */
+} UniqueKey;
+
 
 /*
  * VolatileFunctionStatus -- allows nodes to cache their

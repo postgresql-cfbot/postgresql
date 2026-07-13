@@ -696,6 +696,23 @@ list_member_ptr(const List *list, const void *datum)
 }
 
 /*
+ * Return index of the datum in list if found. otherwise return -1.
+ */
+int
+list_member_ptr_pos(const List *list, const void *datum)
+{
+	ListCell   *lc;
+
+	foreach(lc, list)
+	{
+		if (lfirst(lc) == datum)
+			return foreach_current_index(lc);
+	}
+
+	return -1;
+}
+
+/*
  * Return true iff the integer 'datum' is a member of the list.
  */
 bool

@@ -756,6 +756,8 @@ make_join_rel(PlannerInfo *root, RelOptInfo *rel1, RelOptInfo *rel2)
 							 sjinfo, pushed_down_joins,
 							 &restrictlist);
 
+	populate_joinrel_uniquekeys(root, joinrel, rel1, rel2, restrictlist, sjinfo->jointype);
+
 	/*
 	 * If we've already proven this join is empty, we needn't consider any
 	 * more paths for it.

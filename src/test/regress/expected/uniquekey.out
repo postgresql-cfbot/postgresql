@@ -1,0 +1,272 @@
+CREATE TABLE uk_t (id int primary key, a int not null, b int not null, c int, d int, e int);
+explain (costs off)
+select distinct id from uk_t;
+    QUERY PLAN    
+------------------
+ Seq Scan on uk_t
+(1 row)
+
+explain (costs off)
+select distinct e from uk_t where id = e;
+     QUERY PLAN     
+--------------------
+ Seq Scan on uk_t
+   Filter: (id = e)
+(2 rows)
+
+create unique index on uk_t (a, b);
+create unique index on uk_t (c, d);
+explain (costs off)
+select distinct a, b from uk_t;
+    QUERY PLAN    
+------------------
+ Seq Scan on uk_t
+(1 row)
+
+explain (costs off)
+select distinct c, d from uk_t;
+       QUERY PLAN       
+------------------------
+ HashAggregate
+   Group Key: c, d
+   ->  Seq Scan on uk_t
+(3 rows)
+
+explain (costs off)
+select distinct c, d from uk_t
+where c > 0 and d > 0;
+                QUERY PLAN                 
+-------------------------------------------
+ Bitmap Heap Scan on uk_t
+   Recheck Cond: ((c > 0) AND (d > 0))
+   ->  Bitmap Index Scan on uk_t_c_d_idx
+         Index Cond: ((c > 0) AND (d > 0))
+(4 rows)
+
+explain (costs off)
+select distinct d from uk_t
+where c > 1 and d > 0;
+                   QUERY PLAN                    
+-------------------------------------------------
+ HashAggregate
+   Group Key: d
+   ->  Bitmap Heap Scan on uk_t
+         Recheck Cond: ((c > 1) AND (d > 0))
+         ->  Bitmap Index Scan on uk_t_c_d_idx
+               Index Cond: ((c > 1) AND (d > 0))
+(6 rows)
+
+explain (costs off)
+select distinct d from uk_t
+where c = 1 and d > 0;
+                QUERY PLAN                 
+-------------------------------------------
+ Bitmap Heap Scan on uk_t
+   Recheck Cond: ((c = 1) AND (d > 0))
+   ->  Bitmap Index Scan on uk_t_c_d_idx
+         Index Cond: ((c = 1) AND (d > 0))
+(4 rows)
+
+-- test the join case --
+EXPLAIN (COSTS OFF)
+SELECT distinct t1.id FROM uk_t t1 JOIN uk_t t2 ON t1.e = t2.id;
+           QUERY PLAN            
+---------------------------------
+ Hash Join
+   Hash Cond: (t1.e = t2.id)
+   ->  Seq Scan on uk_t t1
+   ->  Hash
+         ->  Seq Scan on uk_t t2
+(5 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT distinct t1.id FROM uk_t t1 JOIN uk_t t2 ON t1.e = t2.a and t1.d = t2.b;
+                   QUERY PLAN                   
+------------------------------------------------
+ Hash Join
+   Hash Cond: ((t1.e = t2.a) AND (t1.d = t2.b))
+   ->  Seq Scan on uk_t t1
+   ->  Hash
+         ->  Seq Scan on uk_t t2
+(5 rows)
+
+EXPLAIN (COSTS OFF)
+SELECT distinct t1.id FROM uk_t t1 LEFT JOIN uk_t t2 ON t1.e = t2.id;
+     QUERY PLAN      
+---------------------
+ Seq Scan on uk_t t1
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT distinct t1.id FROM uk_t t1 LEFT JOIN uk_t t2 ON t1.e = t2.a and t1.d = t2.b;
+     QUERY PLAN      
+---------------------
+ Seq Scan on uk_t t1
+(1 row)
+
+-- outer join makes null values so distinct can't be a no-op.
+EXPLAIN (COSTS OFF)
+SELECT distinct t1.id FROM uk_t t1 RIGHT JOIN uk_t t2 ON t1.e = t2.id;
+              QUERY PLAN               
+---------------------------------------
+ HashAggregate
+   Group Key: t1.id
+   ->  Hash Right Join
+         Hash Cond: (t1.e = t2.id)
+         ->  Seq Scan on uk_t t1
+         ->  Hash
+               ->  Seq Scan on uk_t t2
+(7 rows)
+
+-- single row case.
+-- single row is unqiue all the time.
+-- case 1:
+-- t1.d is single row at base rel level, and because of t1.e = t2.id, it is
+-- still single row after join.
+EXPLAIN (COSTS OFF)
+SELECT distinct t1.d FROM uk_t t1 JOIN uk_t t2 ON t1.e = t2.id and t1.id = 1;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Nested Loop
+   ->  Index Scan using uk_t_pkey on uk_t t1
+         Index Cond: (id = 1)
+   ->  Index Only Scan using uk_t_pkey on uk_t t2
+         Index Cond: (id = t1.e)
+(5 rows)
+
+-- case 2
+-- any uniquekey which join with single row whose uniqueness can be kept.
+-- t1.d is single row at base rel level because of t1.id = 1
+-- so t2's uniquekey can be kept when join with t2.any_column.
+EXPLAIN (COSTS OFF)
+SELECT distinct t2.id FROM uk_t t1 JOIN uk_t t2 ON t2.e = t1.e and t1.id = 1;
+                    QUERY PLAN                     
+---------------------------------------------------
+ Hash Join
+   Hash Cond: (t2.e = t1.e)
+   ->  Seq Scan on uk_t t2
+   ->  Hash
+         ->  Index Scan using uk_t_pkey on uk_t t1
+               Index Cond: (id = 1)
+(6 rows)
+
+insert into uk_t SELECT 1, 2, 3, 4, 5, 6;
+-- combined uniquekey cases.
+-- the combinations of uniquekeys from the 2 sides is still unique
+-- no matter the join method and join clauses.
+EXPLAIN (COSTS OFF)
+SELECT distinct t2.id, t1.id FROM uk_t t1 JOIN uk_t t2 ON true;
+           QUERY PLAN            
+---------------------------------
+ Nested Loop
+   ->  Seq Scan on uk_t t1
+   ->  Materialize
+         ->  Seq Scan on uk_t t2
+(4 rows)
+
+SELECT distinct t2.id, t1.id FROM uk_t t1 JOIN uk_t t2 ON true;
+ id | id 
+----+----
+  1 |  1
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT distinct t2.id, t1.id FROM uk_t t1 JOIN uk_t t2 ON false;
+         QUERY PLAN         
+----------------------------
+ Result
+   Replaces: Join on t1, t2
+   One-Time Filter: false
+(3 rows)
+
+SELECT distinct t2.id, t1.id FROM uk_t t1 JOIN uk_t t2 ON false;
+ id | id 
+----+----
+(0 rows)
+
+-- BAD CASE: the distinct should be marked as noop in the below 4 cases, but
+-- since it is nullable by outer join, so it can't be removed. However the rule
+-- here should be if both uniquekey are not nullable, the combinations of them
+-- is not *mutli* nullable even by outer join. It is not clear to me how to
+-- implement it since I am just feeling not maintaining the not-null stuff
+-- during the joins is pretty amazing, otherwise there are too many stuff to
+-- do to cover this special case.
+EXPLAIN (COSTS OFF)
+SELECT distinct t2.id, t1.id FROM uk_t t1 LEFT JOIN uk_t t2 ON true;
+                          QUERY PLAN                          
+--------------------------------------------------------------
+ Unique
+   ->  Incremental Sort
+         Sort Key: t1.id, t2.id
+         Presorted Key: t1.id
+         ->  Nested Loop Left Join
+               ->  Index Only Scan using uk_t_pkey on uk_t t1
+               ->  Materialize
+                     ->  Seq Scan on uk_t t2
+(8 rows)
+
+SELECT distinct t2.id, t1.id FROM uk_t t1 LEFT JOIN uk_t t2 ON true;
+ id | id 
+----+----
+  1 |  1
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT distinct t2.id, t1.id FROM uk_t t1 LEFT JOIN uk_t t2 ON false;
+              QUERY PLAN              
+--------------------------------------
+ HashAggregate
+   Group Key: t2.id, t1.id
+   ->  Nested Loop Left Join
+         Join Filter: false
+         ->  Seq Scan on uk_t t1
+         ->  Result
+               Replaces: Scan on t2
+               One-Time Filter: false
+(8 rows)
+
+SELECT distinct t2.id, t1.id FROM uk_t t1 LEFT JOIN uk_t t2 ON false;
+ id | id 
+----+----
+    |  1
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT distinct t2.id, t1.id FROM uk_t t1 FULL JOIN uk_t t2 ON true;
+              QUERY PLAN               
+---------------------------------------
+ HashAggregate
+   Group Key: t2.id, t1.id
+   ->  Merge Full Join
+         ->  Seq Scan on uk_t t1
+         ->  Materialize
+               ->  Seq Scan on uk_t t2
+(6 rows)
+
+SELECT distinct t2.id, t1.id FROM uk_t t1 FULL JOIN uk_t t2 ON true;
+ id | id 
+----+----
+  1 |  1
+(1 row)
+
+EXPLAIN (COSTS OFF)
+SELECT distinct t2.id, t1.id FROM uk_t t1 FULL JOIN uk_t t2 ON false;
+                 QUERY PLAN                  
+---------------------------------------------
+ Unique
+   ->  Sort
+         Sort Key: t2.id, t1.id
+         ->  Merge Full Join
+               Join Filter: false
+               ->  Seq Scan on uk_t t1
+               ->  Materialize
+                     ->  Seq Scan on uk_t t2
+(8 rows)
+
+SELECT distinct t2.id, t1.id FROM uk_t t1 FULL JOIN uk_t t2 ON false;
+ id | id 
+----+----
+  1 |   
+    |  1
+(2 rows)
+

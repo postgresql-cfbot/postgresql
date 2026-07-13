@@ -45,10 +45,13 @@
 
 #include "access/multixact.h"
 #include "catalog/pg_class_d.h"
+#include "catalog/pg_collation_d.h"
 #include "common/file_perm.h"
 #include "common/logging.h"
 #include "common/restricted_token.h"
 #include "fe_utils/string_utils.h"
+#include "fe_utils/version.h"
+#include "mb/pg_wchar.h"
 #include "pg_upgrade.h"
 
 /*
@@ -67,6 +70,8 @@ static void copy_xact_xlog_xid(void);
 static void set_frozenxids(void);
 static void make_outputdirs(char *pgdata);
 static void setup(char *argv0);
+static void resolve_new_bindir(const char *argv0);
+static void create_new_cluster_via_initdb(void);
 static void create_logical_replication_slots(void);
 static void create_conflict_detection_slot(void);
 
@@ -108,6 +113,15 @@ main(int argc, char **argv)
 
 	adjust_data_dir(&old_cluster);
 	adjust_data_dir(&new_cluster);
+
+	/*
+	 * Create the new cluster before anything requires it.  This runs after
+	 * adjust_data_dir(&new_cluster) so that a config-only -D directory is
+	 * already resolved to the real data directory; otherwise initdb would
+	 * populate the configuration directory instead.
+	 */
+	if (user_opts.initdb_new_cluster)
+		create_new_cluster_via_initdb();
 
 	/*
 	 * Set mask based on PGDATA permissions, needed for the creation of the
@@ -358,6 +372,159 @@ make_outputdirs(char *pgdata)
 }
 
 
+/*
+ * resolve_new_bindir()
+ *
+ * Idempotent helper: if new_cluster.bindir has not been set by the user via
+ * -B, derive it from the path of the currently executing pg_upgrade binary.
+ */
+static void
+resolve_new_bindir(const char *argv0)
+{
+	if (!new_cluster.bindir)
+	{
+		char		exec_path[MAXPGPATH];
+
+		if (find_my_exec(argv0, exec_path) < 0)
+			pg_fatal("%s: could not find own program executable", argv0);
+		/* Trim off program name and keep just the directory */
+		*last_dir_separator(exec_path) = '\0';
+		canonicalize_path(exec_path);
+		new_cluster.bindir = pg_strdup(exec_path);
+	}
+}
+
+
+/*
+ * create_new_cluster_via_initdb()
+ *
+ * Implements --initdb: run initdb to create the new cluster before upgrading,
+ * deriving WAL segment size, data checksums, encoding, and locale settings
+ * from the old cluster so that check_control_data() passes.
+ *
+ * This runs before the normal verify_directories() / setup() path, so we
+ * use a temporary log directory under the new bindir for the early server
+ * start; make_outputdirs() will replace log_opts.logdir later.
+ */
+static void
+create_new_cluster_via_initdb(void)
+{
+	DbLocaleInfo *locale;
+	PQExpBufferData cmd;
+	char		tmp_logdir[MAXPGPATH];
+	char	   *saved_logdir = log_opts.logdir;
+	const char *encoding_name;
+
+	resolve_new_bindir(os_info.progname);
+
+	/*
+	 * Verify that initdb is present and executable before doing any work. The
+	 * normal path checks this later inside verify_directories(), but we run
+	 * before that, so fail early with a useful message.
+	 */
+	{
+		char		initdb_path[MAXPGPATH];
+
+		snprintf(initdb_path, sizeof(initdb_path), "%s/initdb",
+				 new_cluster.bindir);
+		if (validate_exec(initdb_path) != 0)
+			pg_fatal("could not find \"initdb\" in \"%s\": %m\n"
+					 "The --initdb option requires initdb to be present in the new cluster's bin directory.",
+					 new_cluster.bindir);
+	}
+
+	/* Refuse to overwrite an existing cluster. */
+	{
+		char		verfile[MAXPGPATH];
+		struct stat st;
+
+		snprintf(verfile, sizeof(verfile), "%s/PG_VERSION",
+				 new_cluster.pgdata);
+		if (stat(verfile, &st) == 0)
+			pg_fatal("new cluster data directory \"%s\" already contains a database system; "
+					 "--initdb requires an empty or nonexistent directory",
+					 new_cluster.pgdata);
+	}
+
+	old_cluster.major_version = get_pg_version(old_cluster.pgdata,
+											   &old_cluster.major_version_str);
+
+	/*
+	 * get_control_data() selects pg_resetwal vs. pg_resetxlog via
+	 * bin_version, which get_bin_version() (called from check_bin_dir()
+	 * during setup()) normally fills in later.  Seed it now so the right
+	 * binary name is used in this early call.
+	 */
+	if (old_cluster.bin_version == 0)
+		old_cluster.bin_version = old_cluster.major_version;
+
+	get_control_data(&old_cluster);
+
+	/* Set up a temporary log directory for the early server start. */
+	snprintf(tmp_logdir, sizeof(tmp_logdir), "%s/pg_upgrade_initdb.log.d",
+			 new_cluster.bindir);
+	if (mkdir(tmp_logdir, pg_dir_create_mode) < 0 && errno != EEXIST)
+		pg_fatal("could not create temporary log directory \"%s\": %m",
+				 tmp_logdir);
+	log_opts.logdir = tmp_logdir;
+
+	if (!old_cluster.sockdir)
+		old_cluster.sockdir = user_opts.socketdir ? user_opts.socketdir : ".";
+
+	prep_status("Examining old cluster settings");
+	start_postmaster(&old_cluster, true);
+	get_template0_info(&old_cluster);
+	stop_postmaster(false);
+	check_ok();
+
+	locale = old_cluster.template0;
+	encoding_name = pg_encoding_to_char(locale->db_encoding);
+
+	prep_status("Creating new cluster with initdb");
+
+	initPQExpBuffer(&cmd);
+	appendPQExpBuffer(&cmd, "\"%s/initdb\" -D \"%s\" -N",
+					  new_cluster.bindir, new_cluster.pgdata);
+	appendPQExpBuffer(&cmd, " -U \"%s\"", os_info.user);
+	appendPQExpBuffer(&cmd, " --wal-segsize=%u",
+					  old_cluster.controldata.walseg / (1024 * 1024));
+
+	/*
+	 * Pass --data-checksums or --no-data-checksums explicitly.  Starting from
+	 * PG18, initdb enables checksums by default, so we must mirror the old
+	 * cluster's setting to avoid a mismatch that check_control_data() would
+	 * reject.
+	 */
+	if (old_cluster.controldata.data_checksum_version != 0)
+		appendPQExpBufferStr(&cmd, " --data-checksums");
+	else
+		appendPQExpBufferStr(&cmd, " --no-data-checksums");
+
+	appendPQExpBuffer(&cmd, " --encoding=%s", encoding_name);
+	appendPQExpBuffer(&cmd, " --locale-provider=%s",
+					  collprovider_name(locale->db_collprovider));
+	appendPQExpBuffer(&cmd, " --lc-collate=\"%s\" --lc-ctype=\"%s\"",
+					  locale->db_collate, locale->db_ctype);
+
+	if (locale->db_locale)
+	{
+		if (locale->db_collprovider == COLLPROVIDER_ICU)
+			appendPQExpBuffer(&cmd, " --icu-locale=\"%s\"",
+							  locale->db_locale);
+		else if (locale->db_collprovider == COLLPROVIDER_BUILTIN)
+			appendPQExpBuffer(&cmd, " --builtin-locale=\"%s\"",
+							  locale->db_locale);
+	}
+
+	exec_prog(UTILITY_LOG_FILE, NULL, true, true, "%s", cmd.data);
+
+	termPQExpBuffer(&cmd);
+	log_opts.logdir = saved_logdir;
+
+	check_ok();
+}
+
+
 static void
 setup(char *argv0)
 {
@@ -372,17 +539,7 @@ setup(char *argv0)
 	 * with -B, default to using the path of the currently executed pg_upgrade
 	 * binary.
 	 */
-	if (!new_cluster.bindir)
-	{
-		char		exec_path[MAXPGPATH];
-
-		if (find_my_exec(argv0, exec_path) < 0)
-			pg_fatal("%s: could not find own program executable", argv0);
-		/* Trim off program name and keep just path */
-		*last_dir_separator(exec_path) = '\0';
-		canonicalize_path(exec_path);
-		new_cluster.bindir = pg_strdup(exec_path);
-	}
+	resolve_new_bindir(argv0);
 
 	verify_directories();
 

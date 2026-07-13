@@ -391,7 +391,7 @@ MetaphAdd(metastring *s, const char *new_str)
 	if ((s->length + add_length) > (s->bufsize - 1))
 		IncreaseBuffer(s, add_length);
 
-	strcat(s->str, new_str);
+	memcpy(s->str + s->length, new_str, add_length + 1);
 	s->length += add_length;
 }
 

@@ -27,6 +27,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
+#include "commands/keyjoin.h"
 #include "executor/functions.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -578,7 +579,8 @@ ProcedureCreate(const char *procedureName,
 		}
 
 		/*
-		 * Serialize concurrent replacement of this procedure's definition.
+		 * Serialize replacement with any session recording a dependency on
+		 * this procedure's definition.
 		 */
 		LockDatabaseObject(ProcedureRelationId, oldprocid, 0,
 						   AccessExclusiveLock);
@@ -776,6 +778,20 @@ ProcedureCreate(const char *procedureName,
 	/* ensure that stats are dropped if transaction aborts */
 	if (!is_update)
 		pgstat_create_function(retval);
+
+	/*
+	 * For CREATE OR REPLACE FUNCTION, revalidate stored key-join proofs that
+	 * captured this function in a matched-filter conjunct.  The function's
+	 * body, volatility, or strictness may all have changed; if a stored proof
+	 * no longer holds, revalidation raises an error and aborts the DDL.
+	 * Plain CREATE FUNCTION can't have any dependents yet, so revalidation is
+	 * needed only for the replace path.
+	 */
+	if (is_update)
+	{
+		CommandCounterIncrement();
+		RevalidateDependentKeyJoinObjectsOnProcedure(retval);
+	}
 
 	return myself;
 }

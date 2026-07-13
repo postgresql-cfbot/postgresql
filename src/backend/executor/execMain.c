@@ -153,6 +153,19 @@ standard_ExecutorStart(QueryDesc *queryDesc, int eflags)
 	Assert(GetActiveSnapshot() == queryDesc->snapshot);
 
 	/*
+	 * A plan flagged by the planner as built against a stale key-join proof
+	 * must never run; every caller is expected to re-derive the proof and
+	 * replan instead (see BuildCachedPlan).  Refuse it here so that a caller
+	 * that fails to do so produces an error rather than an equijoin whose
+	 * proven join-to-one property no longer holds.
+	 */
+	if (unlikely(queryDesc->plannedstmt->staleKeyJoinProof))
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_FOREIGN_KEY),
+				 errmsg("cached plan depends on a key join proof that is no longer valid"),
+				 errhint("Retry the statement or prepare it again.")));
+
+	/*
 	 * If the transaction is read-only, we need to check if any writes are
 	 * planned to non-temporary tables.  EXPLAIN is considered read-only.
 	 *

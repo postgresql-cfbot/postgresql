@@ -165,6 +165,7 @@ static void deleteOneObject(const ObjectAddress *object,
 static void doDeletion(const ObjectAddress *object, int flags);
 static bool find_expr_references_walker(Node *node,
 										find_expr_references_context *context);
+static bool find_keyjoin_proof_dependencies_walker(Node *node, void *context);
 static void process_function_rte_ref(RangeTblEntry *rte, AttrNumber attnum,
 									 find_expr_references_context *context);
 static void eliminate_duplicate_dependencies(ObjectAddresses *addrs);
@@ -616,6 +617,7 @@ findDependentObjects(const ObjectAddress *object,
 		switch (foundDep->deptype)
 		{
 			case DEPENDENCY_NORMAL:
+			case DEPENDENCY_KEYJOIN:
 			case DEPENDENCY_AUTO:
 			case DEPENDENCY_AUTO_EXTENSION:
 				/* no problem */
@@ -938,6 +940,7 @@ findDependentObjects(const ObjectAddress *object,
 		switch (foundDep->deptype)
 		{
 			case DEPENDENCY_NORMAL:
+			case DEPENDENCY_KEYJOIN:
 				subflags = DEPFLAG_NORMAL;
 				break;
 			case DEPENDENCY_AUTO:
@@ -1639,6 +1642,33 @@ recordDependencyOnExpr(const ObjectAddress *depender,
 	recordMultipleDependencies(depender,
 							   addrs->refs, addrs->numrefs,
 							   behavior);
+
+	free_object_addresses(addrs);
+}
+
+/*
+ * recordDependencyOnKeyJoinProofs - record FOR KEY proof dependencies
+ *
+ * Stored FOR KEY joins carry proof dependencies in KeyJoinNode nodes.  These
+ * are not ordinary expression references: revalidation uses them to find which
+ * stored joins to recheck when a referenced object changes, so record them
+ * with DEPENDENCY_KEYJOIN after the normal expression dependency pass has run.
+ * pg_dump follows these edges too: they order a dumped container after the
+ * constraints its proof needs, so the re-proof at restore succeeds.
+ */
+void
+recordDependencyOnKeyJoinProofs(const ObjectAddress *depender, Node *expr)
+{
+	ObjectAddresses *addrs;
+
+	addrs = new_object_addresses();
+
+	(void) find_keyjoin_proof_dependencies_walker(expr, addrs);
+
+	eliminate_duplicate_dependencies(addrs);
+	recordMultipleDependencies(depender,
+							   addrs->refs, addrs->numrefs,
+							   DEPENDENCY_KEYJOIN);
 
 	free_object_addresses(addrs);
 }
@@ -2460,6 +2490,56 @@ find_expr_references_walker(Node *node,
 
 	return expression_tree_walker(node, find_expr_references_walker,
 								  context);
+}
+
+/*
+ * find_keyjoin_proof_dependencies_walker
+ *
+ * Collect only the proof dependencies embedded in stored KeyJoinNodes.  The
+ * ordinary expression dependency walker deliberately skips these nodes.
+ */
+static bool
+find_keyjoin_proof_dependencies_walker(Node *node, void *context)
+{
+	ObjectAddresses *addrs = (ObjectAddresses *) context;
+
+	if (node == NULL)
+		return false;
+
+	if (IsA(node, KeyJoinNode))
+	{
+		KeyJoinNode *key_join = castNode(KeyJoinNode, node);
+
+		foreach_node(KeyJoinProofDependency, dep,
+					 key_join->proofDependencies)
+			add_object_address(dep->classId, dep->objectId, 0, addrs);
+
+		return false;
+	}
+
+	if (IsA(node, JoinExpr))
+	{
+		JoinExpr   *join = castNode(JoinExpr, node);
+
+		(void) find_keyjoin_proof_dependencies_walker(join->keyJoin, addrs);
+		(void) find_keyjoin_proof_dependencies_walker(join->larg, addrs);
+		(void) find_keyjoin_proof_dependencies_walker(join->rarg, addrs);
+		(void) find_keyjoin_proof_dependencies_walker(join->quals, addrs);
+		(void) find_keyjoin_proof_dependencies_walker(join->joinFilter, addrs);
+		return false;
+	}
+
+	if (IsA(node, Query))
+	{
+		(void) query_tree_walker(castNode(Query, node),
+								 find_keyjoin_proof_dependencies_walker,
+								 addrs, 0);
+		return false;
+	}
+
+	(void) expression_tree_walker(node, find_keyjoin_proof_dependencies_walker,
+								  addrs);
+	return false;
 }
 
 /*

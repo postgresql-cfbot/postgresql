@@ -1,0 +1,26 @@
+Parsed test spec with 3 sessions
+
+starting permutation: s3_lock_child s1_disable_rls s2_replace_dep s3_commit
+step s3_lock_child: 
+ BEGIN;
+ LOCK TABLE key_join_recursive_revalidation_lock.c
+     IN ACCESS EXCLUSIVE MODE;
+
+step s1_disable_rls: 
+ SET deadlock_timeout = '10ms';
+ ALTER TABLE key_join_recursive_revalidation_lock.x
+     DISABLE ROW LEVEL SECURITY;
+
+step s2_replace_dep: 
+ SET deadlock_timeout = '10s';
+ BEGIN;
+ ALTER VIEW key_join_recursive_revalidation_lock.dep
+     SET (security_barrier=false);
+ CREATE OR REPLACE VIEW key_join_recursive_revalidation_lock.dep AS
+ SELECT p.region, p.id,
+        (SELECT count(*) FROM key_join_recursive_revalidation_lock.x) AS marker
+ FROM key_join_recursive_revalidation_lock.p;
+ COMMIT;
+ <waiting ...>
+step s3_commit: COMMIT;
+step s2_replace_dep: <... completed>

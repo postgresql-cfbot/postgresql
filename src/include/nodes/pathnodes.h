@@ -250,6 +250,18 @@ typedef struct PlannerGlobal
 	/* is plan specific to current role? */
 	bool		dependsOnRole;
 
+	/*
+	 * Did planning find inheritance children on a relation that a key-join
+	 * proof assumed childless?  See preprocess_relation_rtes().
+	 */
+	bool		staleKeyJoinProof;
+
+	/* pg_class OIDs the statement's key-join proofs assumed childless */
+	List	   *keyJoinProofRelids;
+
+	/* has keyJoinProofRelids been collected yet? */
+	bool		keyJoinProofRelidsValid;
+
 	/* parallel mode potentially OK? */
 	bool		parallelModeOK;
 

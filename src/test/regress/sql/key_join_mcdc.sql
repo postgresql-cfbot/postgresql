@@ -429,10 +429,54 @@ CREATE VIEW mcdc_dupe_active_v AS
 SELECT DISTINCT p.id
 FROM mcdc_dupe_parent p;
 
+CREATE VIEW mcdc_dupe_inactive_nn_v AS
+SELECT r.parent_id
+FROM mcdc_dupe_parent p
+LEFT JOIN mcdc_dupe_reader r FOR KEY (parent_id) -> p (id);
+
+CREATE VIEW mcdc_dupe_v AS
+SELECT q.id
+FROM (SELECT DISTINCT p.id FROM mcdc_dupe_parent p) q
+LEFT JOIN mcdc_dupe_reader r FOR KEY (parent_id) -> q (id);
+
+SELECT r.id, v.id
+FROM mcdc_dupe_v v
+JOIN mcdc_dupe_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id, v.id;
+
 SELECT n.id, v.id
 FROM mcdc_dupe_active_v v
 JOIN mcdc_dupe_nullable_reader n FOR KEY (parent_id) -> v (id)
 ORDER BY n.id, v.id;
+
+SELECT rv.parent_id, v.id
+FROM mcdc_dupe_inactive_nn_v rv
+JOIN mcdc_dupe_active_v v FOR KEY (id) <- rv (parent_id)
+ORDER BY rv.parent_id, v.id;
+
+-- Stored revalidation path: no FILTER, join-local FILTERs, and multi-column.
+CREATE VIEW mcdc_plain_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id);
+
+CREATE VIEW mcdc_filter_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id)
+FILTER (WHERE c.id > 0);
+
+CREATE VIEW mcdc_unary_filter_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id)
+FILTER (WHERE @+ c.id);
+
+CREATE VIEW mcdc_other_side_filter_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id)
+FILTER (WHERE p.id = 1);
 
 CREATE VIEW mcdc_duplicate_filter_parent_v AS
 SELECT *
@@ -453,6 +497,23 @@ CREATE VIEW mcdc_reader_parent_1_v AS
 SELECT *
 FROM mcdc_reader
 WHERE parent_id = 1;
+
+CREATE VIEW mcdc_group_inactive_rowcov_join_v AS
+SELECT r.parent_id
+FROM mcdc_group_inactive_rowcov_v v
+JOIN mcdc_reader_parent_1_v r FOR KEY (parent_id) -> v (id);
+
+CREATE VIEW mcdc_distinct_filter_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id)
+FILTER (WHERE c.id = CASE WHEN 1 IS DISTINCT FROM 2 THEN 11 ELSE 0 END);
+
+CREATE VIEW mcdc_array_filter_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id)
+FILTER (WHERE c.id = CASE WHEN 11 = ANY (ARRAY[11, 22]) THEN 11 ELSE 0 END);
 
 CREATE VIEW mcdc_expr_filter_v AS
 SELECT *
@@ -479,14 +540,72 @@ SELECT *
 FROM mcdc_reader
 WHERE parent_id =## 1::bigint;
 
+CREATE VIEW mcdc_multi_v AS
+SELECT p.tenant_id, p.code
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (tenant_id, code) -> p (tenant_id, code);
+
 CREATE VIEW mcdc_second_cte_v AS
 WITH unused AS (SELECT id FROM mcdc_parent WHERE false),
      parents AS (SELECT id FROM mcdc_parent)
 SELECT id FROM parents;
 
+CREATE VIEW mcdc_jointree_search_v AS
+SELECT q.id
+FROM (SELECT count(*) AS n FROM mcdc_parent) one,
+     (
+        (mcdc_parent p
+         LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id))
+            AS q(id, tenant_id, code, child_id, child_parent_id,
+                 child_tenant_id, child_code)
+        JOIN mcdc_reader r FOR KEY (parent_id) -> q (id)
+     );
+
+CREATE VIEW mcdc_stored_plain_join_search_v AS
+SELECT v.id, c.id AS child_id
+FROM (mcdc_plain_v v
+      JOIN mcdc_reader r FOR KEY (parent_id) -> v (id))
+JOIN mcdc_child c ON c.parent_id = v.id;
+
+SELECT r.id, v.id
+FROM mcdc_plain_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
+SELECT r.id, v.id
+FROM mcdc_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
+SELECT r.id, v.id
+FROM mcdc_unary_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
+SELECT r.id, v.id
+FROM mcdc_other_side_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
 SELECT r.id, v.id
 FROM mcdc_duplicate_filter_parent_v v
 JOIN mcdc_duplicate_filter_reader_v r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
+-- Filter propagation skips inactive row-coverage targets.
+SELECT q.parent_id, p.id
+FROM mcdc_group_inactive_rowcov_join_v q
+JOIN mcdc_parent p FOR KEY (id) <- q (parent_id)
+ORDER BY q.parent_id;
+
+SELECT r.id, v.id
+FROM mcdc_distinct_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
+SELECT r.id, v.id
+FROM mcdc_array_filter_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
 ORDER BY r.id;
 
 SELECT r.id, v.id
@@ -509,8 +628,18 @@ FROM mcdc_hash_filter_parent_v v
 JOIN mcdc_hash_filter_reader_v r FOR KEY (parent_id) -> v (id)
 ORDER BY r.id;
 
+SELECT r.id, v.tenant_id, v.code
+FROM mcdc_multi_v v
+JOIN mcdc_reader r FOR KEY (tenant_id, code) -> v (tenant_id, code)
+ORDER BY r.id;
+
 SELECT r.id, v.id
 FROM mcdc_second_cte_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
+ORDER BY r.id;
+
+SELECT r.id, v.id
+FROM mcdc_jointree_search_v v
 JOIN mcdc_reader r FOR KEY (parent_id) -> v (id)
 ORDER BY r.id;
 
@@ -644,6 +773,7 @@ DROP FUNCTION mcdc_support_subject(int);
 DROP FUNCTION mcdc_support_func(internal);
 DROP VIEW mcdc_duplicate_filter_reader_v;
 DROP VIEW mcdc_duplicate_filter_parent_v;
+DROP VIEW mcdc_group_inactive_rowcov_join_v;
 DROP VIEW mcdc_reader_parent_1_v;
 DROP VIEW mcdc_group_inactive_rowcov_v;
 DROP VIEW mcdc_stable_filter_v;

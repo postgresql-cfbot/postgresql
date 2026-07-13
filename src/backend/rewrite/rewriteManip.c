@@ -438,8 +438,10 @@ OffsetVarNodes_walker(Node *node, OffsetVarNodes_context *context)
 		{
 			Assert(kjn->referencingVarno > 0);
 			Assert(kjn->referencedVarno > 0);
+			Assert(kjn->refAliasVarno > 0);
 			kjn->referencingVarno += context->offset;
 			kjn->referencedVarno += context->offset;
+			kjn->refAliasVarno += context->offset;
 		}
 		/* fall through to examine children */
 	}
@@ -616,6 +618,8 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 				kjn->referencingVarno = context->new_index;
 			if (kjn->referencedVarno == context->rt_index)
 				kjn->referencedVarno = context->new_index;
+			if (kjn->refAliasVarno == context->rt_index)
+				kjn->refAliasVarno = context->new_index;
 		}
 		/* fall through to examine children */
 	}

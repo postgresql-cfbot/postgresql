@@ -1,0 +1,27 @@
+Parsed test spec with 3 sessions
+
+starting permutation: exec1 attach exec2 inherit wakeup detach exec3
+step exec1: SELECT * FROM kcpi.run(0);
+out_rid|out_pid
+-------+-------
+     10|      1
+(1 row)
+
+step attach: 
+	SELECT FROM injection_points_set_local();
+	SELECT FROM injection_points_attach('build-cached-plan-before-planning', 'wait');
+	SELECT FROM injection_points_attach('build-cached-plan-planning-start', 'invalidate_system_caches');
+
+step exec2: SELECT * FROM kcpi.run(0); <waiting ...>
+step inherit: ALTER TABLE kcpi.child INHERIT kcpi.parent;
+step wakeup: SELECT FROM injection_points_wakeup('build-cached-plan-before-planning'); <waiting ...>
+runner: NOTICE:  system caches invalidated for injection point build-cached-plan-planning-start
+step exec2: <... completed>
+ERROR:  key join from referencing relation r to referenced relation p cannot be proven
+step wakeup: <... completed>
+step detach: 
+	SELECT FROM injection_points_detach('build-cached-plan-before-planning');
+	SELECT FROM injection_points_detach('build-cached-plan-planning-start');
+
+step exec3: SELECT * FROM kcpi.run(0);
+ERROR:  key join from referencing relation r to referenced relation p cannot be proven

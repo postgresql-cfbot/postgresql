@@ -1,0 +1,15 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_create_view s2_insert_parent s1_commit
+step s1_begin: BEGIN;
+step s1_create_view: 
+ CREATE VIEW key_join_view_blocks_dml.v AS
+ SELECT c.id, c.parent_id
+ FROM key_join_view_blocks_dml.p AS p
+ JOIN key_join_view_blocks_dml.c AS c
+ FOR KEY (parent_id) -> p (id);
+
+step s2_insert_parent: 
+ INSERT INTO key_join_view_blocks_dml.p VALUES (99);
+
+step s1_commit: COMMIT;

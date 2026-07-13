@@ -34,6 +34,7 @@ tests += {
     'sql': [
       'injection_points',
       'hashagg',
+      'key_join',
       'reindex_conc',
       'vacuum',
     ],
@@ -51,6 +52,16 @@ tests += {
       'repack_toast',
       'syscache-update-pruned',
       'heap_lock_update',
+      'key_join_proof_race_constraints',
+      'key_join_proof_race_filter_function_prelock',
+      'key_join_proof_race_filter_operator_prelock',
+      'key_join_proof_race_function_prelock',
+      'key_join_proof_race_indexes',
+      'key_join_proof_race_operator_cascade',
+      'key_join_proof_race_operator_prelock',
+      'key_join_proof_race_producer_view',
+      'key_join_proof_race_relation_state',
+      'key_join_cached_plan_inherit',
     ],
     'runningcheck': false, # see syscache-update-pruned
     # Some tests wait for all snapshots, so avoid parallel execution

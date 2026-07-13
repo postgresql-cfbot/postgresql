@@ -40,6 +40,7 @@ OBJS = \
 	foreigncmds.o \
 	functioncmds.o \
 	indexcmds.o \
+	keyjoincmds.o \
 	lockcmds.o \
 	matview.o \
 	opclasscmds.o \

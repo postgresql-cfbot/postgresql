@@ -1,0 +1,7 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_alter_g s2_alter_f s1_commit
+step s1_begin: BEGIN;
+step s1_alter_g: ALTER FUNCTION key_join_plain_function_dependent_lock.g() COST 11;
+step s2_alter_f: ALTER FUNCTION key_join_plain_function_dependent_lock.f() COST 12;
+step s1_commit: COMMIT;

@@ -67,6 +67,7 @@
 #include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
+#include "utils/injection_point.h"
 #include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/resowner.h"
@@ -1040,6 +1041,7 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 	List	   *plist;
 	bool		snapshot_set;
 	bool		is_transient;
+	bool		redid_analysis = false;
 	MemoryContext plan_context;
 	MemoryContext oldcxt = CurrentMemoryContext;
 	ListCell   *lc;
@@ -1060,40 +1062,88 @@ BuildCachedPlan(CachedPlanSource *plansource, List *qlist,
 	if (!plansource->is_valid)
 		qlist = RevalidateCachedQuery(plansource, queryEnv);
 
-	/*
-	 * If we don't already have a copy of the querytree list that can be
-	 * scribbled on by the planner, make one.  For a one-shot plan, we assume
-	 * it's okay to scribble on the original query_list.
-	 */
-	if (qlist == NIL)
+	for (;;)
 	{
+		bool		stale_key_join = false;
+		ListCell   *plc;
+
+		/*
+		 * If we don't already have a copy of the querytree list that can be
+		 * scribbled on by the planner, make one.  For a one-shot plan, we
+		 * assume it's okay to scribble on the original query_list.
+		 */
+		if (qlist == NIL)
+		{
+			if (!plansource->is_oneshot)
+				qlist = copyObject(plansource->query_list);
+			else
+				qlist = plansource->query_list;
+		}
+
+		/*
+		 * If a snapshot is already set (the normal case), we can just use
+		 * that for planning.  But if it isn't, and we need one, install one.
+		 */
+		snapshot_set = false;
+		if (!ActiveSnapshotSet() &&
+			BuildingPlanRequiresSnapshot(plansource))
+		{
+			PushActiveSnapshot(GetTransactionSnapshot());
+			snapshot_set = true;
+		}
+
+		/*
+		 * Generate the plan.
+		 */
 		if (!plansource->is_oneshot)
-			qlist = copyObject(plansource->query_list);
-		else
-			qlist = plansource->query_list;
+		{
+			INJECTION_POINT("build-cached-plan-before-planning", NULL);
+			INJECTION_POINT("build-cached-plan-planning-start", NULL);
+		}
+		plist = pg_plan_queries(qlist, plansource->query_string,
+								plansource->cursor_options, boundParams);
+
+		/* Release snapshot if we got one */
+		if (snapshot_set)
+			PopActiveSnapshot();
+
+		/*
+		 * If the planner found inheritance children on a relation that a
+		 * key-join proof in the analysis assumed childless, the plan must not
+		 * run: a child attached after the proof was made could break the
+		 * proven join-to-one property.  Discard it and re-derive the analysis
+		 * so the proof is re-checked against the current catalogs; that
+		 * either raises the ordinary "cannot be proven" error or yields a
+		 * fresh proof to plan again.
+		 */
+		foreach(plc, plist)
+		{
+			PlannedStmt *pstmt = lfirst_node(PlannedStmt, plc);
+
+			if (pstmt->staleKeyJoinProof)
+			{
+				stale_key_join = true;
+				break;
+			}
+		}
+		if (!stale_key_join)
+			break;
+
+		/*
+		 * One-shot plans are analyzed, planned, and executed in the same
+		 * transaction, during which the analysis holds the inheritance-shape
+		 * lock on every proof evidence relation, so no child can have been
+		 * attached in between.  Likewise, a re-derived analysis just above
+		 * re-took those locks, so a second stale round is impossible: the
+		 * flag only ever names proof evidence relations.
+		 */
+		if (plansource->is_oneshot || redid_analysis)
+			elog(ERROR, "key-join proof invalidated while building a plan");
+
+		plansource->is_valid = false;
+		qlist = RevalidateCachedQuery(plansource, queryEnv);
+		redid_analysis = true;
 	}
-
-	/*
-	 * If a snapshot is already set (the normal case), we can just use that
-	 * for planning.  But if it isn't, and we need one, install one.
-	 */
-	snapshot_set = false;
-	if (!ActiveSnapshotSet() &&
-		BuildingPlanRequiresSnapshot(plansource))
-	{
-		PushActiveSnapshot(GetTransactionSnapshot());
-		snapshot_set = true;
-	}
-
-	/*
-	 * Generate the plan.
-	 */
-	plist = pg_plan_queries(qlist, plansource->query_string,
-							plansource->cursor_options, boundParams);
-
-	/* Release snapshot if we got one */
-	if (snapshot_set)
-		PopActiveSnapshot();
 
 	/*
 	 * Normally we make a dedicated memory context for the CachedPlan and its

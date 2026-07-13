@@ -89,6 +89,13 @@ typedef struct PlannedStmt
 	/* is plan specific to current role? */
 	bool		dependsOnRole;
 
+	/*
+	 * Did planning find inheritance children on a relation that a key-join
+	 * proof in the (possibly cached) analysis assumed childless?  Such a plan
+	 * must never run; plancache re-derives the analysis instead.
+	 */
+	bool		staleKeyJoinProof;
+
 	/* parallel mode required to execute? */
 	bool		parallelModeNeeded;
 

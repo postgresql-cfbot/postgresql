@@ -1080,6 +1080,37 @@ UnlockDatabaseObject(Oid classid, Oid objid, uint16 objsubid,
 }
 
 /*
+ *		LockKeyJoinInheritanceShape
+ *
+ * Reader/writer interlock that serializes key-join proof derivation against
+ * inheritance/partition child attachment on a parent relation, WITHOUT taking a
+ * heavyweight relation lock.  A relation lock strong enough to conflict with the
+ * ShareUpdateExclusiveLock that child-attach takes would also block vacuum,
+ * ANALYZE, and CREATE/DROP/REINDEX INDEX CONCURRENTLY -- far more than we need.
+ *
+ * Proof derivation (compute_key_join_relation_facts) takes ShareLock; a
+ * non-partition child attach (StoreCatalogInheritance1) takes ExclusiveLock.
+ * These conflict with each other and with nothing else: the lock rides on the
+ * object-lock namespace with a reserved objsubid, and relations are otherwise
+ * locked via LOCKTAG_RELATION (LockRelationOid), never here.  Like any object
+ * lock it is held to transaction end, so no child can be attached between a
+ * proof's has_subclass() check and the commit of its dependency.
+ */
+void
+LockKeyJoinInheritanceShape(Oid parentOid, LOCKMODE lockmode)
+{
+	LockDatabaseObject(RelationRelationId, parentOid,
+					   KEYJOIN_INHERIT_SHAPE_OBJSUBID, lockmode);
+}
+
+void
+UnlockKeyJoinInheritanceShape(Oid parentOid, LOCKMODE lockmode)
+{
+	UnlockDatabaseObject(RelationRelationId, parentOid,
+						 KEYJOIN_INHERIT_SHAPE_OBJSUBID, lockmode);
+}
+
+/*
  *		LockSharedObject
  *
  * Obtain a lock on a shared-across-databases object.

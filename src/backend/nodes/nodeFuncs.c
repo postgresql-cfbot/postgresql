@@ -2413,6 +2413,8 @@ expression_tree_walker_impl(Node *node,
 			return WALK(((NullTest *) node)->arg);
 		case T_BooleanTest:
 			return WALK(((BooleanTest *) node)->arg);
+		case T_KeyJoinProofDependency:
+			break;
 		case T_KeyJoinNode:
 			break;
 		case T_CoerceToDomain:
@@ -3533,6 +3535,8 @@ expression_tree_mutator_impl(Node *node,
 				return (Node *) newnode;
 			}
 			break;
+		case T_KeyJoinProofDependency:
+			return copyObject(node);
 		case T_KeyJoinNode:
 			{
 				KeyJoinNode *key_join = (KeyJoinNode *) node;
@@ -3543,6 +3547,12 @@ expression_tree_mutator_impl(Node *node,
 					copyObject(key_join->referencingAttnums);
 				newnode->referencedAttnums =
 					copyObject(key_join->referencedAttnums);
+				newnode->refAliasAttnums =
+					copyObject(key_join->refAliasAttnums);
+				newnode->notNullConstraints =
+					copyObject(key_join->notNullConstraints);
+				newnode->proofDependencies =
+					copyObject(key_join->proofDependencies);
 				return (Node *) newnode;
 			}
 		case T_CoerceToDomain:
@@ -4352,8 +4362,16 @@ raw_expression_tree_walker_impl(Node *node,
 			return WALK(((NullTest *) node)->arg);
 		case T_BooleanTest:
 			return WALK(((BooleanTest *) node)->arg);
-		case T_KeyJoinNode:
+		case T_KeyJoinProofDependency:
 			break;
+		case T_KeyJoinNode:
+			{
+				KeyJoinNode *key_join = (KeyJoinNode *) node;
+
+				if (WALK(key_join->notNullConstraints))
+					return true;
+				return WALK(key_join->proofDependencies);
+			}
 		case T_KeyJoinClause:
 			{
 				KeyJoinClause *kjc = (KeyJoinClause *) node;

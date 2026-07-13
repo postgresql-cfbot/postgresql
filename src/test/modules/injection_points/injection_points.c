@@ -31,6 +31,7 @@
 #include "utils/builtins.h"
 #include "utils/guc.h"
 #include "utils/injection_point.h"
+#include "utils/inval.h"
 #include "utils/memutils.h"
 #include "utils/tuplestore.h"
 #include "utils/wait_event.h"
@@ -81,6 +82,9 @@ extern PGDLLEXPORT void injection_notice(const char *name,
 extern PGDLLEXPORT void injection_wait(const char *name,
 									   const void *private_data,
 									   void *arg);
+extern PGDLLEXPORT void injection_invalidate_system_caches(const char *name,
+														   const void *private_data,
+														   void *arg);
 
 /* track if injection points attached in this process are linked to it */
 static bool injection_point_local = false;
@@ -290,6 +294,19 @@ injection_wait(const char *name, const void *private_data, void *arg)
 	SpinLockRelease(&inj_state->lock);
 }
 
+void
+injection_invalidate_system_caches(const char *name,
+								   const void *private_data, void *arg)
+{
+	const InjectionPointCondition *condition = private_data;
+
+	if (!injection_point_allowed(condition))
+		return;
+
+	InvalidateSystemCaches();
+	elog(NOTICE, "system caches invalidated for injection point %s", name);
+}
+
 /*
  * SQL function for creating an injection point.
  */
@@ -308,6 +325,8 @@ injection_points_attach(PG_FUNCTION_ARGS)
 		function = "injection_notice";
 	else if (strcmp(action, "wait") == 0)
 		function = "injection_wait";
+	else if (strcmp(action, "invalidate_system_caches") == 0)
+		function = "injection_invalidate_system_caches";
 	else
 		elog(ERROR, "incorrect action \"%s\" for injection point creation", action);
 

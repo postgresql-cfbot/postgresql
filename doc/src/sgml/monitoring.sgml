@@ -7887,6 +7887,69 @@ FROM pg_stat_get_backend_idset() AS backendid;
        </itemizedlist>
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>oldest_xmin_blocker</structfield> <type>text</type>
+      </para>
+      <para>
+       What was holding the oldest xmin horizon back when this vacuum computed
+       its cutoffs, and thus what may be preventing dead tuples from being
+       removed. The value is <literal>NULL</literal> when nothing older than
+       this vacuum's own xmin was found. Possible values are:
+       <itemizedlist>
+        <listitem>
+         <para>
+          <literal>running transaction</literal>: an in-progress transaction
+          (possibly idle or long-running) is holding back the horizon (see
+          <link linkend="monitoring-pg-stat-activity-view"><structname>pg_stat_activity</structname></link>).
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>prepared transaction</literal>: a prepared (two-phase)
+          transaction that has not yet been committed or rolled back (see
+          <link linkend="view-pg-prepared-xacts"><structname>pg_prepared_xacts</structname></link>).
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>standby feedback</literal>: the oldest xmin a standby
+          reported through <xref linkend="guc-hot-standby-feedback"/>, reserved
+          via the walsender's process entry rather than a slot. (When the
+          standby uses a replication slot, the xmin is reserved on the slot and
+          is reported as <literal>replication slot</literal> instead.)
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>replication slot</literal>: a replication slot's
+          <structfield>xmin</structfield> (see
+          <link linkend="view-pg-replication-slots"><structname>pg_replication_slots</structname></link>).
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>logical replication slot</literal>: a slot's
+          <structfield>catalog_xmin</structfield>, held for logical decoding
+          (see
+          <link linkend="view-pg-replication-slots"><structname>pg_replication_slots</structname></link>).
+         </para>
+        </listitem>
+       </itemizedlist>
+       <note>
+        <para>
+         This value is what vacuum saw when it computed its xmin cutoffs, so
+         the responsible transaction or slot may have changed or gone away by
+         the time it is read. Only the oldest one is reported; once it is
+         gone, the next oldest one (if any) is reported instead. For example,
+         if a long-running transaction and a replication slot are both holding
+         xmins back, the one with the older xmin is reported, and the other
+         only after the first has ended.
+        </para>
+       </note>
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

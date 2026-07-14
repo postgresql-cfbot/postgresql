@@ -18,6 +18,35 @@
 #include "utils/relcache.h"
 #include "utils/snapshot.h"
 
+/*
+ * What is holding the oldest-xmin horizon back, that is, what stops VACUUM
+ * from removing more dead tuples. A best-effort hint: the backend or slot may
+ * change right after we look.
+ */
+typedef enum OldestXminBlocker
+{
+	OLDEST_XMIN_BLOCKER_NONE = 0,	/* nothing older than this backend */
+	OLDEST_XMIN_BLOCKER_RUNNING_XACT,	/* a running transaction's xmin/xid */
+	OLDEST_XMIN_BLOCKER_PREPARED_XACT,	/* a prepared (two-phase) transaction */
+	OLDEST_XMIN_BLOCKER_STANDBY_FEEDBACK,	/* hot_standby_feedback with no
+											 * slot */
+	OLDEST_XMIN_BLOCKER_REPLICATION_SLOT,	/* a slot's xmin */
+	OLDEST_XMIN_BLOCKER_LOGICAL_SLOT,	/* a slot's catalog_xmin (logical
+										 * decoding) */
+} OldestXminBlocker;
+
+/*
+ * What holds each visibility horizon back, filled in by ComputeXidHorizons()
+ * alongside the horizons themselves. Kept out of ComputeXidHorizonsResult, and
+ * optional there, so the common callers that only want the horizons neither
+ * carry nor compute this. See OldestXminBlocker.
+ */
+typedef struct XminHorizonBlockers
+{
+	OldestXminBlocker shared;
+	OldestXminBlocker data;
+	OldestXminBlocker catalog;
+} XminHorizonBlockers;
 
 extern void ProcArrayAdd(PGPROC *proc);
 extern void ProcArrayRemove(PGPROC *proc, TransactionId latestXid);
@@ -51,6 +80,8 @@ extern RunningTransactions GetRunningTransactionData(void);
 
 extern bool TransactionIdIsInProgress(TransactionId xid);
 extern TransactionId GetOldestNonRemovableTransactionId(Relation rel);
+extern TransactionId GetOldestNonRemovableTransactionIdExt(Relation rel,
+														   OldestXminBlocker *blocker);
 extern TransactionId GetOldestTransactionIdConsideredRunning(void);
 extern TransactionId GetOldestActiveTransactionId(bool inCommitOnly,
 												  bool allDbs);

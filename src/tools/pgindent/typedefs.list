@@ -1903,6 +1903,7 @@ OkeysState
 OldMultiXactReader
 OldToNewMapping
 OldToNewMappingData
+OldestXminBlocker
 OnCommitAction
 OnCommitItem
 OnConflictAction
@@ -3549,6 +3550,7 @@ XidBoundsViolation
 XidCacheStatus
 XidCommitStatus
 XidStatus
+XminHorizonBlockers
 XmlExpr
 XmlExprOp
 XmlOptionType

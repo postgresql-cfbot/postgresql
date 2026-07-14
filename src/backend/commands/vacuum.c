@@ -133,6 +133,31 @@ static VacOptValue get_vacoptval_from_boolean(DefElem *def);
 static bool vac_tid_reaped(ItemPointer itemptr, void *state);
 
 /*
+ * Names for the OldestXminBlocker categories, indexed by enum value, used in
+ * log lines and pg_stat_progress_vacuum. Keep in sync with the enum in
+ * procarray.h.
+ */
+static const char *const OldestXminBlockerNames[] = {
+	[OLDEST_XMIN_BLOCKER_NONE] = "none",
+	[OLDEST_XMIN_BLOCKER_RUNNING_XACT] = "running transaction",
+	[OLDEST_XMIN_BLOCKER_PREPARED_XACT] = "prepared transaction",
+	[OLDEST_XMIN_BLOCKER_STANDBY_FEEDBACK] = "standby feedback",
+	[OLDEST_XMIN_BLOCKER_REPLICATION_SLOT] = "replication slot",
+	[OLDEST_XMIN_BLOCKER_LOGICAL_SLOT] = "logical replication slot",
+};
+
+/*
+ * Returns the name for an oldest-xmin blocker category.
+ */
+const char *
+vacuum_oldest_xmin_blocker_name(OldestXminBlocker blocker)
+{
+	if (blocker < 0 || blocker >= lengthof(OldestXminBlockerNames))
+		return "unknown";
+	return OldestXminBlockerNames[blocker];
+}
+
+/*
  * GUC check function to ensure GUC value specified is within the allowable
  * range.
  */
@@ -1139,7 +1164,8 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 	 * that only one vacuum process can be working on a particular table at
 	 * any time, and that each vacuum is always an independent transaction.
 	 */
-	cutoffs->OldestXmin = GetOldestNonRemovableTransactionId(rel);
+	cutoffs->OldestXmin =
+		GetOldestNonRemovableTransactionIdExt(rel, &cutoffs->oldest_xmin_blocker);
 
 	Assert(TransactionIdIsNormal(cutoffs->OldestXmin));
 
@@ -1169,10 +1195,20 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 	if (safeOldestMxact < FirstMultiXactId)
 		safeOldestMxact = FirstMultiXactId;
 	if (TransactionIdPrecedes(cutoffs->OldestXmin, safeOldestXmin))
-		ereport(WARNING,
-				(errmsg("cutoff for removing and freezing tuples is far in the past"),
-				 errhint("Close open transactions soon to avoid wraparound problems.\n"
-						 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
+	{
+		if (cutoffs->oldest_xmin_blocker != OLDEST_XMIN_BLOCKER_NONE)
+			ereport(WARNING,
+					(errmsg("cutoff for removing and freezing tuples is far in the past"),
+					 errdetail("The oldest xmin horizon is currently held back by: %s.",
+							   vacuum_oldest_xmin_blocker_name(cutoffs->oldest_xmin_blocker)),
+					 errhint("Close open transactions soon to avoid wraparound problems.\n"
+							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
+		else
+			ereport(WARNING,
+					(errmsg("cutoff for removing and freezing tuples is far in the past"),
+					 errhint("Close open transactions soon to avoid wraparound problems.\n"
+							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
+	}
 	if (MultiXactIdPrecedes(cutoffs->OldestMxact, safeOldestMxact))
 		ereport(WARNING,
 				(errmsg("cutoff for freezing multixacts is far in the past"),

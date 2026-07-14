@@ -1353,7 +1353,13 @@ CREATE VIEW pg_stat_progress_vacuum AS
         CASE S.param13 WHEN 1 THEN 'manual'
                        WHEN 2 THEN 'autovacuum'
                        WHEN 3 THEN 'autovacuum_wraparound'
-                       ELSE NULL END AS started_by
+                       ELSE NULL END AS started_by,
+        CASE S.param14 WHEN 1 THEN 'running transaction'
+                       WHEN 2 THEN 'prepared transaction'
+                       WHEN 3 THEN 'standby feedback'
+                       WHEN 4 THEN 'replication slot'
+                       WHEN 5 THEN 'logical replication slot'
+                       ELSE NULL END AS oldest_xmin_blocker
     FROM pg_stat_get_progress_info('VACUUM') AS S
         LEFT JOIN pg_database D ON S.datid = D.oid;
 

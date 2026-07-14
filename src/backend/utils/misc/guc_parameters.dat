@@ -891,6 +891,13 @@
   boot_val => 'true',
 },
 
+{ name => 'enable_fk_inner_join_removal', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
+  short_desc => 'Enables foreign-key-based inner-join removal.',
+  flags => 'GUC_EXPLAIN',
+  variable => 'enable_fk_inner_join_removal',
+  boot_val => 'true',
+},
+
 { name => 'enable_gathermerge', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
   short_desc => 'Enables the planner\'s use of gather merge plans.',
   flags => 'GUC_EXPLAIN',

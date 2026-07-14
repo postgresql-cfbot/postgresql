@@ -159,6 +159,7 @@ select name, setting from pg_settings where name like 'enable%';
  enable_bitmapscan              | on
  enable_distinct_reordering     | on
  enable_eager_aggregate         | on
+ enable_fk_inner_join_removal   | on
  enable_gathermerge             | on
  enable_group_by_reordering     | on
  enable_groupagg                | on

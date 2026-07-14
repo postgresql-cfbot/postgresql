@@ -49,8 +49,7 @@ static JsonTablePlan *transformJsonTableNestedColumns(JsonTableParseContext *cxt
 													  List *columns);
 static JsonFuncExpr *transformJsonTableColumn(JsonTableColumn *jtc,
 											  Node *contextItemExpr,
-											  List *passingArgs,
-											  bool errorOnError);
+											  List *passingArgs);
 static bool isCompositeType(Oid typid);
 static JsonTablePlan *makeJsonTablePathScan(JsonTableParseContext *cxt,
 											JsonTablePathSpec *pathspec,
@@ -363,12 +362,8 @@ appendJsonTableColumns(JsonTableParseContext *cxt, List *columns, List *passingA
 {
 	ListCell   *col;
 	ParseState *pstate = cxt->pstate;
-	JsonTable  *jt = cxt->jt;
 	TableFunc  *tf = cxt->tf;
 	bool		ordinality_found = false;
-	JsonBehavior *on_error = jt->on_error;
-	bool		errorOnError = on_error &&
-		on_error->btype == JSON_BEHAVIOR_ERROR;
 	Oid			contextItemTypid = exprType(tf->docexpr);
 
 	foreach(col, columns)
@@ -427,7 +422,7 @@ appendJsonTableColumns(JsonTableParseContext *cxt, List *columns, List *passingA
 					param->typeMod = -1;
 
 					jfe = transformJsonTableColumn(rawc, (Node *) param,
-												   passingArgs, errorOnError);
+												   passingArgs);
 
 					colexpr = transformExpr(pstate, (Node *) jfe,
 											EXPR_KIND_FROM_FUNCTION);
@@ -482,7 +477,7 @@ isCompositeType(Oid typid)
  */
 static JsonFuncExpr *
 transformJsonTableColumn(JsonTableColumn *jtc, Node *contextItemExpr,
-						 List *passingArgs, bool errorOnError)
+						 List *passingArgs)
 {
 	Node	   *pathspec;
 	JsonFuncExpr *jfexpr = makeNode(JsonFuncExpr);
@@ -524,8 +519,6 @@ transformJsonTableColumn(JsonTableColumn *jtc, Node *contextItemExpr,
 	jfexpr->output->returning->format = jtc->format;
 	jfexpr->on_empty = jtc->on_empty;
 	jfexpr->on_error = jtc->on_error;
-	if (jfexpr->on_error == NULL && errorOnError)
-		jfexpr->on_error = makeJsonBehavior(JSON_BEHAVIOR_ERROR, NULL, -1);
 	jfexpr->quotes = jtc->quotes;
 	jfexpr->wrapper = jtc->wrapper;
 	jfexpr->location = jtc->location;

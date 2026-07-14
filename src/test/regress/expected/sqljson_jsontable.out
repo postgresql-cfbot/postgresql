@@ -547,6 +547,15 @@ SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'strict $.a' ERROR O
 ERROR:  jsonpath member accessor can only be applied to an object
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'lax $.a' ERROR ON EMPTY) ERROR ON ERROR) jt;
 ERROR:  no SQL/JSON item found for specified path of column "a"
+-- Table-level ERROR ON ERROR is not propagated to a column lacking its own
+-- ON ERROR clause: the column keeps the default NULL ON ERROR behavior, so a
+-- conversion failure yields NULL rather than raising an error.
+SELECT * FROM JSON_TABLE(jsonb '"err"', '$' COLUMNS (a int PATH '$') ERROR ON ERROR) jt;
+ a 
+---
+  
+(1 row)
+
 SELECT * FROM JSON_TABLE(jsonb '"a"', '$' COLUMNS (a int PATH '$'   DEFAULT 1 ON EMPTY DEFAULT 2 ON ERROR)) jt;
  a 
 ---
@@ -1821,7 +1830,7 @@ CREATE OR REPLACE VIEW public.json_table_view9 AS
    FROM JSON_TABLE(
             '"a"'::text, '$' AS json_table_path_0
             COLUMNS (
-                a text PATH '$' NULL ON EMPTY
+                a text PATH '$'
             ) ERROR ON ERROR
         )
 DROP VIEW json_table_view8, json_table_view9;
@@ -1847,3 +1856,19 @@ CREATE OR REPLACE VIEW public.json_table_view9 AS
             )
         )
 DROP VIEW json_table_view8, json_table_view9;
+-- Test JSON_TABLE() column deparsing -- a non-default ON EMPTY behavior of a
+-- column must be preserved
+CREATE VIEW json_table_view_on_empty AS
+SELECT * FROM JSON_TABLE(jsonb '{}', '$' AS p0
+	COLUMNS (a int PATH '$.nosuch' ERROR ON EMPTY)
+	ERROR ON ERROR);
+\sv json_table_view_on_empty;
+CREATE OR REPLACE VIEW public.json_table_view_on_empty AS
+ SELECT a
+   FROM JSON_TABLE(
+            '{}'::jsonb, '$' AS p0
+            COLUMNS (
+                a integer PATH '$."nosuch"' ERROR ON EMPTY
+            ) ERROR ON ERROR
+        )
+DROP VIEW json_table_view_on_empty;

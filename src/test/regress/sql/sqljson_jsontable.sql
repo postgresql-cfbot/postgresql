@@ -266,6 +266,11 @@ SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH '$.a' ERROR ON EMPTY
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'strict $.a' ERROR ON ERROR) ERROR ON ERROR) jt;
 SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (a int PATH 'lax $.a' ERROR ON EMPTY) ERROR ON ERROR) jt;
 
+-- Table-level ERROR ON ERROR is not propagated to a column lacking its own
+-- ON ERROR clause: the column keeps the default NULL ON ERROR behavior, so a
+-- conversion failure yields NULL rather than raising an error.
+SELECT * FROM JSON_TABLE(jsonb '"err"', '$' COLUMNS (a int PATH '$') ERROR ON ERROR) jt;
+
 SELECT * FROM JSON_TABLE(jsonb '"a"', '$' COLUMNS (a int PATH '$'   DEFAULT 1 ON EMPTY DEFAULT 2 ON ERROR)) jt;
 SELECT * FROM JSON_TABLE(jsonb '"a"', '$' COLUMNS (a int PATH 'strict $.a' DEFAULT 1 ON EMPTY DEFAULT 2 ON ERROR)) jt;
 SELECT * FROM JSON_TABLE(jsonb '"a"', '$' COLUMNS (a int PATH 'lax $.a' DEFAULT 1 ON EMPTY DEFAULT 2 ON ERROR)) jt;
@@ -1004,3 +1009,13 @@ CREATE VIEW json_table_view9 AS SELECT * from JSON_TABLE('"a"', '$' COLUMNS (a t
 \sv json_table_view9;
 
 DROP VIEW json_table_view8, json_table_view9;
+
+-- Test JSON_TABLE() column deparsing -- a non-default ON EMPTY behavior of a
+-- column must be preserved
+CREATE VIEW json_table_view_on_empty AS
+SELECT * FROM JSON_TABLE(jsonb '{}', '$' AS p0
+	COLUMNS (a int PATH '$.nosuch' ERROR ON EMPTY)
+	ERROR ON ERROR);
+\sv json_table_view_on_empty;
+
+DROP VIEW json_table_view_on_empty;

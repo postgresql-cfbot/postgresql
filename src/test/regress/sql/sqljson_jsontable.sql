@@ -587,6 +587,24 @@ SELECT * FROM JSON_TABLE(
        PLAN ((p1 INNER (p12 CROSS p11)) CROSS (p2 INNER p21))
 ) jt;
 
+-- An unnamed NESTED path whose generated name would clash with a
+-- user-supplied path name must not silently drop columns: the generated
+-- name is made unique, so the still-uncovered path is reported instead.
+SELECT * FROM JSON_TABLE(
+       jsonb '[{"x":[1],"y":[2]}]', '$[*]' AS p0
+       COLUMNS (
+               NESTED PATH '$.x[*]' AS json_table_path_0 COLUMNS (x int PATH '$'),
+               NESTED PATH '$.y[*]' COLUMNS (y int PATH '$')
+       )
+       PLAN (p0 OUTER json_table_path_0)
+) jt;
+
+-- A user-supplied name matching the pattern of generated path names must not
+-- trigger a spurious duplicate-name error: the unnamed row pattern path is
+-- named only after the user-supplied names are collected, so its generated
+-- name avoids them.
+SELECT * FROM JSON_TABLE(jsonb '1', '$' COLUMNS (json_table_path_0 int PATH '$')) jt;
+
 -- JSON_TABLE: plan execution
 
 CREATE TEMP TABLE jsonb_table_test (js jsonb);

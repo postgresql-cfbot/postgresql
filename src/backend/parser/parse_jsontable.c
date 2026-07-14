@@ -647,13 +647,12 @@ transformJsonTableNestedColumns(JsonTableParseContext *cxt,
 	else
 		elog(ERROR, "invalid JSON_TABLE plan type %d", planspec->plan_type);
 
-	if (!jtc)
-		ereport(ERROR,
-				(errcode(ERRCODE_SYNTAX_ERROR),
-				 errmsg("invalid JSON_TABLE plan clause"),
-				 errdetail("PATH name was %s not found in nested columns list.",
-						   planspec->pathname),
-				 parser_errposition(cxt->pstate, planspec->location)));
+	/*
+	 * The plan's path names were already matched one-to-one against the
+	 * nested columns by validateJsonTableChildPlan(), so a nested column with
+	 * this path name must exist.
+	 */
+	Assert(jtc != NULL);
 
 	return transformJsonTableColumns(cxt, planspec, jtc->columns,
 									 passingArgs,

@@ -1613,6 +1613,15 @@ TransactionIdIsInProgress(TransactionId xid)
 	return false;
 }
 
+/* Build an oldest-xmin blocker; the caller fills in the pid when relevant. */
+static inline OldestXminBlockerInfo
+make_xmin_blocker(OldestXminBlocker kind, TransactionId xid)
+{
+	OldestXminBlockerInfo b = {kind, 0, xid};
+
+	return b;
+}
+
 
 /*
  * Determine XID horizons.
@@ -1683,11 +1692,7 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, XminHorizonBlockers *b)
 
 	/* no blocker identified yet, for callers that asked for one */
 	if (b)
-	{
-		b->shared = OLDEST_XMIN_BLOCKER_NONE;
-		b->data = OLDEST_XMIN_BLOCKER_NONE;
-		b->catalog = OLDEST_XMIN_BLOCKER_NONE;
-	}
+		MemSet(b, 0, sizeof(*b));
 
 	LWLockAcquire(ProcArrayLock, LW_SHARED);
 
@@ -1743,7 +1748,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, XminHorizonBlockers *b)
 		int8		statusFlags = ProcGlobal->statusFlags[index];
 		TransactionId xid;
 		TransactionId xmin;
-		OldestXminBlocker this_blocker = OLDEST_XMIN_BLOCKER_NONE;
+		OldestXminBlockerInfo this_blocker;
+		bool		xid_owner = false;
 
 		/* Fetch xid just once - see GetNewTransactionId */
 		xid = UINT32_ACCESS_ONCE(other_xids[index]);
@@ -1785,18 +1791,39 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, XminHorizonBlockers *b)
 		 * PROC_AFFECTS_ALL_HORIZONS marks a walsender that reserves an xmin
 		 * via its PGPROC entry rather than a slot, i.e. hot_standby_feedback
 		 * with no slot (see ProcessStandbyHSFeedbackMessage). Anything else
-		 * is a running transaction.
+		 * is a running transaction. We keep the PID (for the running xact and
+		 * the walsender) or the xid (for the prepared xact, to resolve its
+		 * GID later), whichever names it.
+		 *
+		 * xid_owner is true when this proc's own xid reaches the horizon,
+		 * rather than a snapshot xmin that observes that xid. When several
+		 * procs share the same value, the owner is preferred, since ending it
+		 * is more likely to let the horizon advance. For example, backend A
+		 * holds xid 100 while backends B, C, D, E run with xmin 100; all five
+		 * are at 100, and A is reported.
 		 */
 		if (b)
 		{
-			if (proc->pid == 0)
-				this_blocker = OLDEST_XMIN_BLOCKER_PREPARED_XACT;
-			else if (statusFlags & PROC_AFFECTS_ALL_HORIZONS)
-				this_blocker = OLDEST_XMIN_BLOCKER_STANDBY_FEEDBACK;
-			else
-				this_blocker = OLDEST_XMIN_BLOCKER_RUNNING_XACT;
+			xid_owner = TransactionIdIsValid(xid) && xid == xmin;
 
-			if (TransactionIdPrecedes(xmin, h->shared_oldest_nonremovable))
+			if (proc->pid == 0)
+			{
+				this_blocker.kind = OLDEST_XMIN_BLOCKER_PREPARED_XACT;
+				this_blocker.xid = xid;
+			}
+			else if (statusFlags & PROC_AFFECTS_ALL_HORIZONS)
+			{
+				this_blocker.kind = OLDEST_XMIN_BLOCKER_STANDBY_FEEDBACK;
+				this_blocker.pid = proc->pid;
+			}
+			else
+			{
+				this_blocker.kind = OLDEST_XMIN_BLOCKER_RUNNING_XACT;
+				this_blocker.pid = proc->pid;
+			}
+
+			if (TransactionIdPrecedes(xmin, h->shared_oldest_nonremovable) ||
+				(xid_owner && xmin == h->shared_oldest_nonremovable))
 				b->shared = this_blocker;
 		}
 
@@ -1828,7 +1855,8 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, XminHorizonBlockers *b)
 			(statusFlags & PROC_AFFECTS_ALL_HORIZONS) ||
 			in_recovery)
 		{
-			if (b && TransactionIdPrecedes(xmin, h->data_oldest_nonremovable))
+			if (b && (TransactionIdPrecedes(xmin, h->data_oldest_nonremovable) ||
+					  (xid_owner && xmin == h->data_oldest_nonremovable)))
 				b->data = this_blocker;
 			h->data_oldest_nonremovable =
 				TransactionIdOlder(h->data_oldest_nonremovable, xmin);
@@ -1853,11 +1881,11 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, XminHorizonBlockers *b)
 		h->oldest_considered_running =
 			TransactionIdOlder(h->oldest_considered_running, kaxmin);
 		if (b && TransactionIdPrecedes(kaxmin, h->shared_oldest_nonremovable))
-			b->shared = OLDEST_XMIN_BLOCKER_RUNNING_XACT;
+			b->shared = make_xmin_blocker(OLDEST_XMIN_BLOCKER_RUNNING_XACT, InvalidTransactionId);
 		h->shared_oldest_nonremovable =
 			TransactionIdOlder(h->shared_oldest_nonremovable, kaxmin);
 		if (b && TransactionIdPrecedes(kaxmin, h->data_oldest_nonremovable))
-			b->data = OLDEST_XMIN_BLOCKER_RUNNING_XACT;
+			b->data = make_xmin_blocker(OLDEST_XMIN_BLOCKER_RUNNING_XACT, InvalidTransactionId);
 		h->data_oldest_nonremovable =
 			TransactionIdOlder(h->data_oldest_nonremovable, kaxmin);
 		/* temp relations cannot be accessed in recovery */
@@ -1875,9 +1903,11 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, XminHorizonBlockers *b)
 	if (b && TransactionIdIsValid(h->slot_xmin))
 	{
 		if (TransactionIdPrecedes(h->slot_xmin, h->shared_oldest_nonremovable))
-			b->shared = OLDEST_XMIN_BLOCKER_REPLICATION_SLOT;
+			b->shared = make_xmin_blocker(OLDEST_XMIN_BLOCKER_REPLICATION_SLOT,
+										  h->slot_xmin);
 		if (TransactionIdPrecedes(h->slot_xmin, h->data_oldest_nonremovable))
-			b->data = OLDEST_XMIN_BLOCKER_REPLICATION_SLOT;
+			b->data = make_xmin_blocker(OLDEST_XMIN_BLOCKER_REPLICATION_SLOT,
+										h->slot_xmin);
 	}
 	h->shared_oldest_nonremovable =
 		TransactionIdOlder(h->shared_oldest_nonremovable, h->slot_xmin);
@@ -1904,10 +1934,12 @@ ComputeXidHorizons(ComputeXidHorizonsResult *h, XminHorizonBlockers *b)
 		{
 			if (TransactionIdPrecedes(h->slot_catalog_xmin,
 									  h->shared_oldest_nonremovable))
-				b->shared = OLDEST_XMIN_BLOCKER_LOGICAL_SLOT;
+				b->shared = make_xmin_blocker(OLDEST_XMIN_BLOCKER_LOGICAL_SLOT,
+											  h->slot_catalog_xmin);
 			if (TransactionIdPrecedes(h->slot_catalog_xmin,
 									  h->catalog_oldest_nonremovable))
-				b->catalog = OLDEST_XMIN_BLOCKER_LOGICAL_SLOT;
+				b->catalog = make_xmin_blocker(OLDEST_XMIN_BLOCKER_LOGICAL_SLOT,
+											   h->slot_catalog_xmin);
 		}
 	}
 	h->shared_oldest_nonremovable =
@@ -2032,7 +2064,7 @@ GetOldestNonRemovableTransactionId(Relation rel)
  * relations, never for a plain user table.
  */
 TransactionId
-GetOldestNonRemovableTransactionIdExt(Relation rel, OldestXminBlocker *blocker)
+GetOldestNonRemovableTransactionIdExt(Relation rel, OldestXminBlockerInfo *blocker)
 {
 	ComputeXidHorizonsResult horizons;
 	XminHorizonBlockers blockers;
@@ -2056,12 +2088,12 @@ GetOldestNonRemovableTransactionIdExt(Relation rel, OldestXminBlocker *blocker)
 			 * The temp horizon is bounded by this session's own xid, so
 			 * nothing external holds it back.
 			 */
-			*blocker = OLDEST_XMIN_BLOCKER_NONE;
+			*blocker = make_xmin_blocker(OLDEST_XMIN_BLOCKER_NONE, InvalidTransactionId);
 			return horizons.temp_oldest_nonremovable;
 	}
 
 	/* just to prevent compiler warnings */
-	*blocker = OLDEST_XMIN_BLOCKER_NONE;
+	*blocker = make_xmin_blocker(OLDEST_XMIN_BLOCKER_NONE, InvalidTransactionId);
 	return InvalidTransactionId;
 }
 

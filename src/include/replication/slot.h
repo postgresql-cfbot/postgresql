@@ -357,6 +357,8 @@ extern bool ReplicationSlotValidateNameInternal(const char *name,
 extern void ReplicationSlotReserveWal(void);
 extern void ReplicationSlotsComputeRequiredXmin(bool already_locked);
 extern void ReplicationSlotsComputeRequiredLSN(void);
+extern bool ReplicationSlotNameForXmin(TransactionId xid, bool catalog,
+									   char *name, int namesize);
 extern XLogRecPtr ReplicationSlotsComputeLogicalRestartLSN(void);
 extern bool ReplicationSlotsCountDBSlots(Oid dboid, int *nslots, int *nactive);
 extern bool CheckLogicalSlotExists(void);

@@ -851,6 +851,39 @@ TwoPhaseGetGXact(FullTransactionId fxid, bool lock_held)
 }
 
 /*
+ * Look up the GID of a prepared transaction by its XID, for diagnostics such
+ * as reporting what holds VACUUM's horizon back.
+ *
+ * Best-effort: returns false rather than erroring when no match is found,
+ * since this is only for reporting and the transaction may have committed or
+ * aborted by the time we look.
+ */
+bool
+TwoPhaseGetGidByXid(TransactionId xid, char *gid, int gidsize)
+{
+	bool		found = false;
+
+	if (!TransactionIdIsValid(xid))
+		return false;
+
+	LWLockAcquire(TwoPhaseStateLock, LW_SHARED);
+	for (int i = 0; i < TwoPhaseState->numPrepXacts; i++)
+	{
+		GlobalTransaction gxact = TwoPhaseState->prepXacts[i];
+
+		if (XidFromFullTransactionId(gxact->fxid) == xid)
+		{
+			strlcpy(gid, gxact->gid, gidsize);
+			found = true;
+			break;
+		}
+	}
+	LWLockRelease(TwoPhaseStateLock);
+
+	return found;
+}
+
+/*
  * TwoPhaseGetXidByVirtualXID
  *		Lookup VXID among xacts prepared since last startup.
  *

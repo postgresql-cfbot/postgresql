@@ -36,6 +36,18 @@ typedef enum OldestXminBlocker
 } OldestXminBlocker;
 
 /*
+ * A blocker's kind plus what we can cheaply name it by: a backend or walsender
+ * pid, or an xid to look up a GID or slot name later. Unused fields are left
+ * at 0 or InvalidTransactionId.
+ */
+typedef struct OldestXminBlockerInfo
+{
+	OldestXminBlocker kind;
+	int			pid;
+	TransactionId xid;
+} OldestXminBlockerInfo;
+
+/*
  * What holds each visibility horizon back, filled in by ComputeXidHorizons()
  * alongside the horizons themselves. Kept out of ComputeXidHorizonsResult, and
  * optional there, so the common callers that only want the horizons neither
@@ -43,9 +55,9 @@ typedef enum OldestXminBlocker
  */
 typedef struct XminHorizonBlockers
 {
-	OldestXminBlocker shared;
-	OldestXminBlocker data;
-	OldestXminBlocker catalog;
+	OldestXminBlockerInfo shared;
+	OldestXminBlockerInfo data;
+	OldestXminBlockerInfo catalog;
 } XminHorizonBlockers;
 
 extern void ProcArrayAdd(PGPROC *proc);
@@ -81,7 +93,7 @@ extern RunningTransactions GetRunningTransactionData(void);
 extern bool TransactionIdIsInProgress(TransactionId xid);
 extern TransactionId GetOldestNonRemovableTransactionId(Relation rel);
 extern TransactionId GetOldestNonRemovableTransactionIdExt(Relation rel,
-														   OldestXminBlocker *blocker);
+														   OldestXminBlockerInfo *blocker);
 extern TransactionId GetOldestTransactionIdConsideredRunning(void);
 extern TransactionId GetOldestActiveTransactionId(bool inCommitOnly,
 												  bool allDbs);

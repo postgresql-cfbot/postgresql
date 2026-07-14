@@ -33,6 +33,7 @@
 #include "access/multixact.h"
 #include "access/tableam.h"
 #include "access/transam.h"
+#include "access/twophase.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_database.h"
@@ -48,6 +49,7 @@
 #include "postmaster/autovacuum.h"
 #include "postmaster/bgworker_internals.h"
 #include "postmaster/interrupt.h"
+#include "replication/slot.h"
 #include "storage/bufmgr.h"
 #include "storage/lmgr.h"
 #include "storage/pmsignal.h"
@@ -155,6 +157,54 @@ vacuum_oldest_xmin_blocker_name(OldestXminBlocker blocker)
 	if (blocker < 0 || blocker >= lengthof(OldestXminBlockerNames))
 		return "unknown";
 	return OldestXminBlockerNames[blocker];
+}
+
+/*
+ * Append a blocker's identity to buf, to follow its category name, and return
+ * true, or return false when there is nothing more specific to add. The 2PC
+ * and slot lookups are best-effort.
+ */
+bool
+vacuum_oldest_xmin_blocker_ident(const OldestXminBlockerInfo *blocker,
+								 StringInfo buf)
+{
+	if (blocker->kind == OLDEST_XMIN_BLOCKER_RUNNING_XACT)
+	{
+		appendStringInfo(buf, " (pid %d)", blocker->pid);
+		return true;
+	}
+	else if (blocker->kind == OLDEST_XMIN_BLOCKER_STANDBY_FEEDBACK)
+	{
+		appendStringInfo(buf,
+						 " (walsender pid %d; the transaction runs on the standby)",
+						 blocker->pid);
+		return true;
+	}
+	else if (blocker->kind == OLDEST_XMIN_BLOCKER_PREPARED_XACT)
+	{
+		char		gid[GIDSIZE];
+
+		if (TwoPhaseGetGidByXid(blocker->xid, gid, sizeof(gid)))
+		{
+			appendStringInfo(buf, " '%s'", gid);
+			return true;
+		}
+	}
+	else if (blocker->kind == OLDEST_XMIN_BLOCKER_REPLICATION_SLOT ||
+			 blocker->kind == OLDEST_XMIN_BLOCKER_LOGICAL_SLOT)
+	{
+		char		slotname[NAMEDATALEN];
+		bool		catalog = (blocker->kind == OLDEST_XMIN_BLOCKER_LOGICAL_SLOT);
+
+		if (ReplicationSlotNameForXmin(blocker->xid, catalog,
+									   slotname, sizeof(slotname)))
+		{
+			appendStringInfo(buf, " (slot \"%s\")", slotname);
+			return true;
+		}
+	}
+
+	return false;
 }
 
 /*
@@ -1196,18 +1246,22 @@ vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 		safeOldestMxact = FirstMultiXactId;
 	if (TransactionIdPrecedes(cutoffs->OldestXmin, safeOldestXmin))
 	{
-		if (cutoffs->oldest_xmin_blocker != OLDEST_XMIN_BLOCKER_NONE)
-			ereport(WARNING,
-					(errmsg("cutoff for removing and freezing tuples is far in the past"),
-					 errdetail("The oldest xmin horizon is currently held back by: %s.",
-							   vacuum_oldest_xmin_blocker_name(cutoffs->oldest_xmin_blocker)),
-					 errhint("Close open transactions soon to avoid wraparound problems.\n"
-							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
-		else
-			ereport(WARNING,
-					(errmsg("cutoff for removing and freezing tuples is far in the past"),
-					 errhint("Close open transactions soon to avoid wraparound problems.\n"
-							 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
+		OldestXminBlockerInfo *blocker = &cutoffs->oldest_xmin_blocker;
+		StringInfoData ident;
+
+		/* identity to append after the category name, empty if none */
+		initStringInfo(&ident);
+		if (blocker->kind != OLDEST_XMIN_BLOCKER_NONE)
+			vacuum_oldest_xmin_blocker_ident(blocker, &ident);
+
+		ereport(WARNING,
+				(errmsg("cutoff for removing and freezing tuples is far in the past"),
+				 blocker->kind != OLDEST_XMIN_BLOCKER_NONE ?
+				 errdetail("The oldest xmin horizon is currently held back by: %s%s.",
+						   vacuum_oldest_xmin_blocker_name(blocker->kind), ident.data) : 0,
+				 errhint("Close open transactions soon to avoid wraparound problems.\n"
+						 "You might also need to commit or roll back old prepared transactions, or drop stale replication slots.")));
+		pfree(ident.data);
 	}
 	if (MultiXactIdPrecedes(cutoffs->OldestMxact, safeOldestMxact))
 		ereport(WARNING,

@@ -281,9 +281,9 @@ struct VacuumCutoffs
 
 	/*
 	 * A best-effort hint about what held OldestXmin back at the time it was
-	 * computed, for diagnostics only. See OldestXminBlocker.
+	 * computed, for diagnostics only. See OldestXminBlockerInfo.
 	 */
-	OldestXminBlocker oldest_xmin_blocker;
+	OldestXminBlockerInfo oldest_xmin_blocker;
 
 	/*
 	 * FreezeLimit is the Xid below which all Xids are definitely frozen or
@@ -394,6 +394,8 @@ extern bool vacuum_get_cutoffs(Relation rel, const VacuumParams *params,
 							   struct VacuumCutoffs *cutoffs);
 extern bool vacuum_xid_failsafe_check(const struct VacuumCutoffs *cutoffs);
 extern const char *vacuum_oldest_xmin_blocker_name(OldestXminBlocker blocker);
+extern bool vacuum_oldest_xmin_blocker_ident(const OldestXminBlockerInfo *blocker,
+											 StringInfo buf);
 extern void vac_update_datfrozenxid(void);
 extern void vacuum_delay_point(bool is_analyze);
 extern bool vacuum_is_permitted_for_relation(Oid relid, Form_pg_class reltuple,

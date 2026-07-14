@@ -1904,6 +1904,7 @@ OldMultiXactReader
 OldToNewMapping
 OldToNewMappingData
 OldestXminBlocker
+OldestXminBlockerInfo
 OnCommitAction
 OnCommitItem
 OnConflictAction

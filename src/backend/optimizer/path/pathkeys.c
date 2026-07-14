@@ -1170,7 +1170,7 @@ build_index_pathkeys(PlannerInfo *root,
 		bool		reverse_sort;
 		bool		nulls_first;
 		PathKey    *cpathkey;
-
+		bool		cpathkey_emitted = false;
 		/*
 		 * INCLUDE columns are stored in index unordered, so they don't
 		 * support ordered index scan.
@@ -1200,11 +1200,19 @@ build_index_pathkeys(PlannerInfo *root,
 											  false);
 
 		/*
-		 * SLOPE: if the first unmatched query pathkey is a monotonic function
-		 * of this index column, use that pathkey instead of the column's own
-		 * pathkey so the index can satisfy the query ordering without a Sort.
+		 * SLOPE: scan query_pathkeys to emit all pathkeys that this index
+		 * column can satisfy — both direct (EquivalenceClass) and monotonic
+		 * (SLOPE) matches — in query order.
+		 *
+		 * Emitting in query order handles pathkey chains like:
+		 *
+		 * [f(x), g(x), x] with all monotonic in x, the index order on x
+		 * implies the order of every function.
+		 *
+		 * [x, ..., f(x)] with f(x) is constant when x is constant, so f(x) is
+		 * a redundant tiebreaker after x.
 		 */
-		if (enable_slope && index->rel->reloptkind == RELOPT_BASEREL)
+		if (enable_slope)
 		{
 			ListCell   *lc2;
 
@@ -1215,55 +1223,89 @@ build_index_pathkeys(PlannerInfo *root,
 				if (pathkey_is_redundant(qpk, retval))
 					continue;
 
-				if (cpathkey && qpk->pk_eclass == cpathkey->pk_eclass)
-					break;
+				if (cpathkey &&
+					qpk->pk_eclass == cpathkey->pk_eclass)
+				{
+					if (!pathkey_is_redundant(cpathkey, retval))
+						retval = lappend(retval, cpathkey);
+					cpathkey_emitted = true;
+					continue;
+				}
 
-				if (qpk->pk_var != NULL &&
+				if (index->rel->reloptkind == RELOPT_BASEREL &&
+					qpk->pk_var != NULL &&
 					!qpk->pk_eclass->ec_has_volatile &&
 					qpk->pk_varrelid == index->rel->relid &&
 					equal(qpk->pk_var, indexkey))
 				{
-
-					if (qpk->pk_slope == MONOTONICFUNC_UNSET)
+					/*
+					 * Case 1: f(x) before x — descending chain. Need
+					 * monotonicity to determine the sort direction that f(x)
+					 * inherits from the index order on x.
+					 */
+					if (!cpathkey_emitted)
 					{
-						EquivalenceMember *em;
+						PathKey    *spk;
 
-						em = linitial(qpk->pk_eclass->ec_members);
-						qpk->pk_slope = get_expr_slope_wrt(em->em_expr,
-														   qpk->pk_var);
+						if (qpk->pk_slope == MONOTONICFUNC_UNSET)
+						{
+							EquivalenceMember *em;
+
+							em = linitial(qpk->pk_eclass->ec_members);
+							qpk->pk_slope = get_expr_slope_wrt(em->em_expr,
+															   qpk->pk_var);
+						}
+						spk = slope_emit_pathkey(root, qpk, indexkey,
+												 reverse_sort, nulls_first);
+						if (spk && !pathkey_is_redundant(spk, retval))
+							retval = lappend(retval, spk);
+						continue;
 					}
-					cpathkey = slope_emit_pathkey(root, qpk, indexkey,
-												  reverse_sort, nulls_first);
+
+
+					/*
+					 * Case 2: f(x) after x — ascending chain. x is already
+					 * in retval, so within each group of equal x values, f(x)
+					 * is constant (for any deterministic f).  The pathkey is
+					 * redundant as a tiebreaker regardless of monotonicity.
+					 */
+					if (!pathkey_is_redundant(qpk, retval))
+						retval = lappend(retval, qpk);
+					continue;
 				}
 				break;
 			}
 		}
 
+		if (cpathkey_emitted){
+			i++;
+			continue;
+		}
+
 		if (cpathkey)
 		{
 			/*
-			 * We found the sort key in an EquivalenceClass, so it's relevant
-			 * for this query.  Add it to list, unless it's redundant.
-			 */
+			* We found the sort key in an EquivalenceClass, so it's relevant
+			* for this query.  Add it to list, unless it's redundant.
+			*/
 			if (!pathkey_is_redundant(cpathkey, retval))
 				retval = lappend(retval, cpathkey);
 		}
 		else
 		{
 			/*
-			 * Boolean index keys might be redundant even if they do not
-			 * appear in an EquivalenceClass, because of our special treatment
-			 * of boolean equality conditions --- see the comment for
-			 * indexcol_is_bool_constant_for_query().  If that applies, we can
-			 * continue to examine lower-order index columns.  Otherwise, the
-			 * sort key is not an interesting sort order for this query, so we
-			 * should stop considering index columns; any lower-order sort
-			 * keys won't be useful either.
-			 */
+			* Boolean index keys might be redundant even if they do not
+			* appear in an EquivalenceClass, because of our special treatment
+			* of boolean equality conditions --- see the comment for
+			* indexcol_is_bool_constant_for_query().  If that applies, we can
+			* continue to examine lower-order index columns.  Otherwise, the
+			* sort key is not an interesting sort order for this query, so we
+			* should stop considering index columns; any lower-order sort
+			* keys won't be useful either.
+			*/
 			if (!indexcol_is_bool_constant_for_query(root, index, i))
 				break;
 		}
-
 		i++;
 	}
 

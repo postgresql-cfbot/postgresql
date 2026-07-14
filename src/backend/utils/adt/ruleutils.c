@@ -12768,7 +12768,8 @@ get_json_table_plan(TableFunc *tf, JsonTablePlan *plan, deparse_context *context
 			appendStringInfoString(context->buf,
 								   s->outerJoin ? " OUTER " : " INNER ");
 			get_json_table_plan(tf, s->child, context,
-								IsA(s->child, JsonTableSiblingJoin));
+								IsA(s->child, JsonTableSiblingJoin) ||
+								castNode(JsonTablePathScan, s->child)->child);
 		}
 	}
 	else if (IsA(plan, JsonTableSiblingJoin))

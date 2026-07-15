@@ -148,7 +148,8 @@ static Buffer vm_extend(Relation rel, BlockNumber vm_nblocks);
  * any I/O.  Returns true if any bits have been cleared and false otherwise.
  */
 bool
-visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags)
+visibilitymap_clear(RelFileLocator rlocator,
+					BlockNumber heapBlk, Buffer vmbuf, uint8 flags)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	int			mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
@@ -162,7 +163,9 @@ visibilitymap_clear(Relation rel, BlockNumber heapBlk, Buffer vmbuf, uint8 flags
 	Assert(flags != VISIBILITYMAP_ALL_VISIBLE);
 
 #ifdef TRACE_VISIBILITYMAP
-	elog(DEBUG1, "vm_clear %s %d", RelationGetRelationName(rel), heapBlk);
+	elog(DEBUG1, "vm_clear %s %d",
+		 relpathbackend(rlocator, MyProcNumber, MAIN_FORKNUM).str,
+		 heapBlk);
 #endif
 
 	if (!BufferIsValid(vmbuf) || BufferGetBlockNumber(vmbuf) != mapBlock)
@@ -254,7 +257,7 @@ visibilitymap_pin_ok(BlockNumber heapBlk, Buffer vmbuf)
 void
 visibilitymap_set(BlockNumber heapBlk,
 				  Buffer vmBuf, uint8 flags,
-				  const RelFileLocator rlocator)
+				  RelFileLocator rlocator)
 {
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
 	uint32		mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);

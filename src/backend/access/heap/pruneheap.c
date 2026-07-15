@@ -947,7 +947,7 @@ heap_page_fix_vm_corruption(PruneState *prstate, OffsetNumber offnum,
 
 	if (do_clear_vm)
 	{
-		visibilitymap_clear(prstate->relation, prstate->block,
+		visibilitymap_clear(prstate->relation->rd_locator, prstate->block,
 							prstate->vmbuffer,
 							VISIBILITYMAP_VALID_BITS);
 		prstate->old_vmbits = 0;

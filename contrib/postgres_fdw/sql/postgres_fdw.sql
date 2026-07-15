@@ -268,6 +268,243 @@ ANALYZE ft1;
 ALTER FOREIGN TABLE ft2 OPTIONS (use_remote_estimate 'true');
 
 -- ===================================================================
+-- test streaming_fetch option
+-- ===================================================================
+CREATE SERVER fetch_stream_srv
+    FOREIGN DATA WRAPPER postgres_fdw
+    OPTIONS (dbname :'current_database', port :'current_port');
+CREATE USER MAPPING FOR CURRENT_USER SERVER fetch_stream_srv;
+
+CREATE TABLE local_tbl (id int, val text);
+INSERT INTO local_tbl VALUES (1, 'a'), (2, 'b'), (3, 'c');
+-- 1. streaming_fetch set at SERVER level only
+
+-- 1a. Set streaming_fetch = true on the server
+ALTER SERVER fetch_stream_srv OPTIONS (ADD streaming_fetch 'true');
+
+CREATE FOREIGN TABLE ft_server (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl');
+
+-- Verify option appears in foreign server
+SELECT srvname, option_name, option_value
+FROM pg_foreign_server,
+     LATERAL pg_options_to_table(srvoptions)
+WHERE srvname = 'fetch_stream_srv'
+  AND option_name IN ('streaming_fetch')
+ORDER BY srvname, option_name;
+
+-- Verify option is NOT present at table level (inherits from server)
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_server'::regclass;
+
+-- 1b. Switch server-level to streaming_fetch = false
+ALTER SERVER fetch_stream_srv OPTIONS (SET streaming_fetch 'false');
+
+SELECT srvname, option_name, option_value
+FROM pg_foreign_server,
+     LATERAL pg_options_to_table(srvoptions)
+WHERE srvname = 'fetch_stream_srv'
+  AND option_name IN ('streaming_fetch')
+ORDER BY srvname, option_name;
+
+-- Verify option is NOT present at table level (inherits from server)
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_server'::regclass;
+
+-- 2. streaming_fetch set at TABLE level only (no server-level option)
+ALTER SERVER fetch_stream_srv OPTIONS (DROP streaming_fetch);
+
+-- 2a. streaming_fetch = true at table level
+ALTER FOREIGN TABLE ft_server OPTIONS (ADD streaming_fetch 'true');
+
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_server'::regclass;
+
+SELECT * FROM ft_server ORDER BY id;
+
+-- 2b. streaming_fetch = false at table level
+ALTER FOREIGN TABLE ft_server OPTIONS (SET streaming_fetch 'false');
+
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_server'::regclass;
+
+SELECT * FROM ft_server ORDER BY id;
+
+-- 3. TABLE-level value overrides SERVER-level value
+
+-- 3a. Server = true, Table = false
+ALTER SERVER fetch_stream_srv OPTIONS (ADD streaming_fetch 'true');
+
+-- Server  shows true
+SELECT srvname, option_name, option_value
+FROM pg_foreign_server,
+     LATERAL pg_options_to_table(srvoptions)
+WHERE srvname = 'fetch_stream_srv'
+  AND option_name IN ('streaming_fetch')
+ORDER BY srvname, option_name;
+
+-- Table shows its own override: false
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_server'::regclass;
+
+-- Query must succeed and use table-level setting (false)
+SELECT * FROM ft_server ORDER BY id;
+
+-- 3b. Server = false, Table = true  →  effective value is true
+ALTER SERVER fetch_stream_srv OPTIONS (SET streaming_fetch 'false');
+
+ALTER FOREIGN TABLE ft_server OPTIONS (SET streaming_fetch 'true');
+
+-- Server shows false
+SELECT srvname, option_name, option_value
+FROM pg_foreign_server,
+     LATERAL pg_options_to_table(srvoptions)
+WHERE srvname = 'fetch_stream_srv'
+  AND option_name IN ('streaming_fetch')
+ORDER BY srvname, option_name;
+
+-- Table shows its own override: true
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_server'::regclass;
+
+-- Query must succeed and use table-level setting (true)
+SELECT * FROM ft_server ORDER BY id;
+
+-- 4. Negative tests: invalid values must be rejected
+
+-- streaming_fetch is boolean; non-boolean value must ERROR
+\set VERBOSITY terse
+
+CREATE FOREIGN TABLE ft_invalid (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl', streaming_fetch 'yes');  -- ERROR
+
+CREATE FOREIGN TABLE ft_invalid (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl', streaming_fetch '1');    -- ERROR
+
+CREATE FOREIGN TABLE ft_invalid (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl', streaming_fetch '');     -- ERROR
+
+ALTER SERVER fetch_stream_srv OPTIONS (SET streaming_fetch 'notabool');             -- ERROR
+
+\set VERBOSITY default
+
+-- 5. ALTER FOREIGN TABLE: add, change, and drop streaming_fetch
+
+ALTER SERVER fetch_stream_srv OPTIONS (SET streaming_fetch 'true');
+
+CREATE FOREIGN TABLE ft_alter_test (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl');
+
+-- No table-level option yet
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_alter_test'::regclass;
+
+-- ADD table-level option
+ALTER FOREIGN TABLE ft_alter_test OPTIONS (ADD streaming_fetch 'false');
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_alter_test'::regclass;
+
+SELECT * FROM ft_alter_test ORDER BY id;
+
+-- SET (change) table-level option
+ALTER FOREIGN TABLE ft_alter_test OPTIONS (SET streaming_fetch 'true');
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_alter_test'::regclass;
+
+SELECT * FROM ft_alter_test ORDER BY id;
+
+-- DROP table-level option (falls back to server-level)
+ALTER FOREIGN TABLE ft_alter_test OPTIONS (DROP streaming_fetch);
+SELECT ftrelid::regclass, ftoptions
+FROM pg_foreign_table
+WHERE ftrelid = 'ft_alter_test'::regclass;
+
+SELECT * FROM ft_alter_test ORDER BY id;
+
+DROP FOREIGN TABLE ft_alter_test;
+
+-- 6. streaming_fetch with non-default fetch_size values
+-- Use a 12-row table so chunk boundaries are distinct and predictable:
+-- fetch_size=1 gives 12 single-row chunks, fetch_size=5 gives chunks
+-- of 5+5+2, and fetch_size=1000 puts all rows in a single chunk.
+CREATE TABLE local_tbl_large (id int, val text);
+INSERT INTO local_tbl_large SELECT id, 'val' || id FROM generate_series(1, 12) id;
+
+ALTER SERVER fetch_stream_srv OPTIONS (SET streaming_fetch 'true');
+
+-- fetch_size = 1: every row is its own libpq chunk; exercises the path
+-- where pgfdw_get_next_result is called once per row.
+CREATE FOREIGN TABLE ft_fetchsize (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl_large', fetch_size '1');
+SELECT count(*) FROM ft_fetchsize;
+DROP FOREIGN TABLE ft_fetchsize;
+
+-- fetch_size = 5: three chunks with a partial last chunk (5+5+2);
+-- the final chunk is smaller than fetch_size.
+CREATE FOREIGN TABLE ft_fetchsize (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl_large', fetch_size '5');
+SELECT count(*) FROM ft_fetchsize;
+SELECT * FROM ft_fetchsize ORDER BY id;
+DROP FOREIGN TABLE ft_fetchsize;
+
+-- fetch_size exceeds the table row count: all rows arrive in one chunk
+-- followed immediately by the final empty PGRES_TUPLES_OK result.
+CREATE FOREIGN TABLE ft_fetchsize (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl_large', fetch_size '1000');
+SELECT count(*) FROM ft_fetchsize;
+DROP FOREIGN TABLE ft_fetchsize;
+
+DROP TABLE local_tbl_large;
+
+-- 7. streaming_fetch combined with use_remote_estimate
+-- use_remote_estimate issues a remote EXPLAIN to size the scan at plan
+-- time; streaming_fetch must not interfere with that EXPLAIN call.
+ALTER SERVER fetch_stream_srv OPTIONS (ADD use_remote_estimate 'true');
+
+CREATE FOREIGN TABLE ft_remote_est (id int, val text)
+    SERVER fetch_stream_srv
+    OPTIONS (schema_name 'public', table_name 'local_tbl');
+
+-- Verify both options are active at the server level.
+SELECT srvname, option_name, option_value
+FROM pg_foreign_server,
+     LATERAL pg_options_to_table(srvoptions)
+WHERE srvname = 'fetch_stream_srv'
+  AND option_name IN ('streaming_fetch', 'use_remote_estimate')
+ORDER BY option_name;
+
+-- Both options active: use_remote_estimate sizes the scan remotely via
+-- EXPLAIN, then streaming_fetch fetches rows without a cursor.
+SELECT * FROM ft_remote_est ORDER BY id;
+
+ALTER SERVER fetch_stream_srv OPTIONS (DROP use_remote_estimate);
+
+-- 9. streaming_fetch check the output in explain with verbose
+EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM ft_remote_est ORDER BY id;
+
+-- Cleanup
+DROP FOREIGN TABLE ft_remote_est;
+DROP USER MAPPING FOR CURRENT_USER SERVER fetch_stream_srv;
+DROP SERVER fetch_stream_srv CASCADE;
+DROP TABLE local_tbl;
+-- ===================================================================
 -- test subscription
 -- ===================================================================
 CREATE SUBSCRIPTION regress_pgfdw_subscription SERVER testserver1
@@ -307,6 +544,32 @@ SELECT COUNT(*) FROM ft1 t1;
 SELECT * FROM ft1 t1 WHERE t1.c3 IN (SELECT c3 FROM ft2 t2 WHERE c1 <= 10) ORDER BY c1;
 -- subquery+MAX
 SELECT * FROM ft1 t1 WHERE t1.c3 = (SELECT MAX(c3) FROM ft2 t2) ORDER BY c1;
+-- Test in streaming_fetch mode to cover path from subquery params
+-- with only one table using streaming_fetch
+ALTER FOREIGN TABLE ft1 OPTIONS (streaming_fetch 'true');
+SELECT * FROM ft1 t1 WHERE t1.c3 = (SELECT MAX(c3) FROM ft2 t2) ORDER BY c1;
+-- Test join with only one table using streaming_fetch at a time
+SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T 1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'false');
+ALTER FOREIGN TABLE ft2 OPTIONS (streaming_fetch 'true');
+SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T 1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
+-- with both the tables using streaming_fetch
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'true');
+SELECT * FROM ft1 t1 WHERE t1.c3 = (SELECT MAX(c3) FROM ft2 t2) ORDER BY c1;
+-- Test join with both the tables using streaming_fetch
+SELECT t1.c1, t2."C 1" FROM ft2 t1 JOIN "S 1"."T 1" t2 ON (t1.c1 = t2."C 1") OFFSET 100 LIMIT 10;
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'false');
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'false');
+-- streaming_fetch: verify correct results when parallel-friendly settings
+-- are active locally.  With no cursor on the remote side, the remote
+-- planner is free to choose a parallel plan; results must match exactly.
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'true');
+SET max_parallel_workers_per_gather = 2;
+SET min_parallel_table_scan_size = 0;
+SELECT count(*) FROM ft1;
+RESET max_parallel_workers_per_gather;
+RESET min_parallel_table_scan_size;
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'false');
 -- used in CTE
 WITH t1 AS (SELECT * FROM ft1 WHERE c1 <= 10) SELECT t2.c1, t2.c2, t2.c3, t2.c4 FROM t1, ft2 t2 WHERE t1.c1 = t2.c1 ORDER BY t1.c1;
 -- fixed values
@@ -386,6 +649,54 @@ EXPLAIN (VERBOSE, COSTS OFF)
   WHERE a.c2 = 6 AND b.c1 = a.c1 AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
 SELECT * FROM ft2 a, ft2 b
 WHERE a.c2 = 6 AND b.c1 = a.c1 AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+
+-- Test in streaming_fetch mode for rescan path
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'true');
+SELECT * FROM ft2 a, ft2 b
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+-- Test for streaming_fetch covering rescans and three active cursors
+SELECT count(*) FROM ft2 a, ft2 b, ft2 c
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND c.c1 = b.c1 AND a.c8 = 'foo'
+AND b.c7 = upper(a.c7);
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'false');
+
+-- Test in streaming_fetch mode for interleaved scans.
+-- The non-shippable condition a.c8 = 'foo' (user_enum is not a built-in type)
+-- prevents full join pushdown, so the planner issues two separate FDW scans
+-- that share the same loopback connection.  When the inner scan's init_scan
+-- fires it calls save_to_tuplestore to drain the outer scan's unread rows.
+ ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'true');
+
+-- Show the plan: ft2 must appear as two independent ForeignScan nodes, not
+-- a single pushed-down remote join.
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM ft2 a, ft2 b
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+
+-- Verify results with cursor path.
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'false');
+SELECT * FROM ft2 a, ft2 b
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'true');
+
+-- Three-way self-join to test streaming_fetch
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT count(*) FROM ft2 a, ft2 b, ft2 c
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND c.c1 = b.c1
+AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+
+SELECT count(*) FROM ft2 a, ft2 b, ft2 c
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND c.c1 = b.c1
+AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+
+-- output matches in cursor mode
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'false');
+SELECT count(*) FROM ft2 a, ft2 b, ft2 c
+WHERE a.c2 = 6 AND b.c1 = a.c1 AND c.c1 = b.c1
+AND a.c8 = 'foo' AND b.c7 = upper(a.c7);
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'false');
+
+
 -- bug before 9.3.5 due to sloppy handling of remote-estimate parameters
 SELECT * FROM ft1 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft2 WHERE c1 < 5));
 SELECT * FROM ft2 WHERE c1 = ANY (ARRAY(SELECT c1 FROM ft1 WHERE c1 < 5));
@@ -711,6 +1022,16 @@ SELECT t1.c1 FROM ft1 t1 WHERE EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c1)
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1 FROM ft1 t1 WHERE NOT EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c2) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
 SELECT t1.c1 FROM ft1 t1 WHERE NOT EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c2) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
+
+-- Test in streaming_fetch mode to cover the patch for two simultaneous active cursors
+-- with only one table using streaming_fetch
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'true');
+SELECT t1.c1 FROM ft1 t1 WHERE NOT EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c2) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
+-- with both the tables using streaming_fetch
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'true');
+SELECT t1.c1 FROM ft1 t1 WHERE NOT EXISTS (SELECT 1 FROM ft2 t2 WHERE t1.c1 = t2.c2) ORDER BY t1.c1 OFFSET 100 LIMIT 10;
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'false');
+ALTER FOREIGN TABLE ft2 OPTIONS (SET streaming_fetch 'false');
 -- CROSS JOIN can be pushed down
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1, t2.c1 FROM ft1 t1 CROSS JOIN ft2 t2 ORDER BY t1.c1, t2.c1 OFFSET 100 LIMIT 10;
@@ -719,6 +1040,12 @@ SELECT t1.c1, t2.c1 FROM ft1 t1 CROSS JOIN ft2 t2 ORDER BY t1.c1, t2.c1 OFFSET 1
 EXPLAIN (VERBOSE, COSTS OFF)
 SELECT t1.c1, t2.c1 FROM ft5 t1 JOIN ft6 t2 ON (t1.c1 = t2.c1) ORDER BY t1.c1, t2.c1 OFFSET 100 LIMIT 10;
 SELECT t1.c1, t2.c1 FROM ft5 t1 JOIN ft6 t2 ON (t1.c1 = t2.c1) ORDER BY t1.c1, t2.c1 OFFSET 100 LIMIT 10;
+-- Test in streaming_fetch mode to cover the case with multiple cursors but only one active cursor at a time
+ALTER FOREIGN TABLE ft5 OPTIONS (streaming_fetch 'true');
+ALTER FOREIGN TABLE ft6 OPTIONS (streaming_fetch 'true');
+SELECT t1.c1, t2.c1 FROM ft5 t1 JOIN ft6 t2 ON (t1.c1 = t2.c1) ORDER BY t1.c1, t2.c1 OFFSET 100 LIMIT 10;
+ALTER FOREIGN TABLE ft5 OPTIONS (SET streaming_fetch 'false');
+ALTER FOREIGN TABLE ft6 OPTIONS (SET streaming_fetch 'false');
 -- unsafe join conditions (c8 has a UDT), not pushed down. Practically a CROSS
 -- JOIN since c8 in both tables has same value.
 EXPLAIN (VERBOSE, COSTS OFF)
@@ -865,6 +1192,31 @@ select count(c6), sum(c1), avg(c1), min(c2), max(c1), stddev(c2), sum(c1) * (ran
 explain (verbose, costs off)
 select count(c6), sum(c1), avg(c1), min(c2), max(c1), stddev(c2), sum(c1) * (random() <= 1)::int as sum2 from ft1 where c2 < 5 group by c2 order by 1, 2 limit 1;
 select count(c6), sum(c1), avg(c1), min(c2), max(c1), stddev(c2), sum(c1) * (random() <= 1)::int as sum2 from ft1 where c2 < 5 group by c2 order by 1, 2 limit 1;
+
+-- Test with limit and streaming_fetch
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'true');
+select count(c6), sum(c1), avg(c1), min(c2), max(c1), stddev(c2), sum(c1) * (random() <= 1)::int as sum2 from ft1 where c2 < 5 group by c2 order by 1, 2 limit 1;
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'false');
+
+-- Test LIMIT stopping before all tuples are consumed.
+-- The WHERE clause references c8 (a user-defined type that cannot be
+-- pushed to the remote), preventing LIMIT pushdown.  The remote
+-- therefore streams all rows, and end_scan must discard the in-flight
+-- data when the local executor stops early.
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'true');
+-- LIMIT 5 with default fetch_size=100: stops well within the first
+-- chunk; end_scan discards ~995 rows still in flight on the connection.
+SELECT c1 FROM ft1 WHERE c8 = 'foo' ORDER BY c1 LIMIT 5;
+-- Verify the connection is still usable after the early stop.
+SELECT count(*) FROM ft1;
+-- fetch_size=10, LIMIT=15: consumes one full chunk (rows 1-10) plus 5
+-- rows from a second chunk (rows 11-15); end_scan then discards the
+-- remainder of that chunk and all subsequent in-flight chunks.
+ALTER FOREIGN TABLE ft1 OPTIONS (fetch_size '10');
+SELECT c1 FROM ft1 WHERE c8 = 'foo' ORDER BY c1 LIMIT 15;
+SELECT count(*) FROM ft1;
+ALTER FOREIGN TABLE ft1 OPTIONS (DROP fetch_size);
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'false');
 
 -- Aggregate is not pushed down as aggregation contains random()
 explain (verbose, costs off)
@@ -3635,6 +3987,41 @@ SELECT 1 FROM ft1 LIMIT 1;    -- should fail
 \set VERBOSITY default
 COMMIT;
 
+-- ===================================================================
+-- streaming_fetch: error recovery when the remote backend terminates
+-- ===================================================================
+-- Enable streaming_fetch
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'true');
+
+-- Establish a fresh remote connection.
+SELECT 1 FROM ft1 LIMIT 1;
+
+-- Terminate the remote backend and wait for the termination to complete.
+DO $$ BEGIN
+PERFORM pg_terminate_backend(pid, 180000) FROM pg_stat_activity
+	WHERE application_name = 'fdw_retry_check';
+END $$;
+
+-- After the connection is broken, a streaming_fetch query should detect
+-- the broken connection, reestablish it, and succeed.
+BEGIN;
+SELECT c1 FROM ft1 ORDER BY c1 LIMIT 3;
+
+-- Inside a subtransaction the broken connection must not be silently
+-- retried; the query should fail.
+DO $$ BEGIN
+PERFORM pg_terminate_backend(pid, 180000) FROM pg_stat_activity
+	WHERE application_name = 'fdw_retry_check';
+END $$;
+SAVEPOINT s2;
+-- The text of the error might vary across platforms, so only show SQLSTATE.
+\set VERBOSITY sqlstate
+SELECT 1 FROM ft1 LIMIT 1;    -- should fail
+\set VERBOSITY default
+COMMIT;
+
+ALTER FOREIGN TABLE ft1 OPTIONS (SET streaming_fetch 'false');
+
 -- =============================================================================
 -- test connection invalidation cases and postgres_fdw_get_connections function
 -- =============================================================================
@@ -4193,6 +4580,29 @@ SELECT * FROM local_tbl, async_pt WHERE local_tbl.a = async_pt.a AND local_tbl.c
 ALTER FOREIGN TABLE async_p1 OPTIONS (DROP use_remote_estimate);
 ALTER FOREIGN TABLE async_p2 OPTIONS (DROP use_remote_estimate);
 
+-- Test with streaming_fetch
+-- No streaming_fetch at server, this should give Async Foreign Scan for for async_p1 and async_p2
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM async_pt;
+
+-- streaming_fetch = false at loopback server, this should still give Async Foreign Scan for async_p1 and async_p2
+ALTER SERVER loopback OPTIONS (streaming_fetch 'false');
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM async_pt;
+
+-- streaming_fetch = false at loopback server but true for async_p1, this should give Foreign Scan for async_p1
+ALTER FOREIGN TABLE async_p1 OPTIONS (ADD streaming_fetch 'true');
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM async_pt;
+
+-- streaming_fetch = true at loopback2 server, this should give Foreign Scan for async_p2 also
+ALTER SERVER loopback2 OPTIONS (streaming_fetch 'true');
+EXPLAIN (VERBOSE, COSTS OFF)
+SELECT * FROM async_pt;
+
+ALTER FOREIGN TABLE async_p1 OPTIONS (DROP streaming_fetch);
+ALTER SERVER loopback OPTIONS (DROP streaming_fetch);
+ALTER SERVER loopback2 OPTIONS (DROP streaming_fetch);
 DROP TABLE local_tbl;
 DROP INDEX base_tbl1_idx;
 DROP INDEX base_tbl2_idx;

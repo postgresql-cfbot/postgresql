@@ -755,7 +755,7 @@ WalRcvFetchTimeLineHistoryFiles(TimeLineID first, TimeLineID last)
 		{
 			char	   *fname;
 			char	   *content;
-			int			len;
+			size_t		len;
 			char		expectedfname[MAXFNAMELEN];
 
 			ereport(LOG,
@@ -913,7 +913,7 @@ static void
 XLogWalRcvWrite(char *buf, Size nbytes, XLogRecPtr recptr, TimeLineID tli)
 {
 	int			startoff;
-	int			byteswritten;
+	ssize_t		byteswritten;
 	instr_time	start;
 
 	Assert(tli != 0);

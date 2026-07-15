@@ -829,8 +829,8 @@ logical_heap_rewrite_flush_mappings(RewriteState state)
 		char	   *waldata_start;
 		xl_heap_rewrite_mapping xlrec;
 		Oid			dboid;
-		uint32		len;
-		int			written;
+		size_t		len;
+		ssize_t		written;
 		uint32		num_mappings = dclist_count(&src->mappings);
 
 		/* this file hasn't got any new mappings */
@@ -882,10 +882,14 @@ logical_heap_rewrite_flush_mappings(RewriteState state)
 		 */
 		written = FileWrite(src->vfd, waldata_start, len, src->off,
 							WAIT_EVENT_LOGICAL_REWRITE_WRITE);
-		if (written != len)
+		if (written < 0)
 			ereport(ERROR,
 					(errcode_for_file_access(),
-					 errmsg("could not write to file \"%s\", wrote %d of %d: %m", src->path,
+					 errmsg("could not write to file \"%s\": %m", src->path)));
+		else if (written != len)
+			ereport(ERROR,
+					(errcode_for_file_access(),
+					 errmsg("could not write to file \"%s\": wrote %zd of %zu", src->path,
 							written, len)));
 		src->off += len;
 
@@ -1078,7 +1082,7 @@ heap_xlog_logical_rewrite(XLogReaderState *r)
 	char		path[MAXPGPATH];
 	int			fd;
 	xl_heap_rewrite_mapping *xlrec;
-	uint32		len;
+	size_t		len;
 	char	   *data;
 
 	xlrec = (xl_heap_rewrite_mapping *) XLogRecGetData(r);

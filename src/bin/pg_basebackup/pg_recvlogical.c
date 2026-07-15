@@ -292,10 +292,10 @@ StreamLogicalLog(void)
 	while (!time_to_abort)
 	{
 		int			r;
-		int			bytes_left;
-		int			bytes_written;
+		size_t		bytes_left;
+		size_t		bytes_written;
 		TimestampTz now;
-		int			hdr_len;
+		size_t		hdr_len;
 
 		cur_record_lsn = InvalidXLogRecPtr;
 
@@ -560,7 +560,7 @@ StreamLogicalLog(void)
 
 		while (bytes_left)
 		{
-			int			ret;
+			ssize_t		ret;
 
 			ret = write(outfd,
 						copybuf + hdr_len + bytes_written,
@@ -568,7 +568,7 @@ StreamLogicalLog(void)
 
 			if (ret < 0)
 			{
-				pg_log_error("could not write %d bytes to log file \"%s\": %m",
+				pg_log_error("could not write %zu bytes to log file \"%s\": %m",
 							 bytes_left, outfile);
 				goto error;
 			}
@@ -580,8 +580,8 @@ StreamLogicalLog(void)
 
 		if (write(outfd, "\n", 1) != 1)
 		{
-			pg_log_error("could not write %d bytes to log file \"%s\": %m",
-						 1, outfile);
+			pg_log_error("could not write %zu bytes to log file \"%s\": %m",
+						 (size_t) 1, outfile);
 			goto error;
 		}
 

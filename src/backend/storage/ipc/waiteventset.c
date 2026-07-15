@@ -1905,7 +1905,7 @@ latch_sigurg_handler(SIGNAL_ARGS)
 static void
 sendSelfPipeByte(void)
 {
-	int			rc;
+	ssize_t		rc;
 	char		dummy = 0;
 
 retry:

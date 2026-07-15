@@ -3541,7 +3541,7 @@ XLogFileCopy(TimeLineID destTLI, XLogSegNo destsegno,
 		}
 		errno = 0;
 		pgstat_report_wait_start(WAIT_EVENT_WAL_COPY_WRITE);
-		if ((int) write(fd, buffer.data, sizeof(buffer)) != (int) sizeof(buffer))
+		if (write(fd, buffer.data, sizeof(buffer)) != sizeof(buffer))
 		{
 			int			save_errno = errno;
 

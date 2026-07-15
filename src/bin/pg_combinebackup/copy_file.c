@@ -179,7 +179,7 @@ copy_file_blocks(const char *src, const char *dst,
 	uint8	   *buffer;
 	const int	buffer_size = 50 * BLCKSZ;
 	ssize_t		rb;
-	unsigned	offset = 0;
+	size_t		offset = 0;
 
 	if ((src_fd = open(src, O_RDONLY | PG_BINARY, 0)) < 0)
 		pg_fatal("could not open file \"%s\": %m", src);
@@ -199,8 +199,8 @@ copy_file_blocks(const char *src, const char *dst,
 			if (wb < 0)
 				pg_fatal("could not write to file \"%s\": %m", dst);
 			else
-				pg_fatal("could not write to file \"%s\", offset %u: wrote %d of %d",
-						 dst, offset, (int) wb, (int) rb);
+				pg_fatal("could not write to file \"%s\", offset %zu: wrote %zd of %zu",
+						 dst, offset, wb, (size_t) rb);
 		}
 
 		if (pg_checksum_update(checksum_ctx, buffer, rb) < 0)

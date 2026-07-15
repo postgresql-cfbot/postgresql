@@ -488,7 +488,7 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		 const void *buffer, bool skipFsync)
 {
 	pgoff_t		seekpos;
-	int			nbytes;
+	ssize_t		nbytes;
 	MdfdVec    *v;
 
 	/* If this build supports direct I/O, the buffer must be I/O aligned. */
@@ -530,9 +530,9 @@ mdextend(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		/* short write: complain appropriately */
 		ereport(ERROR,
 				(errcode(ERRCODE_DISK_FULL),
-				 errmsg("could not extend file \"%s\": wrote only %d of %d bytes at block %u",
+				 errmsg("could not extend file \"%s\": wrote only %zd of %zu bytes at block %u",
 						FilePathName(v->mdfd_vfd),
-						nbytes, BLCKSZ, blocknum),
+						nbytes, (size_t) BLCKSZ, blocknum),
 				 errhint("Check free disk space.")));
 	}
 
@@ -1080,7 +1080,7 @@ mdwritev(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		struct iovec iov[PG_IOV_MAX];
 		int			iovcnt;
 		pgoff_t		seekpos;
-		int			nbytes;
+		ssize_t		nbytes;
 		MdfdVec    *v;
 		BlockNumber nblocks_this_segment;
 		size_t		transferred_this_segment;

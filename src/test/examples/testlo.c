@@ -151,8 +151,7 @@ exportFile(PGconn *conn, Oid lobjId, char *filename)
 {
 	int			lobj_fd;
 	char		buf[BUFSIZE];
-	int			nbytes,
-				tmp;
+	int			nbytes;
 	int			fd;
 
 	/*
@@ -177,6 +176,8 @@ exportFile(PGconn *conn, Oid lobjId, char *filename)
 	 */
 	while ((nbytes = lo_read(conn, lobj_fd, buf, BUFSIZE)) > 0)
 	{
+		ssize_t		tmp;
+
 		tmp = write(fd, buf, nbytes);
 		if (tmp < nbytes)
 		{

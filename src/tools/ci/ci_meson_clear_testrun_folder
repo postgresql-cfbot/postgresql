@@ -1,0 +1,50 @@
+#!/usr/bin/env python3
+#
+# After a test run, each test that passed contains a test.success file in its
+# output directory. This script removes those directories so that only the logs
+# of failed tests remain, making it easier to inspect CI artifacts.
+#
+# Usage: ci_meson_clear_testrun_folder <path>
+#   e.g. ci_meson_clear_testrun_folder build/testrun
+
+import argparse
+import os
+import shutil
+import sys
+
+parser = argparse.ArgumentParser(
+    description="Remove subdirectories that contain a test.success file."
+)
+parser.add_argument(
+    "path",
+    help="Path to the directory to clear, e.g. 'build/testrun'",
+)
+args = parser.parse_args()
+
+testrun_dir = os.path.abspath(args.path)
+
+if not os.path.exists(testrun_dir):
+    print(f"Directory does not exist, nothing to do: {testrun_dir}")
+    sys.exit(0)
+
+if not os.path.isdir(testrun_dir):
+    print(f"Error: not a directory: {testrun_dir}")
+    sys.exit(1)
+
+print(f"Removing successful tests from {testrun_dir}:")
+for dirpath, dirnames, filenames in os.walk(testrun_dir):
+    if "test.success" in filenames:
+        print(f"Removing: {dirpath}")
+        shutil.rmtree(dirpath)
+        dirnames.clear()
+print("Done\n")
+
+print(f"Removing any empty directories from {testrun_dir}:")
+for dirpath, _, _ in os.walk(testrun_dir, topdown=False):
+    # Don't remove ${testrun_dir}
+    if dirpath == testrun_dir:
+        continue
+    if not os.listdir(dirpath):
+        print(f"Removing empty dir: {dirpath}")
+        os.rmdir(dirpath)
+print("Done\n")

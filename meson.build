@@ -4118,6 +4118,10 @@ add_test_setup('tmp_install',
 add_test_setup('running',
   exclude_suites: ['setup'] + install_suites)
 
+clear_testrun_folder = files('src/tools/ci/ci_meson_clear_testrun_folder')
+run_target('clear_testrun_folder',
+  command: [python, clear_testrun_folder, test_result_dir]
+)
 
 
 ###############################################################

@@ -6099,7 +6099,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			 * unlogged anyway.
 			 */
 			OIDNewHeap = make_new_heap(tab->relid, NewTableSpace, NewAccessMethod,
-									   persistence, lockmode);
+									   persistence, lockmode, false);
 
 			/*
 			 * Copy the heap data into the new table with the desired
@@ -6122,6 +6122,7 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 							 true,	/* reindex */
 							 RecentXmin,
 							 ReadNextMultiXactId(),
+							 false, /* update_toast_cutoffs */
 							 persistence);
 
 			InvokeObjectPostAlterHook(RelationRelationId, tab->relid, 0);
@@ -23762,9 +23763,7 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	Oid			defaultPartOid;
 	Oid			existingRelid;
 	Oid			ownerId = InvalidOid;
-	Oid			save_userid;
-	int			save_sec_context;
-	int			save_nestlevel;
+	IndexBuildSecurity ibsec;
 
 	/*
 	 * Check ownership of merged partitions - partitions with different owners
@@ -23896,18 +23895,9 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	newPartRel = createPartitionTable(wqueue, cmd->name, rel, ownerId);
 
 	/*
-	 * Switch to the table owner's userid, so that any index functions are run
-	 * as that user.  Also, lockdown security-restricted operations and
-	 * arrange to make GUC variable changes local to this command.
-	 *
-	 * Need to do it after determining the namespace in the
-	 * createPartitionTable() call.
+	 * Prevent index functions from doing what they are not supposed to.
 	 */
-	GetUserIdAndSecContext(&save_userid, &save_sec_context);
-	SetUserIdAndSecContext(ownerId,
-						   save_sec_context | SECURITY_RESTRICTED_OPERATION);
-	save_nestlevel = NewGUCNestLevel();
-	RestrictSearchPath();
+	enable_index_build_security(ownerId, &ibsec);
 
 	/* Copy data from merged partitions to the new partition. */
 	MergePartitionsMoveRows(wqueue, mergingPartitions, newPartRel);
@@ -23944,11 +23934,8 @@ ATExecMergePartitions(List **wqueue, AlteredTableInfo *tab, Relation rel,
 	/* Keep the lock until commit. */
 	table_close(newPartRel, NoLock);
 
-	/* Roll back any GUC changes executed by index functions. */
-	AtEOXact_GUC(false, save_nestlevel);
-
-	/* Restore the userid and security context. */
-	SetUserIdAndSecContext(save_userid, save_sec_context);
+	/* Relax the restrictions imposed above. */
+	disable_index_build_security(&ibsec);
 }
 
 /*

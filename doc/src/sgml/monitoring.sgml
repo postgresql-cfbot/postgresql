@@ -2902,9 +2902,11 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
   <para>
    Currently, I/O on relations (e.g. tables, indexes) and WAL activity are
-   tracked. However, relation I/O which bypasses shared buffers
-   (e.g. when moving a table from one tablespace to another) is currently
-   not tracked.
+   tracked. Writes that bypass shared buffers while building new relation
+   storage are tracked in the <literal>bypass</literal>
+   <varname>context</varname>. However, some relation I/O which bypasses
+   shared buffers is still not tracked, such as the reads performed when
+   moving a table from one tablespace to another.
   </para>
 
   <table id="pg-stat-io-view" xreflabel="pg_stat_io">
@@ -3013,6 +3015,16 @@ description | Waiting for a newly initialized WAL file to reach durable storage
          <para>
           <literal>bulkwrite</literal>: Certain large write I/O operations
           done outside of shared buffers, such as <command>COPY</command>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>bypass</literal>: Write I/O operations that populate
+          newly built relation storage by bypassing shared buffers, such as
+          building a B-tree index or rewriting a table's heap during
+          <command>VACUUM FULL</command> or <command>CLUSTER</command>. The
+          associated <literal>fsync</literal> is counted separately in
+          <varname>context</varname> <literal>normal</literal>.
          </para>
         </listitem>
        </itemizedlist>

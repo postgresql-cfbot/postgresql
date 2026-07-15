@@ -218,7 +218,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBC
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBD
 
 typedef struct PgStat_ArchiverStats
 {
@@ -289,6 +289,7 @@ typedef enum IOContext
 {
 	IOCONTEXT_BULKREAD,
 	IOCONTEXT_BULKWRITE,
+	IOCONTEXT_BYPASS,
 	IOCONTEXT_INIT,
 	IOCONTEXT_NORMAL,
 	IOCONTEXT_VACUUM,

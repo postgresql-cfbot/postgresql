@@ -38,6 +38,8 @@
 
 #include "access/xloginsert.h"
 #include "access/xlogrecord.h"
+#include "pgstat.h"
+#include "storage/bufmgr.h"
 #include "storage/bufpage.h"
 #include "storage/bulk_write.h"
 #include "storage/proc.h"
@@ -243,9 +245,20 @@ smgr_bulk_flush(BulkWriteState *bulkstate)
 {
 	int			npending = bulkstate->npending;
 	PendingWrite *pending_writes = bulkstate->pending_writes;
+	IOObject	io_object;
 
 	if (npending == 0)
 		return;
+
+	/*
+	 * These writes bypass shared buffers, so they are not accounted for by
+	 * the buffer manager.  Count them in pg_stat_io ourselves, under the
+	 * dedicated IOCONTEXT_BYPASS context.  The matching fsync happens
+	 * separately (see smgr_bulk_finish()) and is counted under
+	 * IOCONTEXT_NORMAL, like all relation fsyncs.
+	 */
+	io_object = SmgrIsTemp(bulkstate->smgr) ?
+		IOOBJECT_TEMP_RELATION : IOOBJECT_RELATION;
 
 	if (npending > 1)
 		qsort(pending_writes, npending, sizeof(PendingWrite), buffer_cmp);
@@ -283,6 +296,8 @@ smgr_bulk_flush(BulkWriteState *bulkstate)
 
 		if (blkno >= bulkstate->relsize)
 		{
+			instr_time	io_start;
+
 			/*
 			 * If we have to write pages nonsequentially, fill in the space
 			 * with zeroes until we come back and overwrite.  This is not
@@ -292,19 +307,31 @@ smgr_bulk_flush(BulkWriteState *bulkstate)
 			 */
 			while (blkno > bulkstate->relsize)
 			{
+				io_start = pgstat_prepare_io_time(track_io_timing);
 				/* don't set checksum for all-zero page */
 				smgrextend(bulkstate->smgr, bulkstate->forknum,
 						   bulkstate->relsize,
 						   &zero_buffer,
 						   true);
+				pgstat_count_io_op_time(io_object, IOCONTEXT_BYPASS,
+										IOOP_EXTEND, io_start, 1, BLCKSZ);
 				bulkstate->relsize++;
 			}
 
+			io_start = pgstat_prepare_io_time(track_io_timing);
 			smgrextend(bulkstate->smgr, bulkstate->forknum, blkno, page, true);
+			pgstat_count_io_op_time(io_object, IOCONTEXT_BYPASS,
+									IOOP_EXTEND, io_start, 1, BLCKSZ);
 			bulkstate->relsize++;
 		}
 		else
+		{
+			instr_time	io_start = pgstat_prepare_io_time(track_io_timing);
+
 			smgrwrite(bulkstate->smgr, bulkstate->forknum, blkno, page, true);
+			pgstat_count_io_op_time(io_object, IOCONTEXT_BYPASS,
+									IOOP_WRITE, io_start, 1, BLCKSZ);
+		}
 		pfree(page);
 	}
 

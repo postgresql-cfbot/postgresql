@@ -14,6 +14,7 @@
 #include "access/xlogdefs.h"
 #include "access/xlogreader.h"
 #include "catalog/pg_replication_origin.h"
+#include "utils/relcache.h"
 
 typedef struct xl_replorigin_set
 {
@@ -55,6 +56,8 @@ extern PGDLLIMPORT int max_active_replication_origins;
 /* API for querying & manipulating replication origins */
 extern ReplOriginId replorigin_by_name(const char *roname, bool missing_ok);
 extern ReplOriginId replorigin_create(const char *roname);
+extern void replorigin_create_with_id(ReplOriginId roident, const char *roname,
+									  XLogRecPtr remote_lsn, Relation rel);
 extern void replorigin_drop_by_name(const char *name, bool missing_ok, bool nowait);
 extern bool replorigin_by_oid(ReplOriginId roident, bool missing_ok,
 							  char **roname);

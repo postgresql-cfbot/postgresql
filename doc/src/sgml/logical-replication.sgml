@@ -2860,7 +2860,7 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
 
    <note>
     <para>
-     Commit timestamps and origin data are not preserved during the upgrade.
+     Commit timestamps are not preserved during the upgrade.
      As a result, even if
      <link linkend="sql-createsubscription-params-with-retain-dead-tuples"><literal>retain_dead_tuples</literal></link>
      is enabled, the upgraded subscriber may be unable to detect conflicts or
@@ -2901,8 +2901,10 @@ CONTEXT:  processing remote data for replication origin "pg_16395" during "INSER
      <para>
       The new cluster must have
       <link linkend="guc-max-active-replication-origins"><varname>max_active_replication_origins</varname></link>
-      configured to a value greater than or equal to the number of
-      subscriptions present in the old cluster.
+      configured to a value greater than or equal to the number of tracked
+      replication origins present in the old cluster (reflected in
+      <link linkend="view-pg-replication-origin-status"><structname>pg_replication_origin_status</structname></link>).
+      The new cluster must contain no replication origins.
      </para>
     </listitem>
     <listitem>

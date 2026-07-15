@@ -863,7 +863,7 @@ mdreadv(SMgrRelation reln, ForkNumber forknum, BlockNumber blocknum,
 		struct iovec iov[PG_IOV_MAX];
 		int			iovcnt;
 		pgoff_t		seekpos;
-		int			nbytes;
+		ssize_t		nbytes;
 		MdfdVec    *v;
 		BlockNumber nblocks_this_segment;
 		size_t		transferred_this_segment;

@@ -61,7 +61,7 @@ static void write_reconstructed_file(const char *input_filename,
 									 CopyMethod copy_method,
 									 bool debug,
 									 bool dry_run);
-static void read_bytes(const rfile *rf, void *buffer, unsigned length);
+static void read_bytes(const rfile *rf, void *buffer, size_t length);
 static void write_block(int fd, const char *output_filename,
 						const uint8 *buffer,
 						pg_checksum_context *checksum_ctx);
@@ -529,16 +529,18 @@ make_rfile(const char *filename, bool missing_ok)
  * Read the indicated number of bytes from an rfile into the buffer.
  */
 static void
-read_bytes(const rfile *rf, void *buffer, unsigned length)
+read_bytes(const rfile *rf, void *buffer, size_t length)
 {
-	int			rb = read(rf->fd, buffer, length);
+	ssize_t		rb;
+
+	rb = read(rf->fd, buffer, length);
 
 	if (rb != length)
 	{
 		if (rb < 0)
 			pg_fatal("could not read file \"%s\": %m", rf->filename);
 		else
-			pg_fatal("could not read file \"%s\": read %d of %u",
+			pg_fatal("could not read file \"%s\": read %zd of %zu",
 					 rf->filename, rb, length);
 	}
 }
@@ -776,7 +778,7 @@ write_block(int fd, const char *output_filename,
 static void
 read_block(const rfile *s, off_t off, uint8 *buffer)
 {
-	int			rb;
+	ssize_t		rb;
 
 	/* Read the block from the correct source, except if dry-run. */
 	rb = pg_pread(s->fd, buffer, BLCKSZ, off);
@@ -785,7 +787,7 @@ read_block(const rfile *s, off_t off, uint8 *buffer)
 		if (rb < 0)
 			pg_fatal("could not read from file \"%s\": %m", s->filename);
 		else
-			pg_fatal("could not read from file \"%s\", offset %lld: read %d of %d",
-					 s->filename, (long long) off, rb, BLCKSZ);
+			pg_fatal("could not read from file \"%s\", offset %lld: read %zd of %zu",
+					 s->filename, (long long) off, rb, (size_t) BLCKSZ);
 	}
 }

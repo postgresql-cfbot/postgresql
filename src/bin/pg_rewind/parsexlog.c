@@ -279,7 +279,7 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 	uint32		targetPageOff;
 	XLogRecPtr	targetSegEnd;
 	XLogSegNo	targetSegNo;
-	int			r;
+	ssize_t		r;
 
 	XLByteToSeg(targetPagePtr, targetSegNo, WalSegSz);
 	XLogSegNoOffsetToRecPtr(targetSegNo + 1, 0, WalSegSz, targetSegEnd);
@@ -370,9 +370,8 @@ SimpleXLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr,
 		if (r < 0)
 			pg_log_error("could not read file \"%s\": %m", xlogfpath);
 		else
-			pg_log_error("could not read file \"%s\": read %d of %zu",
+			pg_log_error("could not read file \"%s\": read %zd of %zu",
 						 xlogfpath, r, (Size) XLOG_BLCKSZ);
-
 		return -1;
 	}
 

@@ -1947,7 +1947,7 @@ static void
 drain(void)
 {
 	char		buf[1024];
-	int			rc;
+	ssize_t		rc;
 	int			fd;
 
 #ifdef WAIT_USE_SELF_PIPE

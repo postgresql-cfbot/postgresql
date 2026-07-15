@@ -3282,7 +3282,7 @@ XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
 	int			emode = private->emode;
 	uint32		targetPageOff;
 	XLogSegNo	targetSegNo PG_USED_FOR_ASSERTS_ONLY;
-	int			r;
+	ssize_t		r;
 	instr_time	io_start;
 
 	Assert(AmStartupProcess() || !IsUnderPostmaster);
@@ -3408,7 +3408,7 @@ retry:
 		else
 			ereport(emode_for_corrupt_record(emode, targetPagePtr + reqLen),
 					(errcode(ERRCODE_DATA_CORRUPTED),
-					 errmsg("could not read from WAL segment %s, LSN %X/%08X, offset %u: read %d of %zu",
+					 errmsg("could not read from WAL segment %s, LSN %X/%08X, offset %u: read %zd of %zu",
 							fname, LSN_FORMAT_ARGS(targetPagePtr),
 							readOff, r, (Size) XLOG_BLCKSZ)));
 		goto next_record_is_invalid;

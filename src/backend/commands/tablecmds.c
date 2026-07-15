@@ -30,6 +30,7 @@
 #include "access/xlog.h"
 #include "access/xloginsert.h"
 #include "catalog/catalog.h"
+#include "catalog/global_temp.h"
 #include "catalog/heap.h"
 #include "catalog/index.h"
 #include "catalog/namespace.h"
@@ -53,6 +54,8 @@
 #include "catalog/pg_rewrite.h"
 #include "catalog/pg_statistic_ext.h"
 #include "catalog/pg_tablespace.h"
+#include "catalog/pg_temp_class.h"
+#include "catalog/pg_temp_index.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "catalog/storage.h"
@@ -175,6 +178,7 @@ typedef struct AlteredTableInfo
 	Oid			relid;			/* Relation to work on */
 	char		relkind;		/* Its relkind */
 	TupleDesc	oldDesc;		/* Pre-modification tuple descriptor */
+	char		oldrelpersistence;	/* Pre-modification relpersistence */
 
 	/*
 	 * Transiently set during Phase 2, normally set to NULL.
@@ -850,11 +854,17 @@ DefineRelation(CreateStmt *stmt, char relkind, Oid ownerId,
 	/*
 	 * Check consistency of arguments
 	 */
-	if (stmt->oncommit != ONCOMMIT_NOOP
-		&& stmt->relation->relpersistence != RELPERSISTENCE_TEMP)
+	if (stmt->oncommit != ONCOMMIT_NOOP &&
+		stmt->relation->relpersistence != RELPERSISTENCE_TEMP &&
+		stmt->relation->relpersistence != RELPERSISTENCE_GLOBAL_TEMP)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 				 errmsg("ON COMMIT can only be used on temporary tables")));
+	if (stmt->oncommit == ONCOMMIT_DROP &&
+		stmt->relation->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+		ereport(ERROR,
+				(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+				 errmsg("ON COMMIT DROP cannot be used on global temporary tables")));
 
 	if (stmt->partspec != NULL)
 	{
@@ -1712,7 +1722,8 @@ RemoveRelations(DropStmt *drop)
 		 * callback retrieved the rel's persistence for us.
 		 */
 		if (drop->concurrent &&
-			state.actual_relpersistence != RELPERSISTENCE_TEMP)
+			state.actual_relpersistence != RELPERSISTENCE_TEMP &&
+			state.actual_relpersistence != RELPERSISTENCE_GLOBAL_TEMP)
 		{
 			Assert(list_length(drop->objects) == 1 &&
 				   drop->removeType == OBJECT_INDEX);
@@ -1850,7 +1861,7 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 		Form_pg_index indexform;
 		bool		indisvalid;
 
-		locTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(relOid));
+		locTuple = GetEffectivePgIndexTuple(relOid);
 		if (!HeapTupleIsValid(locTuple))
 		{
 			ReleaseSysCache(tuple);
@@ -1859,7 +1870,7 @@ RangeVarCallbackForDropRelation(const RangeVar *rel, Oid relOid, Oid oldRelOid,
 
 		indexform = (Form_pg_index) GETSTRUCT(locTuple);
 		indisvalid = indexform->indisvalid;
-		ReleaseSysCache(locTuple);
+		heap_freetuple(locTuple);
 
 		/* Mark object as being an invalid index of system catalogs */
 		if (!indisvalid)
@@ -2780,24 +2791,31 @@ MergeAttributes(List *columns, const List *supers, char relpersistence,
 
 		/*
 		 * If the parent is permanent, so must be all of its partitions.  Note
-		 * that inheritance allows that case.
+		 * that inheritance allows that case.  For these purposes, global
+		 * temporary tables behave like permanent tables -- i.e., we allow
+		 * global temporary tables to be partitions of permanent tables, and
+		 * vice versa.
 		 */
 		if (is_partition &&
 			relation->rd_rel->relpersistence != RELPERSISTENCE_TEMP &&
 			relpersistence == RELPERSISTENCE_TEMP)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-					 errmsg("cannot create a temporary relation as partition of permanent relation \"%s\"",
+					 errmsg(RELATION_IS_GLOBAL_TEMP(relation)
+							? "cannot create a local temporary relation as partition of global temporary relation \"%s\""
+							: "cannot create a local temporary relation as partition of permanent relation \"%s\"",
 							RelationGetRelationName(relation))));
 
-		/* Permanent rels cannot inherit from temporary ones */
+		/* Permanent rels cannot inherit from local temporary ones */
 		if (relpersistence != RELPERSISTENCE_TEMP &&
 			relation->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
 			ereport(ERROR,
 					(errcode(ERRCODE_WRONG_OBJECT_TYPE),
 					 errmsg(!is_partition
 							? "cannot inherit from temporary relation \"%s\""
-							: "cannot create a permanent relation as partition of temporary relation \"%s\"",
+							: relpersistence == RELPERSISTENCE_GLOBAL_TEMP
+							? "cannot create a global temporary relation as partition of local temporary relation \"%s\""
+							: "cannot create a permanent relation as partition of local temporary relation \"%s\"",
 							RelationGetRelationName(relation))));
 
 		/* If existing rel is temp, it must belong to this session */
@@ -3812,7 +3830,8 @@ CheckRelationTableSpaceMove(Relation rel, Oid newTableSpaceId)
 
 /*
  * SetRelationTableSpace
- *		Set new reltablespace and relfilenumber in pg_class entry.
+ *		Set new reltablespace and relfilenumber in pg_class (and/or
+ *		pg_temp_class for a global temporary relation).
  *
  * newTableSpaceId is the new tablespace for the relation, and
  * newRelFilenumber its new filenumber.  If newRelFilenumber is
@@ -3832,34 +3851,58 @@ SetRelationTableSpace(Relation rel,
 {
 	Relation	pg_class;
 	HeapTuple	tuple;
+	HeapTuple	temp_tuple;
 	ItemPointerData otid;
 	Form_pg_class rd_rel;
+	Form_pg_temp_class temp_rd_rel;
 	Oid			reloid = RelationGetRelid(rel);
 
 	Assert(CheckRelationTableSpaceMove(rel, newTableSpaceId));
 
-	/* Get a modifiable copy of the relation's pg_class row. */
+	/*
+	 * Get a modifiable copy of the relation's pg_class row and, for a global
+	 * temporary relation, its pg_temp_class row.
+	 */
 	pg_class = table_open(RelationRelationId, RowExclusiveLock);
 
-	tuple = SearchSysCacheLockedCopy1(RELOID, ObjectIdGetDatum(reloid));
+	tuple = GetPgClassAndPgTempClassTuples(reloid, true, &temp_tuple, true);
 	if (!HeapTupleIsValid(tuple))
 		elog(ERROR, "cache lookup failed for relation %u", reloid);
 	otid = tuple->t_self;
 	rd_rel = (Form_pg_class) GETSTRUCT(tuple);
-
-	/* Update the pg_class row. */
-	rd_rel->reltablespace = (newTableSpaceId == MyDatabaseTableSpace) ?
-		InvalidOid : newTableSpaceId;
-	if (RelFileNumberIsValid(newRelFilenumber))
-		rd_rel->relfilenode = newRelFilenumber;
-	CatalogTupleUpdate(pg_class, &otid, tuple);
-	UnlockTuple(pg_class, &otid, InplaceUpdateTupleLock);
+	temp_rd_rel = (Form_pg_temp_class) GETSTRUCT_SAFE(temp_tuple);
 
 	/*
-	 * Record dependency on tablespace.  This is only required for relations
-	 * that have no physical storage.
+	 * Update the pg_class and/or pg_temp_class rows.  For global temporary
+	 * relations, the new tablespace is set in both pg_class and pg_temp_class
+	 * so that the change is made in the current session and for all future
+	 * sessions.  Other current sessions using the relation are not affected.
 	 */
-	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind))
+	SetEffective_reltablespace(rd_rel, temp_rd_rel,
+							   newTableSpaceId == MyDatabaseTableSpace ?
+							   InvalidOid : newTableSpaceId);
+	if (RelFileNumberIsValid(newRelFilenumber))
+		SetEffective_relfilenode(rd_rel, temp_rd_rel, newRelFilenumber);
+
+	CatalogTupleUpdate(pg_class, &otid, tuple);
+	UnlockTuple(pg_class, &otid, InplaceUpdateTupleLock);
+	if (HeapTupleIsValid(temp_tuple))
+	{
+		UpdatePgTempClassTuple(reloid, temp_tuple);
+		heap_freetuple(temp_tuple);
+	}
+
+	/*
+	 * Record dependency on tablespace.  This is required for relations that
+	 * have no physical storage, and for global temporary relations whose
+	 * physical storage is temporary.  Note that a global temporary relation
+	 * being used in another session will not see the change in tablespace,
+	 * and will continue to use the original tablespace until the session
+	 * exits, but its local temporary storage will prevent the old tablespace
+	 * from being dropped until then.
+	 */
+	if (!RELKIND_HAS_STORAGE(rel->rd_rel->relkind) ||
+		RELATION_IS_GLOBAL_TEMP(rel))
 		changeDependencyOnTablespace(RelationRelationId, reloid,
 									 rd_rel->reltablespace);
 
@@ -6041,6 +6084,18 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 						 errmsg("cannot rewrite temporary tables of other sessions")));
 
 			/*
+			 * Don't allow rewrite on global temporary tables, if they're
+			 * being used by other backends ... we have no way to rewrite
+			 * local storage of another backend.
+			 */
+			if (RELATION_IS_GLOBAL_TEMP(OldHeap) &&
+				IsOtherUsingGlobalTempRelation(RelationGetRelid(OldHeap)))
+				ereport(ERROR,
+						errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+						errmsg("cannot rewrite global temporary table \"%s\" because it is being used in another session",
+							   RelationGetRelationName(OldHeap)));
+
+			/*
 			 * Select destination tablespace (same as original unless user
 			 * requested a change)
 			 */
@@ -6136,11 +6191,22 @@ ATRewriteTables(AlterTableStmt *parsetree, List **wqueue, LOCKMODE lockmode,
 			/*
 			 * If required, test the current data within the table against new
 			 * constraints generated by ALTER TABLE commands, but don't
-			 * rebuild data.
+			 * rebuild data.  Don't allow this for global temporary tables, if
+			 * they're being used by other backends ... we have no way to scan
+			 * local storage of another backend.
 			 */
 			if (tab->constraints != NIL || tab->verify_new_notnull ||
 				tab->partition_constraint != NULL)
+			{
+				if (tab->oldrelpersistence == RELPERSISTENCE_GLOBAL_TEMP &&
+					IsOtherUsingGlobalTempRelation(tab->relid))
+					ereport(ERROR,
+							errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							errmsg("cannot add or alter constraints of global temporary table \"%s\" because it is being used in another session",
+								   get_rel_name(tab->relid)));
+
 				ATRewriteTable(tab, InvalidOid);
+			}
 
 			/*
 			 * If we had SET TABLESPACE but no reason to reconstruct tuples,
@@ -6702,6 +6768,7 @@ ATGetQueueEntry(List **wqueue, Relation rel)
 	tab->rel = NULL;			/* set later */
 	tab->relkind = rel->rd_rel->relkind;
 	tab->oldDesc = CreateTupleDescCopyConstr(RelationGetDescr(rel));
+	tab->oldrelpersistence = rel->rd_rel->relpersistence;
 	tab->newAccessMethod = InvalidOid;
 	tab->chgAccessMethod = false;
 	tab->newTableSpace = InvalidOid;
@@ -10299,11 +10366,17 @@ ATAddForeignKeyConstraint(List **wqueue, AlteredTableInfo *tab, Relation rel,
 			if (pkrel->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-						 errmsg("constraints on temporary tables may reference only temporary tables")));
+						 errmsg("constraints on local temporary tables may reference only local temporary tables")));
 			if (!pkrel->rd_islocaltemp || !rel->rd_islocaltemp)
 				ereport(ERROR,
 						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
-						 errmsg("constraints on temporary tables must involve temporary tables of this session")));
+						 errmsg("constraints on local temporary tables must involve local temporary tables of this session")));
+			break;
+		case RELPERSISTENCE_GLOBAL_TEMP:
+			if (!RELATION_IS_GLOBAL_TEMP(pkrel))
+				ereport(ERROR,
+						(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
+						 errmsg("constraints on global temporary tables may reference only global temporary tables")));
 			break;
 	}
 
@@ -13942,7 +14015,7 @@ transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
 	{
 		Oid			indexoid = lfirst_oid(indexoidscan);
 
-		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+		indexTuple = GetEffectivePgIndexTuple(indexoid);
 		if (!HeapTupleIsValid(indexTuple))
 			elog(ERROR, "cache lookup failed for index %u", indexoid);
 		indexStruct = (Form_pg_index) GETSTRUCT(indexTuple);
@@ -13962,7 +14035,7 @@ transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
 			*indexOid = indexoid;
 			break;
 		}
-		ReleaseSysCache(indexTuple);
+		heap_freetuple(indexTuple);
 	}
 
 	list_free(indexoidlist);
@@ -14000,7 +14073,7 @@ transformFkeyGetPrimaryKey(Relation pkrel, Oid *indexOid,
 
 	*pk_has_without_overlaps = indexStruct->indisexclusion;
 
-	ReleaseSysCache(indexTuple);
+	heap_freetuple(indexTuple);
 
 	return i;
 }
@@ -14063,7 +14136,7 @@ transformFkeyCheckAttrs(Relation pkrel,
 		Form_pg_index indexStruct;
 
 		indexoid = lfirst_oid(indexoidscan);
-		indexTuple = SearchSysCache1(INDEXRELID, ObjectIdGetDatum(indexoid));
+		indexTuple = GetEffectivePgIndexTuple(indexoid);
 		if (!HeapTupleIsValid(indexTuple))
 			elog(ERROR, "cache lookup failed for index %u", indexoid);
 		indexStruct = (Form_pg_index) GETSTRUCT(indexTuple);
@@ -14139,7 +14212,7 @@ transformFkeyCheckAttrs(Relation pkrel,
 			if (found)
 				*pk_has_without_overlaps = indexStruct->indisexclusion;
 		}
-		ReleaseSysCache(indexTuple);
+		heap_freetuple(indexTuple);
 		if (found)
 			break;
 	}
@@ -17875,7 +17948,8 @@ index_copy_data(Relation rel, RelFileLocator newrlocator)
 	 * NOTE: any conflict in relfilenumber value will be caught in
 	 * RelationCreateStorage().
 	 */
-	dstrel = RelationCreateStorage(newrlocator, rel->rd_rel->relpersistence, true);
+	dstrel = RelationCreateStorage(rel->rd_id, newrlocator,
+								   rel->rd_rel->relpersistence, true);
 
 	/* copy main fork */
 	RelationCopyStorage(RelationGetSmgr(rel), dstrel, MAIN_FORKNUM,
@@ -19536,6 +19610,7 @@ ATPrepChangePersistence(AlteredTableInfo *tab, Relation rel, bool toLogged)
 	switch (rel->rd_rel->relpersistence)
 	{
 		case RELPERSISTENCE_TEMP:
+		case RELPERSISTENCE_GLOBAL_TEMP:
 			ereport(ERROR,
 					(errcode(ERRCODE_INVALID_TABLE_DEFINITION),
 					 errmsg("cannot change logged status of table \"%s\" because it is temporary",
@@ -21163,20 +21238,27 @@ ATExecAttachPartition(List **wqueue, Relation rel, PartitionCmd *cmd,
 						   RelationGetRelationName(rel),
 						   RelationGetRelationName(attachrel))));
 
-	/* If the parent is permanent, so must be all of its partitions. */
+	/*
+	 * If the parent is permanent or global temporary, so must be all of its
+	 * partitions, but permanent and global temporary can be mixed.
+	 */
 	if (rel->rd_rel->relpersistence != RELPERSISTENCE_TEMP &&
 		attachrel->rd_rel->relpersistence == RELPERSISTENCE_TEMP)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot attach a temporary relation as partition of permanent relation \"%s\"",
+				 errmsg(RELATION_IS_GLOBAL_TEMP(rel)
+						? "cannot attach a local temporary relation as partition of global temporary relation \"%s\""
+						: "cannot attach a local temporary relation as partition of permanent relation \"%s\"",
 						RelationGetRelationName(rel))));
 
-	/* Temp parent cannot have a partition that is itself not a temp */
+	/* Partitions of a local temporary parent must be local temporary */
 	if (rel->rd_rel->relpersistence == RELPERSISTENCE_TEMP &&
 		attachrel->rd_rel->relpersistence != RELPERSISTENCE_TEMP)
 		ereport(ERROR,
 				(errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				 errmsg("cannot attach a permanent relation as partition of temporary relation \"%s\"",
+				 errmsg(RELATION_IS_GLOBAL_TEMP(attachrel)
+						? "cannot attach a global temporary relation as partition of local temporary relation \"%s\""
+						: "cannot attach a permanent relation as partition of local temporary relation \"%s\"",
 						RelationGetRelationName(rel))));
 
 	/* If the parent is temp, it must belong to this session */
@@ -22589,14 +22671,13 @@ validatePartitionedIndex(Relation partedIdx, Relation partedTbl)
 		HeapTuple	indTup;
 		Form_pg_index indexForm;
 
-		indTup = SearchSysCache1(INDEXRELID,
-								 ObjectIdGetDatum(inhForm->inhrelid));
+		indTup = GetEffectivePgIndexTuple(inhForm->inhrelid);
 		if (!HeapTupleIsValid(indTup))
 			elog(ERROR, "cache lookup failed for index %u", inhForm->inhrelid);
 		indexForm = (Form_pg_index) GETSTRUCT(indTup);
 		if (indexForm->indisvalid)
 			tuples += 1;
-		ReleaseSysCache(indTup);
+		heap_freetuple(indTup);
 	}
 
 	/* Done with pg_inherits */
@@ -22611,20 +22692,35 @@ validatePartitionedIndex(Relation partedIdx, Relation partedTbl)
 	{
 		Relation	idxRel;
 		HeapTuple	indTup;
+		HeapTuple	temp_indTup;
 		Form_pg_index indexForm;
+		Form_pg_temp_index temp_indexForm;
 
+		/*
+		 * For a global temporary index, we update indisvalid in both pg_index
+		 * and pg_temp_index, so that the change applies to this session and
+		 * all future sessions.
+		 */
 		idxRel = table_open(IndexRelationId, RowExclusiveLock);
-		indTup = SearchSysCacheCopy1(INDEXRELID,
-									 ObjectIdGetDatum(RelationGetRelid(partedIdx)));
+		indTup = GetPgIndexAndPgTempIndexTuples(RelationGetRelid(partedIdx),
+												&temp_indTup, true);
 		if (!HeapTupleIsValid(indTup))
 			elog(ERROR, "cache lookup failed for index %u",
 				 RelationGetRelid(partedIdx));
 		indexForm = (Form_pg_index) GETSTRUCT(indTup);
+		temp_indexForm = (Form_pg_temp_index) GETSTRUCT_SAFE(temp_indTup);
 
 		indexForm->indisvalid = true;
+		if (temp_indexForm != NULL)
+			temp_indexForm->indisvalid = true;
 		updated = true;
 
 		CatalogTupleUpdate(idxRel, &indTup->t_self, indTup);
+		if (HeapTupleIsValid(temp_indTup))
+		{
+			UpdatePgTempIndexTuple(RelationGetRelid(partedIdx), temp_indTup);
+			heap_freetuple(temp_indTup);
+		}
 
 		table_close(idxRel, RowExclusiveLock);
 		heap_freetuple(indTup);
@@ -23246,24 +23342,29 @@ createPartitionTable(List **wqueue, RangeVar *newPartName,
 				errmsg("relation \"%s\" already exists", newPartName->relname));
 
 	/*
-	 * We intended to create the partition with the same persistence as the
-	 * parent table, but we still need to recheck because that might be
-	 * affected by the search_path.  If the parent is permanent, so must be
-	 * all of its partitions.
+	 * We intended to create the partition with the same schema-persistence as
+	 * the parent table, but we still need to recheck because that might be
+	 * affected by the search_path.  If the parent is permanent or global
+	 * temporary, so must be all of its partitions, but we do allow permanent
+	 * and global temporary to be mixed.
 	 */
 	if (parent_relform->relpersistence != RELPERSISTENCE_TEMP &&
 		newPartName->relpersistence == RELPERSISTENCE_TEMP)
 		ereport(ERROR,
 				errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				errmsg("cannot create a temporary relation as partition of permanent relation \"%s\"",
+				errmsg(parent_relform->relpersistence == RELPERSISTENCE_GLOBAL_TEMP
+					   ? "cannot create a local temporary relation as partition of global temporary relation \"%s\""
+					   : "cannot create a local temporary relation as partition of permanent relation \"%s\"",
 					   RelationGetRelationName(parent_rel)));
 
-	/* Permanent rels cannot be partitions belonging to a temporary parent. */
+	/* Partitions of a local temporary parent must be local temporary */
 	if (newPartName->relpersistence != RELPERSISTENCE_TEMP &&
 		parent_relform->relpersistence == RELPERSISTENCE_TEMP)
 		ereport(ERROR,
 				errcode(ERRCODE_WRONG_OBJECT_TYPE),
-				errmsg("cannot create a permanent relation as partition of temporary relation \"%s\"",
+				errmsg(newPartName->relpersistence == RELPERSISTENCE_GLOBAL_TEMP
+					   ? "cannot create a global temporary relation as partition of local temporary relation \"%s\""
+					   : "cannot create a permanent relation as partition of local temporary relation \"%s\"",
 					   RelationGetRelationName(parent_rel)));
 
 	/*

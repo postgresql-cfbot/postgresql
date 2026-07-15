@@ -2052,7 +2052,10 @@ do_autovacuum(void)
 
 		/*
 		 * Check if it is a temp table (presumably, of some other backend's).
-		 * We cannot safely process other backends' temp tables.
+		 * We cannot safely process other backends' local temp tables, so just
+		 * record any that appear to be orphaned, so we can drop them later.
+		 * Global temporary tables cannot be processed either, but they cannot
+		 * be orphaned in this way either, so we simply ignore them.
 		 */
 		if (classForm->relpersistence == RELPERSISTENCE_TEMP)
 		{
@@ -2074,6 +2077,8 @@ do_autovacuum(void)
 			}
 			continue;
 		}
+		else if (classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
+			continue;
 
 		/* Fetch reloptions and the pgstat entry for this table */
 		relopts = extract_autovac_opts(tuple, pg_class_desc);
@@ -2151,7 +2156,8 @@ do_autovacuum(void)
 		/*
 		 * We cannot safely process other backends' temp tables, so skip 'em.
 		 */
-		if (classForm->relpersistence == RELPERSISTENCE_TEMP)
+		if (classForm->relpersistence == RELPERSISTENCE_TEMP ||
+			classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
 			continue;
 
 		relid = classForm->oid;
@@ -2246,7 +2252,8 @@ do_autovacuum(void)
 		 */
 		if (!((classForm->relkind == RELKIND_RELATION ||
 			   classForm->relkind == RELKIND_MATVIEW) &&
-			  classForm->relpersistence == RELPERSISTENCE_TEMP))
+			  (classForm->relpersistence == RELPERSISTENCE_TEMP ||
+			   classForm->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)))
 		{
 			UnlockRelationOid(relid, AccessExclusiveLock);
 			continue;
@@ -3681,7 +3688,8 @@ pg_stat_get_autovacuum_scores(PG_FUNCTION_ARGS)
 			form->relkind != RELKIND_MATVIEW &&
 			form->relkind != RELKIND_TOASTVALUE)
 			continue;
-		if (form->relpersistence == RELPERSISTENCE_TEMP)
+		if (form->relpersistence == RELPERSISTENCE_TEMP ||
+			form->relpersistence == RELPERSISTENCE_GLOBAL_TEMP)
 			continue;
 
 		avopts = extract_autovac_opts(tup, RelationGetDescr(rel));

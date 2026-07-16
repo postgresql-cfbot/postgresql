@@ -1515,9 +1515,6 @@
   proargtypes => 'oidvector oidvector', prosrc => 'oidvectorgt' },
 
 # OIDS 700 - 799
-{ oid => '710', descr => 'deprecated, use current_user instead',
-  proname => 'getpgusername', provolatile => 's', prorettype => 'name',
-  proargtypes => '', prosrc => 'current_user' },
 { oid => '716',
   proname => 'oidlt', proleakproof => 't', prorettype => 'bool',
   proargtypes => 'oid oid', prosrc => 'oidlt' },

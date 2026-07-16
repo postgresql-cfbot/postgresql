@@ -168,20 +168,22 @@
 
     <listitem>
      <para>
-      The ICU library is used by default. If you don't want to use it then you must specify the <option>--without-icu</option> option to <filename>configure</filename>. Using this option disables support for ICU collation features (see <xref linkend="collation"/>).
+      The ICU library is used by default. If you don't want to use it then you
+      must specify the <option>--without-icu</option> option to
+      <filename>configure</filename>. Using this option disables support for
+      ICU collation features (see <xref linkend="collation"/>).
      </para>
      <para>
       ICU support requires the <productname>ICU4C</productname> package to be
       installed.  The minimum required version of
-      <productname>ICU4C</productname> is currently 4.2.
+      <productname>ICU4C</productname> is currently 55.
      </para>
 
      <para>
       By default,
       <productname>pkg-config</productname><indexterm><primary>pkg-config</primary></indexterm>
-      will be used to find the required compilation options.  This is
-      supported for <productname>ICU4C</productname> version 4.6 and later.
-      For older versions, or if <productname>pkg-config</productname> is not
+      will be used to find the required compilation options.
+      If <productname>pkg-config</productname> is not
       available, the variables <envar>ICU_CFLAGS</envar> and
       <envar>ICU_LIBS</envar> can be specified to
       <filename>configure</filename>, like in this example:
@@ -2435,7 +2437,7 @@ ninja install
         library, enabling use of ICU collation features (see <xref
         linkend="collation"/>).  Defaults to auto and requires the
         <productname>ICU4C</productname> package to be installed.  The minimum
-        required version of <productname>ICU4C</productname> is currently 4.2.
+        required version of <productname>ICU4C</productname> is currently 55.
        </para>
       </listitem>
      </varlistentry>

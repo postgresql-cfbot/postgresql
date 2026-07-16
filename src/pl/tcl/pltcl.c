@@ -50,9 +50,14 @@ PG_MODULE_MAGIC_EXT(
 	((TCL_MAJOR_VERSION > maj) || \
 	 (TCL_MAJOR_VERSION == maj && TCL_MINOR_VERSION >= min))
 
-/* Insist on Tcl >= 8.6 */
-#if !HAVE_TCL_VERSION(8,6)
-#error PostgreSQL only supports Tcl 8.6 or later.
+/* Insist on Tcl >= 8.4 */
+#if !HAVE_TCL_VERSION(8,4)
+#error PostgreSQL only supports Tcl 8.4 or later.
+#endif
+
+/* Hack to deal with Tcl 8.6 const-ification without losing compatibility */
+#ifndef CONST86
+#define CONST86
 #endif
 
 #if !HAVE_TCL_VERSION(8,7)
@@ -361,7 +366,7 @@ pltcl_FinalizeNotifier(ClientData clientData)
 }
 
 static void
-pltcl_SetTimer(const Tcl_Time *timePtr)
+pltcl_SetTimer(CONST86 Tcl_Time *timePtr)
 {
 }
 
@@ -387,7 +392,7 @@ pltcl_ServiceModeHook(int mode)
 }
 
 static int
-pltcl_WaitForEvent(const Tcl_Time *timePtr)
+pltcl_WaitForEvent(CONST86 Tcl_Time *timePtr)
 {
 	return 0;
 }

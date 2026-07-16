@@ -44,6 +44,7 @@
 #include "postgres.h"
 
 #include "access/amapi.h"
+#include "access/hot_indexed.h"
 #include "access/relation.h"
 #include "access/reloptions.h"
 #include "access/relscan.h"
@@ -607,6 +608,15 @@ index_getnext_tid(IndexScanDesc scan, ScanDirection direction)
 	Assert(TransactionIdIsValid(RecentXmin));
 
 	/*
+	 * Reset the HOT-indexed recheck flag: it is set by the heap AM during
+	 * index_fetch_heap and is per-fetched-tuple, not per-index-entry. For
+	 * IndexOnlyScan, which may skip index_fetch_heap when the VM says the
+	 * entry is visible-to-all, this ensures we don't carry a stale value from
+	 * a previous entry.
+	 */
+	scan->xs_hot_indexed_stale = false;
+
+	/*
 	 * The AM's amgettuple proc finds the next index entry matching the scan
 	 * keys, and puts the TID into scan->xs_heaptid.  It should also set
 	 * scan->xs_recheck and possibly scan->xs_itup/scan->xs_hitup, though we
@@ -667,14 +677,96 @@ index_fetch_heap(IndexScanDesc scan, TupleTableSlot *slot)
 		pgstat_count_heap_fetch(scan->indexRelation);
 
 	/*
+	 * The table AM reported, via xs_hot_indexed_recheck, whether the walk to
+	 * the live tuple crossed a HOT-indexed hop after the arriving index
+	 * entry's own tuple.  When it did, the entry's stored key may no longer
+	 * agree with the live tuple, and we must decide whether to drop it.
+	 *
+	 * The crossed-attribute bitmap (xs_hot_indexed_crossed) is the staleness
+	 * authority.  It is the union of the per-hop modified-attribute bitmaps
+	 * of every hop the walk crossed, and it is complete: each crossed live
+	 * hop, collapse-survivor stub, and redirected (collapsed) prefix
+	 * contributes its segment's bitmap, and chain collapse only ever reclaims
+	 * a member whose attributes are a subset of the surviving later hops (see
+	 * pruneheap.c).  Therefore:
+	 *
+	 * - if the union is disjoint from the heap columns this index references,
+	 * none of the index's inputs changed across the chain, so the entry's key
+	 * still matches the live tuple: keep it; and
+	 *
+	 * - if the union overlaps them, one of this index's key columns changed
+	 * after the entry's own tuple, so the entry is stale: drop it.
+	 *
+	 * Dropping on overlap is correct even when the key was cycled away and
+	 * back to its original value (an ABA update): the update that set the
+	 * value back created a fresh entry pointing at its own (live) tuple,
+	 * whose walk crosses no later key-changing hop, so that entry uniquely
+	 * supplies the row while this stale ancestor entry is dropped.  No
+	 * value-recheck is needed, so this works for any access method; the
+	 * staleness decision is purely attribute-based.
+	 */
+	scan->xs_hot_indexed_stale = false;
+	if (found &&
+		scan->xs_heapfetch->xs_hot_indexed_recheck &&
+		scan->xs_heapfetch->xs_hot_indexed_crossed != NULL)
+	{
+		Bitmapset  *idxattrs = RelationGetIndexedAttrs(scan->indexRelation);
+		int			x = -1;
+
+		while ((x = bms_next_member(idxattrs, x)) >= 0)
+		{
+			AttrNumber	attnum = x + FirstLowInvalidHeapAttributeNumber;
+
+			/* the crossed bitmap records only user attributes */
+			if (attnum >= 1 &&
+				HotIndexedAttrIsModified(scan->xs_heapfetch->xs_hot_indexed_crossed,
+										 attnum))
+			{
+				scan->xs_hot_indexed_stale = true;
+				break;
+			}
+		}
+		bms_free(idxattrs);
+	}
+
+	/*
 	 * If we scanned a whole HOT chain and found only dead tuples, tell index
 	 * AM to kill its entry for that TID (this will take effect in the next
 	 * amgettuple call, in index_getnext_tid).  We do not do this when in
 	 * recovery because it may violate MVCC to do so.  See comments in
 	 * RelationGetIndexScan().
+	 *
+	 * Additionally kill a stale HOT-indexed leaf (one whose key the live
+	 * tuple no longer holds) when every chain member skipped before the
+	 * returned tuple is dead to all transactions (xs_prefix_all_dead): no
+	 * snapshot can reach a matching version through this leaf, so it is
+	 * redundant and reclaiming it bounds the index bloat HOT-indexed updates
+	 * create.
+	 *
+	 * Two independent conditions make this safe:
+	 *
+	 *  - The surely-dead prefix gate (xs_prefix_all_dead) means no snapshot,
+	 *    including older ones still running, can reach a version through this
+	 *    leaf whose key matches: every member ahead of the live tuple is dead
+	 *    to all.  This is what makes it MVCC-safe, exactly as for the
+	 *    all_dead case.
+	 *
+	 *  - The leaf is genuinely redundant, not the row's only entry.  A stale
+	 *    verdict means the crossed-hop union overlaps this index's columns,
+	 *    i.e. one of this index's attributes changed on a hop after this
+	 *    leaf's target.  The update that made that change maintained this
+	 *    index (its attribute changed), so it planted a fresh entry pointing
+	 *    at its own live tuple; that fresh entry crosses no later
+	 *    key-changing hop and uniquely supplies the row.  Dropping the stale
+	 *    ancestor therefore never removes the row's last reachable entry.
+	 *    This holds even under ABA key cycling (X -> Y -> X): the X-restoring
+	 *    update changed this index's column (Y -> X) and so planted the fresh
+	 *    entry.
 	 */
 	if (!scan->xactStartedInRecovery)
-		scan->kill_prior_tuple = all_dead;
+		scan->kill_prior_tuple =
+			all_dead ||
+			(scan->xs_hot_indexed_stale && scan->xs_heapfetch->xs_prefix_all_dead);
 
 	return found;
 }

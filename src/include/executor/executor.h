@@ -615,6 +615,10 @@ extern TupleDesc ExecCleanTypeFromTL(List *targetList);
 extern TupleDesc ExecTypeFromExprList(List *exprList);
 extern void ExecTypeSetColNames(TupleDesc typeInfo, List *namesList);
 extern void UpdateChangedParamSet(PlanState *node, Bitmapset *newchg);
+extern Bitmapset *ExecCompareSlotAttrs(Bitmapset *attrs,
+									   TupleDesc tupdesc,
+									   TupleTableSlot *old_tts,
+									   TupleTableSlot *new_tts);
 
 typedef struct TupOutputState
 {
@@ -750,11 +754,13 @@ extern Bitmapset *ExecGetAllUpdatedCols(ResultRelInfo *relinfo, EState *estate);
  */
 extern void ExecOpenIndices(ResultRelInfo *resultRelInfo, bool speculative);
 extern void ExecCloseIndices(ResultRelInfo *resultRelInfo);
+extern void ExecSetIndexUnchanged(ResultRelInfo *resultRelInfo,
+								  const Bitmapset *modified_idx_attrs);
 
 /* flags for ExecInsertIndexTuples */
 #define		EIIT_IS_UPDATE			(1<<0)
 #define		EIIT_NO_DUPE_ERROR		(1<<1)
-#define		EIIT_ONLY_SUMMARIZING	(1<<2)
+#define		EIIT_IS_HOT_INDEXED		(1<<2)
 extern List *ExecInsertIndexTuples(ResultRelInfo *resultRelInfo, EState *estate,
 								   uint32 flags, TupleTableSlot *slot,
 								   List *arbiterIndexes,
@@ -814,5 +820,8 @@ extern ResultRelInfo *ExecLookupResultRelByOid(ModifyTableState *node,
 											   Oid resultoid,
 											   bool missing_ok,
 											   bool update_cache);
+extern Bitmapset *ExecUpdateModifiedIdxAttrs(ResultRelInfo *relinfo,
+											 TupleTableSlot *old_tts,
+											 TupleTableSlot *new_tts);
 
 #endif							/* EXECUTOR_H  */

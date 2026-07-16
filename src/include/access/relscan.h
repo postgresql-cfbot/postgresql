@@ -134,6 +134,45 @@ typedef struct IndexFetchTableData
 	 * permitted.
 	 */
 	uint32		flags;
+
+	/*
+	 * Side channel for table AMs whose update chains can reach a different
+	 * set of index-key values than the arriving index entry recorded (heap's
+	 * HOT-selectively-updated chains).  Set true by the table AM when the
+	 * walk to the live tuple crossed a HOT/SIU hop after the entry's own
+	 * tuple, meaning the arriving entry's stored key may no longer match the
+	 * live tuple and the index-access layer must recheck it.  Left false when
+	 * no such hop was crossed (the entry is definitely current), and always
+	 * false for AMs without such chains.
+	 */
+	bool		xs_hot_indexed_recheck;
+
+	/*
+	 * Companion to xs_hot_indexed_recheck.  xs_hot_indexed_crossed is the
+	 * union of the per-hop modified-attrs bitmaps the walk crossed after the
+	 * entry's own tuple, over heap attribute numbers (bit attnum-1 for a
+	 * 1-based attnum).  The index-access layer tests it against the arriving
+	 * index's key columns to judge staleness without a key comparison: any
+	 * overlap means a crossed hop changed one of the index's inputs, so the
+	 * entry is stale.  The union is complete (every crossed live hop and
+	 * collapse-survivor stub contributes its bitmap, and collapse only
+	 * reclaims members subsumed by surviving hops), so disjointness reliably
+	 * means fresh.  It is NULL for AMs without such chains and is sized by
+	 * the table AM for the heap relation's column count.
+	 */
+	uint8	   *xs_hot_indexed_crossed;
+
+	/*
+	 * Set by the table AM when it returns a tuple: true iff every chain
+	 * member the walk skipped before reaching the returned (visible) tuple is
+	 * dead to all transactions (below the global xmin horizon).  Combined
+	 * with a stale verdict (the crossed-attribute bitmap overlapped the
+	 * index's key columns), this lets the index-access layer
+	 * kill the arriving leaf: no snapshot can reach a matching version
+	 * through it, so it is redundant.  AMs without such chains leave it
+	 * false.
+	 */
+	bool		xs_prefix_all_dead;
 } IndexFetchTableData;
 
 struct IndexScanInstrumentation;
@@ -154,6 +193,13 @@ typedef struct IndexScanDescData
 	struct ScanKeyData *keyData;	/* array of index qualifier descriptors */
 	struct ScanKeyData *orderByData;	/* array of ordering op descriptors */
 	bool		xs_want_itup;	/* caller requests index tuples */
+	bool		xs_index_only;	/* caller is an index-only scan that may
+								 * return tuples without fetching the heap;
+								 * AMs must retain leaf-page pins for such
+								 * scans (VM all-visible / TID-recycle race),
+								 * whereas a plain scan that sets xs_want_itup
+								 * only to inspect the index tuple still
+								 * fetches the heap and may drop pins */
 	bool		xs_temp_snap;	/* unregister snapshot at scan end? */
 
 	/* signaling to index AM about killing index tuples */
@@ -188,6 +234,20 @@ typedef struct IndexScanDescData
 	IndexFetchTableData *xs_heapfetch;
 
 	bool		xs_recheck;		/* T means scan keys must be rechecked */
+
+	/*
+	 * T means the index entry that reached xs_heaptid is stale: the HOT chain
+	 * walked to reach the tuple crossed a HOT-selectively-updated (HOT/SIU)
+	 * hop that changed an attribute this index covers, so the arriving
+	 * entry's stored key no longer matches the live tuple.  The executor
+	 * drops such a tuple; the row is re-supplied by the fresh entry inserted
+	 * for the new value.  Unlike xs_recheck (set by lossy AMs such as GiST
+	 * and GIN), this is computed by the index-access layer by testing the
+	 * heap AM's crossed-attribute bitmap (xs_hot_indexed_crossed) against
+	 * this index's key columns: any overlap means a crossed hop changed one
+	 * of the index's inputs, so the entry is stale.
+	 */
+	bool		xs_hot_indexed_stale;
 
 	/*
 	 * When fetching with an ordering operator, the values of the ORDER BY

@@ -52,20 +52,28 @@ ItemPointerCompare(const ItemPointerData *arg1, const ItemPointerData *arg2)
 {
 	/*
 	 * Use ItemPointerGet{Offset,Block}NumberNoCheck to avoid asserting
-	 * ip_posid != 0, which may not be true for a user-supplied TID.
+	 * ip_posid != 0, which may not be true for a user-supplied TID.  Strip
+	 * the SIU may-be-stale bit (see ItemPointerSIUMaybeStaleFlag in
+	 * itemptr.h) so two TIDs naming the same (block, offset) always compare
+	 * equal regardless of which one, if either, happens to carry it -- the
+	 * bit is a hint to a handful of bitmap-scan call sites, not part of a
+	 * TID's identity for ordering/equality purposes.  ItemPointerOffsetNumberStrip
+	 * leaves the reserved sentinel values (SpecTokenOffsetNumber,
+	 * MovedPartitionsOffsetNumber) untouched, since those already have the
+	 * same bit set as part of their own encoding.
 	 */
 	BlockNumber b1 = ItemPointerGetBlockNumberNoCheck(arg1);
 	BlockNumber b2 = ItemPointerGetBlockNumberNoCheck(arg2);
+	OffsetNumber o1 = ItemPointerOffsetNumberStrip(ItemPointerGetOffsetNumberNoCheck(arg1));
+	OffsetNumber o2 = ItemPointerOffsetNumberStrip(ItemPointerGetOffsetNumberNoCheck(arg2));
 
 	if (b1 < b2)
 		return -1;
 	else if (b1 > b2)
 		return 1;
-	else if (ItemPointerGetOffsetNumberNoCheck(arg1) <
-			 ItemPointerGetOffsetNumberNoCheck(arg2))
+	else if (o1 < o2)
 		return -1;
-	else if (ItemPointerGetOffsetNumberNoCheck(arg1) >
-			 ItemPointerGetOffsetNumberNoCheck(arg2))
+	else if (o1 > o2)
 		return 1;
 	else
 		return 0;

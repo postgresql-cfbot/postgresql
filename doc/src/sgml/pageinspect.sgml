@@ -459,6 +459,18 @@ test=# SELECT itemoffset, ctid, itemlen, nulls, vars, data, dead, htid, tids[0:2
       <structfield>htid</structfield> value.
      </para>
      <para>
+      <structfield>hot_indexed</structfield> is true when the leaf tuple is a
+      fresh index entry planted by a HOT-indexed (selective index update)
+      <command>UPDATE</command>, which points at a mid-chain heap-only tuple
+      rather than at the chain root.  Such an entry's stored heap TID carries
+      an internal marker bit in its offset that a bitmap scan uses to fall
+      back to page-level (lossy) matching; <structfield>ctid</structfield> and
+      <structfield>htid</structfield> report the real heap offset with that
+      marker removed, and <structfield>hot_indexed</structfield> exposes the
+      marker itself.  It is false for ordinary entries and for the pivot and
+      posting-list tuples whose <structfield>ctid</structfield> is repurposed.
+     </para>
+     <para>
       Note that the first item on any non-rightmost page (any page with
       a non-zero value in the <structfield>btpo_next</structfield> field) is the
       page's <quote>high key</quote>, meaning its <structfield>data</structfield>

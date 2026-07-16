@@ -19,6 +19,7 @@
 
 #include "access/relscan.h"
 #include "access/sdir.h"
+#include "access/sysattr.h"
 #include "access/xact.h"
 #include "executor/tuptable.h"
 #include "storage/read_stream.h"
@@ -27,6 +28,18 @@
 
 
 #define DEFAULT_TABLE_ACCESS_METHOD	"heap"
+
+/*
+ * Whole-row sentinel for the in/out modified-attributes set of
+ * table_tuple_update().  On input the caller supplies the indexed attributes
+ * whose values changed.  A table AM that stored the new tuple as an
+ * independent version not reachable through the existing index entries (for
+ * heap, a non-HOT update) adds this whole-row attribute (attribute number 0,
+ * FirstLowInvalidHeapAttributeNumber convention) on output, signalling that
+ * every index needs a new entry.  Diffing real columns never yields attribute
+ * 0, so it is unambiguous as this sentinel.
+ */
+#define TableTupleUpdateAllIndexes	(0 - FirstLowInvalidHeapAttributeNumber)
 
 /* GUCs */
 extern PGDLLIMPORT char *default_table_access_method;
@@ -124,22 +137,6 @@ typedef enum TM_Result
 	/* lock couldn't be acquired, action skipped. Only used by lock_tuple */
 	TM_WouldBlock,
 } TM_Result;
-
-/*
- * Result codes for table_update(..., update_indexes*..).
- * Used to determine which indexes to update.
- */
-typedef enum TU_UpdateIndexes
-{
-	/* No indexed columns were updated (incl. TID addressing of tuple) */
-	TU_None,
-
-	/* A non-summarizing indexed column was updated, or the TID has changed */
-	TU_All,
-
-	/* Only summarized columns were updated, TID is unchanged */
-	TU_Summarizing,
-} TU_UpdateIndexes;
 
 /*
  * When table_tuple_update, table_tuple_delete, or table_tuple_lock fail
@@ -488,6 +485,13 @@ typedef struct TableAmRoutine
 	 * index_fetch_tuple iff it is guaranteed that no backend needs to see
 	 * that tuple. Index AMs can use that to avoid returning that tid in
 	 * future searches.
+	 *
+	 * If a tuple is returned and the table AM reached it by walking a HOT
+	 * chain that crossed a HOT-selectively-updated (HOT/SIU) hop after the
+	 * arriving entry's own tuple, it sets scan->xs_hot_indexed_recheck (see
+	 * struct IndexFetchTableData) to tell the index-access layer to recheck
+	 * the arriving leaf key against the live tuple.  AMs without such update
+	 * chains leave it false.
 	 */
 	bool		(*index_fetch_tuple) (struct IndexFetchTableData *scan,
 									  ItemPointer tid,
@@ -586,7 +590,7 @@ typedef struct TableAmRoutine
 								 bool wait,
 								 TM_FailureData *tmfd,
 								 LockTupleMode *lockmode,
-								 TU_UpdateIndexes *update_indexes);
+								 Bitmapset **modified_attrs);
 
 	/* see table_tuple_lock() for reference about parameters */
 	TM_Result	(*tuple_lock) (Relation rel,
@@ -1318,11 +1322,20 @@ table_index_fetch_tuple(struct IndexFetchTableData *scan,
  * returns whether there are table tuple items corresponding to an index
  * entry.  This likely is only useful to verify if there's a conflict in a
  * unique index.
+ *
+ * If keep_slot is non-NULL, on a positive result the function stores the
+ * fetched tuple into *keep_slot (which must be a valid slot of the
+ * relation's type) and returns with the slot populated; the caller is
+ * responsible for clearing the slot.  When keep_slot is NULL a temporary
+ * slot is created internally and dropped before return, matching the
+ * pre-existing behaviour.
  */
 extern bool table_index_fetch_tuple_check(Relation rel,
 										  ItemPointer tid,
 										  Snapshot snapshot,
-										  bool *all_dead);
+										  bool *all_dead,
+										  bool *hot_indexed_recheck_out,
+										  TupleTableSlot *keep_slot);
 
 
 /* ------------------------------------------------------------------------
@@ -1573,12 +1586,20 @@ table_tuple_delete(Relation rel, ItemPointer tid, CommandId cid,
  *		TABLE_UPDATE_NO_LOGICAL -- force-disables the emitting of logical
  *		decoding information for the tuple.
  *
+ * In parameters:
+ *	modified_attrs - in/out; on input, the set of indexed attributes whose
+ *		values changed (FirstLowInvalidHeapAttributeNumber convention).  A
+ *		table AM may use this to choose between HOT and non-HOT storage of the
+ *		new tuple.  On output the AM adds the whole-row attribute
+ *		(TableTupleUpdateAllIndexes) iff it stored the new tuple as an
+ *		independent version requiring a fresh entry in every index; otherwise
+ *		the caller consults each index's own attributes against this set to
+ *		decide per index (the standard HOT / selective-index-update cases).
+ *
  * Output parameters:
  *	slot - newly constructed tuple data to store
  *	tmfd - filled in failure cases (see below)
  *	lockmode - filled with lock mode acquired on tuple
- *	update_indexes - in success cases this is set if new index entries
- *		are required for this tuple; see TU_UpdateIndexes
  *
  * Normal, successful return value is TM_Ok, which means we did actually
  * update it.  Failure return codes are TM_SelfModified, TM_Updated, and
@@ -1599,12 +1620,20 @@ table_tuple_update(Relation rel, ItemPointer otid, TupleTableSlot *slot,
 				   CommandId cid, uint32 options,
 				   Snapshot snapshot, Snapshot crosscheck,
 				   bool wait, TM_FailureData *tmfd, LockTupleMode *lockmode,
-				   TU_UpdateIndexes *update_indexes)
+				   Bitmapset **modified_attrs)
 {
+	/*
+	 * *modified_attrs may already contain TableTupleUpdateAllIndexes on input
+	 * when an index expression references a whole-row Var (see the note in
+	 * ExecUpdateAct); the AM also uses the sentinel as an output signal.  Both
+	 * mean "update all indexes", so only require modified_attrs itself to be
+	 * non-NULL for the in-tree heap AM, which dereferences it unconditionally.
+	 */
+	Assert(modified_attrs != NULL);
 	return rel->rd_tableam->tuple_update(rel, otid, slot,
 										 cid, options, snapshot, crosscheck,
-										 wait, tmfd,
-										 lockmode, update_indexes);
+										 wait, tmfd, lockmode,
+										 modified_attrs);
 }
 
 /*
@@ -2089,7 +2118,7 @@ extern void simple_table_tuple_delete(Relation rel, ItemPointer tid,
 									  Snapshot snapshot);
 extern void simple_table_tuple_update(Relation rel, ItemPointer otid,
 									  TupleTableSlot *slot, Snapshot snapshot,
-									  TU_UpdateIndexes *update_indexes);
+									  Bitmapset **modified_attrs);
 
 
 /* ----------------------------------------------------------------------------

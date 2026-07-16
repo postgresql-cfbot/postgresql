@@ -57,6 +57,9 @@
  */
 
 /*							yyyymmddN */
+/* XXX bump catversion -- this commit adds a catalog column
+ * (subhotindexedonapply) and touches pg_subscription; the committer
+ * sets the real value at commit time to avoid needless rebase churn. */
 #define CATALOG_VERSION_NO	202607091
 
 #endif

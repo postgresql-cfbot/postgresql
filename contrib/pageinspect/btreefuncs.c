@@ -485,8 +485,8 @@ bt_page_print_tuples(ua_page_items *uargs)
 	bool		leafpage = uargs->leafpage;
 	bool		rightmost = uargs->rightmost;
 	bool		ispivottuple;
-	Datum		values[9];
-	bool		nulls[9];
+	Datum		values[10];
+	bool		nulls[10];
 	HeapTuple	tuple;
 	ItemId		id;
 	IndexTuple	itup;
@@ -497,6 +497,9 @@ bt_page_print_tuples(ua_page_items *uargs)
 			   *datacstring;
 	char	   *ptr;
 	ItemPointer htid;
+	bool		hot_indexed;
+	ItemPointerData ctid_show;
+	ItemPointerData htid_show;
 
 	id = PageGetItemId(page, offset);
 
@@ -508,7 +511,35 @@ bt_page_print_tuples(ua_page_items *uargs)
 	j = 0;
 	memset(nulls, 0, sizeof(nulls));
 	values[j++] = Int16GetDatum(offset);
-	values[j++] = ItemPointerGetDatum(&itup->t_tid);
+
+	/*
+	 * A HOT-indexed (SIU) fresh entry stores its heap TID with the
+	 * ItemPointerSIUMaybeStaleFlag marker bit set in the offset field (see
+	 * storage/itemptr.h).  Report the real offset in the ctid column -- the
+	 * marker is a bitmap-scan hint, not part of the tuple's address -- and
+	 * expose the marker itself in the separate hot_indexed column below.
+	 * Only a plain leaf tuple's t_tid is a genuine heap TID that can carry
+	 * the flag; a pivot/posting tuple repurposes t_tid for other data and
+	 * must be shown verbatim.
+	 */
+	if (!BTreeTupleIsPivot(itup) && !BTreeTupleIsPosting(itup))
+	{
+		ctid_show = itup->t_tid;
+		hot_indexed = ItemPointerIsSIUMaybeStale(&ctid_show);
+		/*
+		 * Strip the SIU marker directly on the raw offset.  Do not route
+		 * through ItemPointerGetOffsetNumber(), which asserts a valid (nonzero)
+		 * offset: this function also inspects arbitrary raw page images, where
+		 * a corrupt ip_posid == 0 must be shown, not trip an assertion.
+		 */
+		ctid_show.ip_posid = ItemPointerOffsetNumberStrip(ctid_show.ip_posid);
+		values[j++] = ItemPointerGetDatum(&ctid_show);
+	}
+	else
+	{
+		hot_indexed = false;
+		values[j++] = ItemPointerGetDatum(&itup->t_tid);
+	}
 	values[j++] = Int16GetDatum(IndexTupleSize(itup));
 	values[j++] = BoolGetDatum(IndexTupleHasNulls(itup));
 	values[j++] = BoolGetDatum(IndexTupleHasVarwidths(itup));
@@ -584,7 +615,13 @@ bt_page_print_tuples(ua_page_items *uargs)
 	}
 
 	if (htid)
-		values[j++] = ItemPointerGetDatum(htid);
+	{
+		/* Report the real offset; the SIU marker is shown via hot_indexed. */
+		htid_show = *htid;
+		/* Strip on the raw offset; see the ctid path for why not the getter. */
+		htid_show.ip_posid = ItemPointerOffsetNumberStrip(htid_show.ip_posid);
+		values[j++] = ItemPointerGetDatum(&htid_show);
+	}
 	else
 		nulls[j++] = true;
 
@@ -605,6 +642,14 @@ bt_page_print_tuples(ua_page_items *uargs)
 	}
 	else
 		nulls[j++] = true;
+
+	/*
+	 * hot_indexed: true iff this leaf entry is a HOT-indexed (SIU) fresh
+	 * entry.  Only present from pageinspect 1.14 on; older extension versions
+	 * declare one fewer output column, so gate on the actual tuple descriptor.
+	 */
+	if (uargs->tupd->natts > j)
+		values[j++] = BoolGetDatum(hot_indexed);
 
 	/* Build and return the result tuple */
 	tuple = heap_form_tuple(uargs->tupd, values, nulls);

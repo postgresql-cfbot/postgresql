@@ -362,6 +362,25 @@ tbm_free_shared_area(dsa_area *dsa, dsa_pointer dp)
  *
  * If recheck is true, then the recheck flag will be set in the
  * TBMIterateResult when any of these tuples are reported out.
+ *
+ * A TID may carry the SIU "may-be-stale" marker (ItemPointerSIUMaybeStaleFlag,
+ * see storage/itemptr.h): a HOT-indexed (selective index update) fresh entry
+ * points at a mid-chain heap-only tuple rather than at the chain root the way
+ * every other index entry for that row does.  Because BitmapAnd/BitmapOr
+ * intersect/union TID sets here at block+offset granularity before the heap
+ * is ever consulted, an unrelated unchanged index's root-pointing entry for
+ * the same row would not agree with such an entry's offset, and an exact-mode
+ * intersection could silently drop a matching row.  Whenever we see the flag
+ * we therefore add the whole page as lossy instead of the exact offset: a
+ * lossy page survives any AND/OR against an exact-mode page (see
+ * tbm_intersect_page) and forces a recheck, so BitmapHeapScan resolves the
+ * chain and the table AM's heap-side staleness test makes the final call.
+ *
+ * Handling this here -- at the single choke point every amgetbitmap funnels
+ * exact heap TIDs through -- means no index access method needs to know about
+ * HOT-indexed chains: core AMs, contrib AMs (bloom), and out-of-tree AMs are
+ * all correct automatically, and a TID that never carries the flag takes the
+ * identical path it always did.
  */
 void
 tbm_add_tuples(TIDBitmap *tbm, const ItemPointerData *tids, int ntids,
@@ -374,9 +393,25 @@ tbm_add_tuples(TIDBitmap *tbm, const ItemPointerData *tids, int ntids,
 	for (int i = 0; i < ntids; i++)
 	{
 		BlockNumber blk = ItemPointerGetBlockNumber(tids + i);
-		OffsetNumber off = ItemPointerGetOffsetNumber(tids + i);
+		OffsetNumber off;
 		int			wordnum,
 					bitnum;
+
+		/*
+		 * A HOT-indexed fresh entry's TID must not be trusted at exact
+		 * offset granularity here (see the function header).  Test the raw
+		 * TID -- before ItemPointerGetOffsetNumber strips the marker -- and
+		 * if set, degrade the whole page to lossy and move on.
+		 */
+		if (unlikely(ItemPointerIsSIUMaybeStale(tids + i)))
+		{
+			tbm_add_page(tbm, blk);
+			/* tbm_add_page may have lossified pages; force a fresh lookup */
+			currblk = InvalidBlockNumber;
+			continue;
+		}
+
+		off = ItemPointerGetOffsetNumber(tids + i);
 
 		/* safety check to ensure we don't overrun bit array bounds */
 		if (off < 1 || off > TBM_MAX_TUPLES_PER_PAGE)

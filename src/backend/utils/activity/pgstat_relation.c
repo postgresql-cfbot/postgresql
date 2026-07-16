@@ -384,11 +384,17 @@ pgstat_count_heap_insert(Relation rel, PgStat_Counter n)
 
 /*
  * count a tuple update
+ *
+ * hot      -- the update was a heap-only tuple (classic HOT or HOT-indexed)
+ * hot_indexed -- the update was a HOT-indexed update, a subcase of
+ *                hot=true; hot_indexed implies hot
+ * newpage  -- the new tuple went to a different buffer than the old one
  */
 void
-pgstat_count_heap_update(Relation rel, bool hot, bool newpage)
+pgstat_count_heap_update(Relation rel, bool hot, bool hot_indexed, bool newpage)
 {
 	Assert(!(hot && newpage));
+	Assert(!(hot_indexed && !hot));
 
 	if (pgstat_should_count_relation(rel))
 	{
@@ -398,11 +404,17 @@ pgstat_count_heap_update(Relation rel, bool hot, bool newpage)
 		pgstat_info->trans->tuples_updated++;
 
 		/*
-		 * tuples_hot_updated and tuples_newpage_updated counters are
-		 * nontransactional, so just advance them
+		 * tuples_hot_updated, tuples_hot_indexed_updated, and
+		 * tuples_newpage_updated counters are nontransactional, so just
+		 * advance them.  tuples_hot_indexed_updated is counted in *addition* to
+		 * tuples_hot: every hot-indexed update is also a HOT update.
 		 */
 		if (hot)
+		{
 			pgstat_info->counts.tuples_hot_updated++;
+			if (hot_indexed)
+				pgstat_info->counts.tuples_hot_indexed_updated++;
+		}
 		else if (newpage)
 			pgstat_info->counts.tuples_newpage_updated++;
 	}
@@ -854,7 +866,10 @@ pgstat_relation_flush_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	tabentry->tuples_updated += lstats->counts.tuples_updated;
 	tabentry->tuples_deleted += lstats->counts.tuples_deleted;
 	tabentry->tuples_hot_updated += lstats->counts.tuples_hot_updated;
+	tabentry->tuples_hot_indexed_updated += lstats->counts.tuples_hot_indexed_updated;
 	tabentry->tuples_newpage_updated += lstats->counts.tuples_newpage_updated;
+	tabentry->tuples_hot_indexed_upd_skipped += lstats->counts.tuples_hot_indexed_upd_skipped;
+	tabentry->tuples_hot_indexed_upd_matched += lstats->counts.tuples_hot_indexed_upd_matched;
 
 	/*
 	 * If table was truncated/dropped, first reset the live/dead counters.

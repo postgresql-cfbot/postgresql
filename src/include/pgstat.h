@@ -151,7 +151,19 @@ typedef struct PgStat_TableCounts
 	PgStat_Counter tuples_updated;
 	PgStat_Counter tuples_deleted;
 	PgStat_Counter tuples_hot_updated;
+	PgStat_Counter tuples_hot_indexed_updated;
 	PgStat_Counter tuples_newpage_updated;
+
+	/*
+	 * Per-index HOT-indexed update counters.  Maintained on pgstat entries
+	 * keyed on an index oid, not on the owning table's entry.  They count how
+	 * many HOT-indexed updates skipped this index (key unchanged) vs.
+	 * inserted a fresh entry (key changed).  Summarizing indexes do not
+	 * contribute to either counter.
+	 */
+	PgStat_Counter tuples_hot_indexed_upd_skipped;
+	PgStat_Counter tuples_hot_indexed_upd_matched;
+
 	bool		truncdropped;
 
 	PgStat_Counter delta_live_tuples;
@@ -218,7 +230,7 @@ typedef struct PgStat_TableXactStatus
  * ------------------------------------------------------------
  */
 
-#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBC
+#define PGSTAT_FILE_FORMAT_ID	0x01A5BCBD
 
 typedef struct PgStat_ArchiverStats
 {
@@ -460,7 +472,12 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter tuples_updated;
 	PgStat_Counter tuples_deleted;
 	PgStat_Counter tuples_hot_updated;
+	PgStat_Counter tuples_hot_indexed_updated;
 	PgStat_Counter tuples_newpage_updated;
+
+	/* Per-index HOT-indexed update counters (see PgStat_TableCounts). */
+	PgStat_Counter tuples_hot_indexed_upd_skipped;
+	PgStat_Counter tuples_hot_indexed_upd_matched;
 
 	PgStat_Counter live_tuples;
 	PgStat_Counter dead_tuples;
@@ -752,6 +769,16 @@ extern void pgstat_report_analyze(Relation rel,
 		if (pgstat_should_count_relation(rel))						\
 			(rel)->pgstat_info->counts.tuples_returned += (n);		\
 	} while (0)
+#define pgstat_count_hot_indexed_upd_skipped(rel)						\
+	do {															\
+		if (pgstat_should_count_relation(rel))						\
+			(rel)->pgstat_info->counts.tuples_hot_indexed_upd_skipped++;\
+	} while (0)
+#define pgstat_count_hot_indexed_upd_matched(rel)						\
+	do {															\
+		if (pgstat_should_count_relation(rel))						\
+			(rel)->pgstat_info->counts.tuples_hot_indexed_upd_matched++;\
+	} while (0)
 #define pgstat_count_buffer_read(rel)								\
 	do {															\
 		if (pgstat_should_count_relation(rel))						\
@@ -764,7 +791,7 @@ extern void pgstat_report_analyze(Relation rel,
 	} while (0)
 
 extern void pgstat_count_heap_insert(Relation rel, PgStat_Counter n);
-extern void pgstat_count_heap_update(Relation rel, bool hot, bool newpage);
+extern void pgstat_count_heap_update(Relation rel, bool hot, bool hot_indexed, bool newpage);
 extern void pgstat_count_heap_delete(Relation rel);
 extern void pgstat_count_truncate(Relation rel);
 extern void pgstat_update_heap_dead_tuples(Relation rel, int delta);

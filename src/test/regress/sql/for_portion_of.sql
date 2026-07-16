@@ -590,11 +590,13 @@ SELECT * FROM for_portion_of_test ORDER BY id, valid_at;
 
 -- UPDATE ... RETURNING returns only the updated values
 -- (not the inserted side values, which are added by a separate "statement"):
+CREATE SEQUENCE fpo_returning_seq;
 UPDATE for_portion_of_test
   FOR PORTION OF valid_at FROM '2018-02-01' TO '2018-02-15'
   SET name = 'three^3'
   WHERE id = '[3,4)'
-  RETURNING *;
+  RETURNING *, nextval('fpo_returning_seq') AS seq;
+SELECT last_value FROM fpo_returning_seq;
 
 -- UPDATE ... RETURNING supports NEW and OLD valid_at
 UPDATE for_portion_of_test
@@ -626,10 +628,13 @@ DELETE FROM for_portion_of_test WHERE id = '[99,100)';
 
 -- DELETE ... RETURNING returns the deleted values, regardless of bounds
 -- (not the inserted side values, which are added by a separate "statement"):
+ALTER SEQUENCE fpo_returning_seq RESTART;
 DELETE FROM for_portion_of_test
   FOR PORTION OF valid_at FROM '2018-02-02' TO '2018-02-03'
   WHERE id = '[3,4)'
-  RETURNING *;
+  RETURNING *, nextval('fpo_returning_seq') AS seq;
+SELECT last_value FROM fpo_returning_seq;
+DROP SEQUENCE fpo_returning_seq;
 
 -- DELETE FOR PORTION OF in a PL/pgSQL function
 INSERT INTO for_portion_of_test (id, valid_at, name) VALUES
@@ -1439,7 +1444,8 @@ UPDATE temporal_partitioned FOR PORTION OF valid_at FROM '2000-03-01' TO '2000-0
 UPDATE temporal_partitioned FOR PORTION OF valid_at FROM '2000-06-01' TO '2000-07-01'
   SET name = 'one^2',
       id = '[4,5)'
-  WHERE id = '[1,2)';
+  WHERE id = '[1,2)'
+  RETURNING id, valid_at, name;
 
 -- Move from partition 3 to partition 1
 UPDATE temporal_partitioned FOR PORTION OF valid_at FROM '2000-06-01' TO '2000-07-01'

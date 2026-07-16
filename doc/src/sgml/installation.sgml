@@ -265,7 +265,7 @@
       To build the <application>PL/Tcl</application>
       procedural language, you of course need a <productname>Tcl</productname>
       installation.  The minimum required version is
-      <productname>Tcl</productname> 8.4.
+      <productname>Tcl</productname> 8.6.
      </para>
     </listitem>
 
@@ -1936,8 +1936,7 @@ build-postgresql:
          Tcl interpreter program.  This will be used to
          determine the dependencies for building PL/Tcl.
          If this is not set, the following are probed in this
-         order: <literal>tclsh tcl tclsh8.6 tclsh86 tclsh8.5 tclsh85
-         tclsh8.4 tclsh84</literal>.
+         order: <literal>tclsh tcl tclsh8.6 tclsh86</literal>.
         </para>
        </listitem>
       </varlistentry>

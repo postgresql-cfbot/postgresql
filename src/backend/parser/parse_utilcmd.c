@@ -3123,6 +3123,26 @@ transformIndexStmt(Oid relid, IndexStmt *stmt, const char *queryString)
 	}
 
 	/*
+	 * Likewise take care of any expressions in INCLUDING.  (At this writing,
+	 * those will be rejected later on, but probably someday we'll wish to
+	 * support them.)
+	 */
+	foreach(l, stmt->indexIncludingParams)
+	{
+		IndexElem  *ielem = (IndexElem *) lfirst(l);
+
+		if (ielem->expr)
+		{
+			/* Do parse transformation of the expression */
+			ielem->expr = transformExpr(pstate, ielem->expr,
+										EXPR_KIND_INDEX_EXPRESSION);
+
+			/* We have to fix its collations too */
+			assign_expr_collations(pstate, ielem->expr);
+		}
+	}
+
+	/*
 	 * Check that only the base rel is mentioned.  (This should be dead code
 	 * now that add_missing_from is history.)
 	 */

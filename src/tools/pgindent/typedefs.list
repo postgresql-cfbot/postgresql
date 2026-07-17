@@ -2327,6 +2327,7 @@ PgStatShared_Function
 PgStatShared_HashEntry
 PgStatShared_IO
 PgStatShared_Lock
+PgStatShared_LockBackendEntry
 PgStatShared_PerBackendEntry
 PgStatShared_Relation
 PgStatShared_ReplSlot

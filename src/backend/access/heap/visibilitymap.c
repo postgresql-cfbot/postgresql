@@ -154,9 +154,7 @@ visibilitymap_clear(RelFileLocator rlocator, BlockNumber heapBlk,
 {
 	int			mapByte = HEAPBLK_TO_MAPBYTE(heapBlk);
 	int			mapOffset = HEAPBLK_TO_OFFSET(heapBlk);
-#ifdef USE_ASSERT_CHECKING
 	BlockNumber mapBlock = HEAPBLK_TO_MAPBLOCK(heapBlk);
-#endif
 	uint8		mask = flags << mapOffset;
 	Page		page;
 	char	   *map;
@@ -172,7 +170,9 @@ visibilitymap_clear(RelFileLocator rlocator, BlockNumber heapBlk,
 		 heapBlk);
 #endif
 
-	Assert(BufferIsValid(vmbuf) && BufferGetBlockNumber(vmbuf) == mapBlock);
+	if (!BufferIsValid(vmbuf) || BufferGetBlockNumber(vmbuf) != mapBlock)
+		elog(ERROR, "wrong buffer passed to visibilitymap_clear");
+
 	Assert(BufferIsLockedByMeInMode(vmbuf, BUFFER_LOCK_EXCLUSIVE));
 
 	page = BufferGetPage(vmbuf);

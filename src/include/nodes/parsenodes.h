@@ -220,7 +220,6 @@ typedef struct Query
 
 	List	   *groupClause;	/* a list of SortGroupClause's */
 	bool		groupDistinct;	/* was GROUP BY DISTINCT used? */
-	bool		groupByAll;		/* was GROUP BY ALL used? */
 
 	List	   *groupingSets;	/* a list of GroupingSet's if present */
 
@@ -2341,7 +2340,6 @@ typedef struct SelectStmt
 	Node	   *whereClause;	/* WHERE qualification */
 	List	   *groupClause;	/* GROUP BY clauses */
 	bool		groupDistinct;	/* Is this GROUP BY DISTINCT? */
-	bool		groupByAll;		/* Is this GROUP BY ALL? */
 	Node	   *havingClause;	/* HAVING conditional-expression */
 	List	   *windowClause;	/* WINDOW window_name AS (...), ... */
 

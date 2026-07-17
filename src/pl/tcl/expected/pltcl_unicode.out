@@ -6,7 +6,7 @@
 -- those encodings.  However, testing with plain ASCII data would be rather
 -- useless, so we must live with that.
 --
-SELECT getdatabaseencoding() IN ('EUC_CN', 'EUC_JP', 'EUC_KR', 'EUC_TW')
+SELECT pg_database_encoding() IN ('EUC_CN', 'EUC_JP', 'EUC_KR', 'EUC_TW')
   AS skip_test \gset
 \if :skip_test
 \quit

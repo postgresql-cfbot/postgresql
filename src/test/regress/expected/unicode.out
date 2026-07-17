@@ -1,4 +1,4 @@
-SELECT getdatabaseencoding() <> 'UTF8' AS skip_test \gset
+SELECT pg_database_encoding() <> 'UTF8' AS skip_test \gset
 \if :skip_test
 \quit
 \endif

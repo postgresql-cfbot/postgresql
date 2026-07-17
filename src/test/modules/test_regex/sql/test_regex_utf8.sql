@@ -3,7 +3,7 @@
  * because other encodings don't support all the characters used.
  */
 
-SELECT getdatabaseencoding() <> 'UTF8'
+SELECT pg_database_encoding() <> 'UTF8'
        AS skip_test \gset
 \if :skip_test
 \quit

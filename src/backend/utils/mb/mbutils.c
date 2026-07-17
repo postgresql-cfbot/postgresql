@@ -1398,7 +1398,7 @@ GetDatabaseEncodingName(void)
 }
 
 Datum
-getdatabaseencoding(PG_FUNCTION_ARGS)
+pg_database_encoding(PG_FUNCTION_ARGS)
 {
 	return DirectFunctionCall1(namein, CStringGetDatum(DatabaseEncoding->name));
 }

@@ -9,7 +9,7 @@
  *
  * Also disable for Windows.  It fails similarly, at least in some locales.
  */
-SELECT getdatabaseencoding() <> 'UTF8' OR
+SELECT pg_database_encoding() <> 'UTF8' OR
        version() ~ '(Visual C\+\+|mingw32|windows)' OR
        (SELECT (datlocprovider = 'c' AND datctype = 'C') OR datlocprovider = 'i'
         FROM pg_database

@@ -5231,7 +5231,10 @@ listCollations(const char *pattern, bool verbose, bool showSystem)
 	 * unusable collations, so you will need to hack name pattern processing
 	 * somehow to avoid inconsistent behavior.
 	 */
-	appendPQExpBufferStr(&buf, "      AND c.collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding()))\n");
+	if (pset.sversion < 200000)
+		appendPQExpBufferStr(&buf, "      AND c.collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding()))\n");
+	else
+		appendPQExpBufferStr(&buf, "      AND c.collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.pg_database_encoding()))\n");
 
 	if (!validateSQLNamePattern(&buf, pattern, true, false,
 								"n.nspname", "c.collname", NULL,

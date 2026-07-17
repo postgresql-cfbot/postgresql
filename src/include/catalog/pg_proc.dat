@@ -3928,8 +3928,8 @@
 
 # return database encoding name
 { oid => '1039', descr => 'encoding name of current database',
-  proname => 'getdatabaseencoding', provolatile => 's', prorettype => 'name',
-  proargtypes => '', prosrc => 'getdatabaseencoding' },
+  proname => 'pg_database_encoding', provolatile => 's', prorettype => 'name',
+  proargtypes => '', prosrc => 'pg_database_encoding' },
 
 # return client encoding name i.e. session encoding
 { oid => '810', descr => 'encoding name of current database',

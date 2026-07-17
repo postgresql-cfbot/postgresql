@@ -5,7 +5,7 @@
  * of this, some test are lost from UTF-8 version, such as Turkish
  * dotted and undotted 'i'.
  */
-SELECT getdatabaseencoding() <> 'WIN1252' OR
+SELECT pg_database_encoding() <> 'WIN1252' OR
        (SELECT count(*) FROM pg_collation WHERE collname IN ('de_DE', 'en_US', 'sv_SE') AND collencoding = pg_char_to_encoding('WIN1252')) <> 3 OR
        (version() !~ 'Visual C\+\+' AND version() !~ 'mingw32' AND version() !~ 'windows')
        AS skip_test \gset

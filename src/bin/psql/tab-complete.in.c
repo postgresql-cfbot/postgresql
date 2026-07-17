@@ -972,7 +972,7 @@ static const SchemaQuery Query_for_list_of_statistics = {
 
 static const SchemaQuery Query_for_list_of_collations = {
 	.catname = "pg_catalog.pg_collation c",
-	.selcondition = "c.collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.getdatabaseencoding()))",
+	.selcondition = "c.collencoding IN (-1, pg_catalog.pg_char_to_encoding(pg_catalog.current_setting('server_encoding')))",
 	.viscondition = "pg_catalog.pg_collation_is_visible(c.oid)",
 	.namespace = "c.collnamespace",
 	.result = "c.collname",

@@ -128,6 +128,8 @@ AnlExprData
 AnlIndexData
 AnyArrayType
 Append
+AppendBase
+AppendBaseState
 AppendPath
 AppendPathInput
 AppendRelInfo

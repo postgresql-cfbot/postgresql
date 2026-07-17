@@ -1157,15 +1157,14 @@ getIdentitySequence(Relation rel, AttrNumber attnum, bool missing_ok)
 	 */
 	if (RelationGetForm(rel)->relispartition)
 	{
-		List	   *ancestors = get_partition_ancestors(relid);
+		Oid			root_relid = get_partition_root(relid);
 		const char *attname = get_attname(relid, attnum, false);
 
-		relid = llast_oid(ancestors);
+		relid = root_relid;
 		attnum = get_attnum(relid, attname);
 		if (attnum == InvalidAttrNumber)
 			elog(ERROR, "cache lookup failed for attribute \"%s\" of relation %u",
 				 attname, relid);
-		list_free(ancestors);
 	}
 
 	seqlist = getOwnedSequences_internal(relid, attnum, DEPENDENCY_INTERNAL);

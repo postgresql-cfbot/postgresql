@@ -119,6 +119,35 @@ get_partition_parent_worker(Relation inhRel, Oid relid, bool *detach_pending)
 }
 
 /*
+ * get_partition_root
+ *		Obtain root partitioned table OID of the specified relation
+ *
+ * If there are no ancestors, return the input relid.
+ *
+ * Note: This should only be called when it is known that the relation is a
+ * partition (see function get_partition_ancestors).
+ */
+Oid
+get_partition_root(Oid relid)
+{
+	Oid root_relid;
+	List *ancestors;
+
+	/* Fetch the list of ancestors */
+	ancestors = get_partition_ancestors(relid);
+
+	/* If input relid is already top-most parent, just return it */
+	if (ancestors == NIL)
+		return relid;
+
+	root_relid = llast_oid(ancestors);
+	list_free(ancestors);
+
+	Assert(OidIsValid(root_relid));
+	return root_relid;
+}
+
+/*
  * get_partition_ancestors
  *		Obtain ancestors of given relation
  *

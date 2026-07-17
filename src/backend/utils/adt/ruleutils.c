@@ -40,6 +40,7 @@
 #include "catalog/pg_propgraph_label_property.h"
 #include "catalog/pg_propgraph_property.h"
 #include "catalog/pg_statistic_ext.h"
+#include "catalog/pg_subscription.h"
 #include "catalog/pg_trigger.h"
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
@@ -62,6 +63,7 @@
 #include "rewrite/rewriteHandler.h"
 #include "rewrite/rewriteManip.h"
 #include "rewrite/rewriteSupport.h"
+#include "utils/acl.h"
 #include "utils/array.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
@@ -559,6 +561,8 @@ static void get_json_table_nested_columns(TableFunc *tf, JsonTablePlan *plan,
 										  deparse_context *context,
 										  bool showimplicit,
 										  bool needcomma);
+static char *pg_get_subscription_string(const Oid suboid);
+static List *text_array_to_string_list(ArrayType *text_array);
 
 #define only_marker(rte)  ((rte)->inh ? "" : "ONLY ")
 
@@ -14491,4 +14495,239 @@ get_range_partbound_string(List *bound_datums)
 	appendStringInfoChar(&buf, ')');
 
 	return buf.data;
+}
+
+/*
+ * pg_get_subscription_string
+ *		Build CREATE SUBSCRIPTION statement for a subscription from its OID.
+ *
+ * Helper for pg_get_subscription_ddl_by_name() and
+ * pg_get_subscription_ddl_by_oid().
+ */
+static char *
+pg_get_subscription_string(const Oid suboid)
+{
+	Form_pg_subscription subForm;
+	StringInfoData pubnames,
+				   buf;
+	HeapTuple	tup;
+	char	   *conninfo;
+	List	   *publist;
+	Datum		datum;
+	bool		isnull;
+
+	/*
+	 * To prevent unprivileged users from initiating unauthorized network
+	 * connections, dumping subscription creation is restricted.  A user must
+	 * be specifically authorized (via the appropriate role privilege) to
+	 * create subscriptions and/or to read all data.
+	 */
+	if (!(has_privs_of_role(GetUserId(), ROLE_PG_CREATE_SUBSCRIPTION) ||
+		has_privs_of_role(GetUserId(), ROLE_PG_READ_ALL_DATA)))
+		ereport(ERROR,
+				(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+				 errmsg("permission denied to get the create subscription ddl"),
+				 errdetail("Only roles with privileges of the \"%s\" and/or \"%s\" role may view subscription DDL.",
+						   "pg_create_subscription", "pg_read_all_data")));
+
+	/* Look up the subscription in pg_subscription */
+	tup = SearchSysCache1(SUBSCRIPTIONOID, ObjectIdGetDatum(suboid));
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_OBJECT),
+				 errmsg("subscription with oid %d does not exist", suboid)));
+
+	/* Get subscription's details from its tuple */
+	subForm = (Form_pg_subscription) GETSTRUCT(tup);
+
+	initStringInfo(&buf);
+
+	/* Build the CREATE SUBSCRIPTION statement */
+	appendStringInfo(&buf, "CREATE SUBSCRIPTION %s ",
+					 quote_identifier(NameStr(subForm->subname)));
+
+	/* Get connection information */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subconninfo);
+	conninfo = TextDatumGetCString(datum);
+
+	/* Append connection info to the CREATE SUBSCRIPTION statement */
+	appendStringInfo(&buf, "CONNECTION \'%s\'", conninfo);
+
+	/* Build list of quoted publications and append them to query */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subpublications);
+	publist = text_array_to_string_list(DatumGetArrayTypeP(datum));
+	initStringInfo(&pubnames);
+	GetPublicationsStr(publist, &pubnames, false);
+	appendStringInfo(&buf, " PUBLICATION %s", pubnames.data);
+
+	/*
+	 * Add options using WITH clause.  The 'connect' option value given at the
+	 * time of subscription creation is not available in the catalog.  When
+	 * creating a subscription, the remote host is not reachable or in an
+	 * unclear state, in that case, the subscription can be created using
+	 * 'connect = false' option.  This is what pg_dump uses.
+	 *
+	 * The status or value of the options 'create_slot' and 'copy_data' not
+	 * available in the catalog table.  We can use default values i.e. TRUE
+	 * for both.  This is what pg_dump uses.
+	 */
+	appendStringInfoString(&buf, " WITH (connect=false");
+
+
+	/* Get slotname */
+	datum = SysCacheGetAttr(SUBSCRIPTIONOID, tup,
+							Anum_pg_subscription_subslotname,
+							&isnull);
+	if (!isnull)
+		appendStringInfo(&buf, ", slot_name=%s",
+						 quote_literal_cstr(NameStr(*DatumGetName(datum))));
+	else
+	{
+		appendStringInfoString(&buf, ", slot_name=none");
+		/* Setting slot_name to none must set create_slot to false */
+		appendStringInfoString(&buf, ", create_slot=false");
+	}
+
+	/* Get enabled option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subenabled);
+	/* Setting 'slot_name' to none must set 'enabled' to false as well */
+	appendStringInfo(&buf, ", enabled=%s",
+					 (DatumGetBool(datum) && !isnull) ? "true" : "false");
+
+	/* Get binary option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subbinary);
+	appendStringInfo(&buf, ", binary=%s",
+					 DatumGetBool(datum) ? "true" : "false");
+
+	/* Get streaming option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_substream);
+	if (DatumGetChar(datum) == LOGICALREP_STREAM_ON)
+		appendStringInfoString(&buf, ", streaming=on");
+	else if (DatumGetChar(datum) == LOGICALREP_STREAM_OFF)
+		appendStringInfoString(&buf, ", streaming=off");
+	else
+		appendStringInfoString(&buf, ", streaming=parallel");
+
+	/* Get sync commit option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subsynccommit);
+	appendStringInfo(&buf, ", synchronous_commit=%s",
+					 TextDatumGetCString(datum));
+
+	/* Get two-phase commit option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subtwophasestate);
+	appendStringInfo(&buf, ", two_phase=%s",
+					 DatumGetChar(datum) != LOGICALREP_TWOPHASE_STATE_DISABLED ? "true" : "false");
+
+	/* Get disable on error option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subdisableonerr);
+	appendStringInfo(&buf, ", disable_on_error=%s",
+					 DatumGetBool(datum) ? "true" : "false");
+
+	/* Get password required option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subpasswordrequired);
+	appendStringInfo(&buf, ", password_required=%s",
+					 DatumGetBool(datum) ? "true" : "false");
+
+	/* Get run as owner option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subrunasowner);
+	appendStringInfo(&buf, ", run_as_owner=%s",
+					 DatumGetBool(datum) ? "true" : "false");
+
+	/* Get origin */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_suborigin);
+	appendStringInfo(&buf, ", origin=%s", TextDatumGetCString(datum));
+
+	/* Get failover option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subfailover);
+	appendStringInfo(&buf, ", failover=%s",
+					 DatumGetBool(datum) ? "true" : "false");
+
+	/* Get retain dead tuples option */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_subretaindeadtuples);
+	appendStringInfo(&buf, ", retain_dead_tuples=%s",
+					 DatumGetBool(datum) ? "true" : "false");
+
+	/* Get max retention duration */
+	datum = SysCacheGetAttrNotNull(SUBSCRIPTIONOID, tup,
+								   Anum_pg_subscription_submaxretention);
+	appendStringInfo(&buf, ", max_retention_duration=%d",
+					 DatumGetInt32(datum));
+
+	appendStringInfoString(&buf, ");");
+
+	ReleaseSysCache(tup);
+
+	return buf.data;
+}
+
+/*
+ * pg_get_subscription_ddl_by_name
+ *		Get CREATE SUBSCRIPTION statement for a subscription.
+ *
+ * This takes name as parameter for pg_get_subscription_ddl().
+ */
+Datum
+pg_get_subscription_ddl_by_name(PG_FUNCTION_ARGS)
+{
+	Name		subname = PG_GETARG_NAME(0);
+	Oid			suboid;
+	char	   *ddl_stmt;
+
+	/* Get the OID of the subscription from its name */
+	suboid = get_subscription_oid(NameStr(*subname), false);
+
+	/* Get the CREATE SUBSCRIPTION DDL statement from its OID */
+	ddl_stmt = pg_get_subscription_string(suboid);
+
+	PG_RETURN_TEXT_P(string_to_text(ddl_stmt));
+}
+
+/*
+ * pg_get_subscription_ddl_by_oid
+ *		Get CREATE SUBSCRIPTION statement for a subscription.
+ *
+ * This takes oid as parameter for pg_get_subscription_ddl().
+ */
+Datum
+pg_get_subscription_ddl_by_oid(PG_FUNCTION_ARGS)
+{
+	Oid			suboid = PG_GETARG_OID(0);
+	char	   *ddl_stmt;
+
+	/* Get the CREATE SUBSCRIPTION DDL statement from its OID */
+	ddl_stmt = pg_get_subscription_string(suboid);
+
+	PG_RETURN_TEXT_P(string_to_text(ddl_stmt));
+}
+
+/*
+ * text_array_to_string_list
+ *		Convert text array to list of strings.
+ */
+static List *
+text_array_to_string_list(ArrayType *text_array)
+{
+	List	   *result = NIL;
+	Datum	   *elems;
+	int			nelems;
+
+	deconstruct_array_builtin(text_array, TEXTOID, &elems, NULL, &nelems);
+
+	for (int i = 0; i < nelems; i++)
+		result = lappend(result, makeString(TextDatumGetCString(elems[i])));
+
+	return result;
 }

@@ -713,3 +713,71 @@ DROP ROLE regress_subscription_user;
 DROP ROLE regress_subscription_user2;
 DROP ROLE regress_subscription_user3;
 DROP ROLE regress_subscription_user_dummy;
+
+--
+-- Test pg_get_subscription_ddl() by creating subscriptions with various
+-- configurations and checking the DDL.
+--
+CREATE ROLE regress_createsub_role LOGIN;
+CREATE ROLE regress_readalldata_role LOGIN;
+
+-- Check the pg_get_subscription_ddl output for a NULL and empty input
+SELECT pg_get_subscription_ddl('');
+SELECT pg_get_subscription_ddl(NULL);
+
+-- Suppress WARNINGS when creating subscription
+SET client_min_messages = 'error';
+-- Create subscription with minimal options
+CREATE SUBSCRIPTION regress_testsub1 CONNECTION 'dbname=db_doesnotexist'
+  PUBLICATION testpub1 WITH (connect=false);
+RESET client_min_messages;
+
+-- Check that the subscription DDL is correctly created
+SELECT pg_get_subscription_ddl('regress_testsub1');
+
+-- Create subscription with more options
+SET client_min_messages = 'error';
+CREATE SUBSCRIPTION "regress_TestSub2" CONNECTION 'host=unknown user=dvd password=pass123'
+  PUBLICATION "testpub2", "TestPub3" WITH (connect=false, slot_name='slot1',
+  enabled=off);
+RESET client_min_messages;
+SELECT pg_get_subscription_ddl('regress_TestSub2');
+
+-- Create subscription with all options
+SET client_min_messages = 'error';
+CREATE SUBSCRIPTION regress_testsub3 CONNECTION 'host=unknown user=dvd password=pass12'
+  PUBLICATION testpub4 WITH (connect=false, slot_name=none, enabled=false,
+  create_slot=false, copy_data=false, binary=true, streaming=off,
+  synchronous_commit=local, two_phase=true, disable_on_error=true,
+  password_required=false, run_as_owner=true, origin=none, failover=true,
+  retain_dead_tuples=false, max_retention_duration=100);
+RESET client_min_messages;
+SELECT pg_get_subscription_ddl('regress_testsub3');
+
+-- Non-superusers without pg_create_subscription and/or pg_read_all_data
+-- permissions cannot retrieve the DDL.
+SET SESSION AUTHORIZATION 'regress_createsub_role';
+SELECT pg_get_subscription_ddl('regress_TestSub2');
+RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION 'regress_readalldata_role';
+SELECT pg_get_subscription_ddl('regress_TestSub2');
+RESET SESSION AUTHORIZATION;
+-- Administrators can change who can access this function
+GRANT pg_create_subscription TO regress_createsub_role;
+GRANT pg_read_all_data TO regress_readalldata_role;
+SET SESSION AUTHORIZATION 'regress_createsub_role';
+SELECT pg_get_subscription_ddl('regress_TestSub2');
+RESET SESSION AUTHORIZATION;
+SET SESSION AUTHORIZATION 'regress_readalldata_role';
+SELECT pg_get_subscription_ddl('regress_TestSub2');
+
+RESET SESSION AUTHORIZATION;
+REVOKE pg_create_subscription FROM regress_createsub_role;
+REVOKE pg_read_all_data FROM regress_readalldata_role;
+ALTER SUBSCRIPTION regress_testsub1 SET (slot_name=NONE);
+DROP SUBSCRIPTION regress_testsub1;
+ALTER SUBSCRIPTION "regress_TestSub2" SET (slot_name=NONE);
+DROP SUBSCRIPTION "regress_TestSub2";
+DROP SUBSCRIPTION regress_testsub3;
+DROP ROLE regress_createsub_role;
+DROP ROLE regress_readalldata_role;

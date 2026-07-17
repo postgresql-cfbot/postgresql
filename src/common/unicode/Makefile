@@ -21,7 +21,7 @@ CPPFLAGS += $(ICU_CFLAGS)
 # By default, do nothing.
 all:
 
-update-unicode: unicode_case_table.h unicode_category_table.h unicode_east_asian_fw_table.h unicode_nonspacing_table.h unicode_norm_hashfunc.h unicode_norm_table.h unicode_normprops_table.h unicode_version.h
+update-unicode: unicode_case_table.h unicode_category_table.h unicode_east_asian_fw_table.h unicode_nonspacing_table.h unicode_norm_hashfunc.h unicode_limits.h unicode_norm_table.h unicode_normprops_table.h unicode_version.h
 	mv $^ $(top_srcdir)/src/include/common/
 	$(MAKE) case-check
 	$(MAKE) category-check
@@ -35,6 +35,8 @@ CompositionExclusions.txt CaseFolding.txt DerivedCoreProperties.txt DerivedNorma
 
 unicode_version.h: generate-unicode_version.pl
 	$(PERL) $< --version $(UNICODE_VERSION)
+
+unicode_limits.h: unicode_case_table.h
 
 unicode_case_table.h: generate-unicode_case_table.pl CaseFolding.txt SpecialCasing.txt UnicodeData.txt
 	$(PERL) $<
@@ -91,4 +93,4 @@ clean:
 	rm -f $(OBJS) case_test case_test.o category_test category_test.o norm_test norm_test.o
 
 distclean: clean
-	rm -f CompositionExclusions.txt CaseFolding.txt DerivedCoreProperties.txt DerivedNormalizationProps.txt EastAsianWidth.txt NormalizationTest.txt PropList.txt SpecialCasing.txt UnicodeData.txt norm_test_table.h unicode_case_table.h unicode_category_table.h unicode_norm_table.h
+	rm -f CompositionExclusions.txt CaseFolding.txt DerivedCoreProperties.txt DerivedNormalizationProps.txt EastAsianWidth.txt NormalizationTest.txt PropList.txt SpecialCasing.txt UnicodeData.txt norm_test_table.h unicode_case_table.h unicode_category_table.h unicode_limits.h unicode_norm_table.h

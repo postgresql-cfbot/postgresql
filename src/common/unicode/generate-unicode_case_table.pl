@@ -4,13 +4,14 @@
 # or locale-specific mappings.
 #
 # Input: CaseFolding.txt SpecialCasing.txt UnicodeData.txt
-# Output: unicode_case_table.h
+# Output: unicode_case_table.h unicode_limits.h
 #
 # Copyright (c) 2000-2026, PostgreSQL Global Development Group
 
 use strict;
 use warnings FATAL => 'all';
 use Getopt::Long;
+use Encode qw(encode_utf8);
 
 use FindBin;
 use lib "$FindBin::RealBin/../../tools/";
@@ -19,11 +20,22 @@ my $output_path = '.';
 
 GetOptions('outdir:s' => \$output_path);
 
+my $output_limits_file = "$output_path/unicode_limits.h";
 my $output_table_file = "$output_path/unicode_case_table.h";
 
+# The following are computed during table generation:
+
 # The maximum number of codepoints that can result from case mapping
-# of a single character. See Unicode section 5.18 "Case Mappings".
-my $MAX_CASE_EXPANSION = 3;
+# of a single character.
+my $UNICODE_MAX_CASEMAP_CODEPOINTS = 0;
+
+# The maximum expansion factor (in bytes) when case mapping a UTF8
+# string.
+my $UTF8_MAX_CASEMAP_EXPANSION = 0;
+
+# The maximum number of UTF8 bytes that can result from case mapping
+# a single code point.
+my $UTF8_CASEMAP_BUFSZ = 0;
 
 my $FH;
 
@@ -44,15 +56,22 @@ while (my $line = <$FH>)
 	die "Simple_Titlecase $code out of range" if $simple_titlecase > 0x10FFFF;
 	die "Simple_Uppercase $code out of range" if $simple_uppercase > 0x10FFFF;
 
-	if ($simple_lowercase || $simple_titlecase || $simple_uppercase)
-	{
-		$simple{$code} = {
-			Simple_Lowercase => ($simple_lowercase || $code),
-			Simple_Titlecase => ($simple_titlecase || $code),
-			Simple_Uppercase => ($simple_uppercase || $code),
-			Simple_Foldcase => $code,
-		};
-	}
+	next if !$simple_lowercase && !$simple_titlecase && !$simple_uppercase;
+
+	$simple_lowercase ||= $code;
+	$simple_titlecase ||= $code;
+	$simple_uppercase ||= $code;
+
+	update_limits('uppercase', $code, ($simple_uppercase));
+	update_limits('lowercase', $code, ($simple_lowercase));
+	update_limits('titlecase', $code, ($simple_titlecase));
+
+	$simple{$code} = {
+		Simple_Lowercase => $simple_lowercase,
+		Simple_Titlecase => $simple_titlecase,
+		Simple_Uppercase => $simple_uppercase,
+		Simple_Foldcase => $code,
+	};
 }
 close $FH;
 
@@ -105,19 +124,9 @@ while (my $line = <$FH>)
 	push @upper, $code if (scalar @upper == 0);
 	push @fold, $code;
 
-	# none should map to more than 3 codepoints
-	die "lowercase expansion for 0x$elts[0] exceeds maximum: '$elts[1]'"
-	  if (scalar @lower) > $MAX_CASE_EXPANSION;
-	die "titlecase expansion for 0x$elts[0] exceeds maximum: '$elts[2]'"
-	  if (scalar @title) > $MAX_CASE_EXPANSION;
-	die "uppercase expansion for 0x$elts[0] exceeds maximum: '$elts[3]'"
-	  if (scalar @upper) > $MAX_CASE_EXPANSION;
-
-	# pad arrays to a fixed length of 3
-	while (scalar @upper < $MAX_CASE_EXPANSION) { push @upper, 0x000000 }
-	while (scalar @lower < $MAX_CASE_EXPANSION) { push @lower, 0x000000 }
-	while (scalar @title < $MAX_CASE_EXPANSION) { push @title, 0x000000 }
-	while (scalar @fold < $MAX_CASE_EXPANSION)  { push @fold, 0x000000 }
+	update_limits('lowercase', $code, @lower);
+	update_limits('titlecase', $code, @title);
+	update_limits('uppercase', $code, @upper);
 
 	# Characters with special mappings may not have simple mappings;
 	# ensure that an entry exists.
@@ -174,6 +183,8 @@ while (my $line = <$FH>)
 	die "unsupported status type '$status'"
 	  if $status ne 'S' && $status ne 'C' && $status ne 'F';
 
+	update_limits('casefold', $code, @fold);
+
 	# initialize simple case mappings if they don't exist
 	$simple{$code} ||= {
 		Simple_Lowercase => $code,
@@ -197,26 +208,12 @@ while (my $line = <$FH>)
 
 	if ($status eq 'F' || ($status eq 'C' && defined $special{$code}))
 	{
-		while (scalar @fold < $MAX_CASE_EXPANSION) { push @fold, 0x000000 }
-
 		#initialize special case mappings if they don't exist
 		if (!defined $special{$code})
 		{
 			my @lower = ($simple{$code}{Simple_Lowercase});
 			my @title = ($simple{$code}{Simple_Titlecase});
 			my @upper = ($simple{$code}{Simple_Uppercase});
-			while (scalar @lower < $MAX_CASE_EXPANSION)
-			{
-				push @lower, 0x000000;
-			}
-			while (scalar @title < $MAX_CASE_EXPANSION)
-			{
-				push @title, 0x000000;
-			}
-			while (scalar @upper < $MAX_CASE_EXPANSION)
-			{
-				push @upper, 0x000000;
-			}
 			$special{$code} = {
 				Lowercase => \@lower,
 				Titlecase => \@title,
@@ -245,6 +242,53 @@ die
   "special case map contains $num_special entries which cannot be represented in uint8"
   if ($num_special > 256);
 
+open my $LIMITS, '>', $output_limits_file
+  or die "Could not open output file $output_limits_file: $!\n";
+
+print $LIMITS <<"EOS";
+/*-------------------------------------------------------------------------
+ *
+ * unicode_limits.h
+ *	  Useful limits calculated from Unicode data.
+ *
+ * Portions Copyright (c) 1996-2026, PostgreSQL Global Development Group
+ * Portions Copyright (c) 1994, Regents of the University of California
+ *
+ * src/include/common/unicode_limits.h
+ *
+ *-------------------------------------------------------------------------
+ */
+
+#ifndef UNICODE_LIMITS_H
+#define UNICODE_LIMITS_H
+
+/*
+ * File auto-generated by src/common/unicode/generate-unicode_case_table.pl,
+ * do not edit.
+ */
+
+/*
+ * The maximum number of codepoints that can result from case mapping
+ * of a single code point. See Unicode section 5.18 "Case Mappings".
+ */
+#define UNICODE_MAX_CASEMAP_CODEPOINTS $UNICODE_MAX_CASEMAP_CODEPOINTS
+
+/*
+ * The maximum expansion factor of a UTF8 string due to case mapping.
+ */
+#define UTF8_MAX_CASEMAP_EXPANSION $UTF8_MAX_CASEMAP_EXPANSION
+
+/*
+ * The maximum number of UTF8 bytes needed to store the result of case
+ * mapping a single code point.
+ */
+#define UTF8_CASEMAP_BUFSZ $UTF8_CASEMAP_BUFSZ
+
+#endif
+EOS
+
+close $LIMITS;
+
 # Start writing out the output files
 open my $OT, '>', $output_table_file
   or die "Could not open output file $output_table_file: $!\n";
@@ -270,12 +314,7 @@ print $OT <<"EOS";
  */
 
 #include "common/unicode_case.h"
-
-/*
- * The maximum number of codepoints that can result from case mapping
- * of a single character. See Unicode section 5.18 "Case Mappings".
- */
-#define MAX_CASE_EXPANSION 3
+#include "common/unicode_limits.h"
 
 /*
  * Case mapping condition flags. For now, only Final_Sigma is supported.
@@ -296,7 +335,7 @@ typedef enum
 typedef struct
 {
 	int16		conditions;
-	char32_t	map[NCaseKind][MAX_CASE_EXPANSION];
+	char32_t	map[NCaseKind][UNICODE_MAX_CASEMAP_CODEPOINTS];
 } pg_special_case;
 
 /*
@@ -310,18 +349,26 @@ EOS
 
 foreach my $code (sort { $a <=> $b } (keys %special))
 {
-	die if scalar @{ $special{$code}{Lowercase} } != $MAX_CASE_EXPANSION;
-	die if scalar @{ $special{$code}{Titlecase} } != $MAX_CASE_EXPANSION;
-	die if scalar @{ $special{$code}{Uppercase} } != $MAX_CASE_EXPANSION;
-	die if scalar @{ $special{$code}{Foldcase} } != $MAX_CASE_EXPANSION;
-	my $lower = join ", ",
-	  (map { sprintf "0x%06x", $_ } @{ $special{$code}{Lowercase} });
-	my $title = join ", ",
-	  (map { sprintf "0x%06x", $_ } @{ $special{$code}{Titlecase} });
-	my $upper = join ", ",
-	  (map { sprintf "0x%06x", $_ } @{ $special{$code}{Uppercase} });
-	my $fold = join ", ",
-	  (map { sprintf "0x%06x", $_ } @{ $special{$code}{Foldcase} });
+	my @lower = @{ $special{$code}{Lowercase} };
+	my @title = @{ $special{$code}{Titlecase} };
+	my @upper = @{ $special{$code}{Uppercase} };
+	my @fold = @{ $special{$code}{Foldcase} };
+
+	# pad to fixed length
+	push @lower, 0x000000
+	  while (scalar @lower < $UNICODE_MAX_CASEMAP_CODEPOINTS);
+	push @title, 0x000000
+	  while (scalar @title < $UNICODE_MAX_CASEMAP_CODEPOINTS);
+	push @upper, 0x000000
+	  while (scalar @upper < $UNICODE_MAX_CASEMAP_CODEPOINTS);
+	push @fold, 0x000000
+	  while (scalar @fold < $UNICODE_MAX_CASEMAP_CODEPOINTS);
+
+	my $lower = join ", ", (map { sprintf "0x%06x", $_ } @lower);
+	my $title = join ", ", (map { sprintf "0x%06x", $_ } @title);
+	my $upper = join ", ", (map { sprintf "0x%06x", $_ } @upper);
+	my $fold = join ", ", (map { sprintf "0x%06x", $_ } @fold);
+
 	printf $OT "\t{%s, ", $special{$code}{Conditions};
 	printf $OT
 	  "{[CaseLower] = {%s},[CaseTitle] = {%s},[CaseUpper] = {%s},[CaseFold] = {%s}}},\n",
@@ -521,6 +568,37 @@ print $OT <<"EOS";
 EOS
 
 close $OT;
+
+# calculate, check, and update limits
+sub update_limits
+{
+	my ($casekind, $codepoint, @mapping) = @_;
+	my $n = scalar @mapping;
+
+	# See Unicode section 5.18 "Case Mappings"
+	my $mapping_str = join ' ', map { sprintf "0x%06x", $_ } @mapping;
+	die sprintf("%s expansion for 0x%06x exceeds maximum: %s",
+		$casekind, $codepoint, $mapping_str)
+	  if $n > 3;
+
+	$UNICODE_MAX_CASEMAP_CODEPOINTS = $n
+	  if $n > $UNICODE_MAX_CASEMAP_CODEPOINTS;
+
+	my $utf8len1 = length(encode_utf8(chr $codepoint));
+	my $utf8len2 = length(encode_utf8(join '', map { chr } @mapping));
+	my $factor = int(($utf8len1 + $utf8len2 - 1) / $utf8len1);
+	$UTF8_MAX_CASEMAP_EXPANSION = $factor
+	  if $factor > $UTF8_MAX_CASEMAP_EXPANSION;
+
+	# Not guaranteed by Unicode standard. If larger than expected,
+	# then evaluate C type overflow risks before using the generated
+	# table.
+	die "UTF8 casemap expansion is greater than 3"
+	  if $UTF8_MAX_CASEMAP_EXPANSION > 3;
+
+	$UTF8_CASEMAP_BUFSZ = $utf8len2
+	  if $utf8len2 > $UTF8_CASEMAP_BUFSZ;
+}
 
 # The function generates C code with a series of nested if-else conditions
 # to search for the matching interval.

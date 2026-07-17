@@ -28,7 +28,7 @@ update_unicode_common_targets = []
 update_unicode_common_targets += \
   custom_target('unicode_case_table.h',
     input: [unicode_data['CaseFolding.txt'], unicode_data['SpecialCasing.txt'], unicode_data['UnicodeData.txt']],
-    output: ['unicode_case_table.h'],
+    output: ['unicode_case_table.h', 'unicode_limits.h'],
     command: [
       perl, files('generate-unicode_case_table.pl'),
       '--outdir', '@OUTDIR@', '@INPUT@'],

@@ -18,12 +18,7 @@
  */
 
 #include "common/unicode_case.h"
-
-/*
- * The maximum number of codepoints that can result from case mapping
- * of a single character. See Unicode section 5.18 "Case Mappings".
- */
-#define MAX_CASE_EXPANSION 3
+#include "common/unicode_limits.h"
 
 /*
  * Case mapping condition flags. For now, only Final_Sigma is supported.
@@ -44,7 +39,7 @@ typedef enum
 typedef struct
 {
 	int16		conditions;
-	char32_t	map[NCaseKind][MAX_CASE_EXPANSION];
+	char32_t	map[NCaseKind][UNICODE_MAX_CASEMAP_CODEPOINTS];
 } pg_special_case;
 
 /*

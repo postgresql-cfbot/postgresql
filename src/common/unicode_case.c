@@ -237,6 +237,12 @@ convert_case(char *dst, size_t dstsize, const char *src, size_t srclen,
 	size_t		result_len = 0;
 	size_t		boundary = 0;
 
+	/*
+	 * Must be guaranteed by caller to avoid overflow (text values limited to
+	 * MaxAllocSize anyway).
+	 */
+	Assert(srclen < SIZE_MAX / UTF8_MAX_CASEMAP_EXPANSION);
+
 	Assert((str_casekind == CaseTitle && wbnext && wbstate) ||
 		   (str_casekind != CaseTitle && !wbnext && !wbstate));
 
@@ -299,9 +305,9 @@ convert_case(char *dst, size_t dstsize, const char *src, size_t srclen,
 				}
 				break;
 			case CASEMAP_SPECIAL:
-				/* replace with up to MAX_CASE_EXPANSION characters */
+				/* replace with up to UNICODE_MAX_CASEMAP_CODEPOINTS */
 				Assert(simple == 0);
-				for (int i = 0; i < MAX_CASE_EXPANSION && special[i]; i++)
+				for (int i = 0; i < UNICODE_MAX_CASEMAP_CODEPOINTS && special[i]; i++)
 				{
 					char32_t	u2 = special[i];
 					size_t		u2len = unicode_utf8len(u2);
@@ -415,7 +421,7 @@ check_special_conditions(int conditions, const char *str, size_t len,
  *
  * If full is true, and a special case mapping is found and the conditions are
  * met, 'special' is set to the mapping result (which is an array of up to
- * MAX_CASE_EXPANSION characters) and CASEMAP_SPECIAL is returned.
+ * UNICODE_MAX_CASEMAP_CODEPOINTS) and CASEMAP_SPECIAL is returned.
  *
  * Otherwise, search for a simple mapping, and if found, set 'simple' to the
  * result and return CASEMAP_SIMPLE.

@@ -15,10 +15,21 @@
 #include "catalog/pg_collation.h"
 #include "common/unicode_case.h"
 #include "common/unicode_category.h"
+#include "common/unicode_limits.h"
 #include "miscadmin.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 #include "utils/pg_locale.h"
 #include "utils/syscache.h"
+
+/*
+ * The largest text value must fit in MaxAllocSize, but then may grow during
+ * case mapping. While the resulting string will not be representable as a new
+ * text value, we must at least be sure not to overflow a size_t while
+ * processing it.
+ */
+StaticAssertDecl(SIZE_MAX / UTF8_MAX_CASEMAP_EXPANSION > MaxAllocSize,
+				 "case mapping may overflow size_t");
 
 extern pg_locale_t create_pg_locale_builtin(Oid collid,
 											MemoryContext context);

@@ -381,9 +381,9 @@ GRANT SELECT ON attributes TO PUBLIC;
 CREATE VIEW character_sets AS
     SELECT CAST(null AS sql_identifier) AS character_set_catalog,
            CAST(null AS sql_identifier) AS character_set_schema,
-           CAST(getdatabaseencoding() AS sql_identifier) AS character_set_name,
-           CAST(CASE WHEN getdatabaseencoding() = 'UTF8' THEN 'UCS' ELSE getdatabaseencoding() END AS sql_identifier) AS character_repertoire,
-           CAST(getdatabaseencoding() AS sql_identifier) AS form_of_use,
+           CAST(pg_database_encoding() AS sql_identifier) AS character_set_name,
+           CAST(CASE WHEN pg_database_encoding() = 'UTF8' THEN 'UCS' ELSE pg_database_encoding() END AS sql_identifier) AS character_repertoire,
+           CAST(pg_database_encoding() AS sql_identifier) AS form_of_use,
            CAST(current_database() AS sql_identifier) AS default_collate_catalog,
            CAST(nc.nspname AS sql_identifier) AS default_collate_schema,
            CAST(c.collname AS sql_identifier) AS default_collate_name
@@ -485,7 +485,7 @@ CREATE VIEW collation_character_set_applicability AS
            CAST(c.collname AS sql_identifier) AS collation_name,
            CAST(null AS sql_identifier) AS character_set_catalog,
            CAST(null AS sql_identifier) AS character_set_schema,
-           CAST(getdatabaseencoding() AS sql_identifier) AS character_set_name
+           CAST(pg_database_encoding() AS sql_identifier) AS character_set_name
     FROM pg_collation c, pg_namespace nc
     WHERE c.collnamespace = nc.oid
           AND collencoding IN (-1, (SELECT encoding FROM pg_database WHERE datname = current_database()));

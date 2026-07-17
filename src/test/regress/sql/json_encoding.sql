@@ -4,13 +4,13 @@
 
 -- We provide expected-results files for UTF8 (json_encoding.out)
 -- and for SQL_ASCII (json_encoding_1.out).  Skip otherwise.
-SELECT getdatabaseencoding() NOT IN ('UTF8', 'SQL_ASCII')
+SELECT pg_database_encoding() NOT IN ('UTF8', 'SQL_ASCII')
        AS skip_test \gset
 \if :skip_test
 \quit
 \endif
 
-SELECT getdatabaseencoding();           -- just to label the results files
+SELECT pg_database_encoding();           -- just to label the results files
 
 -- first json
 

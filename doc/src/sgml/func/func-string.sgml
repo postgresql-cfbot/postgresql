@@ -853,6 +853,23 @@
       <row>
        <entry role="func_table_entry"><para role="func_signature">
         <indexterm>
+         <primary>pg_database_encoding</primary>
+        </indexterm>
+        <function>pg_database_encoding</function> ( )
+        <returnvalue>name</returnvalue>
+       </para>
+       <para>
+        Returns current database encoding name.
+       </para>
+       <para>
+        <literal>pg_database_encoding()</literal>
+        <returnvalue>UTF8</returnvalue>
+       </para></entry>
+      </row>
+
+      <row>
+       <entry role="func_table_entry"><para role="func_signature">
+        <indexterm>
          <primary>quote_ident</primary>
         </indexterm>
         <function>quote_ident</function> ( <type>text</type> )

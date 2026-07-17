@@ -9,6 +9,7 @@ PGFILEDESC = "ext_vacuum_statistics - convenience views for extended vacuum stat
 ISOLATION = vacuum-extending-in-repetable-read
 ISOLATION_OPTS = --temp-config=$(top_srcdir)/contrib/ext_vacuum_statistics/ext_vacuum_statistics.conf
 TAP_TESTS = 1
+
 NO_INSTALLCHECK = 1
 
 ifdef USE_PGXS

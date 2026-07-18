@@ -43,6 +43,14 @@
 #include "utils/tuplestore.h"
 #include "utils/wait_event.h"
 
+/*
+ * Adaptive guard for the probe-time empty-bucket filter. Sample the skip
+ * rate over a window; if it falls below break-even, stop consulting the
+ * bitmap.
+ */
+#define PROBE_FILTER_WINDOW			1024
+#define PROBE_FILTER_MIN_SKIP_PCT	27
+
 static void ExecHashIncreaseNumBatches(HashJoinTable hashtable);
 static void ExecHashIncreaseNumBuckets(HashJoinTable hashtable);
 static void ExecParallelHashIncreaseNumBatches(HashJoinTable hashtable);
@@ -212,6 +220,26 @@ MultiExecPrivateHash(HashState *node)
 	/* resize the hash table if needed (NTUP_PER_BUCKET exceeded) */
 	if (hashtable->nbuckets != hashtable->nbuckets_optimal)
 		ExecHashIncreaseNumBuckets(hashtable);
+
+	/*
+	 * Single-batch probe filter: build the bitmap filter now that nbuckets
+	 * is final.
+	 */
+	if (hashtable->nbatch == 1 && enable_hashjoin_probe_filter &&
+		hashtable->batch_bitmap == NULL)
+	{
+		MemoryContext oldctx = MemoryContextSwitchTo(hashtable->hashCxt);
+		size_t		bitmap_bytes = (hashtable->nbuckets + 7) / 8;
+		int			b;
+
+		hashtable->batch_bitmap = palloc0_array(uint8 *, 1);
+		hashtable->batch_bitmap[0] = palloc0(bitmap_bytes);
+		for (b = 0; b < hashtable->nbuckets; b++)
+			if (hashtable->buckets.unshared[b] != NULL)
+				hashtable->batch_bitmap[0][b >> 3] |= (1 << (b & 7));
+		hashtable->probe_filter_active = true;
+		MemoryContextSwitchTo(oldctx);
+	}
 
 	/* Account for the buckets in spaceUsed (reported in EXPLAIN ANALYZE) */
 	hashtable->spaceUsed += hashtable->nbuckets * sizeof(HashJoinTuple);
@@ -537,6 +565,15 @@ ExecHashTableCreate(HashState *state)
 	hashtable->skewTuples = 0;
 	hashtable->innerBatchFile = NULL;
 	hashtable->outerBatchFile = NULL;
+	hashtable->batch_bitmap = NULL;
+	hashtable->prefilter_active = false;
+	hashtable->prefilter_win_checks = 0;
+	hashtable->prefilter_win_drops = 0;
+	hashtable->outer_prefiltered = 0;
+	hashtable->probe_filter_active = false;
+	hashtable->probe_filter_win_checks = 0;
+	hashtable->probe_filter_win_skips = 0;
+	hashtable->probe_filter_skips = 0;
 	hashtable->spaceUsed = 0;
 	hashtable->spacePeak = 0;
 	hashtable->spaceAllowed = space_allowed;
@@ -586,6 +623,22 @@ ExecHashTableCreate(HashState *state)
 
 		hashtable->innerBatchFile = palloc0_array(BufFile *, nbatch);
 		hashtable->outerBatchFile = palloc0_array(BufFile *, nbatch);
+
+		/*
+		 * Allocate the pre-spill drop filter's per-batch occupancy bitmaps.
+		 * Index 0 is left NULL, as batch 0 is never spilled.  (The probe-time
+		 * skip is single-batch only and builds its own bitmap in MultiExecHash.)
+		 */
+		if (enable_hashjoin_prefilter)
+		{
+			size_t		bitmap_bytes = (hashtable->nbuckets + 7) / 8;
+			int			b;
+
+			hashtable->batch_bitmap = palloc0_array(uint8 *, nbatch);
+			for (b = 1; b < nbatch; b++)
+				hashtable->batch_bitmap[b] = palloc0(bitmap_bytes);
+			hashtable->prefilter_active = true;
+		}
 
 		MemoryContextSwitchTo(oldctx);
 
@@ -1102,6 +1155,16 @@ ExecHashIncreaseNumBatches(HashJoinTable hashtable)
 	}
 
 	hashtable->nbatch = nbatch;
+
+	/* Batch doubling invalidates the outer pre-storage filter. */
+	if (hashtable->batch_bitmap != NULL)
+	{
+		for (int b = 0; b < oldnbatch; b++)
+			if (hashtable->batch_bitmap[b])
+				pfree(hashtable->batch_bitmap[b]);
+		pfree(hashtable->batch_bitmap);
+		hashtable->batch_bitmap = NULL;
+	}
 
 	/*
 	 * Scan through the existing hash table entries and dump out any that are
@@ -1851,6 +1914,10 @@ ExecHashTableInsert(HashJoinTable hashtable,
 							  hashvalue,
 							  &hashtable->innerBatchFile[batchno],
 							  hashtable);
+
+		/* Set bit in pre-filter to record this bucket as occupied */
+		if (hashtable->batch_bitmap != NULL)
+			hashtable->batch_bitmap[batchno][bucketno >> 3] |= (1 << (bucketno & 7));
 	}
 
 	if (shouldFree)
@@ -2022,6 +2089,43 @@ ExecScanHashBucket(HashJoinState *hjstate,
 	HashJoinTable hashtable = hjstate->hj_HashTable;
 	HashJoinTuple hashTuple = hjstate->hj_CurTuple;
 	uint32		hashvalue = hjstate->hj_CurHashValue;
+
+	/*
+	 * Probe-time empty-bucket skip: on the first probe of a standard bucket,
+	 * check the bitmap filter and skip this bucket if empty. Also check the
+	 * adaptive guard and disable the filter if the rate is below break-even.
+	 */
+	if (hashTuple == NULL &&
+		enable_hashjoin_probe_filter &&
+		hashtable->probe_filter_active &&
+		hashtable->nbatch == 1 &&
+		hashtable->batch_bitmap != NULL &&
+		hjstate->hj_CurSkewBucketNo == INVALID_SKEW_BUCKET_NO)
+	{
+		int			bucketno = hjstate->hj_CurBucketNo;
+		uint8	   *bitmap = hashtable->batch_bitmap[hashtable->curbatch];
+		bool		empty = ((bitmap[bucketno >> 3] & (1 << (bucketno & 7))) == 0);
+
+		hashtable->probe_filter_win_checks++;
+		if (empty)
+			hashtable->probe_filter_win_skips++;
+
+		/* End of probe filter window: skip only if it is paying off. */
+		if (hashtable->probe_filter_win_checks >= PROBE_FILTER_WINDOW)
+		{
+			if (hashtable->probe_filter_win_skips * 100 <
+				hashtable->probe_filter_win_checks * PROBE_FILTER_MIN_SKIP_PCT)
+				hashtable->probe_filter_active = false;
+			hashtable->probe_filter_win_checks = 0;
+			hashtable->probe_filter_win_skips = 0;
+		}
+
+		if (empty)
+		{
+			hashtable->probe_filter_skips++;
+			return false;
+		}
+	}
 
 	/*
 	 * hj_CurTuple is the address of the tuple last returned from the current
@@ -2945,6 +3049,8 @@ ExecHashAccumInstrumentation(HashInstrumentation *instrument,
 									  hashtable->nbatch_original);
 	instrument->space_peak = Max(instrument->space_peak,
 								 hashtable->spacePeak);
+	instrument->outer_prefiltered += hashtable->outer_prefiltered;
+	instrument->probe_filter_skips += hashtable->probe_filter_skips;
 }
 
 /*

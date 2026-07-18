@@ -429,6 +429,8 @@
 #enable_groupagg = on
 #enable_hashagg = on
 #enable_hashjoin = on
+#enable_hashjoin_prefilter = off
+#enable_hashjoin_probe_filter = off
 #enable_incremental_sort = on
 #enable_indexscan = on
 #enable_indexonlyscan = on

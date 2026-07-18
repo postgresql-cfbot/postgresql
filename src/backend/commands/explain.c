@@ -3473,6 +3473,36 @@ show_hash_info(HashState *hashstate, ExplainState *es)
 							 hinstrument.nbuckets, hinstrument.nbatch,
 							 spacePeakKb);
 		}
+
+		/* Show outer pre-storage filter stats if it dropped anything */
+		if (hinstrument.outer_prefiltered > 0)
+		{
+			if (es->format != EXPLAIN_FORMAT_TEXT)
+				ExplainPropertyInteger("Outer Tuples Prefiltered", NULL,
+									   hinstrument.outer_prefiltered, es);
+			else
+			{
+				ExplainIndentText(es);
+				appendStringInfo(es->str,
+								 "Outer Prefilter: " UINT64_FORMAT " tuples dropped before spill\n",
+								 hinstrument.outer_prefiltered);
+			}
+		}
+
+		/* Show probe-time empty-bucket skips if any */
+		if (hinstrument.probe_filter_skips > 0)
+		{
+			if (es->format != EXPLAIN_FORMAT_TEXT)
+				ExplainPropertyInteger("Probe Filter Skips", NULL,
+									   hinstrument.probe_filter_skips, es);
+			else
+			{
+				ExplainIndentText(es);
+				appendStringInfo(es->str,
+								 "Probe Filter: " UINT64_FORMAT " empty buckets skipped\n",
+								 hinstrument.probe_filter_skips);
+			}
+		}
 	}
 }
 

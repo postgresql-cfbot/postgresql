@@ -926,6 +926,20 @@
   boot_val => 'true',
 },
 
+{ name => 'enable_hashjoin_prefilter', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
+  short_desc => 'Enables pre-filter for outer tuples before spilling them in multi-batch hash joins.',
+  flags => 'GUC_EXPLAIN',
+  variable => 'enable_hashjoin_prefilter',
+  boot_val => 'false',
+},
+
+{ name => 'enable_hashjoin_probe_filter', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
+  short_desc => 'Enables skipping empty hash buckets during the probe phase of single-batch hash joins.',
+  flags => 'GUC_EXPLAIN',
+  variable => 'enable_hashjoin_probe_filter',
+  boot_val => 'false',
+},
+
 { name => 'enable_incremental_sort', type => 'bool', context => 'PGC_USERSET', group => 'QUERY_TUNING_METHOD',
   short_desc => 'Enables the planner\'s use of incremental sort steps.',
   flags => 'GUC_EXPLAIN',

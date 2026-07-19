@@ -1602,7 +1602,7 @@ generate_join_implied_equalities(PlannerInfo *root,
 	while ((i = bms_next_member(matching_ecs, i)) >= 0)
 	{
 		EquivalenceClass *ec = (EquivalenceClass *) list_nth(root->eq_classes, i);
-		List	   *sublist = NIL;
+		List	   *sublist;
 
 		/* ECs containing consts do not need any further enforcement */
 		if (ec->ec_has_const)
@@ -1632,6 +1632,7 @@ generate_join_implied_equalities(PlannerInfo *root,
 															  inner_rel);
 
 		result = list_concat(result, sublist);
+		list_free(sublist);
 	}
 
 	return result;
@@ -1708,6 +1709,7 @@ generate_join_implied_equalities_for_ecs(PlannerInfo *root,
 															  inner_rel);
 
 		result = list_concat(result, sublist);
+		list_free(sublist);
 	}
 
 	return result;
@@ -1821,6 +1823,10 @@ generate_join_implied_equalities_normal(PlannerInfo *root,
 		{
 			/* failed... */
 			ec->ec_broken = true;
+			list_free(result);
+			list_free(new_members);
+			list_free(inner_members);
+			list_free(outer_members);
 			return NIL;
 		}
 
@@ -1870,6 +1876,10 @@ generate_join_implied_equalities_normal(PlannerInfo *root,
 				{
 					/* failed... */
 					ec->ec_broken = true;
+					list_free(result);
+					list_free(new_members);
+					list_free(inner_members);
+					list_free(outer_members);
 					return NIL;
 				}
 				/* do NOT set parent_ec, this qual is not redundant! */
@@ -1882,6 +1892,10 @@ generate_join_implied_equalities_normal(PlannerInfo *root,
 			prev_em = cur_em;
 		}
 	}
+
+	list_free(new_members);
+	list_free(inner_members);
+	list_free(outer_members);
 
 	return result;
 }

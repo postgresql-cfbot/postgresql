@@ -73,6 +73,22 @@ REPACK (CONCURRENTLY) repack_conc_replident;
 ALTER TABLE repack_conc_replident ADD PRIMARY KEY (i) DEFERRABLE;
 REPACK (CONCURRENTLY) repack_conc_replident;
 
+-- Invalid indexes (e.g. left over from a failed CREATE INDEX CONCURRENTLY)
+-- must not prevent the processing; their constraints are not enforced while
+-- rebuilding and they stay invalid.
+CREATE TABLE repack_conc_invidx (i int PRIMARY KEY, j int);
+INSERT INTO repack_conc_invidx VALUES (1, 1), (2, 1);
+CREATE UNIQUE INDEX CONCURRENTLY repack_conc_invidx_uq ON repack_conc_invidx (j);
+SELECT indexrelid::regclass, indisvalid FROM pg_index
+WHERE indrelid = 'repack_conc_invidx'::regclass ORDER BY indexrelid::regclass::text;
+REPACK (CONCURRENTLY) repack_conc_invidx;
+SELECT indexrelid::regclass, indisvalid FROM pg_index
+WHERE indrelid = 'repack_conc_invidx'::regclass ORDER BY indexrelid::regclass::text;
+SELECT * FROM repack_conc_invidx ORDER BY i;
+-- the invalid index still must not enforce uniqueness
+INSERT INTO repack_conc_invidx VALUES (3, 1);
+DROP TABLE repack_conc_invidx;
+
 -- clean up
 DROP TABLE repack_conc_replident, clstrpart;
 

@@ -432,9 +432,23 @@ pgstat_get_entry_ref_cached(PgStat_HashKey key, PgStat_EntryRef **entry_ref_p)
 	{
 		PgStat_EntryRef *entry_ref;
 
-		cache_entry->entry_ref = entry_ref =
-			MemoryContextAlloc(pgStatSharedRefContext,
-							   sizeof(PgStat_EntryRef));
+		entry_ref = MemoryContextAllocExtended(pgStatSharedRefContext,
+											   sizeof(PgStat_EntryRef),
+											   MCXT_ALLOC_NO_OOM);
+		if (unlikely(entry_ref == NULL))
+		{
+			/*
+			 * Clean the hash entry to keep the table consistent in the
+			 * backend.
+			 */
+			pgstat_entry_ref_hash_delete(pgStatEntryRefHash, key);
+
+			ereport(ERROR,
+					(errcode(ERRCODE_OUT_OF_MEMORY),
+					 errmsg("out of memory")));
+		}
+
+		cache_entry->entry_ref = entry_ref;
 		entry_ref->shared_stats = NULL;
 		entry_ref->shared_entry = NULL;
 		entry_ref->pending = NULL;

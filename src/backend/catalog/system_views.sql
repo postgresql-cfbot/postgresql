@@ -1025,6 +1025,7 @@ CREATE VIEW pg_stat_wal_receiver AS
             s.last_msg_receipt_time,
             s.latest_end_lsn,
             s.latest_end_time,
+            s.primary_last_archived,
             s.slot_name,
             s.sender_host,
             s.sender_port,

@@ -85,6 +85,9 @@ cmp_ok($status_count, '>', 0, "standby creates archive status files for received
 
 # Generate more WAL and wait for archiving on primary
 my $initial_archived = $primary->safe_psql('postgres', 'SELECT archived_count FROM pg_stat_archiver');
+my $primary_last_archived = $primary->safe_psql('postgres',
+	q{SELECT pg_walfile_name(pg_current_wal_lsn())});
+
 $primary->safe_psql('postgres', "SELECT txid_current();SELECT pg_switch_wal();");
 
 # Wait for primary to archive the new segments
@@ -109,8 +112,16 @@ for (my $i = 0; $i < $PostgreSQL::Test::Utils::timeout_default; $i++)
 	last if $done_count > 0;
 	sleep(1);
 }
+	
 ok($done_count > 0, "standby marked segments as .done after primary's archival report");
 note("Standby has $done_count .done files");
+
+# The primary_last_archived  done status for WAL file itself must also be present.
+ok(-f "$standby_archive_status/$primary_last_archived.done",
+	"WAL segment $primary_last_archived done file exists in standby pg_wal/archive_status");
+
+is($primary_last_archived, $standby->safe_psql('postgres',
+	q{SELECT primary_last_archived from pg_stat_wal_receiver; }),  "standby wal receiver stat view updated with primary last archived wal");
 
 ###############################################################################
 # Test 2: Cascading replication

@@ -360,11 +360,24 @@ extern PGDLLIMPORT int VacuumCostBalanceLocal;
 typedef struct LVExtStatCounters
 {
 	WalUsage	walusage;
+	BufferUsage bufusage;
+	PgStat_Counter blocks_fetched;
+	PgStat_Counter blocks_hit;
 } LVExtStatCounters;
 
 extern void extvac_stats_start(Relation rel, LVExtStatCounters *counters);
 extern void extvac_stats_end(Relation rel, LVExtStatCounters *counters,
 							 PgStat_CommonCounts *report);
+
+/* Per-index-pass sampling state; deltas of istat are computed by callers */
+typedef struct LVExtStatCountersIdx
+{
+	LVExtStatCounters common;
+} LVExtStatCountersIdx;
+
+extern void extvac_stats_start_idx(Relation rel, LVExtStatCountersIdx *counters);
+extern void extvac_stats_end_idx(Relation rel, LVExtStatCountersIdx *counters,
+								 PgStat_VacuumRelationCounts *report);
 
 extern PGDLLIMPORT bool VacuumFailsafeActive;
 extern PGDLLIMPORT double vacuum_cost_delay;

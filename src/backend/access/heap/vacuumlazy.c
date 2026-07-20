@@ -511,6 +511,13 @@ extvac_stats_start(Relation rel, LVExtStatCounters * counters)
 {
 	memset(counters, 0, sizeof(LVExtStatCounters));
 	counters->walusage = pgWalUsage;
+	counters->bufusage = pgBufferUsage;
+
+	if (rel->pgstat_info && pgstat_track_counts)
+	{
+		counters->blocks_fetched = rel->pgstat_info->counts.blocks_fetched;
+		counters->blocks_hit = rel->pgstat_info->counts.blocks_hit;
+	}
 }
 
 /*
@@ -521,13 +528,53 @@ extvac_stats_end(Relation rel, LVExtStatCounters * counters,
 				 PgStat_CommonCounts * report)
 {
 	WalUsage	walusage;
+	BufferUsage bufusage;
 
 	memset(&walusage, 0, sizeof(WalUsage));
 	WalUsageAccumDiff(&walusage, &pgWalUsage, &counters->walusage);
+	memset(&bufusage, 0, sizeof(BufferUsage));
+	BufferUsageAccumDiff(&bufusage, &pgBufferUsage, &counters->bufusage);
 
+	report->total_blks_read = bufusage.local_blks_read + bufusage.shared_blks_read;
+	report->total_blks_hit = bufusage.local_blks_hit + bufusage.shared_blks_hit;
+	report->total_blks_dirtied = bufusage.local_blks_dirtied + bufusage.shared_blks_dirtied;
+	report->total_blks_written = bufusage.shared_blks_written;
+	report->blk_read_time = INSTR_TIME_GET_MILLISEC(bufusage.local_blk_read_time) +
+		INSTR_TIME_GET_MILLISEC(bufusage.shared_blk_read_time);
+	report->blk_write_time = INSTR_TIME_GET_MILLISEC(bufusage.local_blk_write_time) +
+		INSTR_TIME_GET_MILLISEC(bufusage.shared_blk_write_time);
 	report->wal_records = walusage.wal_records;
 	report->wal_fpi = walusage.wal_fpi;
 	report->wal_bytes = walusage.wal_bytes;
+
+	if (rel->pgstat_info && pgstat_track_counts)
+	{
+		report->blks_fetched = rel->pgstat_info->counts.blocks_fetched - counters->blocks_fetched;
+		report->blks_hit = rel->pgstat_info->counts.blocks_hit - counters->blocks_hit;
+	}
+}
+
+/*
+ * extvac_stats_start_idx - Snapshot resource usage before an index pass.
+ */
+void
+extvac_stats_start_idx(Relation rel, LVExtStatCountersIdx * counters)
+{
+	extvac_stats_start(rel, &counters->common);
+}
+
+/*
+ * extvac_stats_end_idx - Diff resource usage of an index pass into report.
+ *
+ * The bulkdelete result deltas (tuples/pages) are computed by the caller,
+ * which tracks the running totals across passes.
+ */
+void
+extvac_stats_end_idx(Relation rel, LVExtStatCountersIdx * counters,
+					 PgStat_VacuumRelationCounts * report)
+{
+	extvac_stats_end(rel, &counters->common, &report->common);
+	report->type = PGSTAT_EXTVAC_INDEX;
 }
 
 /*
@@ -552,6 +599,12 @@ accumulate_heap_vacuum_statistics(LVRelState *vacrel, PgStat_VacuumRelationCount
 	 * them twice otherwise.  Parallel workers report their own usage with
 	 * their index passes, so it never enters the leader's counters.
 	 */
+	extVacStats->common.total_blks_read -= vacrel->extVacReportIdx.common.total_blks_read;
+	extVacStats->common.total_blks_hit -= vacrel->extVacReportIdx.common.total_blks_hit;
+	extVacStats->common.total_blks_dirtied -= vacrel->extVacReportIdx.common.total_blks_dirtied;
+	extVacStats->common.total_blks_written -= vacrel->extVacReportIdx.common.total_blks_written;
+	extVacStats->common.blk_read_time -= vacrel->extVacReportIdx.common.blk_read_time;
+	extVacStats->common.blk_write_time -= vacrel->extVacReportIdx.common.blk_write_time;
 	extVacStats->common.wal_records -= vacrel->extVacReportIdx.common.wal_records;
 	extVacStats->common.wal_fpi -= vacrel->extVacReportIdx.common.wal_fpi;
 	extVacStats->common.wal_bytes -= vacrel->extVacReportIdx.common.wal_bytes;
@@ -565,6 +618,12 @@ static void
 accumulate_idxs_vacuum_statistics(LVRelState *vacrel,
 								  PgStat_VacuumRelationCounts * extVacIdxStats)
 {
+	vacrel->extVacReportIdx.common.total_blks_read += extVacIdxStats->common.total_blks_read;
+	vacrel->extVacReportIdx.common.total_blks_hit += extVacIdxStats->common.total_blks_hit;
+	vacrel->extVacReportIdx.common.total_blks_dirtied += extVacIdxStats->common.total_blks_dirtied;
+	vacrel->extVacReportIdx.common.total_blks_written += extVacIdxStats->common.total_blks_written;
+	vacrel->extVacReportIdx.common.blk_read_time += extVacIdxStats->common.blk_read_time;
+	vacrel->extVacReportIdx.common.blk_write_time += extVacIdxStats->common.blk_write_time;
 	vacrel->extVacReportIdx.common.wal_records += extVacIdxStats->common.wal_records;
 	vacrel->extVacReportIdx.common.wal_fpi += extVacIdxStats->common.wal_fpi;
 	vacrel->extVacReportIdx.common.wal_bytes += extVacIdxStats->common.wal_bytes;
@@ -3139,7 +3198,7 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	double		startdelaytime = VacuumDelayTime;
 	double		prev_tuples_removed = 0;
 	BlockNumber prev_pages_deleted = 0;
-	LVExtStatCounters extVacCounters;
+	LVExtStatCountersIdx extVacCounters;
 	PgStat_VacuumRelationCounts extVacReport;
 
 	/*
@@ -3152,7 +3211,7 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 		prev_pages_deleted = istat->pages_deleted;
 	}
 	if (set_report_vacuum_hook)
-		extvac_stats_start(indrel, &extVacCounters);
+		extvac_stats_start_idx(indrel, &extVacCounters);
 	ivinfo.index = indrel;
 	ivinfo.heaprel = vacrel->rel;
 	ivinfo.analyze_only = false;
@@ -3190,8 +3249,7 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	if (set_report_vacuum_hook)
 	{
 		memset(&extVacReport, 0, sizeof(extVacReport));
-		extvac_stats_end(indrel, &extVacCounters, &extVacReport.common);
-		extVacReport.type = PGSTAT_EXTVAC_INDEX;
+		extvac_stats_end_idx(indrel, &extVacCounters, &extVacReport);
 		if (istat != NULL)
 		{
 			extVacReport.common.tuples_deleted =
@@ -3231,7 +3289,7 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	double		startdelaytime = VacuumDelayTime;
 	double		prev_tuples_removed = 0;
 	BlockNumber prev_pages_deleted = 0;
-	LVExtStatCounters extVacCounters;
+	LVExtStatCountersIdx extVacCounters;
 	PgStat_VacuumRelationCounts extVacReport;
 
 	/*
@@ -3244,7 +3302,7 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 		prev_pages_deleted = istat->pages_deleted;
 	}
 	if (set_report_vacuum_hook)
-		extvac_stats_start(indrel, &extVacCounters);
+		extvac_stats_start_idx(indrel, &extVacCounters);
 	ivinfo.index = indrel;
 	ivinfo.heaprel = vacrel->rel;
 	ivinfo.analyze_only = false;
@@ -3281,8 +3339,7 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	if (set_report_vacuum_hook)
 	{
 		memset(&extVacReport, 0, sizeof(extVacReport));
-		extvac_stats_end(indrel, &extVacCounters, &extVacReport.common);
-		extVacReport.type = PGSTAT_EXTVAC_INDEX;
+		extvac_stats_end_idx(indrel, &extVacCounters, &extVacReport);
 		if (istat != NULL)
 		{
 			extVacReport.common.tuples_deleted =

@@ -44,6 +44,7 @@ tests += {
   'isolation': {
     'specs': [
       'basic',
+      'wait_cleanup',
       'inplace',
       'repack',
       'repack_temporal',

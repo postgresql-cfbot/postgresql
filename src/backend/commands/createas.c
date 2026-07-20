@@ -29,18 +29,32 @@
 #include "access/tableam.h"
 #include "access/xact.h"
 #include "catalog/namespace.h"
+#include "catalog/index.h"
+#include "catalog/pg_am_d.h"
+#include "catalog/pg_constraint.h"
+#include "catalog/pg_inherits.h"
+#include "catalog/pg_trigger.h"
 #include "catalog/toasting.h"
 #include "commands/createas.h"
+#include "commands/defrem.h"
 #include "commands/matview.h"
 #include "commands/prepare.h"
 #include "commands/tablecmds.h"
+#include "commands/tablespace.h"
+#include "commands/trigger.h"
 #include "commands/view.h"
 #include "executor/execdesc.h"
 #include "executor/executor.h"
+#include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
 #include "nodes/queryjumble.h"
+#include "optimizer/optimizer.h"
+#include "optimizer/prep.h"
 #include "parser/analyze.h"
+#include "parser/parser.h"
+#include "parser/parsetree.h"
+#include "parser/parse_clause.h"
 #include "rewrite/rewriteHandler.h"
 #include "tcop/tcopprot.h"
 #include "utils/builtins.h"
@@ -70,6 +84,12 @@ static bool intorel_receive(TupleTableSlot *slot, DestReceiver *self);
 static void intorel_shutdown(DestReceiver *self);
 static void intorel_destroy(DestReceiver *self);
 
+static void CreateIvmTriggersOnBaseTablesRecurse(Query *qry, Node *node, Oid matviewOid,
+									 List **relids, bool ex_lock);
+static void CreateIvmTrigger(Oid relOid, Oid viewOid, int16 type, int16 timing, bool ex_lock);
+static void check_ivm_restriction(Node *node);
+static bool check_ivm_restriction_walker(Node *node, void *context);
+static Bitmapset *get_primary_key_attnos_from_query(Query *query, List **constraintList);
 
 /*
  * create_ctas_internal
@@ -277,6 +297,18 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		into->skipData = true;
 	}
 
+	if (is_matview && into->ivm)
+	{
+		/* check if the query is supported in IMMV definition */
+		if (contain_mutable_functions((Node *) query))
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("mutable function is not supported on incrementally maintainable materialized view"),
+					 errhint("functions must be marked IMMUTABLE")));
+
+		check_ivm_restriction((Node *) query);
+	}
+
 	if (into->skipData)
 	{
 		/*
@@ -288,14 +320,35 @@ ExecCreateTableAs(ParseState *pstate, CreateTableAsStmt *stmt,
 		address = create_ctas_nodata(query->targetList, into);
 
 		/*
+		 * For IVM, mark the matview before refresh so RelationIsIVM()
+		 * returns true inside RefreshMatViewByOid.
+		 */
+		if (is_matview && into->ivm)
+		{
+			Relation matviewRel = table_open(address.objectId, NoLock);
+
+			SetMatViewIVMState(matviewRel, true);
+			table_close(matviewRel, NoLock);
+			CommandCounterIncrement();
+		}
+
+		/*
 		 * For materialized views, reuse the REFRESH logic, which locks down
 		 * security-restricted operations and restricts the search_path.  This
 		 * reduces the chance that a subsequent refresh will fail.
 		 */
 		if (do_refresh)
+		{
 			RefreshMatViewByOid(address.objectId, true, false, false,
 								pstate->p_sourcetext, qc);
 
+			if (is_matview && into->ivm && IsolationUsesXactSnapshot())
+				ereport(WARNING,
+						(errmsg("inconsistent view can be created in isolation level SERIALIZABLE or REPEATABLE READ"),
+						 errdetail("The view may not include effects of a concurrent transaction."),
+						 errhint("The view with incremental maintenance should be created in isolation level READ COMMITTED, "
+								 "or refreshed manually to make sure the view is consistent.")));
+		}
 	}
 	else
 	{
@@ -634,4 +687,660 @@ static void
 intorel_destroy(DestReceiver *self)
 {
 	pfree(self);
+}
+
+/*
+ * CreateIvmTriggersOnBaseTables -- create IVM triggers on all base tables
+ */
+void
+CreateIvmTriggersOnBaseTables(Query *qry, Oid matviewOid)
+{
+	List   *relids = NIL;
+	bool	ex_lock = false;
+	RangeTblEntry *rte;
+
+	/* Immediately return if we don't have any base tables. */
+	if (list_length(qry->rtable) < 1)
+		return;
+
+	/*
+	 * If the view has more than one base tables, we need an exclusive lock
+	 * on the view so that the view would be maintained serially to avoid
+	 * the inconsistency that occurs when two base tables are modified in
+	 * concurrent transactions. However, if the view has only one table,
+	 * we can use a weaker lock.
+	 *
+	 * The type of lock should be determined here, because if we check the
+	 * view definition at maintenance time, we need to acquire a weaker lock,
+	 * and upgrading the lock level after this increases probability of
+	 * deadlock.
+	 */
+
+	rte = list_nth(qry->rtable, 0);
+	if (list_length(qry->rtable) > 1 || rte->rtekind != RTE_RELATION)
+		ex_lock = true;
+
+	CreateIvmTriggersOnBaseTablesRecurse(qry, (Node *)qry, matviewOid, &relids, ex_lock);
+
+	list_free(relids);
+}
+
+static void
+CreateIvmTriggersOnBaseTablesRecurse(Query *qry, Node *node, Oid matviewOid,
+									 List **relids, bool ex_lock)
+{
+	if (node == NULL)
+		return;
+
+	/* This can recurse, so check for excessive recursion */
+	check_stack_depth();
+
+	switch (nodeTag(node))
+	{
+		case T_Query:
+			{
+				Query *query = (Query *) node;
+
+				CreateIvmTriggersOnBaseTablesRecurse(qry, (Node *)query->jointree, matviewOid, relids, ex_lock);
+			}
+			break;
+
+		case T_RangeTblRef:
+			{
+				int			rti = ((RangeTblRef *) node)->rtindex;
+				RangeTblEntry *rte = rt_fetch(rti, qry->rtable);
+
+				if (rte->rtekind == RTE_RELATION && !list_member_oid(*relids, rte->relid))
+				{
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_INSERT, TRIGGER_TYPE_BEFORE, ex_lock);
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_DELETE, TRIGGER_TYPE_BEFORE, ex_lock);
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_UPDATE, TRIGGER_TYPE_BEFORE, ex_lock);
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_TRUNCATE, TRIGGER_TYPE_BEFORE, true);
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_INSERT, TRIGGER_TYPE_AFTER, ex_lock);
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_DELETE, TRIGGER_TYPE_AFTER, ex_lock);
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_UPDATE, TRIGGER_TYPE_AFTER, ex_lock);
+					CreateIvmTrigger(rte->relid, matviewOid, TRIGGER_TYPE_TRUNCATE, TRIGGER_TYPE_AFTER, true);
+
+					*relids = lappend_oid(*relids, rte->relid);
+				}
+			}
+			break;
+
+		case T_FromExpr:
+			{
+				FromExpr   *f = (FromExpr *) node;
+				ListCell   *l;
+
+				foreach(l, f->fromlist)
+					CreateIvmTriggersOnBaseTablesRecurse(qry, lfirst(l), matviewOid, relids, ex_lock);
+			}
+			break;
+
+		case T_JoinExpr:
+			{
+				JoinExpr   *j = (JoinExpr *) node;
+
+				CreateIvmTriggersOnBaseTablesRecurse(qry, j->larg, matviewOid, relids, ex_lock);
+				CreateIvmTriggersOnBaseTablesRecurse(qry, j->rarg, matviewOid, relids, ex_lock);
+			}
+			break;
+
+		default:
+			elog(ERROR, "unrecognized node type: %d", (int) nodeTag(node));
+	}
+}
+
+/*
+ * CreateIvmTrigger -- create IVM trigger on a base table
+ */
+static void
+CreateIvmTrigger(Oid relOid, Oid viewOid, int16 type, int16 timing, bool ex_lock)
+{
+	ObjectAddress	refaddr;
+	ObjectAddress	address;
+	CreateTrigStmt *ivm_trigger;
+	List *transitionRels = NIL;
+
+	Assert(timing == TRIGGER_TYPE_BEFORE || timing == TRIGGER_TYPE_AFTER);
+
+	refaddr.classId = RelationRelationId;
+	refaddr.objectId = viewOid;
+	refaddr.objectSubId = 0;
+
+	ivm_trigger = makeNode(CreateTrigStmt);
+	ivm_trigger->relation = NULL;
+	ivm_trigger->row = false;
+
+	ivm_trigger->timing = timing;
+	ivm_trigger->events = type;
+
+	switch (type)
+	{
+		case TRIGGER_TYPE_INSERT:
+			ivm_trigger->trigname = (timing == TRIGGER_TYPE_BEFORE ? "IVM_trigger_ins_before" : "IVM_trigger_ins_after");
+			break;
+		case TRIGGER_TYPE_DELETE:
+			ivm_trigger->trigname = (timing == TRIGGER_TYPE_BEFORE ? "IVM_trigger_del_before" : "IVM_trigger_del_after");
+			break;
+		case TRIGGER_TYPE_UPDATE:
+			ivm_trigger->trigname = (timing == TRIGGER_TYPE_BEFORE ? "IVM_trigger_upd_before" : "IVM_trigger_upd_after");
+			break;
+		case TRIGGER_TYPE_TRUNCATE:
+			ivm_trigger->trigname = (timing == TRIGGER_TYPE_BEFORE ? "IVM_trigger_truncate_before" : "IVM_trigger_truncate_after");
+			break;
+		default:
+			elog(ERROR, "unsupported trigger type");
+	}
+
+	if (timing == TRIGGER_TYPE_AFTER)
+	{
+		if (type == TRIGGER_TYPE_INSERT || type == TRIGGER_TYPE_UPDATE)
+		{
+			TriggerTransition *n = makeNode(TriggerTransition);
+			n->name = "__ivm_newtable";
+			n->isNew = true;
+			n->isTable = true;
+
+			transitionRels = lappend(transitionRels, n);
+		}
+		if (type == TRIGGER_TYPE_DELETE || type == TRIGGER_TYPE_UPDATE)
+		{
+			TriggerTransition *n = makeNode(TriggerTransition);
+			n->name = "__ivm_oldtable";
+			n->isNew = false;
+			n->isTable = true;
+
+			transitionRels = lappend(transitionRels, n);
+		}
+	}
+
+	/*
+	 * XXX: When using DELETE or UPDATE, we must use exclusive lock for now
+	 * because apply_old_delta(_with_count) uses ctid to identify the tuple
+	 * to be deleted/deleted, but doesn't work in concurrent situations.
+	 *
+	 * If the view doesn't have aggregate, distinct, or tuple duplicate,
+	 * then it would work even in concurrent situations. However, we don't have
+	 * any way to guarantee the view has a unique key before opening the IMMV
+	 * at the maintenance time because users may drop the unique index.
+	 */
+
+	if (type == TRIGGER_TYPE_DELETE || type == TRIGGER_TYPE_UPDATE)
+		ex_lock = true;
+
+	ivm_trigger->funcname =
+		(timing == TRIGGER_TYPE_BEFORE ? SystemFuncName("IVM_immediate_before") : SystemFuncName("IVM_immediate_maintenance"));
+
+	ivm_trigger->columns = NIL;
+	ivm_trigger->transitionRels = transitionRels;
+	ivm_trigger->whenClause = NULL;
+	ivm_trigger->isconstraint = false;
+	ivm_trigger->deferrable = false;
+	ivm_trigger->initdeferred = false;
+	ivm_trigger->constrrel = NULL;
+	ivm_trigger->args = list_make2(
+		makeString(DatumGetPointer(DirectFunctionCall1(oidout, ObjectIdGetDatum(viewOid)))),
+		makeString(DatumGetPointer(DirectFunctionCall1(boolout, BoolGetDatum(ex_lock))))
+		);
+
+	address = CreateTrigger(ivm_trigger, NULL, relOid, InvalidOid, InvalidOid,
+						 InvalidOid, InvalidOid, InvalidOid, NULL, true, false);
+
+	recordDependencyOn(&address, &refaddr, DEPENDENCY_AUTO);
+
+	/* Make changes-so-far visible */
+	CommandCounterIncrement();
+}
+
+/*
+ * check_ivm_restriction --- look for specify nodes in the query tree
+ */
+static void
+check_ivm_restriction(Node *node)
+{
+	check_ivm_restriction_walker(node, NULL);
+}
+
+static bool
+check_ivm_restriction_walker(Node *node, void *context)
+{
+	if (node == NULL)
+		return false;
+
+	/*
+	 * We currently don't support Sub-Query.
+	 */
+	if (IsA(node, SubPlan) || IsA(node, SubLink))
+		ereport(ERROR,
+				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				 errmsg("subquery is not supported on incrementally maintainable materialized view")));
+
+	/* This can recurse, so check for excessive recursion */
+	check_stack_depth();
+
+	switch (nodeTag(node))
+	{
+		case T_Query:
+			{
+				Query *qry = (Query *)node;
+				ListCell   *lc;
+				List       *vars;
+
+				/* if contained CTE, return error */
+				if (qry->cteList != NIL)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("CTE is not supported on incrementally maintainable materialized view")));
+				if (qry->havingQual != NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg(" HAVING clause is not supported on incrementally maintainable materialized view")));
+				if (qry->sortClause != NIL)	/* There is a possibility that we don't need to return an error */
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("ORDER BY clause is not supported on incrementally maintainable materialized view")));
+				if (qry->limitOffset != NULL || qry->limitCount != NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("LIMIT/OFFSET clause is not supported on incrementally maintainable materialized view")));
+				if (qry->distinctClause)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("DISTINCT is not supported on incrementally maintainable materialized view")));
+				if (qry->hasDistinctOn)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("DISTINCT ON is not supported on incrementally maintainable materialized view")));
+				if (qry->hasWindowFuncs)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("window functions are not supported on incrementally maintainable materialized view")));
+				if (qry->groupingSets != NIL)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("GROUPING SETS, ROLLUP, or CUBE clauses is not supported on incrementally maintainable materialized view")));
+				if (qry->setOperations != NULL)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("UNION/INTERSECT/EXCEPT statements are not supported on incrementally maintainable materialized view")));
+				if (list_length(qry->targetList) == 0)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("empty target list is not supported on incrementally maintainable materialized view")));
+				if (qry->rowMarks != NIL)
+					ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("FOR UPDATE/SHARE clause is not supported on incrementally maintainable materialized view")));
+
+				/* system column restrictions */
+				vars = pull_vars_of_level((Node *) qry, 0);
+				foreach(lc, vars)
+				{
+					if (IsA(lfirst(lc), Var))
+					{
+						Var *var = (Var *) lfirst(lc);
+						/* if system column, return error */
+						if (var->varattno < 0)
+							ereport(ERROR,
+									(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+									 errmsg("system column is not supported on incrementally maintainable materialized view")));
+					}
+				}
+
+				/* check if type in the target list had an equality operator */
+				foreach(lc, qry->targetList)
+				{
+					TargetEntry *tle = (TargetEntry *) lfirst(lc);
+					Oid             atttype = exprType((Node *) tle->expr);
+					Oid             opclass;
+
+					opclass = GetDefaultOpClass(atttype, BTREE_AM_OID);
+					if (!OidIsValid(opclass))
+						ereport(ERROR,
+								(errcode(ERRCODE_UNDEFINED_OBJECT),
+								 errmsg("data type %s has no default operator class for access method \"%s\"",
+									format_type_be(atttype), "btree")));
+				}
+
+				/* restrictions for rtable */
+				foreach(lc, qry->rtable)
+				{
+					RangeTblEntry *rte = (RangeTblEntry *) lfirst(lc);
+
+					if (rte->subquery)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("subquery is not supported on incrementally maintainable materialized view")));
+
+					if (rte->tablesample != NULL)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("TABLESAMPLE clause is not supported on incrementally maintainable materialized view")));
+
+					if (rte->relkind == RELKIND_PARTITIONED_TABLE)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("partitioned table is not supported on incrementally maintainable materialized view")));
+
+					if (rte->relkind == RELKIND_RELATION && has_superclass(rte->relid))
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("partitions is not supported on incrementally maintainable materialized view")));
+
+					if (rte->relkind == RELKIND_RELATION && find_inheritance_children(rte->relid, NoLock) != NIL)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("inheritance parent is not supported on incrementally maintainable materialized view")));
+
+					if (rte->relkind == RELKIND_FOREIGN_TABLE)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("foreign table is not supported on incrementally maintainable materialized view")));
+
+					if (rte->relkind == RELKIND_VIEW ||
+						rte->relkind == RELKIND_MATVIEW)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("VIEW or MATERIALIZED VIEW is not supported on incrementally maintainable materialized view")));
+
+					if (rte->rtekind == RTE_VALUES)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("VALUES is not supported on incrementally maintainable materialized view")));
+
+				}
+
+				query_tree_walker(qry, check_ivm_restriction_walker, NULL, QTW_IGNORE_RANGE_TABLE);
+
+				break;
+			}
+		case T_TargetEntry:
+			{
+				TargetEntry *tle = (TargetEntry *)node;
+				if (isIvmName(tle->resname))
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("column name %s is not supported on incrementally maintainable materialized view", tle->resname)));
+
+				expression_tree_walker(node, check_ivm_restriction_walker, NULL);
+				break;
+			}
+		case T_JoinExpr:
+			{
+				JoinExpr *joinexpr = (JoinExpr *)node;
+
+				if (joinexpr->jointype > JOIN_INNER)
+						ereport(ERROR,
+								(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+								 errmsg("OUTER JOIN is not supported on incrementally maintainable materialized view")));
+
+				expression_tree_walker(node, check_ivm_restriction_walker, NULL);
+			}
+			break;
+		case T_Aggref:
+			ereport(ERROR,
+					(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					 errmsg("aggregate function is not supported on incrementally maintainable materialized view")));
+			break;
+		default:
+			expression_tree_walker(node, check_ivm_restriction_walker, (void *) context);
+			break;
+	}
+	return false;
+}
+
+/*
+ * CreateIndexOnIMMV
+ *
+ * Create a unique index on incremental maintainable materialized view.
+ * If the view definition query has a GROUP BY clause, the index is created
+ * on the columns of GROUP BY expressions. Otherwise, if the view contains
+ * all primary key attributes of its base tables in the target list, the index
+ * is created on these attributes. In other cases, no index is created.
+ */
+void
+CreateIndexOnIMMV(Query *query, Relation matviewRel)
+{
+	ListCell *lc;
+	IndexStmt  *index;
+	ObjectAddress address;
+	List *constraintList = NIL;
+	char		idxname[NAMEDATALEN];
+	List	   *indexoidlist = RelationGetIndexList(matviewRel);
+	ListCell   *indexoidscan;
+	Bitmapset *key_attnos;
+
+	snprintf(idxname, sizeof(idxname), "%s_index", RelationGetRelationName(matviewRel));
+
+	index = makeNode(IndexStmt);
+
+	index->unique = true;
+	index->primary = false;
+	index->isconstraint = false;
+	index->deferrable = false;
+	index->initdeferred = false;
+	index->idxname = idxname;
+	index->relation =
+		makeRangeVar(get_namespace_name(RelationGetNamespace(matviewRel)),
+					 pstrdup(RelationGetRelationName(matviewRel)),
+					 -1);
+	index->accessMethod = DEFAULT_INDEX_TYPE;
+	index->options = NIL;
+	index->tableSpace = get_tablespace_name(matviewRel->rd_rel->reltablespace);
+	index->whereClause = NULL;
+	index->indexParams = NIL;
+	index->indexIncludingParams = NIL;
+	index->excludeOpNames = NIL;
+	index->idxcomment = NULL;
+	index->indexOid = InvalidOid;
+	index->oldNumber = InvalidRelFileNumber;
+	index->oldCreateSubid = InvalidSubTransactionId;
+	index->oldFirstRelfilelocatorSubid = InvalidSubTransactionId;
+	index->transformed = true;
+	index->concurrent = false;
+	index->if_not_exists = false;
+
+	/* create index on the base tables' primary key columns */
+	key_attnos = get_primary_key_attnos_from_query(query, &constraintList);
+	if (key_attnos)
+	{
+		foreach(lc, query->targetList)
+		{
+			TargetEntry *tle = (TargetEntry *) lfirst(lc);
+			Form_pg_attribute attr = TupleDescAttr(matviewRel->rd_att, tle->resno - 1);
+
+			if (bms_is_member(tle->resno - FirstLowInvalidHeapAttributeNumber, key_attnos))
+			{
+				IndexElem  *iparam;
+
+				iparam = makeNode(IndexElem);
+				iparam->name = pstrdup(NameStr(attr->attname));
+				iparam->expr = NULL;
+				iparam->indexcolname = NULL;
+				iparam->collation = NIL;
+				iparam->opclass = NIL;
+				iparam->opclassopts = NIL;
+				iparam->ordering = SORTBY_DEFAULT;
+				iparam->nulls_ordering = SORTBY_NULLS_DEFAULT;
+				index->indexParams = lappend(index->indexParams, iparam);
+			}
+		}
+	}
+	else
+	{
+		/* create no index, just notice that an appropriate index is necessary for efficient IVM */
+		ereport(NOTICE,
+				(errmsg("could not create an index on materialized view \"%s\" automatically",
+						RelationGetRelationName(matviewRel)),
+				 errdetail("This target list does not have all the primary key columns. "),
+				 errhint("Create an index on the materialized view for efficient incremental maintenance.")));
+		return;
+	}
+
+	/* If we have a compatible index, we don't need to create another. */
+	foreach(indexoidscan, indexoidlist)
+	{
+		Oid			indexoid = lfirst_oid(indexoidscan);
+		Relation	indexRel;
+		bool		hasCompatibleIndex = false;
+
+		indexRel = index_open(indexoid, AccessShareLock);
+
+		if (CheckIndexCompatible(indexRel->rd_id,
+								index->accessMethod,
+								index->indexParams,
+								index->excludeOpNames,
+								false))
+			hasCompatibleIndex = true;
+
+		index_close(indexRel, AccessShareLock);
+
+		if (hasCompatibleIndex)
+			return;
+	}
+
+	address = DefineIndex(NULL,
+						  RelationGetRelid(matviewRel),
+						  index,
+						  InvalidOid,
+						  InvalidOid,
+						  InvalidOid,
+						  -1,
+						  false, true, false, false, true);
+
+	ereport(NOTICE,
+			(errmsg("created index \"%s\" on materialized view \"%s\"",
+					idxname, RelationGetRelationName(matviewRel))));
+
+	/*
+	 * Make dependencies so that the index is dropped if any base tables'
+	 * primary key is dropped.
+	 */
+	foreach(lc, constraintList)
+	{
+		Oid constraintOid = lfirst_oid(lc);
+		ObjectAddress	refaddr;
+
+		refaddr.classId = ConstraintRelationId;
+		refaddr.objectId = constraintOid;
+		refaddr.objectSubId = 0;
+
+		recordDependencyOn(&address, &refaddr, DEPENDENCY_NORMAL);
+	}
+}
+
+
+/*
+ * get_primary_key_attnos_from_query
+ *
+ * Identify the columns in base tables' primary keys in the target list.
+ *
+ * Returns a Bitmapset of the column attnos of the primary key's columns of
+ * tables that used in the query.  The attnos are offset by
+ * FirstLowInvalidHeapAttributeNumber as same as get_primary_key_attnos.
+ *
+ * If any table has no primary key or any primary key's columns is not in
+ * the target list, return NULL.  We also return NULL if any pkey constraint
+ * is deferrable.
+ *
+ * constraintList is set to a list of the OIDs of the pkey constraints.
+ */
+static Bitmapset *
+get_primary_key_attnos_from_query(Query *query, List **constraintList)
+{
+	List *key_attnos_list = NIL;
+	ListCell *lc;
+	int i;
+	Bitmapset *keys = NULL;
+	Relids	rels_in_from;
+
+	/*
+	 * Collect primary key attributes from all tables used in query. The key attributes
+	 * sets for each table are stored in key_attnos_list in order by RTE index.
+	 */
+	foreach(lc, query->rtable)
+	{
+		RangeTblEntry *r = (RangeTblEntry*) lfirst(lc);
+		Bitmapset *key_attnos;
+		bool	has_no_pkey = false;
+
+		/* for tables, call get_primary_key_attnos */
+		if (r->rtekind == RTE_RELATION)
+		{
+			Oid constraintOid;
+			key_attnos = get_primary_key_attnos(r->relid, false, &constraintOid);
+			*constraintList = lappend_oid(*constraintList, constraintOid);
+			has_no_pkey = (key_attnos == NULL);
+		}
+		/*
+		 * Ignore join rels, because they are flatten later by
+		 * flatten_join_alias_vars(). Store NULL into key_attnos_list
+		 * as a dummy.
+		 */
+		 else if (r->rtekind == RTE_JOIN)
+		 {
+			key_attnos = NULL;
+		}
+		/* for other RTEs, store NULL into key_attnos_list */
+		else
+			has_no_pkey = true;
+
+		/*
+		 * If any table or subquery has no primary key or its pkey constraint is deferrable,
+		 * we cannot get key attributes for this query, so return NULL.
+		 */
+		if (has_no_pkey)
+			return NULL;
+
+		key_attnos_list = lappend(key_attnos_list, key_attnos);
+	}
+
+	/* Collect key attributes appearing in the target list */
+	i = 1;
+	foreach(lc, query->targetList)
+	{
+		TargetEntry *tle = (TargetEntry *) flatten_join_alias_vars(NULL, query, lfirst(lc));
+
+		if (IsA(tle->expr, Var))
+		{
+			Var *var = (Var*) tle->expr;
+			Bitmapset *key_attnos = list_nth(key_attnos_list, var->varno - 1);
+
+			/* check if this attribute is from a base table's primary key */
+			if (bms_is_member(var->varattno - FirstLowInvalidHeapAttributeNumber, key_attnos))
+			{
+				/*
+				 * Remove found key attributes from key_attnos_list, and add this
+				 * to the result list.
+				 */
+				key_attnos = bms_del_member(key_attnos, var->varattno - FirstLowInvalidHeapAttributeNumber);
+				if (bms_is_empty(key_attnos))
+				{
+					key_attnos_list = list_delete_nth_cell(key_attnos_list, var->varno - 1);
+					key_attnos_list = list_insert_nth(key_attnos_list, var->varno - 1, NULL);
+				}
+				keys = bms_add_member(keys, i - FirstLowInvalidHeapAttributeNumber);
+			}
+		}
+		i++;
+	}
+
+	/* Collect RTE indexes of relations appearing in the FROM clause */
+	rels_in_from = get_relids_in_jointree((Node *) query->jointree, false, false);
+
+	/*
+	 * Check if all key attributes of relations in FROM are appearing in the target
+	 * list.  If an attribute remains in key_attnos_list in spite of the table is used
+	 * in FROM clause, the target is missing this key attribute, so we return NULL.
+	 */
+	i = 1;
+	foreach(lc, key_attnos_list)
+	{
+		Bitmapset *bms = (Bitmapset *)lfirst(lc);
+		if (!bms_is_empty(bms) && bms_is_member(i, rels_in_from))
+			return NULL;
+		i++;
+	}
+
+	return keys;
 }

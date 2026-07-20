@@ -1139,6 +1139,12 @@ Start the node and wait until it is ready to accept connections.
 By default, failure terminates the entire F<prove> invocation.  If given,
 instead return a true or false value to indicate success or failure.
 
+=item options => B<string>
+
+Additional postmaster options passed as the value of pg_ctl's C<--options>
+argument. This must be a single string, quoted as needed by the caller.
+Do not specify C<cluster_name>; it is set from the node name.
+
 =back
 
 =cut
@@ -1150,6 +1156,12 @@ sub start
 	my $pgdata = $self->data_dir;
 	my $name = $self->name;
 	my $ret;
+	my $options = "";
+
+	$options .= "$params{options} "
+	  if defined $params{options} && $params{options} ne "";
+
+	$options .= "--cluster-name=$name";
 
 	BAIL_OUT("node \"$name\" is already running") if defined $self->{_pid};
 
@@ -1168,7 +1180,7 @@ sub start
 		'pg_ctl', '--wait',
 		'--pgdata' => $self->data_dir,
 		'--log' => $self->logfile,
-		'--options' => "--cluster-name=$name",
+		'--options' => $options,
 		'start');
 
 	if ($ret != 0)

@@ -1605,7 +1605,57 @@ ShutdownWalRecovery(void)
 	 * it, but let's do it for the sake of tidiness.
 	 */
 	if (ArchiveRecoveryRequested)
-		DisownLatch(&XLogRecoveryCtl->recoveryWakeupLatch);
+
+/*
+ * Get next record for redo.
+ *
+ * Use the pipeline if enabled for parallel decoding and receive decoded
+ * records from a shared queue, else read it directly.
+ *
+ * Parallel decoding helps us offloading some load from the CPU and hence
+ * boosting the recovery process.
+ */
+static XLogRecord *
+ReceiveRecord(XLogPrefetcher *xlogprefetcher, int emode,
+				bool fetching_ckpt, TimeLineID replayTLI,
+				XLogReaderState **localreader)
+{
+
+	XLogRecord *record = NULL;
+	XLogReaderState *reader = *localreader;
+	DecodedXLogRecord *decoded_record = NULL;
+
+	/*
+	 * If pipeline not enabled read the record directly
+	 */
+	if (!wal_pipeline_enabled)
+	{
+		record = ReadRecord(xlogprefetcher, emode, fetching_ckpt, replayTLI);
+		return record;
+	}
+
+	Assert (WalPipeline_IsActive());
+
+	/*
+	 * Get the record from the pipeline message queue
+	 */
+	decoded_record = WalPipeline_ReceiveRecord(reader);
+
+	if (decoded_record)
+	{
+		record = &decoded_record->header;
+		return record;
+	}
+	else
+	{
+		/*
+		 * We will end up here only when pipeline couldn't read more
+		 * records and have sent a shutdown msg. We will acknowldge this
+		 * and will trigger request to stop more pipelined decoding.
+		 */
+		WalPipeline_Stop();
+		return NULL;
+	}
 }
 
 /*
@@ -1619,6 +1669,12 @@ PerformWalRecovery(void)
 	XLogRecord *record;
 	bool		reachedRecoveryTarget = false;
 	TimeLineID	replayTLI;
+
+	/*
+	 * standalone backend may exist in case of pg_rewind.
+	 */
+	if (!IsUnderPostmaster)
+		wal_pipeline_enabled = false;
 
 	/*
 	 * Initialize shared variables for tracking progress of WAL replay, as if
@@ -1698,6 +1754,17 @@ PerformWalRecovery(void)
 		pg_rusage_init(&ru0);
 
 		InRedo = true;
+
+		if(wal_pipeline_enabled)
+		{
+			/*
+			 * Startup proc parameters that pipeline should also be aware of.
+			 */
+			WalPipelineParams *params = palloc0(sizeof(WalPipelineParams));
+
+			params->ReplayTLI = replayTLI;
+			WalPipeline_Start(params);
+		}
 
 		RmgrStartup();
 
@@ -1807,7 +1874,7 @@ PerformWalRecovery(void)
 			}
 
 			/* Else, try to fetch the next WAL record */
-			record = ReadRecord(xlogprefetcher, LOG, false, replayTLI);
+			record = ReceiveRecord(xlogprefetcher, LOG, false, replayTLI, &xlogreader);
 		} while (record != NULL);
 
 		/*
@@ -1816,6 +1883,9 @@ PerformWalRecovery(void)
 
 		if (reachedRecoveryTarget)
 		{
+			if (wal_pipeline_enabled)
+				WalPipeline_Stop();
+
 			if (!reachedConsistency)
 				ereport(FATAL,
 						(errmsg("requested recovery stop point is before consistent recovery point")));

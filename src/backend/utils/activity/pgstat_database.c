@@ -392,6 +392,31 @@ pgstat_should_report_connstat(void)
 /*
  * Find or create a local PgStat_StatDBEntry entry for dboid.
  */
+/*
+ * Report that a vacuum in this database was interrupted by an error.
+ *
+ * Called from the vacuum error callback while the transaction is aborting,
+ * so a pending entry might never be flushed; update the shared entry
+ * directly instead.  Shared relations report dboid = InvalidOid, matching
+ * how their other stats are accounted.
+ */
+void
+pgstat_report_vacuum_error(bool shared)
+{
+	PgStat_EntryRef *entry_ref;
+	PgStatShared_Database *sharedent;
+	Oid			dboid = (shared ? InvalidOid : MyDatabaseId);
+
+	if (!pgstat_track_counts)
+		return;
+
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_DATABASE, dboid,
+											InvalidOid, false);
+	sharedent = (PgStatShared_Database *) entry_ref->shared_stats;
+	sharedent->stats.vacuum_interrupt_count++;
+	pgstat_unlock_entry(entry_ref);
+}
+
 PgStat_StatDBEntry *
 pgstat_prep_database_pending(Oid dboid)
 {

@@ -3828,6 +3828,15 @@ vacuum_error_callback(void *arg)
 {
 	LVRelState *errinfo = arg;
 
+	/*
+	 * If an actual ERROR (not a lower-severity report that merely carries
+	 * this vacuum error context) is being raised while we have a relation in
+	 * hand, record at the database level that a vacuum was interrupted.  Any
+	 * error here aborts the vacuum, so the exact phase does not matter.
+	 */
+	if (errinfo->rel != NULL && geterrlevel() == ERROR)
+		pgstat_report_vacuum_error(errinfo->rel->rd_rel->relisshared);
+
 	switch (errinfo->phase)
 	{
 		case VACUUM_ERRCB_PHASE_SCAN_HEAP:

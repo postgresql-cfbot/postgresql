@@ -23,6 +23,7 @@ tests += {
       't/012_ddlutils.pl',
       't/013_temp_obj_multisession.pl',
       't/014_log_statement_max_length.pl',
+      't/015_vacuum_interrupts.pl',
       't/016_index_vacuum_time.pl',
       't/017_vacuum_failsafe.pl',
     ],

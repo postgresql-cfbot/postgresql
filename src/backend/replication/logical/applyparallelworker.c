@@ -986,66 +986,7 @@ ParallelApplyWorkerMain(Datum main_arg)
 
 	set_apply_error_context_origin(originname);
 
-	PG_TRY();
-	{
-		LogicalParallelApplyLoop(mqh);
-	}
-	PG_CATCH();
-	{
-		MemoryContext oldcontext;
-		ErrorData  *edata;
-
-		/*
-		 * Reset the origin state to prevent the advancement of origin
-		 * progress if we fail to apply. Otherwise, this will result in
-		 * transaction loss as that transaction won't be sent again by the
-		 * server.
-		 */
-		replorigin_xact_clear(true);
-
-		/*
-		 * Copy the error and recover to an idle state so we can insert the
-		 * deferred conflict log tuple (if any) before re-throwing.  Copy the
-		 * error into a longer-lived context first, as it may have been raised
-		 * under ErrorContext.  Also reset the error context stack: the
-		 * callbacks in effect when the error was thrown belong to unwound
-		 * stack frames, and the deferred insert installs its own.
-		 */
-		oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-		edata = CopyErrorData();
-		MemoryContextSwitchTo(oldcontext);
-
-		FlushErrorState();
-		error_context_stack = NULL;
-
-		/*
-		 * Tell the leader we failed and are about to report the error and log
-		 * the conflict.  This must be set before AbortOutOfAnyTransaction()
-		 * below releases the transaction lock that the leader waits on in
-		 * pa_wait_for_xact_finish(); otherwise the leader would see a
-		 * non-finished state, assume the connection was lost, and tear this
-		 * worker down while it is still writing the conflict log tuple.
-		 */
-		pa_set_xact_state(MyParallelShared, PARALLEL_TRANS_ERROR);
-
-		AbortOutOfAnyTransaction();
-
-		/*
-		 * Insert the deferred conflict log tuple before re-throwing.
-		 * Re-throwing is what reports the error to the leader (via the error
-		 * queue set up above), so the insertion must happen first: otherwise
-		 * the leader could start tearing down this worker while it is still
-		 * writing the conflict log tuple.  If the insertion itself fails,
-		 * that error (annotated with the conflict context, see
-		 * InsertConflictLogTuple) propagates to the leader instead of the
-		 * original.
-		 */
-		ProcessPendingConflictLogTuple();
-
-		/* Re-throw the original error, which reports it to the leader. */
-		ReThrowError(edata);
-	}
-	PG_END_TRY();
+	LogicalParallelApplyLoop(mqh);
 
 	/*
 	 * The parallel apply worker must not get here because the parallel apply

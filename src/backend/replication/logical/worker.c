@@ -5660,9 +5660,6 @@ start_apply(XLogRecPtr origin_startpos)
 	}
 	PG_CATCH();
 	{
-		MemoryContext oldcontext;
-		ErrorData  *edata;
-
 		/*
 		 * Reset the origin state to prevent the advancement of origin
 		 * progress if we fail to apply. Otherwise, this will result in
@@ -5676,34 +5673,14 @@ start_apply(XLogRecPtr origin_startpos)
 		else
 		{
 			/*
-			 * Save the error and recover to an idle state so we can insert
-			 * the deferred conflict log tuple (if any) before re-throwing.
-			 * Copy the error into a long-lived context first, as it may have
-			 * been raised under ErrorContext.  Also reset the error context
-			 * stack: the callbacks in effect when the error was thrown belong
-			 * to unwound stack frames, and the deferred insert installs its
-			 * own.
+			 * Report the worker failed while applying changes. Abort the
+			 * current transaction so that the stats message is sent in an
+			 * idle state.
 			 */
-			oldcontext = MemoryContextSwitchTo(TopMemoryContext);
-			edata = CopyErrorData();
-			MemoryContextSwitchTo(oldcontext);
-
-			FlushErrorState();
-			error_context_stack = NULL;
 			AbortOutOfAnyTransaction();
 			pgstat_report_subscription_error(MySubscription->oid);
 
-			/*
-			 * Insert the deferred conflict log tuple in its own transaction.
-			 * If this fails, that error (annotated with the conflict context,
-			 * see InsertConflictLogTuple) propagates instead of the original;
-			 * such failures are expected to be rare and persistent (e.g. out
-			 * of disk space).
-			 */
-			ProcessPendingConflictLogTuple();
-
-			/* Re-throw the original error. */
-			ReThrowError(edata);
+			PG_RE_THROW();
 		}
 	}
 	PG_END_TRY();

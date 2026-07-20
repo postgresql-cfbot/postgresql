@@ -27,6 +27,7 @@
 #include "funcapi.h"
 #include "pgstat.h"
 #include "replication/conflict.h"
+#include "replication/origin.h"
 #include "replication/worker_internal.h"
 #include "storage/lmgr.h"
 #include "utils/array.h"
@@ -340,6 +341,7 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	Relation	conflictlogrel;
 	bool		log_dest_table;
 	bool		log_dest_logfile;
+	char	   *logdetail = NULL;
 
 	pgstat_report_subscription_conflict(MySubscription->oid, type);
 
@@ -386,12 +388,9 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 	}
 
 	/*
-	 * Report the conflict to the server log before inserting it into the
-	 * conflict log table.  Emitting it first guarantees the conflict is
-	 * recorded even if the table insert below fails; it is also what raises
-	 * the error for ERROR-level conflicts.  When the server log is one of the
-	 * destinations we emit the full details, otherwise (table-only) we emit a
-	 * shorter message since the details are captured in the table.
+	 * Build the server-log detail now, while the executor tuples are still
+	 * available.  For an ERROR-level conflict we abort below (which frees
+	 * them) before raising the error.
 	 */
 	if (log_dest_logfile)
 	{
@@ -409,21 +408,87 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 									 conflicttuple->ts,
 									 &err_detail);
 
-		/* Standard reporting with full internal details. */
+		logdetail = err_detail.data;
+	}
+
+	/*
+	 * For an ERROR-level conflict, insert the conflict log tuple in its own
+	 * transaction and then raise the error, so that no transactional work runs
+	 * in the apply worker's error (PG_CATCH) path.  When the table is a
+	 * destination, AbortOutOfAnyTransaction() below frees the executor tuples
+	 * and closes the conflict log relation, so the strings the report needs are
+	 * first captured into a context that survives the abort.
+	 */
+	if (elevel >= ERROR)
+	{
+		if (log_dest_table)
+		{
+			MemoryContext oldctx;
+			char	   *qualname;
+			char	   *clt_relname = NULL;
+
+			oldctx = MemoryContextSwitchTo(ApplyContext);
+			qualname = pstrdup(RelationGetQualifiedRelationName(localrel));
+			if (logdetail)
+				logdetail = pstrdup(logdetail);
+			else				/* table is the only destination */
+				clt_relname = pstrdup(RelationGetRelationName(conflictlogrel));
+			MemoryContextSwitchTo(oldctx);
+
+			/*
+			 * Reset the origin so the insert's commit does not advance
+			 * replication progress, and (for a parallel apply worker) tell the
+			 * leader we errored before the abort releases the transaction lock
+			 * it waits on in pa_wait_for_xact_finish().  Then abort the failed
+			 * apply transaction and insert the conflict tuple in a fresh
+			 * transaction.
+			 */
+			replorigin_xact_clear(true);
+			if (am_parallel_apply_worker())
+				pa_set_xact_state(MyParallelShared, PARALLEL_TRANS_ERROR);
+			AbortOutOfAnyTransaction();
+			ProcessPendingConflictLogTuple();
+
+			if (logdetail)
+				ereport(elevel,
+						errcode_apply_conflict(type),
+						errmsg("conflict detected on relation \"%s\": conflict=%s",
+							   qualname, ConflictTypeNames[type]),
+						errdetail_internal("%s", logdetail));
+			else
+				ereport(elevel,
+						errcode_apply_conflict(type),
+						errmsg("conflict detected on relation \"%s\": conflict=%s",
+							   qualname, ConflictTypeNames[type]),
+						errdetail("Conflict details are logged to the conflict log table: %s",
+								  clt_relname));
+		}
+		else
+		{
+			/* Server log only; no abort needed, executor tuples still valid. */
+			ereport(elevel,
+					errcode_apply_conflict(type),
+					errmsg("conflict detected on relation \"%s\": conflict=%s",
+						   RelationGetQualifiedRelationName(localrel),
+						   ConflictTypeNames[type]),
+					errdetail_internal("%s", logdetail));
+		}
+
+		pg_unreachable();
+	}
+
+	/*
+	 * Below ERROR the apply transaction continues.  Report the conflict, then
+	 * insert the tuple immediately in the same transaction if requested.
+	 */
+	if (log_dest_logfile)
 		ereport(elevel,
 				errcode_apply_conflict(type),
 				errmsg("conflict detected on relation \"%s\": conflict=%s",
 					   RelationGetQualifiedRelationName(localrel),
 					   ConflictTypeNames[type]),
-				errdetail_internal("%s", err_detail.data));
-	}
+				errdetail_internal("%s", logdetail));
 	else if (log_dest_table)
-	{
-		/*
-		 * Not logging conflict details to the server log; report the conflict
-		 * but omit raw tuple data since it is captured in the conflict log
-		 * table.
-		 */
 		ereport(elevel,
 				errcode_apply_conflict(type),
 				errmsg("conflict detected on relation \"%s\": conflict=%s",
@@ -431,48 +496,10 @@ ReportApplyConflict(EState *estate, ResultRelInfo *relinfo, int elevel,
 					   ConflictTypeNames[type]),
 				errdetail("Conflict details are logged to the conflict log table: %s",
 						  RelationGetRelationName(conflictlogrel)));
-	}
 
-	/*
-	 * Insert into the conflict log table if requested.  For conflicts below
-	 * ERROR the apply transaction continues, so insert immediately; for
-	 * ERROR-level conflicts the ereport() above already raised the error and
-	 * the insertion is deferred to a new transaction
-	 * (ProcessPendingConflictLogTuple) so that it is not rolled back.
-	 */
 	if (log_dest_table)
 	{
-		if (elevel < ERROR)
-		{
-			PG_TRY();
-			{
-				InsertConflictLogTuple(conflictlogrel);
-			}
-			PG_CATCH();
-			{
-				/*
-				 * The insert failed, so the apply transaction will abort and
-				 * the error will propagate to the worker's error handler. The
-				 * conflict was already reported to the server log above, so
-				 * it is not lost.  Discard the prepared tuple so that the
-				 * deferred insertion path (ProcessPendingConflictLogTuple)
-				 * does not retry this same failing insert.
-				 */
-				if (pending_conflict_log.tuple != NULL)
-				{
-					heap_freetuple(pending_conflict_log.tuple);
-					pending_conflict_log.tuple = NULL;
-				}
-				if (pending_conflict_log.errcontext_str != NULL)
-				{
-					pfree(pending_conflict_log.errcontext_str);
-					pending_conflict_log.errcontext_str = NULL;
-				}
-				PG_RE_THROW();
-			}
-			PG_END_TRY();
-		}
-
+		InsertConflictLogTuple(conflictlogrel);
 		table_close(conflictlogrel, RowExclusiveLock);
 	}
 }

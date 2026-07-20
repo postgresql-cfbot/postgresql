@@ -4120,7 +4120,8 @@ ReindexRelationConcurrently(const ReindexStmt *stmt, Oid relationOid, const Rein
 									   INDEX_CREATE_SUPPRESS_PROGRESS,
 									   idx->indexId,
 									   tablespaceid,
-									   concurrentName);
+									   concurrentName,
+									   false);
 
 		/*
 		 * Now open the relation of the new index, a session-level lock is

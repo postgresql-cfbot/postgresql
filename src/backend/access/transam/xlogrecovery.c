@@ -102,7 +102,7 @@ int			recovery_min_apply_delay = 0;
 char	   *PrimaryConnInfo = NULL;
 char	   *PrimarySlotName = NULL;
 bool		wal_receiver_create_temp_slot = false;
-bool		wal_pipeline_enabled = false;
+bool		wal_pipeline_enabled = true;
 int			wal_pipeline_mq_size_mb = 128;
 
 /*

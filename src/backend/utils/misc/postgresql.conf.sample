@@ -288,7 +288,7 @@
 #recovery_prefetch = try        # prefetch pages referenced in the WAL?
 #wal_decode_buffer_size = 512kB # lookahead window used for prefetching
                                 # (change requires restart)
-#wal_pipeline = off              # decode in parallel
+#wal_pipeline = on              # decode in parallel
 #wal_pipeline_queue_size = 128MB
 
 # - Archiving -

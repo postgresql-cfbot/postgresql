@@ -3523,7 +3523,7 @@
 { name => 'wal_pipeline', type => 'bool', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY',
   short_desc => 'Use parallel workers to speedup recovery.',
   variable => 'wal_pipeline_enabled',
-  boot_val => 'false',
+  boot_val => 'true',
 },
 
 { name => 'wal_pipeline_queue_size', type => 'int', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY',

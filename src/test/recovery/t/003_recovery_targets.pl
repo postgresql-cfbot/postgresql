@@ -12,6 +12,10 @@ use Time::HiRes qw(usleep);
 # Create and test a standby from given backup, with a certain recovery target.
 # Choose $until_lsn later than the transaction commit that causes the row
 # count to reach $num_rows, yet not later than the recovery target.
+# If options is given, pass it through Cluster->start(options => ...).  This is
+# used to exercise scenarios that require the postmaster command line to receive
+# multiple "-c name=value" instances of the same GUC, which postgresql.conf
+# cannot express because ProcessConfigFile collapses duplicate keys.
 sub test_recovery_standby
 {
 	local $Test::Builder::Level = $Test::Builder::Level + 1;
@@ -22,6 +26,7 @@ sub test_recovery_standby
 	my $recovery_params = shift;
 	my $num_rows = shift;
 	my $until_lsn = shift;
+	my %params = @_;
 
 	my $node_standby = PostgreSQL::Test::Cluster->new($node_name);
 	$node_standby->init_from_backup($node_primary, 'my_backup',
@@ -32,7 +37,8 @@ sub test_recovery_standby
 		$node_standby->append_conf('postgresql.conf', qq($param_item));
 	}
 
-	$node_standby->start;
+	$node_standby->start(
+		defined $params{options} ? (options => $params{options}) : ());
 
 	# Wait until standby has replayed enough data
 	my $caughtup_query =
@@ -108,6 +114,9 @@ $node_primary->safe_psql('postgres',
 # Force archiving of WAL file
 $node_primary->safe_psql('postgres', "SELECT pg_switch_wal()");
 
+my $lsn6 =
+  $node_primary->safe_psql('postgres', "SELECT pg_current_wal_lsn()");
+
 # Test recovery targets
 my @recovery_params = ("recovery_target = 'immediate'");
 test_recovery_standby('immediate target',
@@ -125,11 +134,19 @@ test_recovery_standby('name', 'standby_4', $node_primary, \@recovery_params,
 test_recovery_standby('LSN', 'standby_5', $node_primary, \@recovery_params,
 	"5000", $lsn5);
 
+# Regression: empty-string for one recovery_target_* GUC must not clobber
+# another non-empty target.  Setting recovery_target_xid + recovery_target_time
+# = '' must recover to the xid, not run as no-target recovery.
+@recovery_params =
+  ("recovery_target_xid = '$recovery_txid'", "recovery_target_time = ''");
+test_recovery_standby('xid with empty time GUC',
+	'standby_xid_empty_time', $node_primary, \@recovery_params,
+	"2000", $lsn2);
+
 # Multiple targets
 #
-# Multiple conflicting settings are not allowed, but setting the same
-# parameter multiple times or unsetting a parameter and setting a
-# different one is allowed.
+# Multiple conflicting non-empty settings are rejected, but setting the same
+# parameter twice or clearing one with an empty string is allowed.
 
 @recovery_params = (
 	"recovery_target_name = '$recovery_name'",
@@ -138,31 +155,9 @@ test_recovery_standby('LSN', 'standby_5', $node_primary, \@recovery_params,
 test_recovery_standby('multiple overriding settings',
 	'standby_6', $node_primary, \@recovery_params, "3000", $lsn3);
 
-my $node_standby = PostgreSQL::Test::Cluster->new('standby_7');
-$node_standby->init_from_backup($node_primary, 'my_backup',
-	has_restoring => 1);
-$node_standby->append_conf(
-	'postgresql.conf', "recovery_target_name = '$recovery_name'
-recovery_target_time = '$recovery_time'");
-
-my $res = run_log(
-	[
-		'pg_ctl',
-		'--pgdata' => $node_standby->data_dir,
-		'--log' => $node_standby->logfile,
-		'start',
-	]);
-ok(!$res, 'invalid recovery startup fails');
-
-my $logfile = slurp_file($node_standby->logfile());
-like(
-	$logfile,
-	qr/multiple recovery targets specified/,
-	'multiple conflicting settings');
-
 # Check behavior when recovery ends before target is reached
 
-$node_standby = PostgreSQL::Test::Cluster->new('standby_8');
+my $node_standby = PostgreSQL::Test::Cluster->new('standby_8');
 $node_standby->init_from_backup(
 	$node_primary, 'my_backup',
 	has_restoring => 1,
@@ -184,11 +179,83 @@ foreach my $i (0 .. 10 * $PostgreSQL::Test::Utils::timeout_default)
 	last if !-f $node_standby->data_dir . '/postmaster.pid';
 	usleep(100_000);
 }
-$logfile = slurp_file($node_standby->logfile());
+my $logfile = slurp_file($node_standby->logfile());
 like(
 	$logfile,
 	qr/FATAL: .* recovery ended before configured recovery target was reached/,
 	'recovery end before target reached is a fatal error');
+
+# Conflicts are rejected at every startup, even without recovery.signal.
+# init_from_backup without has_restoring creates no recovery.signal, so this
+# cluster would otherwise start as a plain primary; the conflict must still be
+# caught.
+my $node_no_signal = PostgreSQL::Test::Cluster->new('multi_target_no_signal');
+$node_no_signal->init_from_backup($node_primary, 'my_backup');
+$node_no_signal->append_conf(
+	'postgresql.conf', "recovery_target_name = '$recovery_name'
+recovery_target_time = '$recovery_time'");
+
+ok( !$node_no_signal->start(fail_ok => 1),
+	'server fails to start with conflicting recovery targets and no recovery.signal'
+);
+
+my $logfile_no_signal = slurp_file($node_no_signal->logfile());
+like(
+	$logfile_no_signal,
+	qr/cannot specify more than one recovery target/,
+	'expected error message logged without recovery.signal');
+like(
+	$logfile_no_signal,
+	qr/Parameters set are: "recovery_target_name", "recovery_target_time"/,
+	'errdetail lists the set parameters in order without recovery.signal');
+unlike(
+	$logfile_no_signal,
+	qr/Parameters set are:[^\n]*=/,
+	'errdetail does not echo parameter values without recovery.signal');
+
+my $node_immediate_conflict =
+  PostgreSQL::Test::Cluster->new('immediate_target_conflict');
+$node_immediate_conflict->init_from_backup($node_primary, 'my_backup');
+$node_immediate_conflict->append_conf(
+	'postgresql.conf',
+	"recovery_target = 'immediate'
+recovery_target_xid = '$recovery_txid'");
+
+ok( !$node_immediate_conflict->start(fail_ok => 1),
+	'server fails to start with recovery_target=immediate and a second target'
+);
+like(
+	slurp_file($node_immediate_conflict->logfile()),
+	qr/cannot specify more than one recovery target/,
+	'recovery_target=immediate conflicting with another target is rejected');
+
+# Same-GUC set-then-clear: setting a recovery_target_* GUC and then setting the
+# same GUC to an empty string leaves no target, so recovery runs to the end of
+# WAL.  Duplicate keys collapse in postgresql.conf, so "pg_ctl --options" passes
+# both assignments on the postmaster command line.
+test_recovery_standby(
+	'recovery_target_xid set then cleared',
+	'standby_xid_set_clear',
+	$node_primary,
+	[],
+	"6000",
+	$lsn6,
+	options => "-c recovery_target_xid=$recovery_txid -c recovery_target_xid="
+);
+
+# Set recovery_target_xid, then set and clear recovery_target_name.  Only the
+# xid remains, so recovery must stop at it rather than running to the end of WAL
+# (a competing target that is set then cleared must not strand the first one).
+test_recovery_standby(
+	'recovery target preserved when a competing one is set then cleared',
+	'standby_clobber_clear',
+	$node_primary,
+	[],
+	"2000",
+	$lsn2,
+	options =>
+	  "-c recovery_target_xid=$recovery_txid -c recovery_target_name=$recovery_name -c recovery_target_name="
+);
 
 # Invalid recovery_target_timeline tests
 my ($result, $stdout, $stderr) = $node_primary->psql('postgres',

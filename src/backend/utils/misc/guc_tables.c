@@ -667,7 +667,6 @@ static bool exec_backend_enabled = EXEC_BACKEND_ENABLED;
 static char *recovery_target_timeline_string;
 static char *recovery_target_string;
 static char *recovery_target_xid_string;
-static char *recovery_target_name_string;
 static char *recovery_target_lsn_string;
 
 /* should be static, but commands/variable.c needs to get at this */

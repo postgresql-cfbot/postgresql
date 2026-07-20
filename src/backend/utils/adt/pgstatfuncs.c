@@ -136,6 +136,12 @@ PG_STAT_GET_RELENTRY_FLOAT8(total_analyze_time)
 /* pg_stat_get_total_autoanalyze_time */
 PG_STAT_GET_RELENTRY_FLOAT8(total_autoanalyze_time)
 
+/* pg_stat_get_total_vacuum_delay_time */
+PG_STAT_GET_RELENTRY_FLOAT8(total_vacuum_delay_time)
+
+/* pg_stat_get_total_autovacuum_delay_time */
+PG_STAT_GET_RELENTRY_FLOAT8(total_autovacuum_delay_time)
+
 #define PG_STAT_GET_RELENTRY_TIMESTAMPTZ(stat)					\
 Datum															\
 CppConcat(pg_stat_get_,stat)(PG_FUNCTION_ARGS)					\
@@ -1238,6 +1244,18 @@ PG_STAT_GET_DBENTRY_FLOAT8_MS(blk_write_time)
 
 /* pg_stat_get_db_idle_in_transaction_time */
 PG_STAT_GET_DBENTRY_FLOAT8_MS(idle_in_transaction_time)
+
+/* pg_stat_get_db_total_vacuum_time */
+PG_STAT_GET_DBENTRY_FLOAT8_MS(total_vacuum_time)
+
+/* pg_stat_get_db_total_autovacuum_time */
+PG_STAT_GET_DBENTRY_FLOAT8_MS(total_autovacuum_time)
+
+/* pg_stat_get_db_total_vacuum_delay_time */
+PG_STAT_GET_DBENTRY_FLOAT8_MS(total_vacuum_delay_time)
+
+/* pg_stat_get_db_total_autovacuum_delay_time */
+PG_STAT_GET_DBENTRY_FLOAT8_MS(total_autovacuum_delay_time)
 
 /* pg_stat_get_db_session_time */
 PG_STAT_GET_DBENTRY_FLOAT8_MS(session_time)

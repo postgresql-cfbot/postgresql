@@ -399,6 +399,17 @@ typedef struct PgStat_StatDBEntry
 	PgStat_Counter parallel_workers_to_launch;
 	PgStat_Counter parallel_workers_launched;
 
+	/*
+	 * Cumulative time vacuums spent processing tables of this database and
+	 * sleeping in cost-based delay points, in microseconds (the delay parts
+	 * advance only when track_cost_delay_timing is enabled).  Times of index
+	 * processing are included in the owning table's run.
+	 */
+	PgStat_Counter total_vacuum_time;
+	PgStat_Counter total_autovacuum_time;
+	PgStat_Counter total_vacuum_delay_time;
+	PgStat_Counter total_autovacuum_delay_time;
+
 	TimestampTz stat_reset_timestamp;
 } PgStat_StatDBEntry;
 
@@ -483,6 +494,14 @@ typedef struct PgStat_StatTabEntry
 	PgStat_Counter total_autovacuum_time;
 	PgStat_Counter total_analyze_time;
 	PgStat_Counter total_autoanalyze_time;
+
+	/*
+	 * Time slept in cost-based vacuum delay points while vacuuming this
+	 * relation, in milliseconds; nonzero only when track_cost_delay_timing
+	 * is enabled.
+	 */
+	PgStat_Counter total_vacuum_delay_time;
+	PgStat_Counter total_autovacuum_delay_time;
 
 	TimestampTz stat_reset_time;
 } PgStat_StatTabEntry;
@@ -711,7 +730,12 @@ extern void pgstat_unlink_relation(Relation rel);
 
 extern void pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 								 PgStat_Counter deadtuples,
-								 TimestampTz starttime);
+								 TimestampTz starttime,
+								 PgStat_Counter delaytime);
+extern void pgstat_report_index_vacuum_time(Relation rel,
+											PgStat_Counter elapsedtime,
+											PgStat_Counter delaytime,
+											bool is_autovacuum);
 extern void pgstat_report_analyze(Relation rel,
 								  PgStat_Counter livetuples, PgStat_Counter deadtuples,
 								  bool resetcounter, TimestampTz starttime);

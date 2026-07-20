@@ -209,7 +209,8 @@ pgstat_drop_relation(Relation rel)
  */
 void
 pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
-					 PgStat_Counter deadtuples, TimestampTz starttime)
+					 PgStat_Counter deadtuples, TimestampTz starttime,
+					 PgStat_Counter delaytime)
 {
 	PgStat_EntryRef *entry_ref;
 	PgStatShared_Relation *shtabentry;
@@ -252,15 +253,38 @@ pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 		tabentry->last_autovacuum_time = ts;
 		tabentry->autovacuum_count++;
 		tabentry->total_autovacuum_time += elapsedtime;
+		tabentry->total_autovacuum_delay_time += delaytime;
 	}
 	else
 	{
 		tabentry->last_vacuum_time = ts;
 		tabentry->vacuum_count++;
 		tabentry->total_vacuum_time += elapsedtime;
+		tabentry->total_vacuum_delay_time += delaytime;
 	}
 
 	pgstat_unlock_entry(entry_ref);
+
+	/*
+	 * Accumulate the same times into the database-wide totals.  Index
+	 * processing happens inside the table's run, so per-index times reported
+	 * via pgstat_report_index_vacuum_time() are not added here again.  The
+	 * database entry is stored in microseconds, as its other time counters.
+	 */
+	{
+		PgStat_StatDBEntry *dbentry = pgstat_prep_database_pending(dboid);
+
+		if (AmAutoVacuumWorkerProcess())
+		{
+			dbentry->total_autovacuum_time += elapsedtime * 1000;
+			dbentry->total_autovacuum_delay_time += delaytime * 1000;
+		}
+		else
+		{
+			dbentry->total_vacuum_time += elapsedtime * 1000;
+			dbentry->total_vacuum_delay_time += delaytime * 1000;
+		}
+	}
 
 	/*
 	 * Flush IO statistics now. pgstat_report_stat() will flush IO stats,
@@ -270,6 +294,49 @@ pgstat_report_vacuum(Relation rel, PgStat_Counter livetuples,
 	 */
 	pgstat_flush_io(false);
 	(void) pgstat_flush_backend(false, PGSTAT_BACKEND_FLUSH_IO);
+}
+
+/*
+ * Report the time spent vacuuming an index.
+ *
+ * Vacuum may process an index several times: a bulkdelete pass per index
+ * scan cycle plus a final cleanup pass, possibly spread across parallel
+ * workers.  Each pass adds its elapsed and delay time here, accumulating
+ * into the index's total_vacuum_time or total_autovacuum_time, mirroring
+ * the table-level counters.  The caller says whether this is autovacuum:
+ * parallel workers of an autovacuum leader are regular background workers,
+ * so AmAutoVacuumWorkerProcess() cannot be relied upon here.
+ */
+void
+pgstat_report_index_vacuum_time(Relation rel, PgStat_Counter elapsedtime,
+								PgStat_Counter delaytime, bool is_autovacuum)
+{
+	PgStat_EntryRef *entry_ref;
+	PgStatShared_Relation *shtabentry;
+	PgStat_StatTabEntry *tabentry;
+	Oid			dboid = (rel->rd_rel->relisshared ? InvalidOid : MyDatabaseId);
+
+	if (!pgstat_track_counts)
+		return;
+
+	/* block acquiring lock for the same reason as pgstat_report_autovac() */
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION, dboid,
+											RelationGetRelid(rel), false);
+	shtabentry = (PgStatShared_Relation *) entry_ref->shared_stats;
+	tabentry = &shtabentry->stats;
+
+	if (is_autovacuum)
+	{
+		tabentry->total_autovacuum_time += elapsedtime;
+		tabentry->total_autovacuum_delay_time += delaytime;
+	}
+	else
+	{
+		tabentry->total_vacuum_time += elapsedtime;
+		tabentry->total_vacuum_delay_time += delaytime;
+	}
+
+	pgstat_unlock_entry(entry_ref);
 }
 
 /*

@@ -1301,10 +1301,16 @@ index_create(Relation heapRelation,
  * index_create.
  *
  * "tablespaceOid" is the tablespace to use for this index.
+ *
+ * If "skip_constraint_checks" is true, the copy is created as a plain
+ * non-unique index, so that neither the build nor later insertions enforce
+ * uniqueness.  Useful when the old index is invalid and its constraint
+ * therefore cannot be assumed to hold.
  */
 Oid
 index_create_copy(Relation heapRelation, uint16 flags,
-				  Oid oldIndexId, Oid tablespaceOid, const char *newName)
+				  Oid oldIndexId, Oid tablespaceOid, const char *newName,
+				  bool skip_constraint_checks)
 {
 	Relation	indexRelation;
 	IndexInfo  *oldInfo,
@@ -1397,7 +1403,7 @@ index_create_copy(Relation heapRelation, uint16 flags,
 							oldInfo->ii_Am,
 							indexExprs,
 							indexPreds,
-							oldInfo->ii_Unique,
+							oldInfo->ii_Unique && !skip_constraint_checks,
 							oldInfo->ii_NullsNotDistinct,
 							!concurrently,	/* isready */
 							concurrently,	/* concurrent */

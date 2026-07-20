@@ -18,25 +18,37 @@
 #include "postgres.h"
 
 #include "access/stratnum.h"
+#include "access/transam.h"
 #include "catalog/pg_opfamily.h"
+#include "catalog/pg_type.h"
+#include "fmgr.h"
 #include "nodes/nodeFuncs.h"
+#include "nodes/supportnodes.h"
 #include "optimizer/cost.h"
 #include "optimizer/optimizer.h"
 #include "optimizer/pathnode.h"
 #include "optimizer/paths.h"
+#include "parser/parse_oper.h"
 #include "partitioning/partbounds.h"
 #include "rewrite/rewriteManip.h"
 #include "utils/lsyscache.h"
+#include "utils/typcache.h"
 
 /* Consider reordering of GROUP BY keys? */
 bool		enable_group_by_reordering = true;
 
+/* Perform slope analysis to identify indirectly sorted data */
+bool		enable_slope = true;
 static bool pathkey_is_redundant(PathKey *new_pathkey, List *pathkeys);
 static bool matches_boolean_partition_clause(RestrictInfo *rinfo,
 											 RelOptInfo *partrel,
 											 int partkeycol);
 static Var *find_var_for_subquery_tle(RelOptInfo *rel, TargetEntry *tle);
 static bool right_merge_direction(PlannerInfo *root, PathKey *pathkey);
+static MonotonicFunction get_expr_slope_wrt(Expr *expr, Expr *target);
+static PathKey *slope_emit_pathkey(PlannerInfo *root, PathKey *pk,
+								   Expr *indexkey, bool reverse_sort,
+								   bool nulls_first);
 
 
 /****************************************************************************
@@ -96,6 +108,54 @@ make_canonical_pathkey(PlannerInfo *root,
 	MemoryContextSwitchTo(oldcontext);
 
 	return pk;
+}
+
+/*
+ * make_reversed_pathkey
+ *	  Create a pathkey with reversed sort direction.
+ *
+ * This flips COMPARE_LT <-> COMPARE_GT and inverts nulls_first.
+ */
+PathKey *
+make_reversed_pathkey(PlannerInfo *root, PathKey *pathkey)
+{
+	CompareType reversed_cmptype;
+
+	if (pathkey->pk_cmptype == COMPARE_LT)
+		reversed_cmptype = COMPARE_GT;
+	else if (pathkey->pk_cmptype == COMPARE_GT)
+		reversed_cmptype = COMPARE_LT;
+	else
+		reversed_cmptype = pathkey->pk_cmptype;
+
+	return make_canonical_pathkey(root,
+								  pathkey->pk_eclass,
+								  pathkey->pk_opfamily,
+								  reversed_cmptype,
+								  !pathkey->pk_nulls_first);
+}
+
+/*
+ * reverse_pathkeys
+ *	  Create a list of pathkeys with reversed sort directions.
+ *
+ * This is useful for deriving backward index scan pathkeys from
+ * forward scan pathkeys without recomputing them from scratch.
+ */
+List *
+reverse_pathkeys(PlannerInfo *root, List *pathkeys)
+{
+	List	   *result = NIL;
+	ListCell   *lc;
+
+	foreach(lc, pathkeys)
+	{
+		PathKey    *pk = lfirst_node(PathKey, lc);
+
+		result = lappend(result, make_reversed_pathkey(root, pk));
+	}
+
+	return result;
 }
 
 /*
@@ -712,6 +772,361 @@ get_cheapest_parallel_safe_total_inner(List *paths)
 	return NULL;
 }
 
+/*
+ * get_variation_source
+ *	  Find the source of variation in an expression.
+ *
+ * Descends through function calls to find the innermost non-constant
+ * expression that determines the variation of the whole expression.
+ * For f(x) returns x.  For f(g(x)) returns x.  For f(x, y) returns f(x, y).
+ * For a plain Var, returns the Var itself.
+ *
+ * This is a cheap extraction that doesn't check monotonicity - that's
+ * deferred until we find an index column matching the variation source.
+ * Also extracts the relid if all Vars are from the same table.
+ */
+static void
+get_variation_source(Expr *expr, PathKey *pk)
+{
+	pk->pk_var = NULL;
+	pk->pk_varrelid = 0;
+
+	for (;;)
+	{
+		List	   *args;
+		Expr	   *non_const_arg = NULL;
+		int			non_const_count = 0;
+		ListCell   *lc;
+
+		/* Skip RelabelType (no-op coercion) */
+		if (IsA(expr, RelabelType))
+		{
+			expr = (Expr *) ((RelabelType *) expr)->arg;
+			continue;
+		}
+
+		/* Handle FuncExpr - skip through casts */
+		if (IsA(expr, FuncExpr))
+		{
+			FuncExpr   *fexpr = (FuncExpr *) expr;
+
+			if ((fexpr->funcformat == COERCE_IMPLICIT_CAST ||
+				 fexpr->funcformat == COERCE_EXPLICIT_CAST) &&
+				list_length(fexpr->args) == 1)
+			{
+				expr = (Expr *) linitial(fexpr->args);
+				continue;
+			}
+			args = fexpr->args;
+		}
+		else if (IsA(expr, OpExpr))
+		{
+			args = ((OpExpr *) expr)->args;
+		}
+		else if (IsA(expr, Var))
+		{
+			/* Reached a Var - this is our inner expression */
+			pk->pk_var = expr;
+			pk->pk_varrelid = ((Var *) expr)->varno;
+			return;
+		}
+		else
+		{
+			/* Unsupported node type */
+			return;
+		}
+
+		/* Find non-constant arguments */
+		foreach(lc, args)
+		{
+			Expr	   *arg = (Expr *) lfirst(lc);
+
+			if (!IsA(arg, Const))
+			{
+				non_const_count++;
+				if (non_const_count > 1)
+				{
+					/* Multivariate - return this expression as inner */
+					pk->pk_var = expr;
+					pk->pk_varrelid = 0; /* unknown, will use equal() */
+					return;
+				}
+				non_const_arg = arg;
+			}
+		}
+
+		if (non_const_arg == NULL)
+		{
+			/* All constant - no inner expression */
+			return;
+		}
+
+		expr = non_const_arg;
+	}
+}
+
+
+/*
+ * Returns true if the expression's type may hold NaN values.
+ */
+static bool
+expr_can_nan(Expr *target)
+{
+
+	Oid			expr_type;
+
+	/* Unwrap RelabelType (no-op coercion) */
+	while (target != NULL && IsA(target, RelabelType))
+		target = (Expr *) ((RelabelType *) target)->arg;
+
+	/* Extract type from the node */
+	if (IsA(target, Var))
+		expr_type = ((Var *) target)->vartype;
+	else if (IsA(target, FuncExpr))
+		expr_type = ((FuncExpr *) target)->funcresulttype;
+	else if (IsA(target, OpExpr))
+		expr_type = ((OpExpr *) target)->opresulttype;
+	else
+		return false;
+
+	/* Get the base type for domains */
+	if (expr_type >= FirstNormalObjectId)
+		expr_type = getBaseType(expr_type);
+
+	/* Check if the type can hold NaN values */
+	switch (expr_type)
+	{
+		case FLOAT4OID:
+		case FLOAT8OID:
+		case NUMERICOID:
+			return true;
+		default:
+			return false;
+	}
+}
+
+/*
+ * get_expr_slope_wrt
+ *	  Determine the monotonicity slope of an expression with respect to
+ *	  a specific target subexpression.
+ *
+ * Returns the slope of 'expr' with respect to 'target'
+ *   MONOTONICFUNC_INCREASING: monotonically increasing
+ *   MONOTONICFUNC_DECREASING: monotonically decreasing
+ *   MONOTONICFUNC_BOTH:       independent of target (constant)
+ *   MONOTONICFUNC_NONE:       cannot determine monotonicity
+ */
+static MonotonicFunction
+get_expr_slope_wrt(Expr *expr, Expr *target)
+{
+	MonotonicFunction slope = MONOTONICFUNC_INCREASING;
+
+	for (;;)
+	{
+		Oid			funcid;
+		List	   *args;
+		Oid			prosupport;
+		SupportRequestMonotonic req;
+		ListCell   *lc;
+		int			i;
+		Expr	   *next_expr = NULL;
+		MonotonicFunction func_arg_slope = MONOTONICFUNC_INCREASING;
+
+		/* Check if we've reached the target */
+		if (equal(expr, target))
+		{
+			if (slope == MONOTONICFUNC_INCREASING)
+				return slope;
+
+			/*
+			 * A decreasing function does not relocate NaN values, so index
+			 * scan ordering (forward or backward) cannot match ORDER BY f(x)
+			 * on float/numeric columns.
+			 */
+			if (expr_can_nan(target))
+			{
+				if (slope == MONOTONICFUNC_DECREASING)
+					return MONOTONICFUNC_NONE;
+				else if (slope == MONOTONICFUNC_BOTH)
+					return MONOTONICFUNC_INCREASING;
+			}
+			return slope;
+		}
+
+		/* Skip RelabelType (no-op coercion) */
+		if (IsA(expr, RelabelType))
+		{
+			expr = (Expr *) ((RelabelType *) expr)->arg;
+			continue;
+		}
+
+		/* Handle FuncExpr - skip through casts */
+		if (IsA(expr, FuncExpr))
+		{
+			FuncExpr   *fexpr = (FuncExpr *) expr;
+
+			if ((fexpr->funcformat == COERCE_IMPLICIT_CAST ||
+				 fexpr->funcformat == COERCE_EXPLICIT_CAST) &&
+				list_length(fexpr->args) == 1)
+			{
+				expr = (Expr *) linitial(fexpr->args);
+				continue;
+			}
+			funcid = fexpr->funcid;
+			args = fexpr->args;
+		}
+		else if (IsA(expr, OpExpr))
+		{
+			OpExpr	   *opexpr = (OpExpr *) expr;
+
+			set_opfuncid(opexpr);
+			funcid = opexpr->opfuncid;
+			args = opexpr->args;
+		}
+		else
+		{
+			/* Reached a leaf without finding target */
+			return MONOTONICFUNC_NONE;
+		}
+
+		/* Check for prosupport function */
+		prosupport = get_func_support(funcid);
+		if (!OidIsValid(prosupport))
+			return MONOTONICFUNC_NONE;
+
+		/* Call prosupport to get slope pattern */
+		req.type = T_SupportRequestMonotonic;
+		req.expr = (Node *) expr;
+		req.slopes = NULL;
+		req.nslopes = 0;
+
+		if (DatumGetPointer(OidFunctionCall1(prosupport, PointerGetDatum(&req))) == NULL)
+			return MONOTONICFUNC_NONE;
+
+		if (req.slopes == NULL || req.nslopes <= 0)
+			return MONOTONICFUNC_NONE;
+
+		/* Find the single non-constant argument */
+		i = 0;
+		foreach(lc, args)
+		{
+			Expr	   *arg = (Expr *) lfirst(lc);
+
+			if (!IsA(arg, Const))
+			{
+				if (next_expr != NULL)
+				{
+					/* Multivariate - check if this is the target */
+					return equal(expr, target) ? slope : MONOTONICFUNC_NONE;
+				}
+				next_expr = arg;
+				if (likely(i < req.nslopes))
+				{
+					if (req.slopes[i] == MONOTONICFUNC_DECREASING)
+						func_arg_slope = MONOTONICFUNC_DECREASING;
+					else if (req.slopes[i] != MONOTONICFUNC_INCREASING)
+						return MONOTONICFUNC_NONE;
+				}
+				else
+					return MONOTONICFUNC_NONE;
+			}
+			i++;
+		}
+
+		if (next_expr == NULL)
+			return MONOTONICFUNC_NONE;	/* all constant */
+
+		/* Compose slopes */
+		if (func_arg_slope == MONOTONICFUNC_DECREASING)
+		{
+			slope = (slope == MONOTONICFUNC_INCREASING) ?
+				MONOTONICFUNC_DECREASING : MONOTONICFUNC_INCREASING;
+		}
+
+		expr = next_expr;
+	}
+}
+
+/*
+ * precompute_slope_pathkeys
+ *	  For each query pathkey, extract the source of variation and store
+ *	  it directly on the PathKey (pk_var, pk_varrelid).
+ *
+ * Called once after query_pathkeys is set.  Pathkeys whose expression
+ * is a plain Var or that have no usable variation source are left with
+ * pk_var = NULL.  Monotonicity (pk_slope) is computed lazily on first
+ * index match.
+ */
+void
+precompute_slope_pathkeys(PlannerInfo *root)
+{
+	ListCell   *lc;
+
+	foreach(lc, root->query_pathkeys)
+	{
+		PathKey    *pk = lfirst_node(PathKey, lc);
+		EquivalenceMember *em;
+
+		pk->pk_var = NULL;
+		pk->pk_varrelid = 0;
+		pk->pk_slope = MONOTONICFUNC_UNSET;
+
+		if (!enable_slope)
+			continue;
+
+		if (pk->pk_eclass->ec_has_volatile ||
+			pk->pk_eclass->ec_members == NIL)
+			continue;
+
+		em = linitial(pk->pk_eclass->ec_members);
+
+		if (IsA(em->em_expr, Var))
+			continue;
+
+		get_variation_source(em->em_expr, pk);
+	}
+}
+
+/*
+ * slope_emit_pathkey
+ *	  Return the canonical pathkey for what a forward index scan actually
+ *	  produces for an expression that is monotonic in the index column.
+ *
+ *	  The result reflects both the direction and null ordering that the
+ *	  forward scan generates.  f(NULL) is NULL, so nulls appear at the
+ *	  position dictated by the index's null ordering.
+ *
+ *	  Returns NULL if pk_slope indicates no monotonicity.
+ *
+ *	   index   function   pathkey
+ *	   ASC     ASC        ASC
+ *	   ASC     DESC       DESC
+ *	   DESC    ASC        DESC
+ *	   DESC    DESC       ASC
+ */
+static PathKey *
+slope_emit_pathkey(PlannerInfo *root,
+				   PathKey *pk,
+				   Expr *indexkey,
+				   bool reverse_sort,
+				   bool nulls_first)
+{
+	MonotonicFunction slope;
+	bool		produces_desc;
+
+	slope = (MonotonicFunction) pk->pk_slope;
+	if (slope == MONOTONICFUNC_NONE)
+		return NULL;
+
+	produces_desc = (reverse_sort != (slope == MONOTONICFUNC_DECREASING));
+
+	return make_canonical_pathkey(root,
+								  pk->pk_eclass,
+								  pk->pk_opfamily,
+								  produces_desc ? COMPARE_GT : COMPARE_LT,
+								  nulls_first);
+}
+
 /****************************************************************************
  *		NEW PATHKEY FORMATION
  ****************************************************************************/
@@ -722,8 +1137,8 @@ get_cheapest_parallel_safe_total_inner(List *paths)
  *	  scan using the given index.  (Note that an unordered index doesn't
  *	  induce any ordering, so we return NIL.)
  *
- * If 'scandir' is BackwardScanDirection, build pathkeys representing a
- * backwards scan of the index.
+ * This always builds pathkeys for a forward scan of the index.  For backward
+ * scans, the caller should use reverse_pathkeys() on the result.
  *
  * We iterate only key columns of covering indexes, since non-key columns
  * don't influence index ordering.  The result is canonical, meaning that
@@ -738,8 +1153,7 @@ get_cheapest_parallel_safe_total_inner(List *paths)
  */
 List *
 build_index_pathkeys(PlannerInfo *root,
-					 IndexOptInfo *index,
-					 ScanDirection scandir)
+					 IndexOptInfo *index)
 {
 	List	   *retval = NIL;
 	ListCell   *lc;
@@ -756,7 +1170,7 @@ build_index_pathkeys(PlannerInfo *root,
 		bool		reverse_sort;
 		bool		nulls_first;
 		PathKey    *cpathkey;
-
+		bool		cpathkey_emitted = false;
 		/*
 		 * INCLUDE columns are stored in index unordered, so they don't
 		 * support ordered index scan.
@@ -767,16 +1181,9 @@ build_index_pathkeys(PlannerInfo *root,
 		/* We assume we don't need to make a copy of the tlist item */
 		indexkey = indextle->expr;
 
-		if (ScanDirectionIsBackward(scandir))
-		{
-			reverse_sort = !index->reverse_sort[i];
-			nulls_first = !index->nulls_first[i];
-		}
-		else
-		{
-			reverse_sort = index->reverse_sort[i];
-			nulls_first = index->nulls_first[i];
-		}
+		/* Use the index's natural sort order (forward scan) */
+		reverse_sort = index->reverse_sort[i];
+		nulls_first = index->nulls_first[i];
 
 		/*
 		 * OK, try to make a canonical pathkey for this sort key.
@@ -792,31 +1199,113 @@ build_index_pathkeys(PlannerInfo *root,
 											  index->rel->relids,
 											  false);
 
+		/*
+		 * SLOPE: scan query_pathkeys to emit all pathkeys that this index
+		 * column can satisfy — both direct (EquivalenceClass) and monotonic
+		 * (SLOPE) matches — in query order.
+		 *
+		 * Emitting in query order handles pathkey chains like:
+		 *
+		 * [f(x), g(x), x] with all monotonic in x, the index order on x
+		 * implies the order of every function.
+		 *
+		 * [x, ..., f(x)] with f(x) is constant when x is constant, so f(x) is
+		 * a redundant tiebreaker after x.
+		 */
+		if (enable_slope)
+		{
+			ListCell   *lc2;
+
+			foreach(lc2, root->query_pathkeys)
+			{
+				PathKey    *qpk = lfirst_node(PathKey, lc2);
+
+				if (pathkey_is_redundant(qpk, retval))
+					continue;
+
+				if (cpathkey &&
+					qpk->pk_eclass == cpathkey->pk_eclass)
+				{
+					if (!pathkey_is_redundant(cpathkey, retval))
+						retval = lappend(retval, cpathkey);
+					cpathkey_emitted = true;
+					continue;
+				}
+
+				if (index->rel->reloptkind == RELOPT_BASEREL &&
+					qpk->pk_var != NULL &&
+					!qpk->pk_eclass->ec_has_volatile &&
+					qpk->pk_varrelid == index->rel->relid &&
+					equal(qpk->pk_var, indexkey))
+				{
+					/*
+					 * Case 1: f(x) before x — descending chain. Need
+					 * monotonicity to determine the sort direction that f(x)
+					 * inherits from the index order on x.
+					 */
+					if (!cpathkey_emitted)
+					{
+						PathKey    *spk;
+
+						if (qpk->pk_slope == MONOTONICFUNC_UNSET)
+						{
+							EquivalenceMember *em;
+
+							em = linitial(qpk->pk_eclass->ec_members);
+							qpk->pk_slope = get_expr_slope_wrt(em->em_expr,
+															   qpk->pk_var);
+						}
+						spk = slope_emit_pathkey(root, qpk, indexkey,
+												 reverse_sort, nulls_first);
+						if (spk && !pathkey_is_redundant(spk, retval))
+							retval = lappend(retval, spk);
+						continue;
+					}
+
+
+					/*
+					 * Case 2: f(x) after x — ascending chain. x is already
+					 * in retval, so within each group of equal x values, f(x)
+					 * is constant (for any deterministic f).  The pathkey is
+					 * redundant as a tiebreaker regardless of monotonicity.
+					 */
+					if (!pathkey_is_redundant(qpk, retval))
+						retval = lappend(retval, qpk);
+					continue;
+				}
+				break;
+			}
+		}
+
+		if (cpathkey_emitted){
+			i++;
+			continue;
+		}
+
 		if (cpathkey)
 		{
 			/*
-			 * We found the sort key in an EquivalenceClass, so it's relevant
-			 * for this query.  Add it to list, unless it's redundant.
-			 */
+			* We found the sort key in an EquivalenceClass, so it's relevant
+			* for this query.  Add it to list, unless it's redundant.
+			*/
 			if (!pathkey_is_redundant(cpathkey, retval))
 				retval = lappend(retval, cpathkey);
 		}
 		else
 		{
 			/*
-			 * Boolean index keys might be redundant even if they do not
-			 * appear in an EquivalenceClass, because of our special treatment
-			 * of boolean equality conditions --- see the comment for
-			 * indexcol_is_bool_constant_for_query().  If that applies, we can
-			 * continue to examine lower-order index columns.  Otherwise, the
-			 * sort key is not an interesting sort order for this query, so we
-			 * should stop considering index columns; any lower-order sort
-			 * keys won't be useful either.
-			 */
+			* Boolean index keys might be redundant even if they do not
+			* appear in an EquivalenceClass, because of our special treatment
+			* of boolean equality conditions --- see the comment for
+			* indexcol_is_bool_constant_for_query().  If that applies, we can
+			* continue to examine lower-order index columns.  Otherwise, the
+			* sort key is not an interesting sort order for this query, so we
+			* should stop considering index columns; any lower-order sort
+			* keys won't be useful either.
+			*/
 			if (!indexcol_is_bool_constant_for_query(root, index, i))
 				break;
 		}
-
 		i++;
 	}
 

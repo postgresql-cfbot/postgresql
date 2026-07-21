@@ -680,6 +680,7 @@ extern void pgstat_assert_is_up(void);
 #endif
 
 extern void pgstat_delete_pending_entry(PgStat_EntryRef *entry_ref);
+extern void pgstat_prep_pending_from_entry_ref(PgStat_EntryRef *entry_ref);
 extern PgStat_EntryRef *pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid,
 												  uint64 objid,
 												  bool *created_entry);

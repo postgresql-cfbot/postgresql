@@ -1311,29 +1311,10 @@ pgstat_prep_pending_entry(PgStat_Kind kind, Oid dboid, uint64 objid, bool *creat
 {
 	PgStat_EntryRef *entry_ref;
 
-	/* need to be able to flush out */
-	Assert(pgstat_get_kind_info(kind)->flush_pending_cb != NULL);
-
-	if (unlikely(!pgStatPendingContext))
-	{
-		pgStatPendingContext =
-			AllocSetContextCreate(TopMemoryContext,
-								  "PgStat Pending",
-								  ALLOCSET_SMALL_SIZES);
-	}
-
 	entry_ref = pgstat_get_entry_ref(kind, dboid, objid,
 									 true, created_entry);
 
-	if (entry_ref->pending == NULL)
-	{
-		size_t		entrysize = pgstat_get_kind_info(kind)->pending_size;
-
-		Assert(entrysize != (size_t) -1);
-
-		entry_ref->pending = MemoryContextAllocZero(pgStatPendingContext, entrysize);
-		dlist_push_tail(&pgStatPending, &entry_ref->pending_node);
-	}
+	pgstat_prep_pending_from_entry_ref(entry_ref);
 
 	return entry_ref;
 }
@@ -1375,6 +1356,40 @@ pgstat_delete_pending_entry(PgStat_EntryRef *entry_ref)
 	entry_ref->pending = NULL;
 
 	dlist_delete(&entry_ref->pending_node);
+}
+
+/*
+ * Prepare the given entry to receive pending stats, if not already done.
+ */
+void
+pgstat_prep_pending_from_entry_ref(PgStat_EntryRef *entry_ref)
+{
+	PgStat_Kind kind;
+
+	Assert(entry_ref != NULL);
+
+	kind = entry_ref->shared_entry->key.kind;
+
+	/* need to be able to flush out */
+	Assert(pgstat_get_kind_info(kind)->flush_pending_cb != NULL);
+
+	if (entry_ref->pending == NULL)
+	{
+		size_t		entrysize = pgstat_get_kind_info(kind)->pending_size;
+
+		Assert(entrysize != (size_t) -1);
+
+		if (unlikely(!pgStatPendingContext))
+		{
+			pgStatPendingContext =
+				AllocSetContextCreate(TopMemoryContext,
+									  "PgStat Pending",
+									  ALLOCSET_SMALL_SIZES);
+		}
+
+		entry_ref->pending = MemoryContextAllocZero(pgStatPendingContext, entrysize);
+		dlist_push_tail(&pgStatPending, &entry_ref->pending_node);
+	}
 }
 
 /*

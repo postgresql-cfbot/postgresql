@@ -13,6 +13,7 @@ REGRESS = injection_points hashagg reindex_conc vacuum
 REGRESS_OPTS = --dlpath=$(top_builddir)/src/test/regress
 
 ISOLATION = basic \
+	    wait_cleanup \
 	    inplace \
 	    repack \
 	    repack_temporal \

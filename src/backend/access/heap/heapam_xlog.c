@@ -19,6 +19,7 @@
 #include "access/visibilitymap.h"
 #include "access/xlog.h"
 #include "access/xlogutils.h"
+#include "pgstat.h"
 #include "storage/freespace.h"
 #include "storage/standby.h"
 
@@ -393,6 +394,9 @@ heap_xlog_delete(XLogReaderState *record)
 	}
 	if (BufferIsValid(buffer))
 		UnlockReleaseBuffer(buffer);
+
+	pgstat_wal_replay_delete(target_locator.dbOid,
+							 target_locator.relNumber);
 }
 
 /*
@@ -515,6 +519,9 @@ heap_xlog_insert(XLogReaderState *record)
 	 */
 	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
 		XLogRecordPageWithFreeSpace(target_locator, blkno, freespace);
+
+	pgstat_wal_replay_insert(target_locator.dbOid,
+							 target_locator.relNumber, 1);
 }
 
 /*
@@ -721,6 +728,9 @@ heap_xlog_multi_insert(XLogReaderState *record)
 	 */
 	if (action == BLK_NEEDS_REDO && freespace < BLCKSZ / 5)
 		XLogRecordPageWithFreeSpace(rlocator, blkno, freespace);
+
+	pgstat_wal_replay_insert(rlocator.dbOid, rlocator.relNumber,
+							 xlrec->ntuples);
 }
 
 /*
@@ -1041,6 +1051,9 @@ heap_xlog_update(XLogReaderState *record, bool hot_update)
 	 */
 	if (newaction == BLK_NEEDS_REDO && !hot_update && freespace < BLCKSZ / 5)
 		XLogRecordPageWithFreeSpace(rlocator, newblk, freespace);
+
+	pgstat_wal_replay_update(rlocator.dbOid, rlocator.relNumber,
+							 hot_update, (oldblk != newblk && !hot_update));
 }
 
 /*

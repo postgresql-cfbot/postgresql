@@ -102,11 +102,11 @@ step s1_table_stats {
     SELECT
         pg_stat_get_numscans(tso.oid) AS seq_scan,
         pg_stat_get_tuples_returned(tso.oid) AS seq_tup_read,
-        pg_stat_get_tuples_inserted(tso.oid) AS n_tup_ins,
-        pg_stat_get_tuples_updated(tso.oid) AS n_tup_upd,
-        pg_stat_get_tuples_deleted(tso.oid) AS n_tup_del,
-        pg_stat_get_live_tuples(tso.oid) AS n_live_tup,
-        pg_stat_get_dead_tuples(tso.oid) AS n_dead_tup,
+        pg_stat_get_rfn_tuples_inserted(pg_relation_filenode(tso.oid)) AS n_tup_ins,
+        pg_stat_get_rfn_tuples_updated(pg_relation_filenode(tso.oid)) AS n_tup_upd,
+        pg_stat_get_rfn_tuples_deleted(pg_relation_filenode(tso.oid)) AS n_tup_del,
+        pg_stat_get_rfn_live_tuples(pg_relation_filenode(tso.oid)) AS n_live_tup,
+        pg_stat_get_rfn_dead_tuples(pg_relation_filenode(tso.oid)) AS n_dead_tup,
         pg_stat_get_vacuum_count(tso.oid) AS vacuum_count
     FROM test_stat_oid AS tso
     WHERE tso.name = 'test_stat_tab'

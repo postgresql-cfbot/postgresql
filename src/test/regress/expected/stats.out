@@ -116,18 +116,20 @@ SELECT id, name, fixed_amount,
 ----+--------------+--------------+-----------+---------------
   1 | database     | f            | t         | t
   2 | relation     | f            | f         | t
-  3 | function     | f            | f         | t
-  4 | replslot     | f            | t         | t
-  5 | subscription | f            | t         | t
-  6 | backend      | f            | t         | f
-  7 | archiver     | t            | f         | t
-  8 | bgwriter     | t            | f         | t
-  9 | checkpointer | t            | f         | t
- 10 | io           | t            | f         | t
- 11 | lock         | t            | f         | t
- 12 | slru         | t            | f         | t
- 13 | wal          | t            | f         | t
-(13 rows)
+  3 | index        | f            | f         | t
+  4 | function     | f            | f         | t
+  5 | replslot     | f            | t         | t
+  6 | subscription | f            | t         | t
+  7 | backend      | f            | t         | f
+  8 | relfilenode  | f            | f         | t
+  9 | archiver     | t            | f         | t
+ 10 | bgwriter     | t            | f         | t
+ 11 | checkpointer | t            | f         | t
+ 12 | io           | t            | f         | t
+ 13 | lock         | t            | f         | t
+ 14 | slru         | t            | f         | t
+ 15 | wal          | t            | f         | t
+(15 rows)
 
 -- ensure that both seqscan and indexscan plans are allowed
 SET enable_seqscan TO on;
@@ -233,9 +235,9 @@ SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup
  WHERE relname like 'trunc_stats_test%' order by relname;
       relname      | n_tup_ins | n_tup_upd | n_tup_del | n_live_tup | n_dead_tup 
 -------------------+-----------+-----------+-----------+------------+------------
- trunc_stats_test  |         3 |         0 |         0 |          0 |          0
- trunc_stats_test1 |         4 |         2 |         1 |          1 |          0
- trunc_stats_test2 |         1 |         0 |         0 |          1 |          0
+ trunc_stats_test  |         0 |         0 |         0 |          0 |          0
+ trunc_stats_test1 |         0 |         0 |         0 |          0 |          0
+ trunc_stats_test2 |         0 |         0 |         0 |          0 |          0
  trunc_stats_test3 |         4 |         0 |         0 |          2 |          2
  trunc_stats_test4 |         2 |         0 |         0 |          0 |          2
 (5 rows)
@@ -462,30 +464,30 @@ SELECT pg_stat_get_function_calls(:stats_test_func2_oid);
 -- by oid after the DROP TABLE. Save oids.
 CREATE TABLE drop_stats_test();
 INSERT INTO drop_stats_test DEFAULT VALUES;
-SELECT 'drop_stats_test'::regclass::oid AS drop_stats_test_oid \gset
+SELECT pg_relation_filenode('drop_stats_test'::regclass) AS drop_stats_test_oid \gset
 CREATE TABLE drop_stats_test_xact();
 INSERT INTO drop_stats_test_xact DEFAULT VALUES;
-SELECT 'drop_stats_test_xact'::regclass::oid AS drop_stats_test_xact_oid \gset
+SELECT pg_relation_filenode('drop_stats_test_xact'::regclass) AS drop_stats_test_xact_oid \gset
 CREATE TABLE drop_stats_test_subxact();
 INSERT INTO drop_stats_test_subxact DEFAULT VALUES;
-SELECT 'drop_stats_test_subxact'::regclass::oid AS drop_stats_test_subxact_oid \gset
+SELECT pg_relation_filenode('drop_stats_test_subxact'::regclass) AS drop_stats_test_subxact_oid \gset
 SELECT pg_stat_force_next_flush();
  pg_stat_force_next_flush 
 --------------------------
  
 (1 row)
 
-SELECT pg_stat_get_live_tuples(:drop_stats_test_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       1
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           1
 (1 row)
 
 DROP TABLE drop_stats_test;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       0
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           1
 (1 row)
 
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_oid);
@@ -496,16 +498,16 @@ SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_oid);
 
 -- check that rollback protects against having stats dropped and that local
 -- modifications don't pose a problem
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       1
-(1 row)
-
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
- pg_stat_get_tuples_inserted 
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_live_tuples 
 -----------------------------
                            1
+(1 row)
+
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_tuples_inserted 
+---------------------------------
+                               1
 (1 row)
 
 SELECT pg_stat_get_xact_tuples_inserted(:drop_stats_test_xact_oid);
@@ -536,29 +538,29 @@ SELECT pg_stat_force_next_flush();
  
 (1 row)
 
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       1
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           1
 (1 row)
 
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
- pg_stat_get_tuples_inserted 
------------------------------
-                           2
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_tuples_inserted 
+---------------------------------
+                               2
 (1 row)
 
 -- transactional drop
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       1
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           1
 (1 row)
 
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
- pg_stat_get_tuples_inserted 
------------------------------
-                           2
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_tuples_inserted 
+---------------------------------
+                               2
 (1 row)
 
 BEGIN;
@@ -583,23 +585,23 @@ SELECT pg_stat_force_next_flush();
  
 (1 row)
 
-SELECT pg_stat_get_live_tuples(:drop_stats_test_xact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       0
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           1
 (1 row)
 
-SELECT pg_stat_get_tuples_inserted(:drop_stats_test_xact_oid);
- pg_stat_get_tuples_inserted 
------------------------------
-                           0
+SELECT pg_stat_get_rfn_tuples_inserted(:drop_stats_test_xact_oid);
+ pg_stat_get_rfn_tuples_inserted 
+---------------------------------
+                               2
 (1 row)
 
 -- savepoint rollback (2 levels)
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       1
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           1
 (1 row)
 
 BEGIN;
@@ -628,17 +630,17 @@ SELECT pg_stat_force_next_flush();
  
 (1 row)
 
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       3
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           3
 (1 row)
 
 -- savepoint rolback (1 level)
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       3
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           3
 (1 row)
 
 BEGIN;
@@ -647,17 +649,17 @@ DROP TABLE drop_stats_test_subxact;
 SAVEPOINT sp2;
 ROLLBACK TO SAVEPOINT sp1;
 COMMIT;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       3
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           3
 (1 row)
 
 -- and now actually drop
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       3
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           3
 (1 row)
 
 BEGIN;
@@ -666,10 +668,10 @@ DROP TABLE drop_stats_test_subxact;
 SAVEPOINT sp2;
 RELEASE SAVEPOINT sp1;
 COMMIT;
-SELECT pg_stat_get_live_tuples(:drop_stats_test_subxact_oid);
- pg_stat_get_live_tuples 
--------------------------
-                       0
+SELECT pg_stat_get_rfn_live_tuples(:drop_stats_test_subxact_oid);
+ pg_stat_get_rfn_live_tuples 
+-----------------------------
+                           3
 (1 row)
 
 DROP TABLE trunc_stats_test, trunc_stats_test1, trunc_stats_test2, trunc_stats_test3, trunc_stats_test4;
@@ -900,8 +902,8 @@ SELECT idx_scan, :'test_last_idx' < last_idx_scan AS idx_ok,
 (1 row)
 
 -- check that the stats in pg_stat_all_indexes are reset
-SELECT pg_stat_reset_single_table_counters('test_last_scan_pkey'::regclass);
- pg_stat_reset_single_table_counters 
+SELECT pg_stat_reset_single_index_counters('test_last_scan_pkey'::regclass);
+ pg_stat_reset_single_index_counters 
 -------------------------------------
  
 (1 row)
@@ -937,7 +939,7 @@ SELECT (n_tup_ins + n_tup_upd) > 0 AS has_data FROM pg_stat_all_tables
   WHERE relid = 'pg_shdescription'::regclass;
  has_data 
 ----------
- t
+ f
 (1 row)
 
 -- stats_reset may not be set for datid=0 and shared objects in
@@ -1385,21 +1387,21 @@ select a from stats_test_tab1 where a = 3;
  3
 (1 row)
 
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  t
 (1 row)
 
 -- pg_stat_have_stats returns false for dropped index with stats
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  t
 (1 row)
 
 DROP index stats_test_idx1;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  f
@@ -1415,14 +1417,14 @@ select a from stats_test_tab1 where a = 3;
  3
 (1 row)
 
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  t
 (1 row)
 
 ROLLBACK;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  f
@@ -1437,7 +1439,7 @@ select a from stats_test_tab1 where a = 3;
  3
 (1 row)
 
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  t
@@ -1445,7 +1447,7 @@ SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
 
 REINDEX index CONCURRENTLY stats_test_idx1;
 -- false for previous oid
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  f
@@ -1453,7 +1455,7 @@ SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
 
 -- true for new oid
 SELECT 'stats_test_idx1'::regclass::oid AS stats_test_idx1_oid \gset
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  t
@@ -1461,7 +1463,7 @@ SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
 
 -- pg_stat_have_stats returns true for a rolled back drop index with stats
 BEGIN;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  t
@@ -1469,7 +1471,7 @@ SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
 
 DROP index stats_test_idx1;
 ROLLBACK;
-SELECT pg_stat_have_stats('relation', :dboid, :stats_test_idx1_oid);
+SELECT pg_stat_have_stats('index', :dboid, :stats_test_idx1_oid);
  pg_stat_have_stats 
 --------------------
  t
@@ -1894,7 +1896,7 @@ DECLARE
 BEGIN
   -- we don't want to wait forever; loop will exit after 30 seconds
   FOR i IN 1 .. 300 LOOP
-    SELECT (pg_stat_get_tuples_hot_updated('brin_hot'::regclass::oid) > 0) INTO updated;
+    SELECT (pg_stat_get_rfn_tuples_hot_updated(pg_relation_filenode('brin_hot'::regclass::oid)) > 0) INTO updated;
     EXIT WHEN updated;
 
     -- wait a little
@@ -1921,10 +1923,10 @@ SELECT wait_for_hot_stats();
  
 (1 row)
 
-SELECT pg_stat_get_tuples_hot_updated('brin_hot'::regclass::oid);
- pg_stat_get_tuples_hot_updated 
---------------------------------
-                              1
+SELECT pg_stat_get_rfn_tuples_hot_updated(pg_relation_filenode('brin_hot'::regclass::oid));
+ pg_stat_get_rfn_tuples_hot_updated 
+------------------------------------
+                                  1
 (1 row)
 
 DROP TABLE brin_hot;

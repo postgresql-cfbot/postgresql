@@ -4625,8 +4625,8 @@ ANALYZE simport_table;
 SELECT pg_stat_reset_single_table_counters('public.simport_ftable'::regclass);
 ANALYZE VERBOSE simport_ftable;           -- should work
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples('public.simport_ftable'::regclass),
-       pg_stat_get_dead_tuples('public.simport_ftable'::regclass),
+SELECT pg_stat_get_rfn_live_tuples(pg_relation_filenode('public.simport_ftable'::regclass)),
+       pg_stat_get_rfn_dead_tuples(pg_relation_filenode('public.simport_ftable'::regclass)),
        pg_stat_get_analyze_count('public.simport_ftable'::regclass);
 
 ALTER TABLE simport_table ALTER COLUMN c1 SET STATISTICS 0;
@@ -4647,8 +4647,8 @@ ANALYZE simport_table;
 SELECT pg_stat_reset_single_table_counters('public.simport_ftable'::regclass);
 ANALYZE VERBOSE simport_ftable;           -- should work
 SELECT pg_stat_force_next_flush();
-SELECT pg_stat_get_live_tuples('public.simport_ftable'::regclass),
-       pg_stat_get_dead_tuples('public.simport_ftable'::regclass),
+SELECT pg_stat_get_rfn_live_tuples(pg_relation_filenode('public.simport_ftable'::regclass)),
+       pg_stat_get_rfn_dead_tuples(pg_relation_filenode('public.simport_ftable'::regclass)),
        pg_stat_get_analyze_count('public.simport_ftable'::regclass);
 
 ANALYZE VERBOSE simport_ftable (c1);      -- should work

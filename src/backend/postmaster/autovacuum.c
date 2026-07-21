@@ -109,6 +109,7 @@
 #include "utils/memutils.h"
 #include "utils/ps_status.h"
 #include "utils/rel.h"
+#include "utils/relmapper.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
 #include "utils/timeout.h"
@@ -3082,10 +3083,10 @@ relation_needs_vacanalyze(Oid relid,
 						  bool *wraparound,
 						  AutoVacuumScores *scores)
 {
-	PgStat_StatTabEntry *tabentry;
+	PgStat_StatRFNodeEntry *rfnentry;
+	RelFileNumber rfn;
 	bool		force_vacuum;
 	bool		av_enabled;
-	bool		may_free = false;
 
 	/* constants from reloptions or GUC variables */
 	int			vac_base_thresh,
@@ -3247,20 +3248,27 @@ relation_needs_vacanalyze(Oid relid,
 		*dovacuum = true;
 
 	/*
-	 * If we found stats for the table, and autovacuum is currently enabled,
-	 * make a threshold-based decision whether to vacuum and/or analyze.  If
-	 * autovacuum is currently disabled, we must be here for anti-wraparound
-	 * vacuuming only, so don't vacuum (or analyze) anything that's not being
-	 * forced.
+	 * Fetch tuple counters from the relfilenode entry.  For shared catalogs,
+	 * use the relation map.
 	 */
-	tabentry = pgstat_fetch_stat_tabentry_ext(classForm->relisshared,
-											  relid, &may_free);
-	if (!tabentry)
-		return;
+	rfn = classForm->relfilenode;
+	if (!RelFileNumberIsValid(rfn))
+		rfn = RelationMapOidToFilenumber(relid, classForm->relisshared);
 
-	vactuples = tabentry->dead_tuples;
-	instuples = tabentry->ins_since_vacuum;
-	anltuples = tabentry->mod_since_analyze;
+	rfnentry = pgstat_fetch_stat_rfnodeentry(
+					classForm->relisshared ? InvalidOid : MyDatabaseId, rfn);
+	if (rfnentry)
+	{
+		vactuples = rfnentry->dead_tuples;
+		instuples = rfnentry->ins_since_vacuum;
+		anltuples = rfnentry->mod_since_analyze;
+	}
+	else
+	{
+		vactuples = 0;
+		instuples = 0;
+		anltuples = 0;
+	}
 
 	/* If the table hasn't yet been vacuumed, take reltuples as zero */
 	if (reltuples < 0)
@@ -3334,10 +3342,6 @@ relation_needs_vacanalyze(Oid relid,
 			 vactuples, vacthresh, scores->vac,
 			 anltuples, anlthresh, scores->anl,
 			 scores->xid, scores->mxid);
-
-	/* Avoid leaking pgstat entries until the end of autovacuum. */
-	if (may_free)
-		pfree(tabentry);
 }
 
 /*

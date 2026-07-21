@@ -5809,6 +5809,14 @@ InitializeLogRepWorker(void)
 	 */
 	SetConfigOption("search_path", "", PGC_SUSET, PGC_S_OVERRIDE);
 
+	/*
+	 * Ignore default_transaction_read_only for logical replication workers,
+	 * as they need to be able to modify subscriber-side state regardless of
+	 * that setting.
+	 */
+	SetConfigOption("default_transaction_read_only", "off", PGC_SUSET,
+					PGC_S_OVERRIDE);
+
 	ApplyContext = AllocSetContextCreate(TopMemoryContext,
 										 "ApplyContext",
 										 ALLOCSET_DEFAULT_SIZES);

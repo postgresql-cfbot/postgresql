@@ -59,6 +59,7 @@
 #include "access/xlog_internal.h"
 #include "access/xlogarchive.h"
 #include "access/xloginsert.h"
+#include "access/xlogpipeline.h"
 #include "access/xlogreader.h"
 #include "access/xlogrecovery.h"
 #include "access/xlogutils.h"
@@ -6268,6 +6269,12 @@ StartupXLOG(void)
 
 				ProcArrayApplyRecoveryInfo(&running);
 			}
+
+			/*
+			 * Finaly update the shared standby state, so that pipeline worker
+			 * stay consistent with the startup process.
+			 */
+			SetSharedHotStandbyState();
 		}
 
 		/*
@@ -8924,6 +8931,12 @@ xlog_redo(XLogReaderState *record)
 			running.xids = xids;
 
 			ProcArrayApplyRecoveryInfo(&running);
+
+			/*
+			 * Update the shared standby state, so that pipeline worker
+			 * stay consistent with the startup process.
+			 */
+			SetSharedHotStandbyState();
 		}
 
 		/* ControlFile->checkPointCopy always tracks the latest ckpt XID */
@@ -10148,7 +10161,7 @@ GetOldestRestartPoint(XLogRecPtr *oldrecptr, TimeLineID *oldtli)
 void
 XLogShutdownWalRcv(void)
 {
-	Assert(AmStartupProcess() || !IsUnderPostmaster);
+	Assert(AmStartupProcess() || AmWalPipeline() || !IsUnderPostmaster);
 
 	ShutdownWalRcv();
 	ResetInstallXLogFileSegmentActive();

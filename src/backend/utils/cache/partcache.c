@@ -411,14 +411,31 @@ generate_partition_qual(Relation rel)
 	 */
 	if (result != NIL)
 	{
-		rel->rd_partcheckcxt = AllocSetContextCreate(CacheMemoryContext,
-													 "partition constraint",
-													 ALLOCSET_SMALL_SIZES);
-		MemoryContextCopyAndSetIdentifier(rel->rd_partcheckcxt,
+		/*
+		 * Take care to order operations so that allocation errors don't leave
+		 * the catcache in an invalid state; first allocate everything into a
+		 * transactional context, then associate it with CacheContext and
+		 * update the relation data.  This also avoids leaking memory if we
+		 * ever hit OOM here.
+		 */
+		List	   *partcheck;
+		MemoryContext partctx;
+
+		partctx = AllocSetContextCreate(CurrentMemoryContext,
+										"partition constraint",
+										ALLOCSET_SMALL_SIZES);
+		MemoryContextCopyAndSetIdentifier(partctx,
 										  RelationGetRelationName(rel));
-		oldcxt = MemoryContextSwitchTo(rel->rd_partcheckcxt);
-		rel->rd_partcheck = copyObject(result);
+
+		oldcxt = MemoryContextSwitchTo(partctx);
+		partcheck = copyObject(result);
 		MemoryContextSwitchTo(oldcxt);
+
+		/* finally, link the allocations and memctx into the right places */
+		MemoryContextSetParent(partctx, CacheMemoryContext);
+
+		rel->rd_partcheckcxt = partctx;
+		rel->rd_partcheck = partcheck;
 	}
 	else
 		rel->rd_partcheck = NIL;

@@ -2770,8 +2770,8 @@ tsvector_update_trigger(PG_FUNCTION_ARGS, bool config_column)
 						   TSVECTOROID))
 		ereport(ERROR,
 				(errcode(ERRCODE_DATATYPE_MISMATCH),
-				 errmsg("column \"%s\" is not of tsvector type",
-						trigger->tgargs[0])));
+				 errmsg("column \"%s\" is not of type %s",
+						trigger->tgargs[0], "tsvector")));
 
 	/* Find the configuration to use */
 	if (config_column)
@@ -2788,8 +2788,8 @@ tsvector_update_trigger(PG_FUNCTION_ARGS, bool config_column)
 							   REGCONFIGOID))
 			ereport(ERROR,
 					(errcode(ERRCODE_DATATYPE_MISMATCH),
-					 errmsg("column \"%s\" is not of regconfig type",
-							trigger->tgargs[1])));
+					 errmsg("column \"%s\" is not of type %s",
+							trigger->tgargs[1], "regconfig")));
 
 		datum = SPI_getbinval(rettuple, rel->rd_att, config_attr_num, &isnull);
 		if (isnull)

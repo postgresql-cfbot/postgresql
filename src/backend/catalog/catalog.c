@@ -717,8 +717,8 @@ pg_nextoid(PG_FUNCTION_ARGS)
 	if (attform->atttypid != OIDOID)
 		ereport(ERROR,
 				(errcode(ERRCODE_INVALID_PARAMETER_VALUE),
-				 errmsg("column \"%s\" is not of type oid",
-						NameStr(*attname))));
+				 errmsg("column \"%s\" is not of type %s",
+						NameStr(*attname), "oid")));
 
 	if (IndexRelationGetNumberOfKeyAttributes(idx) != 1 ||
 		idx->rd_index->indkey.values[0] != attno)

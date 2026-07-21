@@ -20,6 +20,7 @@ backend_sources += files(
   'xlogbackup.c',
   'xlogfuncs.c',
   'xloginsert.c',
+  'xlogpipeline.c',
   'xlogprefetcher.c',
   'xlogrecovery.c',
   'xlogstats.c',

@@ -3520,6 +3520,21 @@
   boot_val => 'false',
 },
 
+{ name => 'wal_pipeline', type => 'bool', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY',
+  short_desc => 'Use parallel workers to speedup recovery.',
+  variable => 'wal_pipeline_enabled',
+  boot_val => 'false',
+},
+
+{ name => 'wal_pipeline_queue_size', type => 'int', context => 'PGC_POSTMASTER', group => 'WAL_RECOVERY',
+  short_desc => 'Size of the shared memory queue used by the WAL pipeline.',
+  flags => 'GUC_UNIT_MB',
+  variable => 'wal_pipeline_mq_size_mb',
+  boot_val => '128',
+  min => '1',
+  max => '1024',
+},
+
 { name => 'wal_receiver_create_temp_slot', type => 'bool', context => 'PGC_SIGHUP', group => 'REPLICATION_STANDBY',
   short_desc => 'Sets whether a WAL receiver should create a temporary replication slot if no permanent slot is configured.',
   variable => 'wal_receiver_create_temp_slot',

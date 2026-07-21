@@ -13,6 +13,7 @@
 #include "postgres.h"
 
 #include "access/parallel.h"
+#include "access/xlogpipeline.h"
 #include "commands/repack.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
@@ -166,6 +167,10 @@ static const struct
 	{
 		.fn_name = "DataChecksumsWorkerMain",
 		.fn_addr = DataChecksumsWorkerMain
+	},
+	{
+		.fn_name = "WalPipeline_ProducerMain",
+		.fn_addr = WalPipeline_ProducerMain
 	}
 };
 

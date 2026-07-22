@@ -123,6 +123,7 @@ struct ReadStream
 	bool		batch_mode;		/* READ_STREAM_USE_BATCHING */
 	bool		advice_enabled;
 	bool		temporary;
+	BufferAccessStrategy strategy;
 
 	/* scan stats counters */
 	IOStats    *stats;
@@ -441,6 +442,7 @@ read_stream_start_pending_read(ReadStream *stream)
 	while (stream->initialized_buffers < buffer_index + nblocks)
 		stream->buffers[stream->initialized_buffers++] = InvalidBuffer;
 	requested_nblocks = nblocks;
+	stream->ios[io_index].op.strategy = stream->strategy;
 	need_wait = StartReadBuffers(&stream->ios[io_index].op,
 								 &stream->buffers[buffer_index],
 								 stream->pending_read_blocknum,
@@ -931,6 +933,7 @@ read_stream_begin_impl(int flags,
 	stream->seq_blocknum = InvalidBlockNumber;
 	stream->seq_until_processed = InvalidBlockNumber;
 	stream->temporary = SmgrIsTemp(smgr);
+	stream->strategy = strategy;
 	stream->distance_decay_holdoff = 0;
 
 	/*
@@ -962,7 +965,6 @@ read_stream_begin_impl(int flags,
 		stream->ios[i].op.smgr = smgr;
 		stream->ios[i].op.persistence = persistence;
 		stream->ios[i].op.forknum = forknum;
-		stream->ios[i].op.strategy = strategy;
 	}
 
 	return stream;
@@ -1098,6 +1100,7 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 			 * held at the same time, the model used here is that the stream
 			 * holds only one, and the other now belongs to the caller.
 			 */
+			stream->ios[0].op.strategy = stream->strategy;
 			if (likely(!StartReadBuffer(&stream->ios[0].op,
 										&stream->buffers[oldest_buffer_index],
 										next_blocknum,
@@ -1376,8 +1379,22 @@ read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
 BlockNumber
 read_stream_next_block(ReadStream *stream, BufferAccessStrategy *strategy)
 {
-	*strategy = stream->ios[0].op.strategy;
+	*strategy = stream->strategy;
 	return read_stream_get_block(stream, NULL);
+}
+
+/*
+ * Change the buffer access strategy used for future reads.
+ *
+ * I/O operations may be in progress, so their ReadBuffersOperation must not
+ * be modified here.  The new strategy is installed when an idle operation is
+ * reused to start another read.  The pinned-buffer limit and queue capacity
+ * are fixed when the stream is created.
+ */
+void
+read_stream_set_strategy(ReadStream *stream, BufferAccessStrategy strategy)
+{
+	stream->strategy = strategy;
 }
 
 /*

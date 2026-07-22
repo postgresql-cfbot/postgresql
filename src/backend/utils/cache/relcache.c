@@ -92,6 +92,7 @@
 #include "utils/resowner.h"
 #include "utils/snapmgr.h"
 #include "utils/syscache.h"
+#include "rewrite/rewriteHandler.h"
 
 #define RELCACHE_INIT_FILEMAGIC		0x573266	/* version ID value */
 
@@ -1587,7 +1588,9 @@ RelationInitIndexAccessInfo(Relation relation)
 	 * expressions, predicate, exclusion caches will be filled later
 	 */
 	relation->rd_indexprs = NIL;
+	relation->rd_indexprsExpand = NIL;
 	relation->rd_indpred = NIL;
+	relation->rd_indpredExpand = NIL;
 	relation->rd_exclops = NULL;
 	relation->rd_exclprocs = NULL;
 	relation->rd_exclstrats = NULL;
@@ -5158,6 +5161,49 @@ RelationGetIndexExpressions(Relation relation)
 }
 
 /*
+ * RelationGetIndexExpressionsExpand -- Similar to RelationGetIndexExpressions,
+ * except that it expands the expressions internally.
+ */
+List *
+RelationGetIndexExpressionsExpand(Relation relation)
+{
+	List	   *result;
+	MemoryContext oldcxt;
+	bool		isnull;
+	Datum		heapRelidDatum;
+	Oid         heapRelid;
+
+	/* Quick exit if we already computed the result. */
+	if (relation->rd_indexprsExpand)
+		return copyObject(relation->rd_indexprsExpand);
+
+	/* Quick exit if there is nothing to do. */
+	if (relation->rd_indextuple == NULL ||
+		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indexprs, NULL))
+		return NIL;
+
+	result = RelationGetIndexExpressions(relation);
+	if (result == NIL)
+		return NIL;
+
+	heapRelidDatum = heap_getattr(relation->rd_indextuple,
+							 Anum_pg_index_indrelid,
+							 GetPgIndexDescriptor(),
+							 &isnull);
+	Assert(!isnull);
+	heapRelid = DatumGetObjectId(heapRelidDatum);
+
+	result = ExpandVirtualGeneratedColumns(result, NULL, heapRelid);
+
+	/* Now save a copy of the completed tree in the relcache entry. */
+	oldcxt = MemoryContextSwitchTo(relation->rd_indexcxt);
+	relation->rd_indexprsExpand = copyObject(result);
+	MemoryContextSwitchTo(oldcxt);
+
+	return result;
+}
+
+/*
  * RelationGetDummyIndexExpressions -- get dummy expressions for an index
  *
  * Return a list of dummy expressions (just Const nodes) with the same
@@ -5272,6 +5318,49 @@ RelationGetIndexPredicate(Relation relation)
 	/* Now save a copy of the completed tree in the relcache entry. */
 	oldcxt = MemoryContextSwitchTo(relation->rd_indexcxt);
 	relation->rd_indpred = copyObject(result);
+	MemoryContextSwitchTo(oldcxt);
+
+	return result;
+}
+
+/*
+ * RelationGetIndexPredicateExpand -- Similar to RelationGetIndexPredicate,
+ * except that it expands the predicate expressions internally.
+ */
+List *
+RelationGetIndexPredicateExpand(Relation relation)
+{
+	List	   *result;
+	MemoryContext oldcxt;
+	bool		isnull;
+	Datum		heapRelidDatum;
+	Oid         heapRelid;
+
+	/* Quick exit if we already computed the result. */
+	if (relation->rd_indpredExpand)
+		return copyObject(relation->rd_indpredExpand);
+
+	/* Quick exit if there is nothing to do. */
+	if (relation->rd_indextuple == NULL ||
+		heap_attisnull(relation->rd_indextuple, Anum_pg_index_indpred, NULL))
+		return NIL;
+
+	result = RelationGetIndexPredicate(relation);
+	if (result == NIL)
+		return NIL;
+
+	heapRelidDatum = heap_getattr(relation->rd_indextuple,
+							 Anum_pg_index_indrelid,
+							 GetPgIndexDescriptor(),
+							 &isnull);
+	Assert(!isnull);
+	heapRelid = DatumGetObjectId(heapRelidDatum);
+
+	result = ExpandVirtualGeneratedColumns(result, NULL, heapRelid);
+
+	/* Now save a copy of the completed tree in the relcache entry. */
+	oldcxt = MemoryContextSwitchTo(relation->rd_indexcxt);
+	relation->rd_indpredExpand = copyObject(result);
 	MemoryContextSwitchTo(oldcxt);
 
 	return result;
@@ -6501,7 +6590,9 @@ load_relcache_init_file(bool shared)
 		rel->rd_partcheckvalid = false;
 		rel->rd_partcheckcxt = NULL;
 		rel->rd_indexprs = NIL;
+		rel->rd_indexprsExpand = NIL;
 		rel->rd_indpred = NIL;
+		rel->rd_indpredExpand = NIL;
 		rel->rd_exclops = NULL;
 		rel->rd_exclprocs = NULL;
 		rel->rd_exclstrats = NULL;
@@ -7029,4 +7120,27 @@ ResOwnerReleaseRelation(Datum res)
 	rel->rd_refcnt -= 1;
 
 	RelationCloseCleanup((Relation) DatumGetPointer(res));
+}
+
+/* Expands the expression list by invoking expand_generated_columns_in_expr */
+List *
+ExpandVirtualGeneratedColumns(List *list, Relation heapRelation, Oid heapRelId)
+{
+	bool	opened_relation = false;
+
+	if (list == NIL || (heapRelation == NULL && heapRelId == InvalidOid))
+		return list;
+
+	if (heapRelation == NULL)
+	{
+		heapRelation = table_open(heapRelId, NoLock);
+		opened_relation = true;
+	}
+
+	list = (List *)expand_generated_columns_in_expr((Node *)list, heapRelation, 1);
+
+	if (opened_relation)
+		table_close(heapRelation, NoLock);
+
+	return list;
 }

@@ -821,6 +821,9 @@ ProcessAutoVacLauncherInterrupts(void)
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
 
+	if (ReportAnytimeStatsPending)
+		ProcessReportAnytimeStatsInterrupt();
+
 	/* Process sinval catchup interrupts that happened while sleeping */
 	ProcessCatchupInterrupt();
 }

@@ -870,6 +870,9 @@ ProcessPgArchInterrupts(void)
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
 
+	if (ReportAnytimeStatsPending)
+		ProcessReportAnytimeStatsInterrupt();
+
 	if (ConfigReloadPending)
 	{
 		char	   *archiveLib = pstrdup(XLogArchiveLibrary);

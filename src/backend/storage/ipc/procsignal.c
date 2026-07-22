@@ -719,6 +719,9 @@ procsignal_sigusr1_handler(SIGNAL_ARGS)
 	if (CheckProcSignal(PROCSIG_REPACK_MESSAGE))
 		HandleRepackMessageInterrupt();
 
+	if (CheckProcSignal(PROCSIG_REPORT_ANYTIME_STATS))
+		HandleReportAnytimeStatsInterrupt();
+
 	if (CheckProcSignal(PROCSIG_SLOTSYNC_MESSAGE))
 		HandleSlotSyncMessageInterrupt();
 

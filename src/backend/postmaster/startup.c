@@ -24,6 +24,7 @@
 #include "access/xlogutils.h"
 #include "libpq/pqsignal.h"
 #include "miscadmin.h"
+#include "pgstat.h"
 #include "postmaster/auxprocess.h"
 #include "postmaster/startup.h"
 #include "storage/ipc.h"
@@ -192,6 +193,9 @@ ProcessStartupProcInterrupts(void)
 	/* Perform logging of memory contexts of this process */
 	if (LogMemoryContextPending)
 		ProcessLogMemoryContextInterrupt();
+
+	if (ReportAnytimeStatsPending)
+		ProcessReportAnytimeStatsInterrupt();
 }
 
 

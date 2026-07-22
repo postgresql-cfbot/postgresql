@@ -28,11 +28,16 @@ my $broken_command =
   ? q{copy "%p_does_not_exist" "%f_does_not_exist"}
   : q{cp "%p_does_not_exist" "%f_does_not_exist"};
 
+# Double the backslashes on Windows: the GUC parser processes backslash
+# escapes in quoted configuration values (see also
+# PostgreSQL::Test::Cluster::enable_archiving).
 my $archive_dir = PostgreSQL::Test::Utils::tempdir();
+my $archive_path = $archive_dir;
+$archive_path =~ s{\\}{\\\\}g if $PostgreSQL::Test::Utils::windows_os;
 my $good_command =
   $PostgreSQL::Test::Utils::windows_os
-  ? qq{copy "%p" "$archive_dir\\%f"}
-  : qq{cp %p "$archive_dir/%f"};
+  ? qq{copy "%p" "$archive_path\\\\%f"}
+  : qq{cp %p "$archive_path/%f"};
 
 ###############################################################################
 # Set up primary with archive_mode=shared and BROKEN archiving so that every

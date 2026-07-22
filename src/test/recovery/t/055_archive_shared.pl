@@ -8,14 +8,28 @@ use PostgreSQL::Test::Utils;
 use Test::More;
 use File::Path qw(rmtree);
 
-# Initialize primary node with archiving
+# Initialize primary node with archiving.
+#
+# All nodes share one archive directory (that is the point of
+# archive_mode=shared), so we cannot rely on enable_archiving's per-node
+# archive dir and construct the command ourselves.  Mirror the portability
+# dance of PostgreSQL::Test::Cluster::enable_archiving: on Windows use copy,
+# and double the backslashes because the GUC parser processes backslash
+# escapes in quoted configuration values.
 my $archive_dir = PostgreSQL::Test::Utils::tempdir();
+my $archive_path = $archive_dir;
+$archive_path =~ s{\\}{\\\\}g if $PostgreSQL::Test::Utils::windows_os;
+my $archive_command =
+  $PostgreSQL::Test::Utils::windows_os
+  ? qq{copy "%p" "$archive_path\\\\%f"}
+  : qq{cp %p "$archive_path/%f"};
+
 my $primary = PostgreSQL::Test::Cluster->new('primary');
 $primary->init(has_archiving => 1, allows_streaming => 1);
 $primary->append_conf('postgresql.conf', "
 archive_mode = shared
 archive_status_report_interval = 10ms
-archive_command = 'cp %p \"$archive_dir\"/%f'
+archive_command = '$archive_command'
 wal_keep_size = 128MB
 ");
 $primary->start;
@@ -52,7 +66,7 @@ $standby->init_from_backup($primary, $backup_name, has_streaming => 1);
 $standby->append_conf('postgresql.conf', "
 archive_mode = shared
 archive_status_report_interval = 10ms
-archive_command = 'cp %p \"$archive_dir\"/%f'
+archive_command = '$archive_command'
 wal_receiver_status_interval = 1s
 ");
 $standby->start;
@@ -137,7 +151,7 @@ $cascade_standby->init_from_backup($standby, $promoted_backup, has_streaming => 
 $cascade_standby->append_conf('postgresql.conf', "
 archive_mode = shared
 archive_status_report_interval = 10ms
-archive_command = 'cp %p \"$archive_dir\"/%f'
+archive_command = '$archive_command'
 wal_receiver_status_interval = 1s
 ");
 $cascade_standby->start;

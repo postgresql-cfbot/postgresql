@@ -79,15 +79,45 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
     </listitem>
    </varlistentry>
 
+   <varlistentry id="sql-createpublication-params-table-name">
+    <term><replaceable class="parameter">table_name</replaceable></term>
+    <listitem>
+     <para>
+      Name of an existing table.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createpublication-params-column-name">
+    <term><replaceable class="parameter">column_name</replaceable></term>
+    <listitem>
+     <para>
+      Name of an existing column of
+      <replaceable class="parameter">table_name</replaceable>.
+     </para>
+    </listitem>
+   </varlistentry>
+
+   <varlistentry id="sql-createpublication-params-schema-name">
+    <term><replaceable class="parameter">schema_name</replaceable></term>
+    <listitem>
+     <para>
+      Name of an existing schema.
+     </para>
+    </listitem>
+   </varlistentry>
+
    <varlistentry id="sql-createpublication-params-for-table">
     <term><literal>FOR TABLE</literal></term>
     <listitem>
      <para>
       Specifies a list of tables to add to the publication.  If
-      <literal>ONLY</literal> is specified before the table name, only
+      <literal>ONLY</literal> is specified before the
+      <replaceable class="parameter">table_name</replaceable>, only
       that table is added to the publication.  If <literal>ONLY</literal> is not
       specified, the table and all its descendant tables (if any) are added.
-      Optionally, <literal>*</literal> can be specified after the table name to
+      Optionally, <literal>*</literal> can be specified after the
+      <replaceable class="parameter">table_name</replaceable> to
       explicitly indicate that descendant tables are included.
       This does not apply to a partitioned table, however.  The partitions of
       a partitioned table are always implicitly considered part of the
@@ -208,11 +238,12 @@ CREATE PUBLICATION <replaceable class="parameter">name</replaceable>
      </para>
      <para>
       For inherited tables, if <literal>ONLY</literal> is specified before the
-      table name, only that table is excluded from the publication. If
-      <literal>ONLY</literal> is not specified, the table and all its descendant
-      tables (if any) are excluded. Optionally, <literal>*</literal> can be
-      specified after the table name to explicitly indicate that descendant
-      tables are excluded.
+      <replaceable class="parameter">table_name</replaceable>, only that table
+      is excluded from the publication. If <literal>ONLY</literal> is not
+      specified, the table and all its descendant tables (if any) are excluded.
+      Optionally, <literal>*</literal> can be specified after the
+      <replaceable class="parameter">table_name</replaceable> to explicitly
+      indicate that descendant tables are excluded.
      </para>
      <para>
       For partitioned tables, only the root partitioned table may be specified

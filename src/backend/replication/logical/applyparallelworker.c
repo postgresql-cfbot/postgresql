@@ -1314,9 +1314,33 @@ pa_wait_for_xact_finish(ParallelApplyWorkerInfo *winfo)
 	 * released.
 	 */
 	if (pa_get_xact_state(winfo->shared) != PARALLEL_TRANS_FINISHED)
+	{
+		/*
+		 * If the worker signalled that it errored (PARALLEL_TRANS_ERROR), it
+		 * is logging the conflict and will report the actual error via the
+		 * error queue before exiting.  Wait for that rather than reporting a
+		 * generic lost connection: CHECK_FOR_INTERRUPTS() drives
+		 * ProcessParallelApplyMessages(), which raises the real error on the
+		 * worker's ErrorResponse (or "lost connection" if the worker died
+		 * without reporting).  Waiting here also keeps the worker alive long
+		 * enough to finish writing the conflict log tuple.
+		 */
+		while (pa_get_xact_state(winfo->shared) == PARALLEL_TRANS_ERROR)
+		{
+			CHECK_FOR_INTERRUPTS();
+
+			(void) WaitLatch(MyLatch,
+							 WL_LATCH_SET | WL_TIMEOUT | WL_EXIT_ON_PM_DEATH,
+							 10L,
+							 WAIT_EVENT_LOGICAL_PARALLEL_APPLY_STATE_CHANGE);
+
+			ResetLatch(MyLatch);
+		}
+
 		ereport(ERROR,
 				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
 				 errmsg("lost connection to the logical replication parallel apply worker")));
+	}
 }
 
 /*

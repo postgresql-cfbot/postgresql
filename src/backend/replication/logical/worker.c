@@ -487,7 +487,9 @@ static bool MySubscriptionValid = false;
 static List *on_commit_wakeup_workers_subids = NIL;
 
 bool		in_remote_transaction = false;
-static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
+XLogRecPtr	remote_final_lsn = InvalidXLogRecPtr;
+TransactionId remote_xid = InvalidTransactionId;
+TimestampTz remote_commit_ts = 0;
 
 /* fields valid only when processing streamed transaction */
 static bool in_streamed_transaction = false;
@@ -1236,6 +1238,8 @@ apply_handle_begin(StringInfo s)
 	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
 
 	remote_final_lsn = begin_data.final_lsn;
+	remote_commit_ts = begin_data.committime;
+	remote_xid = begin_data.xid;
 
 	maybe_start_skipping_changes(begin_data.final_lsn);
 
@@ -1296,6 +1300,8 @@ apply_handle_begin_prepare(StringInfo s)
 	set_apply_error_context_xact(begin_data.xid, begin_data.prepare_lsn);
 
 	remote_final_lsn = begin_data.prepare_lsn;
+	remote_xid = begin_data.xid;
+	remote_commit_ts = 0;
 
 	maybe_start_skipping_changes(begin_data.prepare_lsn);
 
@@ -1766,6 +1772,10 @@ apply_handle_stream_start(StringInfo s)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("invalid transaction ID in streamed replication transaction")));
+
+	remote_xid = stream_xid;
+	remote_final_lsn = InvalidXLogRecPtr;
+	remote_commit_ts = 0;
 
 	set_apply_error_context_xact(stream_xid, InvalidXLogRecPtr);
 
@@ -2427,6 +2437,9 @@ apply_handle_stream_commit(StringInfo s)
 	switch (apply_action)
 	{
 		case TRANS_LEADER_APPLY:
+
+			/* Set remote_commit_ts for conflict logging. */
+			remote_commit_ts = commit_data.committime;
 
 			/*
 			 * The transaction has been serialized to file, so replay all the
@@ -6043,6 +6056,14 @@ DisableSubscriptionAndExit(void)
 	RESUME_INTERRUPTS();
 
 	/*
+	 * The error context callbacks in effect when the error was thrown belong
+	 * to now-unwound stack frames; reset the stack before running further
+	 * code (including the deferred conflict log insertion, which installs its
+	 * own).
+	 */
+	error_context_stack = NULL;
+
+	/*
 	 * Report the worker failed during sequence synchronization, table
 	 * synchronization, or apply.
 	 */
@@ -6069,6 +6090,19 @@ DisableSubscriptionAndExit(void)
 	ereport(LOG,
 			errmsg("subscription \"%s\" has been disabled because of an error",
 				   MySubscription->name));
+
+	/*
+	 * Insert the deferred conflict log tuple (if any) now that the
+	 * subscription has been disabled and committed.  Doing it after the
+	 * disable means a failure to log the conflict (treated as a hard error,
+	 * see ProcessPendingConflictLogTuple) cannot prevent the subscription
+	 * from being disabled and so cannot leave the worker restarting and
+	 * failing forever.  Do it before the dead-tuple retention check below:
+	 * that check only warns today, but it takes an elevel and could raise an
+	 * error, which must not prevent the conflict from being recorded.  The
+	 * original error was already reported above.
+	 */
+	ProcessPendingConflictLogTuple();
 
 	/*
 	 * Skip the track_commit_timestamp check when disabling the worker due to

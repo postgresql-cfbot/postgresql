@@ -1385,6 +1385,13 @@ lazy_scan_heap(LVRelState *vacrel)
 										 PROGRESS_VACUUM_PHASE_SCAN_HEAP);
 		}
 
+		/*
+		 * Switch the stream's strategy after any check, including one that
+		 * might have happened in lazy_vacuum().
+		 */
+		if (VacuumFailsafeActive)
+			read_stream_set_strategy(stream, NULL);
+
 		buf = read_stream_next_buffer(stream, &per_buffer_data);
 
 		/* The relation is exhausted. */

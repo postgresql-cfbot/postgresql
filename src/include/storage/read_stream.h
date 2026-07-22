@@ -100,6 +100,8 @@ extern ReadStream *read_stream_begin_smgr_relation(int flags,
 												   ReadStreamBlockNumberCB callback,
 												   void *callback_private_data,
 												   size_t per_buffer_data_size);
+extern void read_stream_set_strategy(ReadStream *stream,
+									 BufferAccessStrategy strategy);
 extern BlockNumber read_stream_pause(ReadStream *stream);
 extern void read_stream_resume(ReadStream *stream);
 extern void read_stream_reset(ReadStream *stream);

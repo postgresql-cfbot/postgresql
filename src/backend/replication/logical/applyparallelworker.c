@@ -14,6 +14,9 @@
  * ParallelApplyWorkerInfo which is required so the leader worker and parallel
  * apply workers can communicate with each other.
  *
+ * Streaming transactions
+ * ======================
+ *
  * The parallel apply workers are assigned (if available) as soon as xact's
  * first stream is received for subscriptions that have set their 'streaming'
  * option as parallel. The leader apply worker will send changes to this new
@@ -36,12 +39,9 @@
  * its information is added to the ParallelApplyWorkerPool. Once the worker
  * finishes applying the transaction, it is marked as available for re-use.
  * Now, before starting a new worker to apply the streaming transaction, we
- * check the list for any available worker. Note that we retain a maximum of
- * half the max_parallel_apply_workers_per_subscription workers in the pool and
- * after that, we simply exit the worker after applying the transaction.
- *
- * XXX This worker pool threshold is arbitrary and we can provide a GUC
- * variable for this in the future if required.
+ * check the list for any available worker. We do not stop workers in the pool
+ * unless partial of the changes of the transaction are serialized due to a send
+ * timeout.
  *
  * The leader apply worker will create a separate dynamic shared memory segment
  * when each parallel apply worker starts. The reason for this design is that
@@ -152,6 +152,153 @@
  * session-level locks because both locks could be acquired outside the
  * transaction, and the stream lock in the leader needs to persist across
  * transaction boundaries i.e. until the end of the streaming transaction.
+ *
+ * Non-streaming transactions
+ * ======================
+ * The handling is similar to streaming transactions, but including few
+ * differences:
+ *
+ * Transaction dependency
+ * ----------------------
+ * Before dispatching changes to a parallel worker, the leader verifies if the
+ * current modification affects the same row (identitied by replica identity
+ * key) as another ongoing transaction (see handle_dependency_on_change for
+ * details). If so, the leader sends a list of dependent transaction IDs to the
+ * parallel worker, indicating that the parallel apply worker must wait for
+ * these transactions to commit before proceeding. If transactions are streamed
+ * but leader deciedes not to assign parallel apply workers, dependencies are
+ * verified when the transaction is committed.
+ *
+ * Tracking dependencies is necessary even when commit order is preserved.
+ * Consider two transactions: TX-1 (INSERT row 1) and TX-2 (DELETE row 1). If
+ * both are allowed to apply in parallel, TX-2's DELETE could be applied before
+ * TX-1's INSERT, resulting in a delete_missing conflict.
+ *
+ * Beyond replica identity keys, we also track dependencies on transactions that
+ * modify the same local unique key. Even if the replica identity keys differ,
+ * unique indexes can still cause conflicts. This is necessary to prevent
+ * unexpected errors. For example:
+ *
+ *   TX-1: DELETE row (1,2) with replica identity key (1,2) and unique key (2)
+ *   TX-2: INSERT row (3,2) with replica identity key (3,2) and unique key (2)
+ *
+ * If applied in parallel, TX-2's INSERT could be applied before TX-1's DELETE,
+ * leading to a unique index violation error.
+ *
+ * We do not track dependencies for INSERT and UPDATE that conflict on a new
+ * unique key value, since such conflicts would cause an error even in serial
+ * mode. Instead, we only track dependencies involving old tuples (from DELETE
+ * or UPDATE) and require INSERT and UPDATE transactions that target the same
+ * unique key to wait for them.
+ *
+ * Note that the old tuple of an UPDATE or DELETE may not include the unique key
+ * column if that column is not part of the replica identity columns on the
+ * publisher. In such cases, we only use the unique columns that are part of the
+ * replica identity keys for dependency tracking, which may lead to false
+ * positives. For example, consider a unique index defined as UNIQUE (a, b),
+ * where only b is part of the replica identity keys:
+ *
+ *   TX-1: DELETE row (1,2) TX-2: INSERT row (3,2)
+ *
+ * If applied in parallel, both transactions will be treated as dependent
+ * because they modify the same unique key value (b=2), even though they
+ * actually modify different unique keys. This is acceptable because it is still
+ * better than completely disallowing parallelism for these transactions.
+ *
+ * In the worst case, if none of the unique index columns are part of the
+ * replica identity keys, we treat all transactions that modify the same table
+ * as dependent and disallow parallelism for that table.
+ *
+ * XXX We could consider requesting the publisher to include unique key columns
+ * in the old tuple of UPDATE or DELETE when they are not part of the replica
+ * identity keys. This would reduce false positives, but would require changes
+ * on the publisher side and increase disk (WAL size) and network data. For now,
+ * we choose not to implement this. An alternative approach is to provide an
+ * option to skip tracking dependencies on unique keys that are not part of the
+ * replica identity keys. This could be useful for users who prefer higher
+ * parallelism and experience few conflicts.
+ *
+ * Additionally, foreign key dependencies are also tracked to prevent constraint
+ * violations. Consider a referencing table FK_TABLE (a INT REFERENCES PK_TABLE)
+ * and a referenced table PK_TABLE (a INT PRIMARY KEY):
+ *
+ *   TX-1: INSERT row (1) INTO PK_TABLE
+ *   TX-2: INSERT row (1) INTO FK_TABLE
+ *
+ * TX-2 must wait for TX-1; otherwise, a foreign key violation occurs.
+ *
+ * Similarly, for deletions:
+ *
+ *   TX-1: DELETE row (1) FROM FK_TABLE
+ *   TX-2: DELETE row (1) FROM PK_TABLE
+ *
+ * TX-2 must wait for TX-1 to avoid violating the foreign key constraint.
+ *
+ * Therefore, we record new tuples on the referenced table (PK_TABLE) and check
+ * for dependencies when processing new tuples on the referencing table
+ * (FK_TABLE). Conversely, we record old tuples deleted from the referencing
+ * table and require deletions on the referenced table to depend on them.
+ *
+ * Similar to unique key dependencies, for delete-delete cases we only track
+ * foreign key dependencies on columns that are part of the replica identity
+ * keys on the publisher. This may lead to false positives but is acceptable
+ * given the trade-off.
+ *
+ * Note that the local unique key could change after dependency checking and
+ * before applying the change. However, to centralize tracking and keep it
+ * simple, we still perform this check only in the leader apply worker. This is
+ * acceptable because in the worst case, the parallel worker will report an
+ * error and restart the transaction using the latest index information.
+ *
+ * Commit order
+ * ------------
+ * We preserve publisher commit order for all transactions for two reasons:
+ *
+ * 1) User-visible consistency
+ *
+ * Out-of-order commits can expose states on the subscriber that were never
+ * visible on the publisher.
+ *
+ * For example, suppose a user updates table A and then updates table B on the
+ * publisher. If the subscriber commits those transactions out of order, a
+ * query that sees the latest row in B might still see stale data in A.
+ * Although eventual consistency would still be reached, that behavior may be
+ * unacceptable for some users. In the future, we could provide a subscription
+ * option to allow out-of-order commits for users who prefer higher parallelism.
+ *
+ * 2) Replication progress tracking
+ *
+ * We currently track replication progress using the last transaction's commit
+ * LSNs. With out-of-order commits, this becomes ambiguous after failures.
+ *
+ * For example, if TX-2 is applied before TX-1 and replication stops due to an
+ * error, we cannot reliably determine whether TX-1 was applied before restart.
+ * As a result, transactions that were already committed on the subscriber may
+ * be replayed.
+ *
+ * Worker interaction
+ * ------------
+ * After sending the COMMIT message for a transaction, the leader apply worker
+ * does not wait for the parallel apply worker to finish applying that
+ * transaction. Instead, it sends a PA_MSG_XACT_DEPENDENCY message to
+ * the parallel apply worker, instructing it to wait for the last transaction to
+ * commit. This allows the leader to remain busy receiving and dispatching
+ * changes to more parallel apply workers, enabling greater parallelism in
+ * transaction application.
+ *
+ * Locking considerations
+ * ----------------------
+ * When handling a PA_MSG_RELMAP message, the worker attempts
+ * to acquire the transaction lock of the depended transaction and releases it
+ * immediately after acquisition (see pa_wait_for_depended_transaction). This
+ * allows deadlock detection when one worker (either leader or parallel apply
+ * worker) is waiting for a dependency on a transaction being applied by another
+ * worker, while that other worker is also blocked by a lock held by the first
+ * worker.
+ *
+ * The lock graph for the above example will look as follows: Worker_1 (waiting
+ * for depended transaction to finish) -> Worker_2 (waiting to acquire a
+ * relation lock) -> Worker_1
  *-------------------------------------------------------------------------
  */
 
@@ -213,19 +360,73 @@
 #define PARALLEL_APPLY_LOCK_XACT	1
 
 /*
- * Hash table entry to map xid to the parallel apply worker state.
+ * Hash table entry of ParallelApplyTxnHash to map xid to the parallel apply
+ * worker state.
  */
 typedef struct ParallelApplyWorkerEntry
 {
-	TransactionId xid;			/* Hash key -- must be first */
+	TransactionId xid;			/* Remote transaction ID (hash key) ---
+								 * must be first */
+
+	/*
+	 * The parallel apply worker assigned for applying the transaction. It is
+	 * NULL if the worker has already finished the transaction and the leader
+	 * has collected its local end LSN.
+	 */
 	ParallelApplyWorkerInfo *winfo;
+
+	/*
+	 * The local end LSN of this transaction applied by the parallel apply
+	 * worker.
+	 *
+	 * The leader will initialize this value by reading the last_commit_end from
+	 * the parallel apply worker shared memory before reusing the worker for
+	 * another transaction (see pa_get_last_commit_end). An invalid value
+	 * indicates the worker has not finished applying the transaction or there
+	 * is no change applied by the worker for this transaction.
+	 */
+	XLogRecPtr	local_end;
 } ParallelApplyWorkerEntry;
 
 /*
  * A hash table used to cache the state of streaming transactions being applied
- * by the parallel apply workers.
+ * by the parallel apply workers. Entries are of type ParallelApplyWorkerEntry.
+ *
+ * The leader apply worker adds an entry when a transaction starts being
+ * applied, and removes it after collecting the transaction's local end LSN from
+ * the parallel worker.
  */
 static HTAB *ParallelApplyTxnHash = NULL;
+
+/* An entry in the parallelized_txns shared hash table */
+typedef struct ParallelizedTxnEntry
+{
+	TransactionId xid;			/* Hash key, remote transaction ID */
+} ParallelizedTxnEntry;
+
+/*
+ * A hash table used to track the parallelized remote transactions that could be
+ * depended on by other transactions. Entries are of type ParallelizedTxnEntry.
+ *
+ * The leader apply worker adds an entry before sending the COMMIT record of a
+ * transaction to a parallel apply worker. The entry is removed by that worker
+ * immediately after committing the transaction.
+ *
+ * dshash is used to enable dynamic shared memory allocation based on the number
+ * of transactions being applied in parallel.
+ */
+static dsa_area *parallel_apply_dsa_area = NULL;
+static dshash_table *parallelized_txns = NULL;
+
+/* Parameters for the parallelized_txns shared hash table */
+static const dshash_parameters dsh_params = {
+	sizeof(TransactionId),
+	sizeof(ParallelizedTxnEntry),
+	dshash_memcmp,
+	dshash_memhash,
+	dshash_memcpy,
+	LWTRANCHE_PARALLEL_APPLY_DSA
+};
 
 /*
  * A list (pool) of active parallel apply workers. The information for
@@ -260,6 +461,9 @@ static List *subxactlist = NIL;
 static void pa_free_worker_info(ParallelApplyWorkerInfo *winfo);
 static ParallelTransState pa_get_xact_state(ParallelApplyWorkerShared *wshared);
 static PartialFileSetState pa_get_fileset_state(void);
+static void pa_attach_parallelized_txn_hash(dsa_handle *pa_dsa_handle,
+											dshash_table_handle *pa_dshash_handle);
+static void write_internal_relation(StringInfo s, LogicalRepRelation *rel);
 
 /*
  * Returns true if it is OK to start a parallel apply worker, false otherwise.
@@ -337,6 +541,15 @@ pa_setup_dsm(ParallelApplyWorkerInfo *winfo)
 	shm_mq	   *mq;
 	Size		queue_size = DSM_QUEUE_SIZE;
 	Size		error_queue_size = DSM_ERROR_QUEUE_SIZE;
+	dsa_handle	parallel_apply_dsa_handle;
+	dshash_table_handle parallelized_txns_handle;
+
+	pa_attach_parallelized_txn_hash(&parallel_apply_dsa_handle,
+									&parallelized_txns_handle);
+
+	if (parallel_apply_dsa_handle == DSA_HANDLE_INVALID ||
+		parallelized_txns_handle == DSHASH_HANDLE_INVALID)
+		return false;
 
 	/*
 	 * Estimate how much shared memory we need.
@@ -368,10 +581,13 @@ pa_setup_dsm(ParallelApplyWorkerInfo *winfo)
 	shared = shm_toc_allocate(toc, sizeof(ParallelApplyWorkerShared));
 	SpinLockInit(&shared->mutex);
 
+	shared->xid = InvalidTransactionId;
 	shared->xact_state = PARALLEL_TRANS_UNKNOWN;
 	pg_atomic_init_u32(&(shared->pending_stream_count), 0);
 	shared->last_commit_end = InvalidXLogRecPtr;
 	shared->fileset_state = FS_EMPTY;
+	shared->parallel_apply_dsa_handle = parallel_apply_dsa_handle;
+	shared->parallelized_txns_handle = parallelized_txns_handle;
 
 	shm_toc_insert(toc, PARALLEL_APPLY_KEY_SHARED, shared);
 
@@ -409,6 +625,8 @@ pa_launch_parallel_worker(void)
 	MemoryContext oldcontext;
 	bool		launched;
 	ParallelApplyWorkerInfo *winfo;
+	dsa_handle	pa_dsa_handle;
+	dshash_table_handle pa_dshash_handle;
 	ListCell   *lc;
 
 	/* Try to get an available parallel apply worker from the worker pool. */
@@ -418,7 +636,35 @@ pa_launch_parallel_worker(void)
 
 		if (!winfo->in_use)
 			return winfo;
+
+		/*
+		 * The leader does not explicitly free workers that handle non-streaming
+		 * transactions, so we check whether the transaction has committed, and
+		 * if so, reuse the worker.
+		 */
+		if (!winfo->stream_txn &&
+			pa_get_xact_state(winfo->shared) == PARALLEL_TRANS_FINISHED)
+		{
+			/*
+			 * Save the local commit LSN of the last transaction applied by
+			 * this worker before reusing it for another transaction. This WAL
+			 * position is crucial for determining the flush position in
+			 * responses to the publisher (see get_flush_position()).
+			 */
+			(void) pa_get_last_commit_end(winfo->shared->xid, false, NULL);
+			return winfo;
+		}
 	}
+
+	pa_attach_parallelized_txn_hash(&pa_dsa_handle, &pa_dshash_handle);
+
+	/*
+	 * Return if the number of parallel apply workers has reached the maximum
+	 * limit.
+	 */
+	if (list_length(ParallelApplyWorkerPool) ==
+		max_parallel_apply_workers_per_subscription)
+		return NULL;
 
 	/*
 	 * Start a new parallel apply worker.
@@ -447,17 +693,49 @@ pa_launch_parallel_worker(void)
 										dsm_segment_handle(winfo->dsm_seg),
 										false);
 
-	if (launched)
+	if (!launched)
 	{
-		ParallelApplyWorkerPool = lappend(ParallelApplyWorkerPool, winfo);
-	}
-	else
-	{
+		MemoryContextSwitchTo(oldcontext);
 		pa_free_worker_info(winfo);
-		winfo = NULL;
+		return NULL;
 	}
 
+	ParallelApplyWorkerPool = lappend(ParallelApplyWorkerPool, winfo);
+
 	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * Send all existing remote relation information to the parallel apply
+	 * worker. This allows the parallel worker to initialize the
+	 * LogicalRepRelMapEntry locally before applying remote changes. This is
+	 * needed since the walsender does not send remote relation information
+	 * with every transaction.
+	 */
+	if (logicalrep_get_num_rels())
+	{
+		StringInfoData out;
+		shm_mq_result result;
+
+		initStringInfo(&out);
+
+		write_internal_relation(&out, NULL);
+
+		/*
+		 * Send relation information synchronously rather than using
+		 * non-blocking send (pa_send_data). This avoids the need to serialize
+		 * the data, which would add complexity for the parallel apply worker to
+		 * deserialize outside of transaction application.
+		 *
+		 * This is safe from deadlocks because a newly started worker does not
+		 * hold any strong locks when processing relation information.
+		 */
+		result = shm_mq_send(winfo->mq_handle, out.len, out.data, false, true);
+
+		if (result != SHM_MQ_SUCCESS)
+			ereport(ERROR,
+					errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					errmsg("could not send remote relation information to the logical replication parallel apply worker"));
+	}
 
 	return winfo;
 }
@@ -465,13 +743,17 @@ pa_launch_parallel_worker(void)
 /*
  * Allocate a parallel apply worker that will be used for the specified xid.
  *
+ * preceding_xid is the transaction received before the current one; pass
+ * InvalidTransactionId if none exists.
+ *
  * We first try to get an available worker from the pool, if any and then try
  * to launch a new worker. On successful allocation, remember the worker
  * information in the hash table so that we can get it later for processing the
  * streaming changes.
  */
 void
-pa_allocate_worker(TransactionId xid)
+pa_allocate_worker(TransactionId xid, TransactionId preceding_xid,
+				   bool stream_txn)
 {
 	bool		found;
 	ParallelApplyWorkerInfo *winfo = NULL;
@@ -508,11 +790,14 @@ pa_allocate_worker(TransactionId xid)
 	SpinLockAcquire(&winfo->shared->mutex);
 	winfo->shared->xact_state = PARALLEL_TRANS_UNKNOWN;
 	winfo->shared->xid = xid;
+	winfo->shared->preceding_xid = preceding_xid;
 	SpinLockRelease(&winfo->shared->mutex);
 
 	winfo->in_use = true;
 	winfo->serialize_changes = false;
+	winfo->stream_txn = stream_txn;
 	entry->winfo = winfo;
+	entry->local_end = InvalidXLogRecPtr;
 }
 
 /*
@@ -561,25 +846,27 @@ pa_free_worker(ParallelApplyWorkerInfo *winfo)
 {
 	Assert(!am_parallel_apply_worker());
 	Assert(winfo->in_use);
-	Assert(pa_get_xact_state(winfo->shared) == PARALLEL_TRANS_FINISHED);
+	Assert(!winfo->stream_txn ||
+		   pa_get_xact_state(winfo->shared) == PARALLEL_TRANS_FINISHED);
 
 	if (!hash_search(ParallelApplyTxnHash, &winfo->shared->xid, HASH_REMOVE, NULL))
 		elog(ERROR, "hash table corrupted");
 
 	/*
-	 * Stop the worker if there are enough workers in the pool.
+	 * XXX we stop the worker if the leader apply worker serialize part of the
+	 * transaction data due to a send timeout. This is because the message could
+	 * be partially written to the queue and there is no way to clean the queue
+	 * other than resending the message until it succeeds. Instead of trying to
+	 * send the data which anyway would have been serialized and then letting
+	 * the parallel apply worker deal with the spurious message, we stop the
+	 * worker.
 	 *
-	 * XXX Additionally, we also stop the worker if the leader apply worker
-	 * serialize part of the transaction data due to a send timeout. This is
-	 * because the message could be partially written to the queue and there
-	 * is no way to clean the queue other than resending the message until it
-	 * succeeds. Instead of trying to send the data which anyway would have
-	 * been serialized and then letting the parallel apply worker deal with
-	 * the spurious message, we stop the worker.
+	 * For other cases, we do not stop workers once started. All transactions
+	 * (whether streamed or not) are assigned to parallel apply workers, so
+	 * restarting workers frequently would only increase CPU overhead and slow
+	 * down the leader's ability to dispatch changes to workers.
 	 */
-	if (winfo->serialize_changes ||
-		list_length(ParallelApplyWorkerPool) >
-		(max_parallel_apply_workers_per_subscription / 2))
+	if (winfo->serialize_changes)
 	{
 		logicalrep_pa_worker_stop(winfo);
 		pa_free_worker_info(winfo);
@@ -710,6 +997,76 @@ pa_process_spooled_messages_if_required(void)
 }
 
 /*
+ * Get the local end LSN for a transaction applied by a parallel apply worker.
+ *
+ * Set delete_entry to true if you intend to remove the transaction from the
+ * ParallelApplyTxnHash after collecting its LSN. Otherwise, the local end LSN
+ * is copied from shared memory into the local entry of ParallelApplyTxnHash for
+ * later collection by the leader.
+ *
+ * If the parallel apply worker did not write any changes during the transaction
+ * application due to situations like update/delete_missing or a before trigger,
+ * the *skipped_write will be set to true.
+ */
+XLogRecPtr
+pa_get_last_commit_end(TransactionId xid, bool delete_entry, bool *skipped_write)
+{
+	bool		found;
+	ParallelApplyWorkerEntry *entry;
+	ParallelApplyWorkerInfo *winfo;
+
+	Assert(TransactionIdIsValid(xid));
+	Assert(ParallelApplyTxnHash);
+
+	if (skipped_write)
+		*skipped_write = false;
+
+	/* Find an entry for the requested transaction. */
+	entry = hash_search(ParallelApplyTxnHash, &xid, HASH_FIND, &found);
+
+	if (!found)
+		return InvalidXLogRecPtr;
+
+	/*
+	 * If worker info is NULL, it indicates that the worker has already
+	 * finished handling the transaction. Consequently, the local end LSN has
+	 * already been collected and saved in entry->local_end.
+	 */
+	winfo = entry->winfo;
+	if (winfo == NULL)
+	{
+		if (delete_entry &&
+			!hash_search(ParallelApplyTxnHash, &xid, HASH_REMOVE, NULL))
+			elog(ERROR, "hash table corrupted");
+
+		if (skipped_write)
+			*skipped_write = XLogRecPtrIsInvalid(entry->local_end);
+
+		return entry->local_end;
+	}
+
+	/* Return InvalidXLogRecPtr if the transaction is still in progress */
+	if (pa_get_xact_state(winfo->shared) != PARALLEL_TRANS_FINISHED)
+		return InvalidXLogRecPtr;
+
+	/* Collect the local end LSN from the worker's shared memory area */
+	entry->local_end = winfo->shared->last_commit_end;
+	entry->winfo = NULL;
+
+	if (skipped_write)
+		*skipped_write = XLogRecPtrIsInvalid(entry->local_end);
+
+	elog(DEBUG1, "store local commit %X/%X end to txn entry: %u",
+		 LSN_FORMAT_ARGS(entry->local_end), xid);
+
+	if (delete_entry &&
+		!hash_search(ParallelApplyTxnHash, &xid, HASH_REMOVE, NULL))
+		elog(ERROR, "hash table corrupted");
+
+	return entry->local_end;
+}
+
+/*
  * Interrupt handler for main loop of parallel apply worker.
  */
 static void
@@ -733,6 +1090,73 @@ ProcessParallelApplyInterrupts(void)
 	}
 }
 
+/*
+ * Handle internal dependency information.
+ *
+ * Wait for all transactions listed in the message to commit.
+ */
+static void
+apply_handle_internal_dependency(StringInfo s)
+{
+	int			nxids = pq_getmsgint(s, 4);
+
+	for (int i = 0; i < nxids; i++)
+	{
+		TransactionId xid = pq_getmsgint(s, 4);
+
+		pa_wait_for_depended_transaction(xid);
+	}
+}
+
+/*
+ * Handle internal relation information.
+ *
+ * Update all relation details in the relation map cache.
+ */
+static void
+apply_handle_internal_relation(StringInfo s)
+{
+	int			nrels = pq_getmsgint(s, 4);
+
+	for (int i = 0; i < nrels; i++)
+	{
+		LogicalRepRelation *rel = logicalrep_read_rel(s);
+
+		logicalrep_relmap_update(rel);
+
+		/* Also reset all entries in the partition map that refer to remoterel. */
+		logicalrep_partmap_reset_relmap(rel);
+
+		elog(DEBUG1, "parallel apply worker init relmap for %s",
+			 rel->relname);
+	}
+}
+
+/*
+ * Handle an internal message generated by the leader apply worker.
+ */
+void
+apply_handle_internal_message(StringInfo s)
+{
+	PAWorkerMsgType action = pq_getmsgbyte(s);
+
+	Assert(am_parallel_apply_worker());
+
+	switch (action)
+	{
+		case PA_MSG_XACT_DEPENDENCY:
+			apply_handle_internal_dependency(s);
+			break;
+		case PA_MSG_RELMAP:
+			apply_handle_internal_relation(s);
+			break;
+		default:
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("invalid worker internal message type \"??? (%d)\"", action)));
+	}
+}
+
 /* Parallel apply worker main loop. */
 static void
 LogicalParallelApplyLoop(shm_mq_handle *mqh)
@@ -740,6 +1164,14 @@ LogicalParallelApplyLoop(shm_mq_handle *mqh)
 	shm_mq_result shmq_res;
 	ErrorContextCallback errcallback;
 	MemoryContext oldcxt = CurrentMemoryContext;
+
+	/*
+	 * Ensure LOGICAL_REP_MSG_INTERNAL_MESSAGE does not conflict with
+	 * PqReplMsg_WALData ('d'), as parallel apply workers may receive both types
+	 * of messages.
+	 */
+	StaticAssertDecl(LOGICAL_REP_MSG_INTERNAL_MESSAGE != PqReplMsg_WALData,
+					 "LOGICAL_REP_MSG_INTERNAL_MESSAGE conflicts with PqReplMsg_WALData");
 
 	/*
 	 * Init the ApplyMessageContext which we clean up after each replication
@@ -779,26 +1211,46 @@ LogicalParallelApplyLoop(shm_mq_handle *mqh)
 
 			initReadOnlyStringInfo(&s, data, len);
 
-			/*
-			 * The first byte of messages sent from leader apply worker to
-			 * parallel apply workers can only be PqReplMsg_WALData.
-			 */
 			c = pq_getmsgbyte(&s);
-			if (c != PqReplMsg_WALData)
+
+			if (c == PqReplMsg_WALData)
+			{
+				/*
+				 * Ignore statistics fields that have been updated by the
+				 * leader apply worker.
+				 *
+				 * XXX We can avoid sending the statistics fields from the
+				 * leader apply worker but for that, it needs to rebuild the
+				 * entire message by removing these fields which could be more
+				 * work than simply ignoring these fields in the parallel apply
+				 * worker.
+				 */
+				s.cursor += SIZE_STATS_MESSAGE;
+
+				apply_dispatch(&s);
+			}
+			else if (c == LOGICAL_REP_MSG_INTERNAL_MESSAGE)
+			{
+				/*
+				 * Rewind the cursor so that apply_dispatch can re-read the
+				 * first byte (LOGICAL_REP_MSG_INTERNAL_MESSAGE) to correctly
+				 * handle the internal message. Alternatively, we could call
+				 * apply_handle_internal_message directly, but using
+				 * apply_dispatch uniformly across all message types is cleaner
+				 * and more consistent.
+				 */
+				s.cursor--;
+
+				apply_dispatch(&s);
+			}
+			else
+			{
+				/*
+				 * The first byte of messages sent from leader apply worker to
+				 * parallel apply workers can only be 'w' or 'i'.
+				 */
 				elog(ERROR, "unexpected message \"%c\"", c);
-
-			/*
-			 * Ignore statistics fields that have been updated by the leader
-			 * apply worker.
-			 *
-			 * XXX We can avoid sending the statistics fields from the leader
-			 * apply worker but for that, it needs to rebuild the entire
-			 * message by removing these fields which could be more work than
-			 * simply ignoring these fields in the parallel apply worker.
-			 */
-			s.cursor += SIZE_STATS_MESSAGE;
-
-			apply_dispatch(&s);
+			}
 		}
 		else if (shmq_res == SHM_MQ_WOULD_BLOCK)
 		{
@@ -861,6 +1313,9 @@ pa_shutdown(int code, Datum arg)
 				   INVALID_PROC_NUMBER);
 
 	dsm_detach((dsm_segment *) DatumGetPointer(arg));
+
+	if (parallel_apply_dsa_area)
+		dsa_detach(parallel_apply_dsa_area);
 }
 
 /*
@@ -876,6 +1331,8 @@ ParallelApplyWorkerMain(Datum main_arg)
 	shm_mq	   *mq;
 	shm_mq_handle *mqh;
 	shm_mq_handle *error_mqh;
+	dsa_handle	pa_dsa_handle;
+	dshash_table_handle pa_dshash_handle;
 	ReplOriginId originid;
 	int			worker_slot = DatumGetInt32(main_arg);
 	char		originname[NAMEDATALEN];
@@ -961,6 +1418,8 @@ ParallelApplyWorkerMain(Datum main_arg)
 	InitializeLogRepWorker();
 
 	InitializingApplyWorker = false;
+
+	pa_attach_parallelized_txn_hash(&pa_dsa_handle, &pa_dshash_handle);
 
 	/* Setup replication origin tracking. */
 	StartTransactionCommand();
@@ -1168,7 +1627,6 @@ pa_send_data(ParallelApplyWorkerInfo *winfo, Size nbytes, const void *data)
 	shm_mq_result result;
 	TimestampTz startTime = 0;
 
-	Assert(!IsTransactionState());
 	Assert(!winfo->serialize_changes);
 
 	/*
@@ -1217,6 +1675,58 @@ pa_send_data(ParallelApplyWorkerInfo *winfo, Size nbytes, const void *data)
 		else if (TimestampDifferenceExceeds(startTime, GetCurrentTimestamp(),
 											SHM_SEND_TIMEOUT_MS))
 			return false;
+	}
+}
+
+/*
+ * Distribute remote relation information to all active parallel apply workers
+ * that require it.
+ */
+void
+pa_distribute_schema_changes_to_workers(LogicalRepRelation *rel)
+{
+	StringInfoData out;
+
+	/* Only leader apply workers can distribute schema changes */
+	if (!am_leader_apply_worker())
+		return;
+
+	/* Quick exit if there are no parallel apply workers */
+	if (!ParallelApplyWorkerPool)
+		return;
+
+	initStringInfo(&out);
+
+	write_internal_relation(&out, rel);
+
+	foreach_ptr(ParallelApplyWorkerInfo, winfo, ParallelApplyWorkerPool)
+	{
+		/*
+		 * Skip the worker responsible for the current transaction, as the
+		 * relation information has already been sent to it.
+		 */
+		if (winfo == stream_apply_worker)
+			continue;
+
+		/*
+		 * Skip the worker that is in serialize mode, as they will soon stop
+		 * once they finish applying the transaction.
+		 */
+		if (winfo->serialize_changes)
+			continue;
+
+		elog(DEBUG1, "distributing schema changes to pa workers");
+
+		if (pa_send_data(winfo, out.len, out.data))
+			continue;
+
+		/*
+		 * TODO: Support switching to PARTIAL_SERIALIZE mode when the send
+		 * buffer becomes full.
+		 */
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("could not send data to the logical replication parallel apply worker for subscription"));
 	}
 }
 
@@ -1437,6 +1947,10 @@ pa_stream_abort(LogicalRepStreamAbortData *abort_data)
 	TransactionId xid = abort_data->xid;
 	TransactionId subxid = abort_data->subxid;
 
+	/* Streamed transactions won't be registered */
+	Assert(!dshash_find(parallelized_txns, &xid, false) &&
+		   !dshash_find(parallelized_txns, &subxid, false));
+
 	/*
 	 * Update origin state so we can restart streaming from correct position
 	 * in case of crash.
@@ -1636,23 +2150,230 @@ pa_decr_and_wait_stream_block(void)
 void
 pa_xact_finish(ParallelApplyWorkerInfo *winfo, XLogRecPtr remote_lsn)
 {
+	XLogRecPtr	local_lsn = InvalidXLogRecPtr;
+	TransactionId pa_remote_xid = winfo->shared->xid;
+
 	Assert(am_leader_apply_worker());
 
 	/*
-	 * Unlock the shared object lock so that parallel apply worker can
-	 * continue to receive and apply changes.
+	 * Unlock the shared object lock taken for streaming transactions so that
+	 * parallel apply worker can continue to receive and apply changes.
 	 */
-	pa_unlock_stream(winfo->shared->xid, AccessExclusiveLock);
+	if (winfo->stream_txn)
+		pa_unlock_stream(winfo->shared->xid, AccessExclusiveLock);
 
 	/*
-	 * Wait for that worker to finish. This is necessary to maintain commit
-	 * order which avoids failures due to transaction dependencies and
-	 * deadlocks.
+	 * Wait for that worker for streaming transaction to finish. This is
+	 * necessary to maintain commit order which avoids failures due to
+	 * transaction dependencies and deadlocks.
+	 *
+	 * For transactions in partial seralize mode, wait for stop as well as the
+	 * worker is anyway cannot be reused anymore (see pa_free_worker() for
+	 * details).
 	 */
-	pa_wait_for_xact_finish(winfo);
+	if (winfo->serialize_changes || winfo->stream_txn)
+	{
+		pa_wait_for_xact_finish(winfo);
+
+		local_lsn = winfo->shared->last_commit_end;
+		pa_remote_xid = InvalidTransactionId;
+
+		pa_free_worker(winfo);
+	}
 
 	if (XLogRecPtrIsValid(remote_lsn))
-		store_flush_position(remote_lsn, winfo->shared->last_commit_end);
+		store_flush_position(remote_lsn, local_lsn, pa_remote_xid);
 
-	pa_free_worker(winfo);
+	pa_set_stream_apply_worker(NULL);
+}
+
+/*
+ * Check if the given transaction has been committed. This can only be used by
+ * the leader apply worker.
+ *
+ * Returns true if the transaction is committed, false if it is still being
+ * applied in parallel.
+ */
+bool
+pa_transaction_committed(TransactionId xid)
+{
+	bool		found;
+	ParallelApplyWorkerEntry *entry;
+
+	Assert(am_leader_apply_worker());
+	Assert(TransactionIdIsValid(xid));
+	Assert(ParallelApplyTxnHash);
+
+	/* Find an entry for the requested transaction */
+	entry = hash_search(ParallelApplyTxnHash, &xid, HASH_FIND, &found);
+
+	if (!found)
+		return true;
+
+	if (!entry->winfo)
+		return true;
+
+	return pa_get_xact_state(entry->winfo->shared) == PARALLEL_TRANS_FINISHED;
+}
+
+/*
+ * Attach to the shared hash table for parallelized transactions.
+ */
+static void
+pa_attach_parallelized_txn_hash(dsa_handle *pa_dsa_handle,
+								dshash_table_handle *pa_dshash_handle)
+{
+	MemoryContext oldctx;
+
+	if (parallelized_txns)
+	{
+		Assert(parallel_apply_dsa_area);
+		*pa_dsa_handle = dsa_get_handle(parallel_apply_dsa_area);
+		*pa_dshash_handle = dshash_get_hash_table_handle(parallelized_txns);
+		return;
+	}
+
+	/* Be sure any local memory allocated by DSA routines is persistent. */
+	oldctx = MemoryContextSwitchTo(ApplyContext);
+
+	if (am_leader_apply_worker())
+	{
+		/* Initialize dynamic shared hash table for parallelized transactions */
+		parallel_apply_dsa_area = dsa_create(LWTRANCHE_PARALLEL_APPLY_DSA);
+		dsa_pin(parallel_apply_dsa_area);
+		dsa_pin_mapping(parallel_apply_dsa_area);
+		parallelized_txns = dshash_create(parallel_apply_dsa_area, &dsh_params, NULL);
+
+		/* Store handles in shared memory for other backends to use. */
+		*pa_dsa_handle = dsa_get_handle(parallel_apply_dsa_area);
+		*pa_dshash_handle = dshash_get_hash_table_handle(parallelized_txns);
+	}
+	else if (am_parallel_apply_worker())
+	{
+		/* Attach to existing dynamic shared hash table. */
+		parallel_apply_dsa_area = dsa_attach(MyParallelShared->parallel_apply_dsa_handle);
+		dsa_pin_mapping(parallel_apply_dsa_area);
+		parallelized_txns = dshash_attach(parallel_apply_dsa_area, &dsh_params,
+										  MyParallelShared->parallelized_txns_handle,
+										  NULL);
+	}
+
+	MemoryContextSwitchTo(oldctx);
+}
+
+/*
+ * Wait for the given remote transaction to finish applying by a parallel apply
+ * worker.
+ *
+ * Both leader and parallel apply workers can call this function to wait for a
+ * parallelized transaction to finish.
+ */
+void
+pa_wait_for_depended_transaction(TransactionId xid)
+{
+	/*
+	 * Quick exit if parallelized_txns has not been initialized yet. This can
+	 * happen when the leader worker calls this function before any parallel
+	 * apply workers have been launched.
+	 */
+	if (!parallelized_txns)
+		return;
+
+	elog(DEBUG1, "wait for depended xid %u", xid);
+
+	for (;;)
+	{
+		ParallelizedTxnEntry *txn_entry;
+
+		txn_entry = dshash_find(parallelized_txns, &xid, false);
+
+		/* The entry is removed only if the transaction is committed */
+		if (txn_entry == NULL)
+			break;
+
+		dshash_release_lock(parallelized_txns, txn_entry);
+
+		/*
+		 * Wait for the parallel apply worker processing the given remote
+		 * transaction to finish applying and release its lock.
+		 */
+		pa_lock_transaction(xid, AccessShareLock);
+		pa_unlock_transaction(xid, AccessShareLock);
+
+		CHECK_FOR_INTERRUPTS();
+
+		/*
+		 * Acquiring the lock successfully does not guarantee we can proceed.
+		 * The worker may have errored out and released the lock while leaving
+		 * its shared hash entry intact, or it may not have acquired the lock
+		 * yet because it hasn't processed the BEGIN message. In either case, we
+		 * must continue waiting in the loop until the parallel apply worker
+		 * finishes applying the transaction, or until the leader notifies us of
+		 * a failure and restarts all workers.
+		 *
+		 * The above race window is small and infrequent, so no WaitLatch is
+		 * added.
+		 */
+	}
+
+	elog(DEBUG1, "finish waiting for depended xid %u", xid);
+}
+
+/*
+ * Mark the transaction state as finished and remove the shared hash entry.
+ */
+void
+pa_commit_transaction(void)
+{
+	TransactionId xid = MyParallelShared->xid;
+
+	SpinLockAcquire(&MyParallelShared->mutex);
+	MyParallelShared->xact_state = PARALLEL_TRANS_FINISHED;
+	SpinLockRelease(&MyParallelShared->mutex);
+
+	dshash_delete_key(parallelized_txns, &xid);
+	elog(DEBUG1, "xid %u committed", xid);
+}
+
+/*
+ * Write internal relation description to the output stream.
+ */
+static void
+write_internal_relation(StringInfo s, LogicalRepRelation *rel)
+{
+	pq_sendbyte(s, LOGICAL_REP_MSG_INTERNAL_MESSAGE);
+	pq_sendbyte(s, PA_MSG_RELMAP);
+
+	if (rel)
+	{
+		pq_sendint(s, 1, 4);
+		logicalrep_write_internal_rel(s, rel);
+	}
+	else
+	{
+		pq_sendint(s, logicalrep_get_num_rels(), 4);
+		logicalrep_write_all_rels(s);
+	}
+}
+
+/*
+ * Register a transaction to the shared hash table.
+ *
+ * This function is called by the leader during the commit phase of non-streamed
+ * transactions. The parallel apply worker that applies the transaction will
+ * remove it from the hash table upon completion.
+ */
+void
+pa_add_parallelized_transaction(TransactionId xid)
+{
+	bool		found;
+	ParallelizedTxnEntry *txn_entry;
+
+	Assert(parallelized_txns);
+	Assert(TransactionIdIsValid(xid));
+	Assert(am_leader_apply_worker());
+
+	txn_entry = dshash_find_or_insert(parallelized_txns, &xid, &found);
+
+	dshash_release_lock(parallelized_txns, txn_entry);
 }

@@ -221,6 +221,7 @@ extern bool XLogBackgroundFlush(void);
 extern bool XLogNeedsFlush(XLogRecPtr record);
 extern int	XLogFileInit(XLogSegNo logsegno, TimeLineID logtli);
 extern int	XLogFileOpen(XLogSegNo segno, TimeLineID tli);
+extern int64 PreallocXlogSegments(int64 nsegs);
 
 extern void CheckXLogRemoved(XLogSegNo segno, TimeLineID tli);
 extern XLogSegNo XLogGetLastRemovedSegno(void);

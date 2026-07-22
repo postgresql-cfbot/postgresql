@@ -72,6 +72,7 @@
 
 /* Replication codes sent by the primary (wrapped in CopyData messages). */
 
+#define PqReplMsg_ArchiveStatusReport 'a'
 #define PqReplMsg_Keepalive			'k'
 #define PqReplMsg_PrimaryStatusUpdate 's'
 #define PqReplMsg_WALData			'w'

@@ -1922,6 +1922,18 @@ description | Waiting for a newly initialized WAL file to reach durable storage
 
      <row>
       <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>primary_last_archived</structfield> <type>text</type>
+      </para>
+      <para>
+       Name of the last WAL file archived by the primary, as reported by
+       the upstream server. Only set when <xref linkend="guc-archive-mode"/>
+       is <literal>shared</literal>; see
+       <xref linkend="continuous-archiving-in-standby"/>.
+      </para></entry>
+     </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
        <structfield>slot_name</structfield> <type>text</type>
       </para>
       <para>

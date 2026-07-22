@@ -459,13 +459,27 @@ lookup_type_cache(Oid type_id, int flags)
 									allocsize * sizeof(*in_progress_list));
 		in_progress_list_maxlen = allocsize;
 	}
-	in_progress_offset = in_progress_list_len++;
-	in_progress_list[in_progress_offset] = type_id;
 
 	/* Try to look up an existing entry */
 	typentry = (TypeCacheEntry *) hash_search(TypeCacheHash,
 											  &type_id,
 											  HASH_FIND, NULL);
+
+	/*
+	 * Only mark the new entry as "in progress" after the initial entry
+	 * lookup.
+	 *
+	 * TypeCacheHash uses type_cache_syshash(), potentially triggering the
+	 * initialization of the TYPEOID catcache, where an out-of-memory failure
+	 * is possible.  If an out-of-memory happens, error recovery would call
+	 * finalize_in_progress_typentries(), that could attempt a catcache
+	 * initialization again outside a transaction context.
+	 *
+	 * See also ConditionalCatalogCacheInitializeCache().
+	 */
+	in_progress_offset = in_progress_list_len++;
+	in_progress_list[in_progress_offset] = type_id;
+
 	if (typentry == NULL)
 	{
 		/*

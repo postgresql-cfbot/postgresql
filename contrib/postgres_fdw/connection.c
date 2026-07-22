@@ -163,7 +163,6 @@ static void pgfdw_inval_callback(Datum arg, SysCacheIdentifier cacheid,
 								 uint32 hashvalue);
 static void pgfdw_reject_incomplete_xact_state_change(ConnCacheEntry *entry);
 static void pgfdw_reset_xact_state(ConnCacheEntry *entry, bool toplevel);
-static bool pgfdw_cancel_query(PGconn *conn);
 static bool pgfdw_cancel_query_begin(PGconn *conn, TimestampTz endtime);
 static bool pgfdw_cancel_query_end(PGconn *conn, TimestampTz endtime,
 								   TimestampTz retrycanceltime,
@@ -1091,6 +1090,16 @@ pgfdw_get_result(PGconn *conn)
 }
 
 /*
+ * Used in case of streaming_fetch mode.
+ * Caller is responsible for the error handling on the result.
+ */
+PGresult *
+pgfdw_get_next_result(PGconn *conn)
+{
+	return libpqsrv_get_result(conn, pgfdw_we_get_result);
+}
+
+/*
  * Report an error we got from the remote server.
  *
  * Callers should use pgfdw_report_error() to throw an error, or use
@@ -1567,7 +1576,7 @@ pgfdw_reset_xact_state(ConnCacheEntry *entry, bool toplevel)
  * query text from the pendingAreq saved in the per-connection state, then
  * report the query using it.
  */
-static bool
+bool
 pgfdw_cancel_query(PGconn *conn)
 {
 	TimestampTz now = GetCurrentTimestamp();
@@ -1927,8 +1936,10 @@ pgfdw_abort_cleanup(ConnCacheEntry *entry, bool toplevel)
 	 * an asynchronous fetch begun by fetch_more_data_begin() was not done
 	 * successfully and thus the per-connection state was not reset in
 	 * fetch_more_data(); in that case reset the per-connection state here.
+	 * Similarly for active_scan, if it is not consumed completely then reset
+	 * the state here.
 	 */
-	if (entry->state.pendingAreq)
+	if (entry->state.pendingAreq || entry->state.active_scan)
 		memset(&entry->state, 0, sizeof(entry->state));
 
 	/* Disarm changing_xact_state if it all worked */
@@ -2219,7 +2230,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 		}
 
 		/* Reset the per-connection state if needed */
-		if (entry->state.pendingAreq)
+		if (entry->state.pendingAreq || entry->state.active_scan)
 			memset(&entry->state, 0, sizeof(entry->state));
 
 		/* We're done with this entry; unset the changing_xact_state flag */
@@ -2264,7 +2275,7 @@ pgfdw_finish_abort_cleanup(List *pending_entries, List *cancel_requested,
 		entry->have_error = false;
 
 		/* Reset the per-connection state if needed */
-		if (entry->state.pendingAreq)
+		if (entry->state.pendingAreq || entry->state.active_scan)
 			memset(&entry->state, 0, sizeof(entry->state));
 
 		/* We're done with this entry; unset the changing_xact_state flag */

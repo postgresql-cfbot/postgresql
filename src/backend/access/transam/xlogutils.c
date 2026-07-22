@@ -23,6 +23,7 @@
 #include "access/xlogrecovery.h"
 #include "access/xlog_internal.h"
 #include "access/xlogutils.h"
+#include "access/xlogwait.h"
 #include "miscadmin.h"
 #include "storage/fd.h"
 #include "storage/smgr.h"
@@ -904,12 +905,7 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	loc = targetPagePtr + reqLen;
 
 	/*
-	 * Loop waiting for xlog to be available if necessary
-	 *
-	 * TODO: The walsender has its own version of this function, which uses a
-	 * condition variable to wake up whenever WAL is flushed. We could use the
-	 * same infrastructure here, instead of the check/sleep/repeat style of
-	 * loop.
+	 * Waiting for xlog to be available if necessary.
 	 */
 	while (1)
 	{
@@ -983,7 +979,44 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 			}
 
 			CHECK_FOR_INTERRUPTS();
-			pg_usleep(1000L);
+
+			/*
+			 * Wait for LSN using appropriate method based on server state.
+			 */
+			if (!RecoveryInProgress())
+			{
+				/* Primary: wait for flush */
+				WaitForLSN(WAIT_LSN_TYPE_PRIMARY_FLUSH, loc, -1);
+			}
+			else
+			{
+				/* Standby: wait for replay */
+				WaitLSNResult result = WaitForLSN(WAIT_LSN_TYPE_STANDBY_REPLAY, loc, -1);
+
+				switch (result)
+				{
+					case WAIT_LSN_RESULT_SUCCESS:
+						/* LSN was replayed, loop back to recheck timeline */
+						break;
+
+					case WAIT_LSN_RESULT_NOT_IN_RECOVERY:
+
+						/*
+						 * Promoted while waiting. This is the tricky case.
+						 * We're now a primary, so loop back and use flush
+						 * logic instead of replay logic.
+						 */
+						break;
+
+					default:
+						elog(ERROR, "unexpected wait result");
+				}
+			}
+
+			/*
+			 * Loop back to recheck everything. Timeline might have changed
+			 * during our wait.
+			 */
 		}
 		else
 		{

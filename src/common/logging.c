@@ -32,11 +32,13 @@ static const char *sgr_error = NULL;
 static const char *sgr_warning = NULL;
 static const char *sgr_note = NULL;
 static const char *sgr_locus = NULL;
+static const char *sgr_info_command = NULL;
 
 #define SGR_ERROR_DEFAULT "01;31"
 #define SGR_WARNING_DEFAULT "01;35"
 #define SGR_NOTE_DEFAULT "01;36"
 #define SGR_LOCUS_DEFAULT "01"
+#define SGR_INFO_COMMAND_DEFAULT "07"
 
 #define ANSI_ESCAPE_FMT "\x1b[%sm"
 #define ANSI_ESCAPE_RESET "\x1b[0m"
@@ -145,6 +147,8 @@ pg_logging_init(const char *argv0)
 							sgr_note = strdup(value);
 						if (strcmp(name, "locus") == 0)
 							sgr_locus = strdup(value);
+						if (strcmp(name, "info_command") == 0)
+							sgr_info_command = strdup(value);
 					}
 				}
 
@@ -157,6 +161,7 @@ pg_logging_init(const char *argv0)
 			sgr_warning = SGR_WARNING_DEFAULT;
 			sgr_note = SGR_NOTE_DEFAULT;
 			sgr_locus = SGR_LOCUS_DEFAULT;
+			sgr_info_command = SGR_INFO_COMMAND_DEFAULT;
 		}
 	}
 }
@@ -353,7 +358,17 @@ pg_log_generic_v(enum pg_log_level level, enum pg_log_part part,
 	if (required_len >= 2 && buf[required_len - 2] == '\n')
 		buf[required_len - 2] = '\0';
 
-	fprintf(stderr, "%s\n", buf);
+	if (level == PG_LOG_INFO && sgr_info_command &&
+		(strncmp(buf, "INFO:  vacuuming", strlen("INFO:  vacuuming")) == 0 ||
+		 strncmp(buf, "INFO:  repacking", strlen("INFO:  repacking")) == 0 ||
+		 strncmp(buf, "INFO:  analyzing", strlen("INFO:  analyzing")) == 0))
+	{
+		fprintf(stderr, ANSI_ESCAPE_FMT, sgr_info_command);
+		fprintf(stderr, "%s\n", buf);
+		fprintf(stderr, ANSI_ESCAPE_RESET);
+	}
+	else
+		fprintf(stderr, "%s\n", buf);
 	if (log_logfile)
 	{
 		fprintf(log_logfile, "%s\n", buf);

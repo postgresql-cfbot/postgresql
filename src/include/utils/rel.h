@@ -306,11 +306,14 @@ typedef struct ForeignKeyCacheInfo
  * RelationGetFillFactor() and RelationGetTargetPageFreeSpace() can only
  * be applied to relations that use this format or a superset for
  * private options data.
+ *
+ * NB: When adding a new member, be sure to update merge_autovac_opts() and/or
+ * table_recheck_autovac() as necessary!
  */
  /* autovacuum-related reloptions. */
 typedef struct AutoVacOpts
 {
-	bool		enabled;
+	pg_ternary	enabled;
 
 	int			autovacuum_parallel_workers;
 	int			vacuum_threshold;
@@ -338,6 +341,7 @@ typedef enum StdRdOptIndexCleanup
 	STDRD_OPTION_VACUUM_INDEX_CLEANUP_AUTO = 0,
 	STDRD_OPTION_VACUUM_INDEX_CLEANUP_OFF,
 	STDRD_OPTION_VACUUM_INDEX_CLEANUP_ON,
+	STDRD_OPTION_VACUUM_INDEX_CLEANUP_NOT_SET,
 } StdRdOptIndexCleanup;
 
 typedef struct StdRdOptions

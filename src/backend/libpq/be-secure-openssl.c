@@ -98,7 +98,8 @@ static bool initialize_dh(SSL_CTX *context, bool isServerStart);
 static bool initialize_ecdh(SSL_CTX *context, bool isServerStart);
 static const char *SSLerrmessageExt(unsigned long ecode, const char *replacement);
 static const char *SSLerrmessage(unsigned long ecode);
-static bool init_host_context(HostsLine *host, bool isServerStart);
+static bool init_host_context(HostsLine *host, bool isServerStart, bool *hasWarned)
+			pg_attribute_nonnull(3);
 static void host_context_cleanup_cb(void *arg);
 #ifdef HAVE_SSL_CTX_SET_CLIENT_HELLO_CB
 static int	sni_clienthello_cb(SSL *ssl, int *al, void *arg);
@@ -160,6 +161,7 @@ be_tls_init(bool isServerStart)
 	int			ssl_ver_min = -1;
 	int			ssl_ver_max = -1;
 	host_cache_hash *host_cache = NULL;
+	bool		hasWarned = false;
 
 	/*
 	 * Since we don't know which host we're using until the ClientHello is
@@ -249,7 +251,7 @@ be_tls_init(bool isServerStart)
 		{
 			HostsLine  *host = lfirst(line);
 
-			if (!init_host_context(host, isServerStart))
+			if (!init_host_context(host, isServerStart, &hasWarned))
 				goto error;
 
 			/*
@@ -344,7 +346,7 @@ be_tls_init(bool isServerStart)
 		pgconf->ssl_passphrase_cmd = ssl_passphrase_command;
 		pgconf->ssl_passphrase_reload = ssl_passphrase_command_supports_reload;
 
-		if (!init_host_context(pgconf, isServerStart))
+		if (!init_host_context(pgconf, isServerStart, &hasWarned))
 			goto error;
 
 		/*
@@ -375,13 +377,8 @@ be_tls_init(bool isServerStart)
 	 * Create a new SSL context into which we'll load all the configuration
 	 * settings.  If we fail partway through, we can avoid memory leakage by
 	 * freeing this context; we don't install it as active until the end.
-	 *
-	 * We use SSLv23_method() because it can negotiate use of the highest
-	 * mutually supported protocol version, while alternatives like
-	 * TLSv1_2_method() permit only one specific version.  Note that we don't
-	 * actually allow SSL v2 or v3, only TLS protocols (see below).
 	 */
-	context = SSL_CTX_new(SSLv23_method());
+	context = SSL_CTX_new(TLS_method());
 	if (!context)
 	{
 		ereport(isServerStart ? FATAL : LOG,
@@ -608,11 +605,24 @@ host_context_cleanup_cb(void *arg)
 		SSL_CTX_free(hosts->default_host->ssl_ctx);
 }
 
+
+/*
+ * init_host_context
+ *
+ * Creates and initializes an OpenSSL SSL_CTX structure for the host config
+ * passed in the host parameter.  The SSL_CTX will be initialized with cert,
+ * key, CA and CRL; the remaining options are copied from the main context
+ * during connection setup in case this context ends up being used.
+ *
+ * If an ssl init hook has been defined, and ssl_sni is enabled, then issue a
+ * warning since the hook won't be executed.  hasWarned will be is set to true
+ * to indicate that the warning has been issued, and passing it back as true
+ * will omit future warning to avoid flooding the logs.
+ */
 static bool
-init_host_context(HostsLine *host, bool isServerStart)
+init_host_context(HostsLine *host, bool isServerStart, bool *hasWarned)
 {
-	SSL_CTX    *ctx = SSL_CTX_new(SSLv23_method());
-	static bool init_warned = false;
+	SSL_CTX    *ctx = SSL_CTX_new(TLS_method());
 
 	if (!ctx)
 	{
@@ -634,7 +644,7 @@ init_host_context(HostsLine *host, bool isServerStart)
 		(*openssl_tls_init_hook) (ctx, isServerStart);
 	else
 	{
-		if (openssl_tls_init_hook != default_openssl_tls_init && !init_warned)
+		if (openssl_tls_init_hook != default_openssl_tls_init && !*hasWarned)
 		{
 			ereport(WARNING,
 					errcode(ERRCODE_CONFIG_FILE_ERROR),
@@ -645,7 +655,7 @@ init_host_context(HostsLine *host, bool isServerStart)
 							"that is currently installed, or remove the hook "
 							"and use per-host passphrase commands in \"%s\".",
 							"ssl_sni", HostsFileName));
-			init_warned = true;
+			*hasWarned = true;
 		}
 
 		/*
@@ -1073,22 +1083,24 @@ aloop:
 		char	   *peer_dn;
 		BIO		   *bio = NULL;
 		BUF_MEM    *bio_buf = NULL;
+		int			index;
 
-		len = X509_NAME_get_text_by_NID(unconstify(X509_NAME *, x509name), NID_commonName, NULL, 0);
-		if (len != -1)
+		index = X509_NAME_get_index_by_NID(unconstify(X509_NAME *, x509name), NID_commonName, -1);
+		if (index >= 0)
 		{
+			const X509_NAME_ENTRY *entry;
+			const ASN1_STRING *peer_cn_asn1;
+			const unsigned char *peer_cn_internal;
 			char	   *peer_cn;
 
+			entry = X509_NAME_get_entry(unconstify(X509_NAME *, x509name), index);
+			peer_cn_asn1 = X509_NAME_ENTRY_get_data(entry);
+			len = ASN1_STRING_length(peer_cn_asn1);
+			peer_cn_internal = ASN1_STRING_get0_data(peer_cn_asn1);
+
 			peer_cn = MemoryContextAlloc(TopMemoryContext, len + 1);
-			r = X509_NAME_get_text_by_NID(unconstify(X509_NAME *, x509name), NID_commonName, peer_cn,
-										  len + 1);
+			memcpy(peer_cn, peer_cn_internal, len);
 			peer_cn[len] = '\0';
-			if (r != len)
-			{
-				/* shouldn't happen */
-				pfree(peer_cn);
-				return -1;
-			}
 
 			/*
 			 * Reject embedded NULLs in certificate common name to prevent
@@ -2409,21 +2421,25 @@ ssl_protocol_version_to_openssl(int v)
 		case PG_TLS_ANY:
 			return 0;
 		case PG_TLS1_VERSION:
+#ifndef OPENSSL_NO_TLS1
 			return TLS1_VERSION;
+#else
+			break;
+#endif
 		case PG_TLS1_1_VERSION:
-#ifdef TLS1_1_VERSION
+#ifndef OPENSSL_NO_TLS1_1
 			return TLS1_1_VERSION;
 #else
 			break;
 #endif
 		case PG_TLS1_2_VERSION:
-#ifdef TLS1_2_VERSION
+#ifndef OPENSSL_NO_TLS1_2
 			return TLS1_2_VERSION;
 #else
 			break;
 #endif
 		case PG_TLS1_3_VERSION:
-#ifdef TLS1_3_VERSION
+#ifdef OPENSSL_NO_TLS1_3
 			return TLS1_3_VERSION;
 #else
 			break;

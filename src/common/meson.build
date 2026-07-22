@@ -31,6 +31,7 @@ common_sources = files(
   'rmtree.c',
   'saslprep.c',
   'scram-common.c',
+  'system_identifier.c',
   'string.c',
   'stringinfo.c',
   'unicode_case.c',

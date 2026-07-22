@@ -94,7 +94,7 @@
   boot_val => 'ARCHIVE_MODE_OFF',
   options => 'archive_mode_options',
 },
-    
+
 { name => 'archive_status_report_interval', type => 'int', context => 'PGC_SIGHUP', group => 'WAL_ARCHIVING',
   short_desc => 'Sets the amount of time between consecutive WAL archive status reports.',
   flags => 'GUC_UNIT_MS',

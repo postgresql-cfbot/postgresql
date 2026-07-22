@@ -2840,7 +2840,7 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
         </listitem>
        </varlistentry>
 
-       <varlistentry id="protocol-replication-primary-status-update">
+       <varlistentry id="protocol-replication-archive-status-report">
         <term>WAL archival report message (B)</term>
         <listitem>
          <variablelist>

@@ -106,6 +106,9 @@ extern PGDLLIMPORT bool XLogLogicalInfo;
 /* Is WAL archiving enabled always (even during recovery)? */
 #define XLogArchivingAlways() \
 	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || wal_level >= WAL_LEVEL_REPLICA), XLogArchiveMode == ARCHIVE_MODE_ALWAYS)
+/* Is WAL archiving coordinated between primary and standby? */
+#define XLogArchivingShared() \
+	(AssertMacro(XLogArchiveMode == ARCHIVE_MODE_OFF || wal_level >= WAL_LEVEL_REPLICA), XLogArchiveMode == ARCHIVE_MODE_SHARED)
 
 /*
  * Is WAL-logging necessary for archival or log-shipping, or can we skip

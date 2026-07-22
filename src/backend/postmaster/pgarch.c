@@ -83,7 +83,6 @@
  */
 #define NUM_FILES_PER_DIRECTORY_SCAN 64
 
-
 char	   *XLogArchiveLibrary = "";
 char	   *arch_module_check_errdetail_string;
 
@@ -170,10 +169,7 @@ PgArchShmemInit(void *arg)
 	MemSet(PgArch, 0, sizeof(PgArchData));
 	PgArch->pgprocno = INVALID_PROC_NUMBER;
 	pg_atomic_init_u32(&PgArch->force_dir_scan, 0);
-
-	PgArch->primary_last_archived[0] = '\0';
-
-	SpinLockInit(&PgArch->lock);	
+	SpinLockInit(&PgArch->lock);
 }
 
 /*
@@ -469,10 +465,10 @@ pgarch_ArchiverCopyLoop(void)
 				continue;
 			}
 
-		if (pgarch_archiveXlog(xlog))
-		{
-			/* successful */
-			pgarch_archiveDone(xlog);
+			if (pgarch_archiveXlog(xlog))
+			{
+				/* successful */
+				pgarch_archiveDone(xlog);
 
 				/*
 				 * Tell the cumulative stats system about the WAL file that we

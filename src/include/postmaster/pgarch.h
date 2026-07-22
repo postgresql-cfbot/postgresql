@@ -51,8 +51,6 @@ typedef struct PgArchData
 	pg_atomic_uint32 force_dir_scan;
 } PgArchData;
 
-
-extern PgArchData *PgArch;
-
+extern PGDLLIMPORT PgArchData *PgArch;
 
 #endif							/* _PGARCH_H */

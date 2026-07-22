@@ -112,11 +112,11 @@ for (my $i = 0; $i < $PostgreSQL::Test::Utils::timeout_default; $i++)
 	last if $done_count > 0;
 	sleep(1);
 }
-	
+
 ok($done_count > 0, "standby marked segments as .done after primary's archival report");
 note("Standby has $done_count .done files");
 
-# The primary_last_archived  done status for WAL file itself must also be present.
+# The .done status file for the last-archived WAL segment must also be present.
 ok(-f "$standby_archive_status/$primary_last_archived.done",
 	"WAL segment $primary_last_archived done file exists in standby pg_wal/archive_status");
 
@@ -191,9 +191,9 @@ ok( -f "$cascade_data/$walfile_done",
 
 # Before promotion, verify archiver is not running on standby (shared mode during recovery)
 # In shared mode, the standby's archiver should not be archiving during recovery
-my $archived_before = $standby->safe_psql('postgres', 
+my $archived_before = $standby->safe_psql('postgres',
 	"SELECT archived_count FROM pg_stat_archiver");
-is($archived_before, '0', 
+is($archived_before, '0',
 	"archiver not active on standby before promotion (archived_count=0)");
 
 # Verify standby is still in recovery before promoting

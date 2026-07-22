@@ -2864,12 +2864,11 @@ ProcessStandbyHSFeedbackMessage(void)
 static void
 WalSndArchivalReport(void)
 {
-	PgStat_ArchiverStats *archiver_stats;
 	TimestampTz now;
 	char		last_archived[MAX_XFN_CHARS + 1];
 
 	/* Only send reports when archive_mode=shared */
-	if (XLogArchiveMode != ARCHIVE_MODE_SHARED)
+	if (!XLogArchivingShared())
 		return;
 
 	/* Only send reports during physical streaming replication, not during backup */
@@ -2898,28 +2897,36 @@ WalSndArchivalReport(void)
 		return;
 
 	last_archival_report_timestamp = now;
-	/*
-	 * Get archiver statistics.  The pgstat snapshot is cached per-session and
-	 * is only invalidated at transaction boundaries.  The walsender runs
-	 * without transaction boundaries, so we must clear the snapshot explicitly
-	 * to avoid reading stale data (e.g. last_archived_wal stuck at its initial
-	 * empty value even after the archiver has archived new segments).
-	 */
-	pgstat_clear_snapshot();
-	archiver_stats = pgstat_fetch_stat_archiver();
-	if (archiver_stats == NULL)
-		return;
-
 
 	if (RecoveryInProgress())
 	{
+		/*
+		 * On a cascading standby, relay the report received from our own
+		 * upstream by the walreceiver.
+		 */
 		SpinLockAcquire(&PgArch->lock);
-		memcpy(last_archived, PgArch->primary_last_archived, sizeof(last_archived));
+		strlcpy(last_archived, PgArch->primary_last_archived,
+				sizeof(last_archived));
 		SpinLockRelease(&PgArch->lock);
 	}
 	else
-		memcpy(last_archived, archiver_stats->last_archived_wal, sizeof(last_archived));
-	
+	{
+		PgStat_ArchiverStats *archiver_stats;
+
+		/*
+		 * Get archiver statistics.  The pgstat snapshot is cached per-session
+		 * and is only invalidated at transaction boundaries.  The walsender
+		 * runs without transaction boundaries, so we must clear the snapshot
+		 * explicitly to avoid reading stale data (e.g. last_archived_wal
+		 * stuck at its initial empty value even after the archiver has
+		 * archived new segments).
+		 */
+		pgstat_clear_snapshot();
+		archiver_stats = pgstat_fetch_stat_archiver();
+		strlcpy(last_archived, archiver_stats->last_archived_wal,
+				sizeof(last_archived));
+	}
+
 	/*
 	 * Only send a report if the last archived WAL has changed. This is both
 	 * an optimization and ensures we don't send empty reports on startup.
@@ -2927,7 +2934,13 @@ WalSndArchivalReport(void)
 	if (strcmp(last_archived, last_archived_report_wal) == 0)
 		return;
 
-	/* Only send reports for WAL segments, not backup history files or other archived files */
+	/*
+	 * Only send reports for WAL segments, not backup history files or other
+	 * archived files.  Note that if the most recently archived file is not a
+	 * WAL segment (e.g. a timeline history file), the report is skipped
+	 * entirely; the segments archived before it will be reported once the
+	 * next regular WAL segment is archived.
+	 */
 	if (!IsXLogFileName(last_archived))
 		return;
 

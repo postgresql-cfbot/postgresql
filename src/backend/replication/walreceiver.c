@@ -158,7 +158,7 @@ static void XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli);
 static void XLogWalRcvSendReply(bool force, bool requestReply, bool checkApply);
 static void XLogWalRcvSendHSFeedback(bool immed);
 static void ProcessWalSndrMessage(XLogRecPtr walEnd, TimestampTz sendTime);
-static void ProcessArchivalReport(void);
+static void ProcessArchivalReport(const char *primary_last_archived);
 static void WalRcvComputeNextWakeup(WalRcvWakeupReason reason, TimestampTz now);
 
 
@@ -918,7 +918,7 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 				if (len >= sizeof(primary_last_archived))
 					ereport(ERROR,
 							(errcode(ERRCODE_PROTOCOL_VIOLATION),
-							 errmsg_internal("invalid archival report message with length %d, expected at most %ld",
+							 errmsg_internal("invalid archival report message with length %d, expected at most %zu",
 											 (int) len, sizeof(primary_last_archived))));
 
 				memcpy(primary_last_archived, buf, len);
@@ -926,18 +926,20 @@ XLogWalRcvProcessMsg(unsigned char type, char *buf, Size len, TimeLineID tli)
 
 				/* Verify it contains only valid characters */
 				if (!IsXLogFileName(primary_last_archived))
-				{
-					primary_last_archived[0] = '\0';
 					ereport(ERROR,
 							(errcode(ERRCODE_PROTOCOL_VIOLATION),
 							 errmsg_internal("unexpected character in primary's last archived filename")));
-				}
 
+				/*
+				 * Publish the report for our own walsenders (cascading
+				 * replication) and for pg_stat_wal_receiver.
+				 */
 				SpinLockAcquire(&PgArch->lock);
-				memcpy(PgArch->primary_last_archived, primary_last_archived, sizeof(PgArch->primary_last_archived));
+				strlcpy(PgArch->primary_last_archived, primary_last_archived,
+						sizeof(PgArch->primary_last_archived));
 				SpinLockRelease(&PgArch->lock);
 
-				ProcessArchivalReport();
+				ProcessArchivalReport(primary_last_archived);
 				break;
 			}
 		default:
@@ -1154,7 +1156,7 @@ XLogWalRcvClose(XLogRecPtr recptr, TimeLineID tli)
 	{
 		XLogArchiveNotify(xlogfname);
 	}
-	else if (XLogArchiveMode == ARCHIVE_MODE_SHARED)
+	else if (XLogArchivingShared())
 	{
 		/*
 		 * In shared mode, check if this segment is already archived on primary.
@@ -1378,16 +1380,13 @@ XLogWalRcvSendHSFeedback(bool immed)
  * timeline as .done if they're <= the reported segment.
  */
 static void
-ProcessArchivalReport(void)
+ProcessArchivalReport(const char *primary_last_archived)
 {
 	TimeLineID	reported_tli;
 	XLogSegNo	reported_segno;
 	char		status_path[MAXPGPATH];
 	bool		use_direct_check = false;
 	XLogSegNo	start_segno;
-	char		*primary_last_archived;
-
-	primary_last_archived = PgArch->primary_last_archived;
 
 	elog(DEBUG2, "received archival report from primary: %s",
 		 primary_last_archived);

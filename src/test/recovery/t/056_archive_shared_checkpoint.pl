@@ -1,4 +1,4 @@
-# Copyright (c) 2025, PostgreSQL Global Development Group
+# Copyright (c) 2026, PostgreSQL Global Development Group
 
 # Tests for archive_mode=shared correctness on standbys:
 #
@@ -212,4 +212,3 @@ is(scalar(@still_missing), 0,
 	"WAL segments were not lost while waiting for archival reports");
 
 done_testing();
-

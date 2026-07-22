@@ -582,7 +582,7 @@ XLogArchiveCheckDone(const char *xlog)
 	 * through to the .done/.ready check below so that checkpoint cannot
 	 * delete a segment whose .ready file has not yet become .done.
 	 */
-	if (!XLogArchivingAlways() && !(XLogArchiveMode == ARCHIVE_MODE_SHARED) &&
+	if (!XLogArchivingAlways() && !XLogArchivingShared() &&
 		GetRecoveryState() == RECOVERY_STATE_ARCHIVE)
 		return true;
 

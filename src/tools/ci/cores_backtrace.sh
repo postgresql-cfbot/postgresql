@@ -28,7 +28,7 @@ if [ "$os" = 'openbsd' ]; then
 fi
 
 first=1
-for corefile in $(find "$directory" -type f) ; do
+for corefile in $(find "$directory" -type f -name '*core*') ; do
     if [ "$first" -eq 1 ]; then
         first=0
     else

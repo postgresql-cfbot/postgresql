@@ -98,15 +98,18 @@ if (opendir(my $dh, $standby_archive_status))
 cmp_ok($status_count, '>', 0, "standby creates archive status files for received WAL");
 
 # Generate more WAL and wait for archiving on primary
-my $initial_archived = $primary->safe_psql('postgres', 'SELECT archived_count FROM pg_stat_archiver');
 my $primary_last_archived = $primary->safe_psql('postgres',
 	q{SELECT pg_walfile_name(pg_current_wal_lsn())});
 
 $primary->safe_psql('postgres', "SELECT txid_current();SELECT pg_switch_wal();");
 
-# Wait for primary to archive the new segments
+# Wait for the primary to archive the segment we just switched away from.
+# Checking archived_count would be racy: it can also be bumped by archiving
+# an older pending segment.  Segments are archived in order, so a simple
+# string comparison of WAL file names works here (same timeline).
 $primary->poll_query_until('postgres',
-	"SELECT archived_count > $initial_archived FROM pg_stat_archiver")
+	qq{SELECT COALESCE(last_archived_wal, '') >= '$primary_last_archived'
+	   FROM pg_stat_archiver})
 	or die "Timed out waiting for primary to archive new segments";
 
 # Wait for standby to catch up (archive status is sent during replication)
@@ -130,12 +133,23 @@ for (my $i = 0; $i < $PostgreSQL::Test::Utils::timeout_default; $i++)
 ok($done_count > 0, "standby marked segments as .done after primary's archival report");
 note("Standby has $done_count .done files");
 
-# The .done status file for the last-archived WAL segment must also be present.
+# Wait for the archival report covering $primary_last_archived to reach the
+# standby.  Reports are sent asynchronously (archive_status_report_interval),
+# so the standby may still hold an older report when we get here; the report
+# may also already be for a later segment.
+$standby->poll_query_until('postgres',
+	qq{SELECT COALESCE(primary_last_archived, '') >= '$primary_last_archived'
+	   FROM pg_stat_wal_receiver})
+	or die "Timed out waiting for archival report on standby";
+
+my $standby_last_archived = $standby->safe_psql('postgres',
+	q{SELECT primary_last_archived FROM pg_stat_wal_receiver});
+cmp_ok($standby_last_archived, 'ge', $primary_last_archived,
+	"standby wal receiver stat view updated with primary last archived wal");
+
+# Processing that report must have marked the segment as .done.
 ok(-f "$standby_archive_status/$primary_last_archived.done",
 	"WAL segment $primary_last_archived done file exists in standby pg_wal/archive_status");
-
-is($primary_last_archived, $standby->safe_psql('postgres',
-	q{SELECT primary_last_archived from pg_stat_wal_receiver; }),  "standby wal receiver stat view updated with primary last archived wal");
 
 ###############################################################################
 # Test 2: Cascading replication

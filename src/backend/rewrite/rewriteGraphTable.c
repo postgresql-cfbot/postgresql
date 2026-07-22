@@ -214,7 +214,7 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 
 				/*
 				 * If both the element patterns have label expressions, they
-				 * need to be conjuncted, which is not supported right now.
+				 * need to be conjuncted.
 				 *
 				 * However, an empty label expression means all labels.
 				 * Conjunction of any label expression with all labels is the
@@ -224,10 +224,10 @@ generate_queries_for_path_pattern(RangeTblEntry *rte, List *path_pattern)
 				if (!other->labelexpr)
 					other->labelexpr = gep->labelexpr;
 				else if (gep->labelexpr && !equal(other->labelexpr, gep->labelexpr))
-					ereport(ERROR,
-							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
-							 errmsg("element patterns with same variable name \"%s\" but different label expressions are not supported",
-									gep->variable)));
+					other->labelexpr = (Node *) makeBoolExpr(AND_EXPR,
+															 list_make2(other->labelexpr,
+																		gep->labelexpr),
+															 -1);
 
 				/*
 				 * If two element patterns have the same variable name, they
@@ -824,6 +824,9 @@ create_pe_for_element(struct path_factor *pf, Oid elemoid)
 /*
  * Returns the list of OIDs of graph labels which the given label expression
  * resolves to in the given property graph.
+ *
+ * For a disjunction (OR) or conjunction (AND) the returned list is the union
+ * of the OIDs of all leaf label references in the expression tree.
  */
 static List *
 get_labels_for_expr(Oid propgraphid, Node *labelexpr)
@@ -869,11 +872,15 @@ get_labels_for_expr(Oid propgraphid, Node *labelexpr)
 	else if (IsA(labelexpr, BoolExpr))
 	{
 		BoolExpr   *be = castNode(BoolExpr, labelexpr);
-		List	   *label_exprs = be->args;
 
+		/*
+		 * Recursively collect all leaf label OIDs from both OR (disjunction)
+		 * and AND (conjunction) expressions.
+		 */
 		label_oids = NIL;
-		foreach_node(GraphLabelRef, glr, label_exprs)
-			label_oids = lappend_oid(label_oids, glr->labelid);
+		foreach_node(Node, arg, be->args)
+			label_oids = list_concat(label_oids,
+									 get_labels_for_expr(propgraphid, arg));
 	}
 	else
 	{
@@ -888,29 +895,13 @@ get_labels_for_expr(Oid propgraphid, Node *labelexpr)
 }
 
 /*
- * Return a list of all the graph elements that satisfy the graph element pattern
- * represented by the given path_factor `pf`.
- *
- * First we find all the graph labels that satisfy the label expression in path
- * factor. Each label is associated with one or more graph elements.  A union of
- * all such elements satisfies the element pattern. We create one path_element
- * object representing every element whose graph element kind qualifies the
- * element pattern kind. A list of all such path_element objects is returned.
- *
- * Note that we need to report an error for an explicitly specified label which
- * is not associated with any graph element of the required kind. So we have to
- * treat each label separately. Without that requirement we could have collected
- * all the unique elements first and then created path_element objects for them
- * to simplify the code.
+ * Return a list of all element OIDs associated with the given property graph
+ * that match the specified kind (VERTEX_PATTERN or EDGE_PATTERN).
  */
 static List *
-get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf)
+get_all_elements_for_kind(Oid propgraphid, uint32 kind)
 {
-	List	   *label_oids = get_labels_for_expr(propgraphid, pf->labelexpr);
-	List	   *elem_oids_seen = NIL;
-	List	   *pf_elem_oids = NIL;
-	List	   *path_elements = NIL;
-	List	   *unresolved_labels = NIL;
+	List	   *elem_oids = NIL;
 	Relation	rel;
 	SysScanDesc scan;
 	ScanKeyData key[1];
@@ -921,81 +912,187 @@ get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf)
 	 * of path factors like nested path pattern need to be handled separately
 	 * when supported.
 	 */
-	Assert(pf->kind == VERTEX_PATTERN || IS_EDGE_PATTERN(pf->kind));
+	Assert(kind == VERTEX_PATTERN || IS_EDGE_PATTERN(kind));
+
+	rel = table_open(PropgraphElementRelationId, AccessShareLock);
+	ScanKeyInit(&key[0],
+				Anum_pg_propgraph_element_pgepgid,
+				BTEqualStrategyNumber,
+				F_OIDEQ, ObjectIdGetDatum(propgraphid));
+	scan = systable_beginscan(rel, PropgraphElementAliasIndexId, true,
+							  NULL, 1, key);
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
+	{
+		Form_pg_propgraph_element elem = (Form_pg_propgraph_element) GETSTRUCT(tup);
+
+		if (elem->pgekind == 'v' && kind == VERTEX_PATTERN)
+			elem_oids = lappend_oid(elem_oids, elem->oid);
+		else if (elem->pgekind == 'e' && IS_EDGE_PATTERN(kind))
+			elem_oids = lappend_oid(elem_oids, elem->oid);
+	}
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	return elem_oids;
+}
+
+/*
+ * Return a list of label OIDs of all labels attached to the given property
+ * graph element.
+ */
+static List *
+get_labels_for_element(Oid elem_oid)
+{
+	List	   *label_oids = NIL;
+	Relation	rel;
+	SysScanDesc scan;
+	ScanKeyData key[1];
+	HeapTuple	tup;
 
 	rel = table_open(PropgraphElementLabelRelationId, AccessShareLock);
-	foreach_oid(labeloid, label_oids)
+	ScanKeyInit(&key[0],
+				Anum_pg_propgraph_element_label_pgelelid,
+				BTEqualStrategyNumber,
+				F_OIDEQ, ObjectIdGetDatum(elem_oid));
+	scan = systable_beginscan(rel, PropgraphElementLabelElementLabelIndexId, true,
+							  NULL, 1, key);
+	while (HeapTupleIsValid(tup = systable_getnext(scan)))
 	{
-		bool		found = false;
+		Form_pg_propgraph_element_label label_elem =
+			(Form_pg_propgraph_element_label) GETSTRUCT(tup);
 
-		ScanKeyInit(&key[0],
-					Anum_pg_propgraph_element_label_pgellabelid,
-					BTEqualStrategyNumber,
-					F_OIDEQ, ObjectIdGetDatum(labeloid));
-		scan = systable_beginscan(rel, PropgraphElementLabelLabelIndexId, true,
-								  NULL, 1, key);
-		while (HeapTupleIsValid(tup = systable_getnext(scan)))
+		label_oids = lappend_oid(label_oids, label_elem->pgellabelid);
+	}
+	systable_endscan(scan);
+	table_close(rel, AccessShareLock);
+
+	return label_oids;
+}
+
+/*
+ * Recursively evaluate a label expression AST node against the set of label
+ * OIDs carried by a candidate graph element.  Returns true if the element
+ * satisfies the expression.
+ *
+ * NULL labelexpr means no IS clause was specified, which per SQL/PGQ matches
+ * any element.
+ */
+static bool
+eval_label_expr_for_element(Node *labelexpr, List *elem_labels)
+{
+	if (labelexpr == NULL)
+		return true;
+
+	if (IsA(labelexpr, GraphLabelRef))
+	{
+		GraphLabelRef *lref = castNode(GraphLabelRef, labelexpr);
+
+		return list_member_oid(elem_labels, lref->labelid);
+	}
+
+	if (IsA(labelexpr, BoolExpr))
+	{
+		BoolExpr   *bexpr = (BoolExpr *) labelexpr;
+
+		switch (bexpr->boolop)
 		{
-			Form_pg_propgraph_element_label label_elem = (Form_pg_propgraph_element_label) GETSTRUCT(tup);
-			Oid			elem_oid = label_elem->pgelelid;
-
-			if (!list_member_oid(elem_oids_seen, elem_oid))
-			{
-				/*
-				 * Create path_element object if the new element qualifies the
-				 * element pattern kind.
-				 */
-				struct path_element *pe = create_pe_for_element(pf, elem_oid);
-
-				if (pe)
+			case AND_EXPR:
+				foreach_node(Node, arg, bexpr->args)
 				{
-					path_elements = lappend(path_elements, pe);
+					if (!eval_label_expr_for_element(arg, elem_labels))
+						return false;
+				}
+				return true;
 
-					/* Remember qualified elements. */
-					pf_elem_oids = lappend_oid(pf_elem_oids, elem_oid);
-					found = true;
+			case OR_EXPR:
+				foreach_node(Node, arg, bexpr->args)
+				{
+					if (eval_label_expr_for_element(arg, elem_labels))
+						return true;
+				}
+				return false;
+
+			case NOT_EXPR:
+				{
+					Node	   *arg = linitial(bexpr->args);
+
+					return !eval_label_expr_for_element(arg, elem_labels);
 				}
 
-				/*
-				 * Remember qualified and unqualified elements processed so
-				 * far to avoid processing already processed elements again.
-				 */
-				elem_oids_seen = lappend_oid(elem_oids_seen, label_elem->pgelelid);
-			}
-			else if (list_member_oid(pf_elem_oids, elem_oid))
-			{
-				/*
-				 * The graph element is known to qualify the given element
-				 * pattern. Flag that the current label has at least one
-				 * qualified element associated with it.
-				 */
-				found = true;
-			}
+			default:
+				elog(ERROR, "unrecognized boolop in label expression: %d", bexpr->boolop);
 		}
+	}
 
-		if (!found)
+	return false;
+}
+
+/*
+ * Return a list of all the graph elements that satisfy the graph element pattern
+ * represented by the given path_factor `pf`.
+ *
+ * Each candidate element of the appropriate kind (vertex or edge) is tested
+ * against the label expression by eval_label_expr_for_element().  Labels that
+ * appear in the expression but are not associated with any element of the
+ * requested kind cause an error when the label was explicitly named, or are
+ * silently dropped from pf->labeloids when the element pattern had no IS
+ * clause.
+ */
+static List *
+get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf)
+{
+	List	   *path_elements = NIL;
+	List	   *all_candidate_elem_oids;
+	List	   *label_oids;
+	List	   *all_candidate_labels = NIL;
+	List	   *unresolved_labels = NIL;
+
+	all_candidate_elem_oids = get_all_elements_for_kind(propgraphid, pf->kind);
+
+	foreach_oid(elem_oid, all_candidate_elem_oids)
+	{
+		List	   *elem_labels = get_labels_for_element(elem_oid);
+
+		/*
+		 * Accumulate the union of all labels seen across every candidate
+		 * element so that we can later detect labels that are referenced in
+		 * the expression but have no associated elements.
+		 */
+		all_candidate_labels = list_concat_unique_oid(all_candidate_labels, elem_labels);
+
+		if (eval_label_expr_for_element(pf->labelexpr, elem_labels))
 		{
-			/*
-			 * We did not find any qualified element associated with this
-			 * label. The label or its properties can not be associated with
-			 * the given element pattern. Throw an error if the label was
-			 * explicitly specified in the element pattern. Otherwise remember
-			 * it for later use.
-			 */
-			if (!pf->labelexpr)
-				unresolved_labels = lappend_oid(unresolved_labels, labeloid);
-			else
+			struct path_element *pe = create_pe_for_element(pf, elem_oid);
+
+			Assert(pe != NULL);
+			path_elements = lappend(path_elements, pe);
+		}
+	}
+
+	/*
+	 * Validate that every label referenced in the expression is associated
+	 * with at least one element of the requested kind.  If the IS clause was
+	 * explicit and a label has no matching elements, raise an error.  If the
+	 * element pattern had no IS clause (all-labels), collect such labels as
+	 * unresolved so that they can be excluded from pf->labeloids.
+	 */
+	label_oids = get_labels_for_expr(propgraphid, pf->labelexpr);
+
+	foreach_oid(labeloid, label_oids)
+	{
+		if (!list_member_oid(all_candidate_labels, labeloid))
+		{
+			if (pf->labelexpr)
 				ereport(ERROR,
 						(errcode(ERRCODE_UNDEFINED_OBJECT),
 						 errmsg("no property graph element of type \"%s\" has label \"%s\" associated with it in property graph \"%s\"",
 								pf->kind == VERTEX_PATTERN ? "vertex" : "edge",
 								get_propgraph_label_name(labeloid),
 								get_rel_name(propgraphid))));
+			else
+				unresolved_labels = lappend_oid(unresolved_labels, labeloid);
 		}
-
-		systable_endscan(scan);
 	}
-	table_close(rel, AccessShareLock);
 
 	/*
 	 * Remove the labels which were not explicitly mentioned in the label
@@ -1004,6 +1101,20 @@ get_path_elements_for_path_factor(Oid propgraphid, struct path_factor *pf)
 	 * replace_property_refs_mutator() for more details.
 	 */
 	pf->labeloids = list_difference_oid(label_oids, unresolved_labels);
+
+	if (path_elements == NIL && pf->labelexpr != NULL)
+	{
+		if (pf->variable)
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("label expression for variable \"%s\" is not satisfied in property graph \"%s\"",
+							pf->variable, get_rel_name(propgraphid))));
+		else
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("label expression is not satisfied in property graph \"%s\"",
+							get_rel_name(propgraphid))));
+	}
 
 	return path_elements;
 }

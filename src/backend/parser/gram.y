@@ -726,6 +726,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 				label_expression
 				label_disjunction
 				label_term
+				label_conjunction
+				label_factor
 %type <str>		opt_colid
 
 /*
@@ -941,6 +943,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %nonassoc	IDENT PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
 			SET KEYS OBJECT_P SCALAR TO USING VALUE_P WITH WITHOUT PATH
 %left		Op OPERATOR RIGHT_ARROW '|'	/* multi-character ops and user-defined operators */
+%left		'&'							/* bitwise AND / label conjunction */
 %left		'+' '-'
 %left		'*' '/' '%'
 %left		'^'
@@ -15981,6 +15984,8 @@ a_expr:		c_expr									{ $$ = $1; }
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "->", $1, $3, @2); }
 			| a_expr '|' a_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "|", $1, $3, @2); }
+			| a_expr '&' a_expr
+				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "&", $1, $3, @2); }
 
 			| a_expr qual_Op a_expr				%prec Op
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, $3, @2); }
@@ -16469,6 +16474,8 @@ b_expr:		c_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "->", $1, $3, @2); }
 			| b_expr '|' b_expr
 				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "|", $1, $3, @2); }
+			| b_expr '&' b_expr
+				{ $$ = (Node *) makeSimpleA_Expr(AEXPR_OP, "&", $1, $3, @2); }
 			| b_expr qual_Op b_expr				%prec Op
 				{ $$ = (Node *) makeA_Expr(AEXPR_OP, $2, $1, $3, @2); }
 			| qual_Op b_expr					%prec Op
@@ -17666,6 +17673,7 @@ MathOp:		 '+'									{ $$ = "+"; }
 			| NOT_EQUALS							{ $$ = "<>"; }
 			| RIGHT_ARROW							{ $$ = "->"; }
 			| '|'									{ $$ = "|"; }
+			| '&'									{ $$ = "&"; }
 		;
 
 qual_Op:	Op
@@ -18449,8 +18457,20 @@ label_disjunction:
 		;
 
 label_term:
+			label_factor
+			| label_conjunction
+		;
+
+label_conjunction:
+			label_term '&' label_factor
+				{ $$ = makeAndExpr($1, $3, @2); }
+		;
+
+label_factor:
 			name
 				{ $$ = makeColumnRef($1, NIL, @1, yyscanner); }
+			| '(' label_expression ')'
+				{ $$ = $2; }
 		;
 
 

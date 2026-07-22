@@ -379,6 +379,17 @@ SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1)->(b)->(a IS vl2) WHERE a.vname <>
 SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1)->(b)->(a) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
 SELECT * FROM GRAPH_TABLE (g1 MATCH (a)->(b)->(a IS vl1) COLUMNS (a.vname AS self, b.vname AS through, a.vprop1 AS self_p1, b.vprop1 AS through_p1)) ORDER BY self, through;
 
+-- implicit label conjunction: v2 carries both labels
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl2)->(b)->(a IS vl3) COLUMNS (a.vname AS self, b.vname AS through, a.vprop2 AS vl2_prop, a.vprop1 AS vl3_prop)) ORDER BY self, through;
+-- explicit label conjunction
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl2 & vl3)->(b) COLUMNS (a.vname AS self, b.vname AS through)) ORDER BY self, through;
+-- explicit conjunction with empty intersection
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1 & vl2)->(b) COLUMNS (a.vname AS self, b.vname AS through)) ORDER BY self, through; -- error
+-- explicit conjunction with disjunction
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS (vl1 | vl3) & l1) COLUMNS (a.elname AS aname)) ORDER BY aname;
+-- conjunction with a wrong-kind label on a vertex
+SELECT * FROM GRAPH_TABLE (g1 MATCH (a IS vl1 & el1)->(b) COLUMNS (a.vname AS self, b.vname AS through)); -- error
+
 -- add loop to test edge patterns with same variable name
 CREATE TABLE e3_3 (
     src_id int,

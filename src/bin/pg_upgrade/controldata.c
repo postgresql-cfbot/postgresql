@@ -76,6 +76,14 @@ get_control_data(ClusterInfo *cluster)
 	bool		live_check = (cluster == &old_cluster && user_opts.live_check);
 
 	/*
+	 * With --initdb the old cluster's control data is read early, to derive
+	 * initdb options, before the normal call in check_cluster_compatibility().
+	 * A non-zero ctrl_ver means it has already been read; don't repeat it.
+	 */
+	if (cluster->controldata.ctrl_ver != 0)
+		return;
+
+	/*
 	 * Because we test the pg_resetwal output as strings, it has to be in
 	 * English.  Copied from pg_regress.c.
 	 */

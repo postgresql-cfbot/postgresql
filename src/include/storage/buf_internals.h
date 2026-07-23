@@ -332,8 +332,12 @@ typedef struct BufferDesc
 	BufferTag	tag;
 
 	/*
-	 * Buffer's index number (from 0). The field never changes after
-	 * initialization, so does not need locking.
+	 * Buffer's index number : positive value (>= 0) for shared buffers and
+	 * negative value (<= -2) for local buffers. The id ranges of both the
+	 * local and shared buffers ensure that (buf_id + 1) executed by
+	 * BufferDescriptorGetBuffer will never return InvalidBuffer(0).
+	 *
+	 * The field never changes after initialization, so does not need locking.
 	 */
 	int			buf_id;
 

@@ -307,6 +307,7 @@ typedef struct DataChecksumsStateStruct
 	DataChecksumsWorkerOperation launch_operation;
 	int			launch_cost_delay;
 	int			launch_cost_limit;
+	bool		launch_fast_checkpoint;
 
 	/*
 	 * Is a launcher process currently running?  This is set by the main
@@ -340,6 +341,7 @@ typedef struct DataChecksumsStateStruct
 	DataChecksumsWorkerOperation operation;
 	int			cost_delay;
 	int			cost_limit;
+	bool		fast_checkpoint;
 
 	/*
 	 * Signaling between the launcher and the worker process. Protected by
@@ -382,7 +384,8 @@ static DataChecksumsWorkerOperation operation;
 /* Prototypes */
 static void StartDataChecksumsWorkerLauncher(DataChecksumsWorkerOperation op,
 											 int cost_delay,
-											 int cost_limit);
+											 int cost_limit,
+											 bool fast);
 static void DataChecksumsShmemRequest(void *arg);
 static bool DatabaseExists(Oid dboid);
 static List *BuildDatabaseList(void);
@@ -544,6 +547,8 @@ AbsorbDataChecksumsBarrier(ProcSignalBarrierType barrier)
 Datum
 disable_data_checksums(PG_FUNCTION_ARGS)
 {
+	bool		fast = PG_GETARG_BOOL(0);
+
 	PreventCommandDuringRecovery("pg_disable_data_checksums()");
 
 	if (!superuser())
@@ -551,7 +556,7 @@ disable_data_checksums(PG_FUNCTION_ARGS)
 				errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
 				errmsg("must be superuser to change data checksum state"));
 
-	StartDataChecksumsWorkerLauncher(DISABLE_DATACHECKSUMS, 0, 0);
+	StartDataChecksumsWorkerLauncher(DISABLE_DATACHECKSUMS, 0, 0, fast);
 	PG_RETURN_VOID();
 }
 
@@ -565,6 +570,7 @@ enable_data_checksums(PG_FUNCTION_ARGS)
 {
 	int			cost_delay = PG_GETARG_INT32(0);
 	int			cost_limit = PG_GETARG_INT32(1);
+	bool		fast = PG_GETARG_BOOL(2);
 
 	PreventCommandDuringRecovery("pg_enable_data_checksums()");
 
@@ -583,7 +589,7 @@ enable_data_checksums(PG_FUNCTION_ARGS)
 				errcode(ERRCODE_INVALID_PARAMETER_VALUE),
 				errmsg("cost limit must be greater than zero"));
 
-	StartDataChecksumsWorkerLauncher(ENABLE_DATACHECKSUMS, cost_delay, cost_limit);
+	StartDataChecksumsWorkerLauncher(ENABLE_DATACHECKSUMS, cost_delay, cost_limit, fast);
 
 	PG_RETURN_VOID();
 }
@@ -603,7 +609,8 @@ enable_data_checksums(PG_FUNCTION_ARGS)
 static void
 StartDataChecksumsWorkerLauncher(DataChecksumsWorkerOperation op,
 								 int cost_delay,
-								 int cost_limit)
+								 int cost_limit,
+								 bool fast)
 {
 	BackgroundWorker bgw;
 	BackgroundWorkerHandle *bgw_handle;
@@ -623,6 +630,7 @@ StartDataChecksumsWorkerLauncher(DataChecksumsWorkerOperation op,
 	DataChecksumState->launch_operation = op;
 	DataChecksumState->launch_cost_delay = cost_delay;
 	DataChecksumState->launch_cost_limit = cost_limit;
+	DataChecksumState->launch_fast_checkpoint = fast;
 
 	/* Is the launcher already running? If so, what is it doing? */
 	running = DataChecksumState->launcher_running;
@@ -1025,7 +1033,20 @@ launcher_exit(int code, Datum arg)
 	 * the state to off since processing cannot be resumed.
 	 */
 	if (DataChecksumsInProgressOn())
-		SetDataChecksumsOff();
+	{
+		bool		fast_checkpoint;
+
+		/*
+		 * Get the current value of the launch_fast_checkpoint flag. It might
+		 * have been updated while the launcher was already running, so make
+		 * sure to follow the locking protocol.
+		 */
+		LWLockAcquire(DataChecksumsWorkerLock, LW_EXCLUSIVE);
+		fast_checkpoint = DataChecksumState->launch_fast_checkpoint;
+		LWLockRelease(DataChecksumsWorkerLock);
+
+		SetDataChecksumsOff(fast_checkpoint);
+	}
 
 	LWLockAcquire(DataChecksumsWorkerLock, LW_EXCLUSIVE);
 	launcher_running = false;
@@ -1166,6 +1187,7 @@ DataChecksumsWorkerLauncherMain(Datum arg)
 	DataChecksumState->operation = operation;
 	DataChecksumState->cost_delay = DataChecksumState->launch_cost_delay;
 	DataChecksumState->cost_limit = DataChecksumState->launch_cost_limit;
+	DataChecksumState->fast_checkpoint = DataChecksumState->launch_fast_checkpoint;
 	LWLockRelease(DataChecksumsWorkerLock);
 
 	/*
@@ -1182,6 +1204,8 @@ again:
 
 	if (operation == ENABLE_DATACHECKSUMS)
 	{
+		bool		fast_checkpoint;
+
 		/*
 		 * If we are asked to enable checksums in a cluster which already has
 		 * checksums enabled, exit immediately as there is nothing more to do.
@@ -1218,22 +1242,41 @@ again:
 		}
 
 		/*
+		 * Get the current value of the fast_checkpoint flag, in case it was
+		 * updated while the worker was running.
+		 */
+		LWLockAcquire(DataChecksumsWorkerLock, LW_EXCLUSIVE);
+		fast_checkpoint = DataChecksumState->fast_checkpoint;
+		LWLockRelease(DataChecksumsWorkerLock);
+
+		/*
 		 * Data checksums have been set on all pages, set the state to on in
 		 * order to instruct backends to validate checksums on reading.
 		 */
-		SetDataChecksumsOn();
+		SetDataChecksumsOn(fast_checkpoint);
 
 		ereport(LOG,
 				errmsg("data checksums are now enabled"));
 	}
 	else if (operation == DISABLE_DATACHECKSUMS)
 	{
+		bool		fast_checkpoint;
+
 		ereport(LOG,
 				errmsg("disabling data checksums requested"));
 
 		pgstat_progress_update_param(PROGRESS_DATACHECKSUMS_PHASE,
 									 PROGRESS_DATACHECKSUMS_PHASE_DISABLING);
-		SetDataChecksumsOff();
+
+		/*
+		 * Get the current value of the fast_checkpoint flag, in case it was
+		 * updated while the worker was running.
+		 */
+		LWLockAcquire(DataChecksumsWorkerLock, LW_EXCLUSIVE);
+		fast_checkpoint = DataChecksumState->fast_checkpoint;
+		LWLockRelease(DataChecksumsWorkerLock);
+
+		SetDataChecksumsOff(fast_checkpoint);
 		ereport(LOG,
 				errmsg("data checksums are now disabled"));
 	}
@@ -1261,6 +1304,7 @@ done:
 		operation = DataChecksumState->launch_operation;
 		DataChecksumState->cost_delay = DataChecksumState->launch_cost_delay;
 		DataChecksumState->cost_limit = DataChecksumState->launch_cost_limit;
+		DataChecksumState->fast_checkpoint = DataChecksumState->launch_fast_checkpoint;
 		LWLockRelease(DataChecksumsWorkerLock);
 		goto again;
 	}
@@ -1341,7 +1385,7 @@ ProcessAllDatabases(void)
 			 * Disable checksums on cluster, because we failed one of the
 			 * databases and this is an all or nothing process.
 			 */
-			SetDataChecksumsOff();
+			SetDataChecksumsOff(DataChecksumState->fast_checkpoint);
 			ereport(ERROR,
 					errcode(ERRCODE_INSUFFICIENT_RESOURCES),
 					errmsg("data checksums failed to get enabled in all databases, aborting"),
@@ -1704,7 +1748,8 @@ DataChecksumsWorkerMain(Datum arg)
 			break;
 		}
 		if ((DataChecksumState->launch_cost_delay != DataChecksumState->cost_delay)
-			|| (DataChecksumState->launch_cost_limit != DataChecksumState->cost_limit))
+			|| (DataChecksumState->launch_cost_limit != DataChecksumState->cost_limit)
+			|| (DataChecksumState->launch_fast_checkpoint != DataChecksumState->fast_checkpoint))
 		{
 			costs_updated = true;
 			VacuumCostDelay = DataChecksumState->launch_cost_delay;
@@ -1713,6 +1758,7 @@ DataChecksumsWorkerMain(Datum arg)
 
 			DataChecksumState->cost_delay = DataChecksumState->launch_cost_delay;
 			DataChecksumState->cost_limit = DataChecksumState->launch_cost_limit;
+			DataChecksumState->fast_checkpoint = DataChecksumState->launch_fast_checkpoint;
 		}
 		else
 			costs_updated = false;

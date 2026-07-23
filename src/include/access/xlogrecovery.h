@@ -11,7 +11,9 @@
 #ifndef XLOGRECOVERY_H
 #define XLOGRECOVERY_H
 
+#include "access/xlogprefetcher.h"
 #include "access/xlogreader.h"
+#include "access/xlogutils.h"
 #include "catalog/pg_control.h"
 #include "lib/stringinfo.h"
 #include "storage/condition_variable.h"
@@ -60,6 +62,17 @@ typedef enum RecoveryPauseState
 	RECOVERY_PAUSED,			/* recovery is paused */
 } RecoveryPauseState;
 
+/* Codes indicating where we got a WAL file from during recovery, or where
+ * to attempt to get one.
+ */
+typedef enum
+{
+	XLOG_FROM_ANY = 0,			/* request to read WAL from any source */
+	XLOG_FROM_ARCHIVE,			/* restored using restore_command */
+	XLOG_FROM_PG_WAL,			/* existing file in pg_wal */
+	XLOG_FROM_STREAM,			/* streamed from primary */
+} XLogSource;
+
 /*
  * Shared-memory state for WAL recovery.
  */
@@ -95,6 +108,14 @@ typedef struct XLogRecoveryCtlData
 	Latch		recoveryWakeupLatch;
 
 	/*
+	 * In case pipeline enabled we will need two latches. One that can be used
+	 * by the pipeline for WAL waiting and other that can be used by the
+	 * startup process for the apply delay. Before this we had only one latch
+	 * for both cases.
+	 */
+	Latch		recoveryApplyDelayLatch;
+
+	/*
 	 * Last record successfully replayed.
 	 */
 	XLogRecPtr	lastReplayedReadRecPtr; /* start position */
@@ -121,6 +142,58 @@ typedef struct XLogRecoveryCtlData
 	ConditionVariable recoveryNotPausedCV;
 
 	slock_t		info_lck;		/* locks shared variables shown above */
+
+	/* ------------------------------------------------------------------
+	 * Variables use for IPC between pipeline and the startup proc.
+	 * These are also the static variables in xlogrecovery.c but there state
+	 * keep on changing. So we added them as the shared states so that both
+	 * the pipeline and the startup proc stay synced if any of these state
+	 * changes.
+	 * ------------------------------------------------------------------
+	 */
+
+	bool		InArchiveRecovery;
+	bool		pendingWalRcvRestart;
+	bool		stanbyEnabled;
+
+	/*
+	 * The target TLI for which expectedTLEs should be recomputed by the
+	 * consumer
+	 */
+	TimeLineID	expectedTLEsUpdateTLI;
+
+	/*
+	 * We also export the recoveryTargetTLI as a WalPipelineParams. But other
+	 * than passing the initial state, the recoveryTargetTLI can also change
+	 * it state during the decoding by the prodcuer (see rescanLatestTimeLine()).
+	 *
+	 * This mean at the end of the recovery,  the startup process should aware
+	 * of any such state changes done by the producer. To handle this
+	 * ResetStatesIfPipelined() will update the startup local recoveryTargetTLI
+	 * with updated one, on FinishWalRecovery().
+	*/
+	TimeLineID	recoveryTargetTLI;
+
+	/*
+	 * Normaly we wakeup walrcvr after specific records have been applied, as
+	 * decoding and apllying are sequential so we wakeup after enough records
+	 * decoded read.
+	 *
+	 * But in case of pipeline reads (decoded records) could be ahead of the
+	 * consumer apply loop. We cannot wakeup wal rcvr based on how much records
+	 * decoded, so we tell consumer to wakeup after only after a specific lsn
+	 * (WakeupWalRcvrRecPtr set by the pipeline) has beed replayed.
+	 */
+	XLogRecPtr	WakeupWalRcvrRecPtr;
+
+	XLogRecPtr	abortedRecPtr;
+	XLogRecPtr	missingContrecPtr;
+
+	XLogSource	currentSource;
+	XLogSource	XLogReceiptSource;
+
+	HotStandbyState standbyState;
+	TimestampTz		XLogReceiptTime;
 } XLogRecoveryCtlData;
 
 extern PGDLLIMPORT XLogRecoveryCtlData *XLogRecoveryCtl;
@@ -205,6 +278,8 @@ typedef struct
 	bool		recovery_signal_file_found;
 } EndOfWalRecoveryInfo;
 
+struct WalPipelineParams;   /* forward declaration */
+
 extern EndOfWalRecoveryInfo *FinishWalRecovery(void);
 extern void ShutdownWalRecovery(void);
 extern void RemovePromoteSignalFiles(void);
@@ -217,15 +292,22 @@ extern void GetXLogReceiptTime(TimestampTz *rtime, bool *fromStream);
 extern TimestampTz GetLatestXTime(void);
 extern TimestampTz GetCurrentChunkReplayStartTime(void);
 extern XLogRecPtr GetCurrentReplayRecPtr(TimeLineID *replayEndTLI);
+extern XLogRecord *ReadRecord(XLogPrefetcher *xlogprefetcher, int emode,
+		   bool fetching_ckpt, TimeLineID replayTLI);
+extern int XLogPageRead(XLogReaderState *xlogreader, XLogRecPtr targetPagePtr, int reqLen,
+			 XLogRecPtr targetRecPtr, char *readBuf);
 
 extern bool PromoteIsTriggered(void);
 extern bool CheckPromoteSignal(void);
 extern void WakeupRecovery(void);
+extern void DisownRecoveryWakeupLatch(void);
+extern void SetSharedHotStandbyState(void);
 
 extern void StartupRequestWalReceiverRestart(void);
 extern void XLogRequestWalReceiverReply(void);
 
 extern void RecoveryRequiresIntParameter(const char *param_name, int currValue, int minValue);
+extern void WalPipeline_ImportRecoveryState(struct WalPipelineParams *params);
 
 extern void xlog_outdesc(StringInfo buf, XLogReaderState *record);
 

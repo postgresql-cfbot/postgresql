@@ -65,6 +65,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/fmgroids.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/pg_locale.h"
 #include "utils/relmapper.h"
@@ -557,6 +558,20 @@ CreateDatabaseUsingFileCopy(Oid src_dboid, Oid dst_dboid, Oid src_tsid,
 	TableScanDesc scan;
 	Relation	rel;
 	HeapTuple	tuple;
+
+	/*
+	 * The strategy check in createdb() runs before our transaction has an
+	 * XID and before the pg_database row exists, so the datachecksumsworker
+	 * launcher can start in that window and miss both the new database and
+	 * our transaction, leaving the raw-copied files without checksums.
+	 * Recheck here: the XID is assigned by now, so a launcher starting after
+	 * this point will wait for us and find the new database.
+	 */
+	if (DataChecksumsInProgressOn())
+		ereport(ERROR,
+				errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				errmsg("create database strategy \"%s\" not allowed when data checksums are being enabled",
+					   "file_copy"));
 
 	/*
 	 * Force a checkpoint before starting the copy. This will force all dirty
@@ -1509,6 +1524,8 @@ createdb(ParseState *pstate, const CreatedbStmt *stmt)
 
 	tuple = heap_form_tuple(RelationGetDescr(pg_database_rel),
 							new_record, new_record_nulls);
+
+	INJECTION_POINT("createdb-before-catalog-insert", NULL);
 
 	CatalogTupleInsert(pg_database_rel, tuple);
 

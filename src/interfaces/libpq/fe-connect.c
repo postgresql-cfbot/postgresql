@@ -30,6 +30,7 @@
 #include "common/string.h"
 #include "fe-auth.h"
 #include "fe-auth-oauth.h"
+#include "fe-connect-srv.h"
 #include "libpq-fe.h"
 #include "libpq-int.h"
 #include "mb/pg_wchar.h"
@@ -230,6 +231,10 @@ static const internalPQconninfoOption PQconninfoOptions[] = {
 	{"dbname", "PGDATABASE", NULL, NULL,
 		"Database-Name", "", 20,
 	offsetof(struct pg_conn, dbName)},
+
+	{"srvhost", "PGSRVHOST", NULL, NULL,
+		"Database-SRV-Host", "", 64,
+	offsetof(struct pg_conn, srvhost)},
 
 	{"host", "PGHOST", NULL, NULL,
 		"Database-Host", "", 40,
@@ -454,6 +459,9 @@ static const pg_fe_sasl_mech *supported_sasl_mechs[] =
 /* The connection URI must start with either of the following designators: */
 static const char uri_designator[] = "postgresql://";
 static const char short_uri_designator[] = "postgres://";
+/* SRV URI variants: the host is treated as the SRV domain, not a direct host */
+static const char srv_uri_designator[] = "postgresql+srv://";
+static const char short_srv_uri_designator[] = "postgres+srv://";
 
 static bool connectOptions1(PGconn *conn, const char *conninfo);
 static bool init_allowed_encryption_methods(PGconn *conn);
@@ -1256,6 +1264,29 @@ index_of_allowed_sasl_mech(PGconn *conn, const pg_fe_sasl_mech *mech)
 bool
 pqConnectOptions2(PGconn *conn)
 {
+	/*
+	 * If srvhost is set, validate mutual exclusivity with host/hostaddr and
+	 * then resolve _postgresql._tcp.<srvhost> SRV records, populating
+	 * conn->pghost and conn->pgport from the sorted results.  This must
+	 * happen before the host-array allocation below.
+	 */
+	if (conn->srvhost != NULL && conn->srvhost[0] != '\0')
+	{
+		if ((conn->pghost != NULL && conn->pghost[0] != '\0') ||
+			(conn->pghostaddr != NULL && conn->pghostaddr[0] != '\0'))
+		{
+			conn->status = CONNECTION_BAD;
+			libpq_append_conn_error(conn,
+									"cannot use \"srvhost\" together with \"host\" or \"hostaddr\"");
+			return false;
+		}
+		if (!pqLookupSRVHosts(conn))
+		{
+			conn->status = CONNECTION_BAD;
+			return false;
+		}
+	}
+
 	/*
 	 * Allocate memory for details about each host to which we might possibly
 	 * try to connect.  For that, count the number of elements in the hostaddr
@@ -6376,6 +6407,15 @@ parse_connection_string(const char *connstr, PQExpBuffer errorMessage,
 static int
 uri_prefix_length(const char *connstr)
 {
+	/* Check SRV URI variants first (longer prefixes before shorter) */
+	if (strncmp(connstr, srv_uri_designator,
+				sizeof(srv_uri_designator) - 1) == 0)
+		return sizeof(srv_uri_designator) - 1;
+
+	if (strncmp(connstr, short_srv_uri_designator,
+				sizeof(short_srv_uri_designator) - 1) == 0)
+		return sizeof(short_srv_uri_designator) - 1;
+
 	if (strncmp(connstr, uri_designator,
 				sizeof(uri_designator) - 1) == 0)
 		return sizeof(uri_designator) - 1;
@@ -6927,6 +6967,14 @@ conninfo_uri_parse(const char *uri, PQExpBuffer errorMessage,
  *
  * postgresql://[user[:password]@][netloc][:port][,...][/dbname][?param1=value1&...]
  *
+ * The postgresql+srv:// and postgres+srv:// URI schemes are also recognized:
+ *
+ * postgresql+srv://[user[:password]@][srvdomain][/dbname][?param1=value1&...]
+ *
+ * In the +srv form, the netloc is interpreted as the SRV domain (stored in
+ * the "srvhost" connection parameter) rather than as a direct host address.
+ * Multiple netloc specifications are not allowed in the +srv form.
+ *
  * Any of the URI parts might use percent-encoding (%xy).
  */
 static bool
@@ -6934,6 +6982,7 @@ conninfo_uri_parse_options(PQconninfoOption *options, const char *uri,
 						   PQExpBuffer errorMessage)
 {
 	int			prefix_len;
+	bool		is_srv_uri;
 	char	   *p;
 	char	   *buf = NULL;
 	char	   *start;
@@ -6961,8 +7010,10 @@ conninfo_uri_parse_options(PQconninfoOption *options, const char *uri,
 	}
 	start = buf;
 
-	/* Skip the URI prefix */
+	/* Skip the URI prefix and detect if this is a +srv URI */
 	prefix_len = uri_prefix_length(uri);
+	is_srv_uri = (prefix_len == sizeof(srv_uri_designator) - 1 ||
+				  prefix_len == sizeof(short_srv_uri_designator) - 1);
 	if (prefix_len == 0)
 	{
 		/* Should never happen */
@@ -7113,10 +7164,32 @@ conninfo_uri_parse_options(PQconninfoOption *options, const char *uri,
 	/* Save final values for host and port. */
 	if (PQExpBufferDataBroken(hostbuf) || PQExpBufferDataBroken(portbuf))
 		goto cleanup;
-	if (hostbuf.data[0] &&
-		!conninfo_storeval(options, "host", hostbuf.data,
-						   errorMessage, false, true))
-		goto cleanup;
+	if (hostbuf.data[0])
+	{
+		if (is_srv_uri)
+		{
+			/*
+			 * For postgresql+srv:// URIs the netloc is the SRV domain, not a
+			 * direct host address.  Store it in "srvhost" and reject multiple
+			 * hosts (commas) since SRV already expands to multiple targets.
+			 */
+			if (strchr(hostbuf.data, ',') != NULL)
+			{
+				libpq_append_error(errorMessage,
+								   "multiple hosts are not allowed in a postgresql+srv:// URI");
+				goto cleanup;
+			}
+			if (!conninfo_storeval(options, "srvhost", hostbuf.data,
+								   errorMessage, false, true))
+				goto cleanup;
+		}
+		else
+		{
+			if (!conninfo_storeval(options, "host", hostbuf.data,
+								   errorMessage, false, true))
+				goto cleanup;
+		}
+	}
 	if (portbuf.data[0] &&
 		!conninfo_storeval(options, "port", portbuf.data,
 						   errorMessage, false, true))

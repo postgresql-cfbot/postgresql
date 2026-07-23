@@ -1057,16 +1057,161 @@ postgres   27093  0.0  0.0  30096  2752 ?        Ss   11:34   0:00 postgres: ser
        <structfield>backend_type</structfield> <type>text</type>
       </para>
       <para>
-       Type of current backend. Possible types are
-       <literal>autovacuum launcher</literal>, <literal>autovacuum worker</literal>,
-       <literal>logical replication launcher</literal>,
-       <literal>logical replication worker</literal>,
-       <literal>parallel worker</literal>, <literal>background writer</literal>,
-       <literal>client backend</literal>, <literal>checkpointer</literal>,
-       <literal>archiver</literal>, <literal>standalone backend</literal>,
-       <literal>startup</literal>, <literal>walreceiver</literal>,
-       <literal>walsender</literal>, <literal>walwriter</literal> and
-       <literal>walsummarizer</literal>.
+       Type of current backend. Possible types are:
+       <itemizedlist>
+        <listitem>
+         <para>
+          <literal>archiver</literal>: The WAL archiver, active when
+          <xref linkend="guc-archive-mode"/> is enabled.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>autovacuum launcher</literal>: The background process that
+          launches autovacuum workers, active when
+          <xref linkend="guc-autovacuum"/> is <literal>on</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>autovacuum worker</literal>: A background process running
+          <command>VACUUM</command> or <command>ANALYZE</command> on a single
+          table.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>background writer</literal>: The background process that
+          makes sure that there are enough clean buffers in shared buffers.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>checkpointer</literal>: The background process that
+          performs <link linkend="wal-configuration">checkpoints</link>
+          regularly.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>client backend</literal>: The server process performing
+          work for a regular database connection.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>datachecksums launcher</literal>: The background process
+          that launches data checksum workers.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>datachecksums worker</literal>: A background process that
+          calculates data checksums for all pages in one database.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>io worker</literal>: A background process performing
+          asynchronous I/O, active when <xref linkend="guc-io-method"/> is set
+          to <literal>worker</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>logical replication apply worker</literal>: A background
+          process that applies data modifications on a logical subscriber.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>logical replication launcher</literal>: The background
+          process that launches logical replication worker processes for
+          subscriptions.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>logical replication parallel worker</literal>: A background
+          process that applies data modifications on a logical subscriber
+          for a subscription with <literal>streaming = parallel</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>logical replication sequencesync worker</literal>: A
+          background process that replicates sequence data on a logical
+          subscriber.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>logical replication tablesync worker</literal>: A
+          background process that copies table data on a logical subscriber
+          for a subscription with <literal>copy_data = true</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>parallel worker</literal>: A background process that helps
+          a backend process to perform operations in parallel.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>REPACK decoding worker</literal>: A background process that
+          decodes WAL for <command>REPACK (CONCURRENTLY)</command>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>slotsync worker</literal>: The background process that
+          synchronizes logical replication slots on a streaming replication
+          standby server, active when <xref linkend="guc-sync-replication-slots"/>
+          is set to <literal>on</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>standalone backend</literal>: The backend process when
+          <productname>PostgreSQL</productname> was started in
+          <xref linkend="app-postgres-single-user"/>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>startup</literal>: The background process that replays WAL
+          during crash recovery, archive recovery or streaming replication.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>walreceiver</literal>: The background process that receives
+          WAL records from a WAL sender, active in streaming replication
+          standby mode.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>walsender</literal>: A background process that sends WAL
+          records to receivers (during streaming replication) or decodes WAL
+          and sends the decoded information (during logical replication).
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>walsummarizer</literal>: The background process that
+          creates summaries from WAL for use with incremental backup, active
+          when <xref linkend="guc-summarize-wal"/> is <literal>on</literal>.
+         </para>
+        </listitem>
+        <listitem>
+         <para>
+          <literal>walwriter</literal>: The background process that persists
+          WAL records from WAL buffers to disk.
+         </para>
+        </listitem>
+       </itemizedlist>
        In addition, background workers registered by extensions may have
        additional types.
       </para></entry>

@@ -43,7 +43,7 @@ ERROR:  relation "nonexistent" does not exist
 CREATE STATISTICS tst ON a, b FROM ext_stats_test;
 ERROR:  column "a" does not exist
 CREATE STATISTICS tst ON x, x, y FROM ext_stats_test;
-ERROR:  duplicate column name in statistics definition
+ERROR:  duplicate expression in statistics definition
 CREATE STATISTICS tst ON x, x, y, x, x, y, x, x, y FROM ext_stats_test;
 ERROR:  cannot have more than 8 columns in statistics
 CREATE STATISTICS tst ON x, x, y, x, x, (x || 'x'), (y + 1), (x || 'x'), (x || 'x'), (y + 1) FROM ext_stats_test;
@@ -56,22 +56,22 @@ CREATE STATISTICS tst (unrecognized) ON x, y FROM ext_stats_test;
 ERROR:  unrecognized statistics kind "unrecognized"
 -- unsupported targets
 CREATE STATISTICS tst ON a FROM (VALUES (x)) AS foo;
-ERROR:  CREATE STATISTICS only supports relation names in the FROM clause
+ERROR:  CREATE STATISTICS only supports relation names or JOIN clauses in the FROM clause
 CREATE STATISTICS tst ON a FROM foo NATURAL JOIN bar;
-ERROR:  CREATE STATISTICS only supports relation names in the FROM clause
+ERROR:  relation "foo" does not exist
 CREATE STATISTICS tst ON a FROM (SELECT * FROM ext_stats_test) AS foo;
-ERROR:  CREATE STATISTICS only supports relation names in the FROM clause
+ERROR:  CREATE STATISTICS only supports relation names or JOIN clauses in the FROM clause
 CREATE STATISTICS tst ON a FROM ext_stats_test s TABLESAMPLE system (x);
-ERROR:  CREATE STATISTICS only supports relation names in the FROM clause
+ERROR:  CREATE STATISTICS only supports relation names or JOIN clauses in the FROM clause
 CREATE STATISTICS tst ON a FROM XMLTABLE('foo' PASSING 'bar' COLUMNS a text);
-ERROR:  CREATE STATISTICS only supports relation names in the FROM clause
+ERROR:  CREATE STATISTICS only supports relation names or JOIN clauses in the FROM clause
 CREATE STATISTICS tst ON a FROM JSON_TABLE(jsonb '123', '$' COLUMNS (item int));
-ERROR:  CREATE STATISTICS only supports relation names in the FROM clause
+ERROR:  CREATE STATISTICS only supports relation names or JOIN clauses in the FROM clause
 CREATE FUNCTION tftest(int) returns table(a int, b int) as $$
 SELECT $1, $1+i FROM generate_series(1,5) g(i);
 $$ LANGUAGE sql IMMUTABLE STRICT;
 CREATE STATISTICS alt_stat2 ON a FROM tftest(1);
-ERROR:  CREATE STATISTICS only supports relation names in the FROM clause
+ERROR:  CREATE STATISTICS only supports relation names or JOIN clauses in the FROM clause
 DROP FUNCTION tftest;
 -- incorrect expressions
 CREATE STATISTICS tst ON (y) FROM ext_stats_test; -- single column reference
@@ -3177,6 +3177,23 @@ SELECT * FROM check_estimated_rows('SELECT * FROM virtual_gen_stats WHERE d = 0 
         10 |     10
 (1 row)
 
+SELECT expr FROM pg_stats_ext_exprs
+    WHERE statistics_name = 'virtual_gen_stats_1' AND NOT inherited;
+     expr      
+---------------
+ c
+ (3 * b)
+ d
+ (d - (2 * a))
+(4 rows)
+
+SELECT pg_get_statisticsobjdef(oid) FROM pg_statistic_ext
+    WHERE stxname = 'virtual_gen_stats_1';
+                                         pg_get_statisticsobjdef                                         
+---------------------------------------------------------------------------------------------------------
+ CREATE STATISTICS public.virtual_gen_stats_1 (mcv) ON c, (3 * b), d, (d - 2 * a) FROM virtual_gen_stats
+(1 row)
+
 -- univariate statistics on individual virtual generated columns
 DROP STATISTICS virtual_gen_stats_1;
 SELECT * FROM check_estimated_rows('SELECT * FROM virtual_gen_stats WHERE c = 0');
@@ -3692,12 +3709,12 @@ CREATE STATISTICS stats_ext_range (mcv)
    ON irange, (irange + '[4,10)'::int4range)
    FROM stats_ext_tbl_range;
 ANALYZE stats_ext_tbl_range;
-SELECT attnames, most_common_vals
+SELECT exprs, most_common_vals
    FROM pg_stats_ext
    WHERE statistics_name = 'stats_ext_range';
- attnames |                      most_common_vals                      
-----------+------------------------------------------------------------
- {irange} | {{"[1,7)","[1,10)"},{"[2,9)","[2,10)"},{"[3,9)","[3,10)"}}
+                   exprs                   |                      most_common_vals                      
+-------------------------------------------+------------------------------------------------------------
+ {irange,"(irange + '[4,10)'::int4range)"} | {{"[1,7)","[1,10)"},{"[2,9)","[2,10)"},{"[3,9)","[3,10)"}}
 (1 row)
 
 SELECT range_length_histogram, range_empty_frac, range_bounds_histogram
@@ -3709,3 +3726,15 @@ SELECT range_length_histogram, range_empty_frac, range_bounds_histogram
 (1 row)
 
 DROP TABLE stats_ext_tbl_range;
+-- Verify user-written ordering of columns and expressions is preserved.
+-- Before PG20, columns were sorted by attnum with expressions at the end.
+-- Leave for pg_upgrade testing.
+CREATE STATISTICS tenk1_mcv (mcv) ON ten, (ten + four), four FROM tenk1;
+ANALYZE tenk1;
+SELECT pg_get_statisticsobjdef(oid) FROM pg_statistic_ext
+    WHERE stxname = 'tenk1_mcv';
+                            pg_get_statisticsobjdef                             
+--------------------------------------------------------------------------------
+ CREATE STATISTICS public.tenk1_mcv (mcv) ON ten, (ten + four), four FROM tenk1
+(1 row)
+

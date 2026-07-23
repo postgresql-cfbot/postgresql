@@ -1459,6 +1459,14 @@ WHERE tablename = 'road';
    </para>
 
    <para>
+    Correlation can likewise span a join: the values of a join column in one
+    table may be correlated with the data of the table it is joined to,
+    which per-table statistics cannot describe.  Here too,
+    <productname>PostgreSQL</productname> can compute multivariate statistics,
+    in this case over the result of the join, to capture the relationship.
+   </para>
+
+   <para>
     Because the number of possible column combinations is very large,
     it's impractical to compute multivariate statistics automatically.
     Instead, <firstterm>extended statistics objects</firstterm>, more often
@@ -1541,27 +1549,28 @@ CREATE STATISTICS stts (dependencies) ON city, zip FROM zipcodes;
 
 ANALYZE zipcodes;
 
-SELECT stxkeys AS k, jsonb_pretty(stxddependencies::text::jsonb) AS dep
+SELECT pg_get_statisticsobjdef_columns(oid) AS cols,
+       jsonb_pretty(stxddependencies::text::jsonb) AS dep
   FROM pg_statistic_ext JOIN pg_statistic_ext_data ON (oid = stxoid)
   WHERE stxname = 'stts';
--[ RECORD 1 ]--------------------
-k   | 1 5
-dep | [                          +
-    |     {                      +
-    |         "degree": 1.000000,+
-    |         "attributes": [    +
-    |             1              +
-    |         ],                 +
-    |         "dependency": 5    +
-    |     },                     +
-    |     {                      +
-    |         "degree": 0.423130,+
-    |         "attributes": [    +
-    |             5              +
-    |         ],                 +
-    |         "dependency": 1    +
-    |     }                      +
-    | ]
+-[ RECORD 1 ]---------------------
+cols | {city,zip}
+dep  | [                           +
+     |     {                       +
+     |         "degree": 1.000000, +
+     |         "attributes": [     +
+     |             1               +
+     |         ],                  +
+     |         "dependency": 5     +
+     |     },                      +
+     |     {                       +
+     |         "degree": 0.423130, +
+     |         "attributes": [     +
+     |             5               +
+     |         ],                  +
+     |         "dependency": 1     +
+     |     }                       +
+     | ]
 (1 row)
 </programlisting>
      Here it can be seen that column 1 (zip code) fully determines column
@@ -1647,42 +1656,43 @@ CREATE STATISTICS stts2 (ndistinct) ON city, state, zip FROM zipcodes;
 
 ANALYZE zipcodes;
 
-SELECT stxkeys AS k, jsonb_pretty(stxdndistinct::text::jsonb) AS nd
+SELECT pg_get_statisticsobjdef_columns(oid) AS cols,
+       jsonb_pretty(stxdndistinct::text::jsonb) AS nd
   FROM pg_statistic_ext JOIN pg_statistic_ext_data on (oid = stxoid)
   WHERE stxname = 'stts2';
--[ RECORD 1 ]-------------------
-k  | 1 2 5
-nd | [                          +
-   |     {                      +
-   |         "ndistinct": 33178,+
-   |         "attributes": [    +
-   |             1,             +
-   |             2              +
-   |         ]                  +
-   |     },                     +
-   |     {                      +
-   |         "ndistinct": 33178,+
-   |         "attributes": [    +
-   |             1,             +
-   |             5              +
-   |         ]                  +
-   |     },                     +
-   |     {                      +
-   |         "ndistinct": 27435,+
-   |         "attributes": [    +
-   |             2,             +
-   |             5              +
-   |         ]                  +
-   |     },                     +
-   |     {                      +
-   |         "ndistinct": 33178,+
-   |         "attributes": [    +
-   |             1,             +
-   |             2,             +
-   |             5              +
-   |         ]                  +
-   |     }                      +
-   | ]
+-[ RECORD 1 ]--------------------
+cols | {city,state,zip}
+nd   | [                          +
+     |     {                      +
+     |         "ndistinct": 33178,+
+     |         "attributes": [    +
+     |             1,             +
+     |             2              +
+     |         ]                  +
+     |     },                     +
+     |     {                      +
+     |         "ndistinct": 33178,+
+     |         "attributes": [    +
+     |             1,             +
+     |             5              +
+     |         ]                  +
+     |     },                     +
+     |     {                      +
+     |         "ndistinct": 27435,+
+     |         "attributes": [    +
+     |             2,             +
+     |             5              +
+     |         ]                  +
+     |     },                     +
+     |     {                      +
+     |         "ndistinct": 33178,+
+     |         "attributes": [    +
+     |             1,             +
+     |             2,             +
+     |             5              +
+     |         ]                  +
+     |     }                      +
+     | ]
 (1 row)
 </programlisting>
      This indicates that there are three combinations of columns that
@@ -1763,6 +1773,18 @@ SELECT m.* FROM pg_statistic_ext join pg_statistic_ext_data on (oid = stxoid),
      and for which misestimation of the number of groups is resulting in bad
      plans.  Otherwise, the <command>ANALYZE</command> and planning cycles
      are just wasted.
+    </para>
+
+    <para>
+     An <acronym>MCV</acronym> list can also be collected over the result of a
+     join rather than a single table, recording how often combinations of
+     values from the joined columns occur together in the join.  When a query
+     joins those tables and restricts the listed columns, the planner consults
+     the join MCV list instead of assuming the restrictions are independent of
+     the join.  This is created with the <literal>FROM ... JOIN ... ON</literal>
+     form of <link linkend="sql-createstatistics"><command>CREATE STATISTICS</command></link>,
+     which documents the joins it currently supports, the index it requires for
+     sampling, and a worked example.
     </para>
    </sect3>
 

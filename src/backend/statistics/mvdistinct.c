@@ -342,17 +342,15 @@ statext_ndistinct_free(MVNDistinct *ndistinct)
  * attributes list correspond to attnums/expressions defined by the extended
  * statistics object.
  *
- * Positive attnums are attributes which must be found in the stxkeys,
- * while negative attnums correspond to an expression number, no attribute
+ * Positive attnums correspond to table columns (excluding virtual generated
+ * columns), while negative attnums correspond to expressions.  No attribute
  * number can be below (0 - numexprs).
  */
 bool
 statext_ndistinct_validate(const MVNDistinct *ndistinct,
-						   const int2vector *stxkeys,
+						   Bitmapset *keys,
 						   int numexprs, int elevel)
 {
-	int			attnum_expr_lowbound = 0 - numexprs;
-
 	/* Scan through each MVNDistinct entry */
 	for (uint32 i = 0; i < ndistinct->nitems; i++)
 	{
@@ -365,27 +363,8 @@ statext_ndistinct_validate(const MVNDistinct *ndistinct,
 		for (int j = 0; j < item.nattributes; j++)
 		{
 			AttrNumber	attnum = item.attributes[j];
-			bool		ok = false;
 
-			if (attnum > 0)
-			{
-				/* attribute number in stxkeys */
-				for (int k = 0; k < stxkeys->dim1; k++)
-				{
-					if (attnum == stxkeys->values[k])
-					{
-						ok = true;
-						break;
-					}
-				}
-			}
-			else if ((attnum < 0) && (attnum >= attnum_expr_lowbound))
-			{
-				/* attribute number for an expression */
-				ok = true;
-			}
-
-			if (!ok)
+			if (!statext_is_valid_attnum(attnum, keys, numexprs))
 			{
 				ereport(elevel,
 						(errcode(ERRCODE_INVALID_TEXT_REPRESENTATION),

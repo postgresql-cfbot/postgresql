@@ -17,6 +17,7 @@
 #include "postgres.h"
 
 #include "access/heapam.h"
+#include "access/table.h"
 #include "catalog/indexing.h"
 #include "catalog/namespace.h"
 #include "catalog/pg_collation_d.h"
@@ -331,9 +332,9 @@ extended_statistics_update(FunctionCallInfo fcinfo)
 	bool		nulls[Natts_pg_statistic_ext_data] = {0};
 	bool		replaces[Natts_pg_statistic_ext_data] = {0};
 	bool		success = true;
-	Datum		exprdatum;
-	bool		isnull;
+	Relation	rel;
 	List	   *exprs = NIL;
+	Bitmapset  *keys = NULL;
 	int			numattnums = 0;
 	int			numexprs = 0;
 	int			numattrs = 0;
@@ -439,38 +440,15 @@ extended_statistics_update(FunctionCallInfo fcinfo)
 
 	/* Find out what extended statistics kinds we should expect. */
 	expand_stxkind(tup, &enabled);
-	numattnums = stxform->stxkeys.dim1;
 
-	/* decode expression (if any) */
-	exprdatum = SysCacheGetAttr(STATEXTOID,
-								tup,
-								Anum_pg_statistic_ext_stxexprs,
-								&isnull);
-	if (!isnull)
-	{
-		char	   *s;
+	/* Decode stxexprs into keys and exprs (const-folded) */
+	rel = table_open(relid, NoLock);
+	statext_decode_stxexprs(tup, rel, &keys, &exprs, NULL);
+	table_close(rel, NoLock);
 
-		s = TextDatumGetCString(exprdatum);
-		exprs = (List *) stringToNode(s);
-		pfree(s);
+	numattnums = bms_num_members(keys);
 
-		/*
-		 * Run the expressions through eval_const_expressions().  This is not
-		 * just an optimization, but is necessary, because the planner will be
-		 * comparing them to similarly-processed qual clauses, and may fail to
-		 * detect valid matches without this.
-		 *
-		 * We must not use canonicalize_qual(), however, since these are not
-		 * qual expressions.
-		 */
-		exprs = (List *) eval_const_expressions(NULL, (Node *) exprs);
-
-		/* May as well fix opfuncids too */
-		fix_opfuncids((Node *) exprs);
-
-		/* Compute the number of expression, for input validation. */
-		numexprs = list_length(exprs);
-	}
+	numexprs = list_length(exprs);
 
 	numattrs = numattnums + numexprs;
 
@@ -580,54 +558,54 @@ extended_statistics_update(FunctionCallInfo fcinfo)
 	 */
 	if (has.mcv || has.expressions)
 	{
+		int			idx;
+		int			k;
+
 		atttypids = palloc0_array(Oid, numattrs);
 		atttypmods = palloc0_array(int32, numattrs);
 		atttypcolls = palloc0_array(Oid, numattrs);
 
 		/*
-		 * The leading stxkeys are attribute numbers up through numattnums.
-		 * These keys must be in ascending AttrNumber order, but we do not
-		 * rely on that.
+		 * Get type info for plain column attributes (from the keys
+		 * Bitmapset).
 		 */
-		for (int i = 0; i < numattnums; i++)
+		idx = 0;
+		k = -1;
+		while ((k = bms_next_member(keys, k)) >= 0)
 		{
-			AttrNumber	attnum = stxform->stxkeys.values[i];
+			AttrNumber	attnum = (AttrNumber) k;
 			HeapTuple	atup = SearchSysCache2(ATTNUM,
 											   ObjectIdGetDatum(relid),
 											   Int16GetDatum(attnum));
-
 			Form_pg_attribute attr;
 
 			/* Attribute not found */
 			if (!HeapTupleIsValid(atup))
-				elog(ERROR, "stxkeys references nonexistent attnum %d", attnum);
+				elog(ERROR, "stxexprs references nonexistent attnum %d", attnum);
 
 			attr = (Form_pg_attribute) GETSTRUCT(atup);
 
 			if (attr->attisdropped)
-				elog(ERROR, "stxkeys references dropped attnum %d", attnum);
+				elog(ERROR, "stxexprs references dropped attnum %d", attnum);
 
-			atttypids[i] = attr->atttypid;
-			atttypmods[i] = attr->atttypmod;
-			atttypcolls[i] = attr->attcollation;
+			atttypids[idx] = attr->atttypid;
+			atttypmods[idx] = attr->atttypmod;
+			atttypcolls[idx] = attr->attcollation;
 			ReleaseSysCache(atup);
+			idx++;
 		}
 
 		/*
-		 * After all the positive number attnums in stxkeys come the negative
-		 * numbers (if any) which represent expressions in the order that they
-		 * appear in stxdexpr.  Because the expressions are always
-		 * monotonically decreasing from -1, there is no point in looking at
-		 * the values in stxkeys, it's enough to know how many of them there
-		 * are.
+		 * Get type info for expressions.
 		 */
-		for (int i = numattnums; i < numattrs; i++)
+		for (int i = 0; i < numexprs; i++)
 		{
-			Node	   *expr = list_nth(exprs, i - numattnums);
+			Node	   *expr = list_nth(exprs, i);
 
-			atttypids[i] = exprType(expr);
-			atttypmods[i] = exprTypmod(expr);
-			atttypcolls[i] = exprCollation(expr);
+			atttypids[idx] = exprType(expr);
+			atttypmods[idx] = exprTypmod(expr);
+			atttypcolls[idx] = exprCollation(expr);
+			idx++;
 		}
 	}
 
@@ -659,7 +637,7 @@ extended_statistics_update(FunctionCallInfo fcinfo)
 		bytea	   *data = DatumGetByteaPP(ndistinct_datum);
 		MVNDistinct *ndistinct = statext_ndistinct_deserialize(data);
 
-		if (statext_ndistinct_validate(ndistinct, &stxform->stxkeys,
+		if (statext_ndistinct_validate(ndistinct, keys,
 									   numexprs, WARNING))
 		{
 			values[Anum_pg_statistic_ext_data_stxdndistinct - 1] = ndistinct_datum;
@@ -678,7 +656,7 @@ extended_statistics_update(FunctionCallInfo fcinfo)
 		bytea	   *data = DatumGetByteaPP(dependencies_datum);
 		MVDependencies *dependencies = statext_dependencies_deserialize(data);
 
-		if (statext_dependencies_validate(dependencies, &stxform->stxkeys,
+		if (statext_dependencies_validate(dependencies, keys,
 										  numexprs, WARNING))
 		{
 			values[Anum_pg_statistic_ext_data_stxddependencies - 1] = dependencies_datum;

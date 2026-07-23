@@ -68,12 +68,11 @@ typedef struct StatsBuildData
 	bool	  **nulls;
 } StatsBuildData;
 
-
 extern MVNDistinct *statext_ndistinct_build(double totalrows, StatsBuildData *data);
 extern bytea *statext_ndistinct_serialize(MVNDistinct *ndistinct);
 extern MVNDistinct *statext_ndistinct_deserialize(bytea *data);
 extern bool statext_ndistinct_validate(const MVNDistinct *ndistinct,
-									   const int2vector *stxkeys,
+									   Bitmapset *keys,
 									   int numexprs, int elevel);
 extern void statext_ndistinct_free(MVNDistinct *ndistinct);
 
@@ -81,9 +80,12 @@ extern MVDependencies *statext_dependencies_build(StatsBuildData *data);
 extern bytea *statext_dependencies_serialize(MVDependencies *dependencies);
 extern MVDependencies *statext_dependencies_deserialize(bytea *data);
 extern bool statext_dependencies_validate(const MVDependencies *dependencies,
-										  const int2vector *stxkeys,
+										  Bitmapset *keys,
 										  int numexprs, int elevel);
 extern void statext_dependencies_free(MVDependencies *dependencies);
+
+extern bool statext_is_valid_attnum(AttrNumber attnum, Bitmapset *keys,
+									int numexprs);
 
 extern MCVList *statext_mcv_build(StatsBuildData *data,
 								  double totalrows, int stattarget);
@@ -95,6 +97,24 @@ extern Datum statext_mcv_import(int elevel, int numattrs, Oid *atttypids,
 								int nitems, Datum *mcv_elems,
 								bool *mcv_nulls, float8 *freqs,
 								float8 *base_freqs);
+
+extern Oid	find_index_for_operator(Relation rel, AttrNumber attnum,
+									Oid eq_op);
+
+extern MCVList *statext_join_mcv_build(Relation anchor_rel,
+									   Oid *joinrel_oids,
+									   int njoinrels,
+									   int16 *joinleft,
+									   int16 *joinright,
+									   Oid *joinops,
+									   int njoinquals,
+									   int16 *stxkeys,
+									   int16 *keyrefs,
+									   int nkeys,
+									   int stattarget,
+									   int numrows, HeapTuple *rows,
+									   double totalrows,
+									   VacAttrStats ***result_stats);
 
 extern MultiSortSupport multi_sort_init(int ndims);
 extern void multi_sort_add_dimension(MultiSortSupport mss, int sortdim,

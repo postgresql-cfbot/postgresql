@@ -509,7 +509,7 @@ generate_query_for_graph_path(RangeTblEntry *rte, List *graph_path)
 		 */
 		rel = table_open(pe->reloid, AccessShareLock);
 		pni = addRangeTableEntryForRelation(make_parsestate(NULL), rel, AccessShareLock,
-											NULL, true, false);
+											NULL, true, true);
 		table_close(rel, NoLock);
 		path_query->rtable = lappend(path_query->rtable, pni->p_rte);
 		path_query->rteperminfos = lappend(path_query->rteperminfos, pni->p_perminfo);

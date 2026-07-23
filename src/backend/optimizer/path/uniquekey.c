@@ -670,11 +670,17 @@ populate_joinrel_uniquekeys(PlannerInfo *root, RelOptInfo *joinrel,
 	{
 		foreach(lc, outerrel->uniquekeys)
 		{
+			UniqueKey  *outer_ukey = lfirst(lc);
+
 			/*
 			 * the uniquekey on the outer side is not changed after semi/anti
-			 * join.
+			 * join, but still apply the same interestingness filter as the
+			 * general inner/outer join path below, so uniquekeys that are
+			 * of no further use don't keep accumulating through chains of
+			 * semi/anti joins.
 			 */
-			joinrel->uniquekeys = lappend(joinrel->uniquekeys, lfirst(lc));
+			if (is_uniquekey_useful_afterjoin(root, outer_ukey, joinrel))
+				joinrel->uniquekeys = lappend(joinrel->uniquekeys, outer_ukey);
 		}
 		return;
 	}

@@ -105,6 +105,7 @@
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/partcache.h"
+#include "utils/pgstat_internal.h"
 #include "utils/relcache.h"
 #include "utils/ruleutils.h"
 #include "utils/snapmgr.h"
@@ -211,7 +212,27 @@ typedef struct AlteredTableInfo
 	char	   *clusterOnIndex; /* index to use for CLUSTER */
 	List	   *changedStatisticsOids;	/* OIDs of statistics to rebuild */
 	List	   *changedStatisticsDefs;	/* string definitions of same */
+	HTAB	   *savedIndexStatsHash;	/* list of SavedIndexStatsEntry by
+										 * partitionTableOid */
 } AlteredTableInfo;
+
+/* Hash table entry for finding saved index stats by partition table OID */
+typedef struct SavedIndexStatsHashEntry
+{
+	Oid			partitionTableOid;	/* hash key */
+	List	   *statsList;		/* list of SavedIndexStatsEntry for this
+								 * partition table */
+} SavedIndexStatsHashEntry;
+
+/* Struct saving stats from an old index before it's dropped */
+typedef struct SavedIndexStatsEntry
+{
+	char	   *indexName;		/* name of the index (for matching) */
+	IndexInfo  *indexInfo;		/* index structure (for matching) */
+	Oid		   *indcollation;	/* collations (for matching) */
+	Oid		   *indopfamily;	/* operator families (for matching) */
+	PgStat_StatTabEntry stats;	/* saved statistics */
+} SavedIndexStatsEntry;
 
 /* Struct describing one new constraint to check in Phase 3 scan */
 /* Note: new not-null constraints are handled elsewhere */
@@ -587,6 +608,8 @@ static void ATPrepAddPrimaryKey(List **wqueue, Relation rel, AlterTableCmd *cmd,
 								bool recurse, LOCKMODE lockmode,
 								AlterTableUtilityContext *context);
 static void verifyNotNullPKCompatible(HeapTuple tuple, const char *colname);
+static void ATExecAddIndex_RestoreStatsToIndex(Oid indexOid, PgStat_StatTabEntry *saved_stats);
+static void ATExecAddIndex_RestoreStats(AlteredTableInfo *tab, Oid new_index_oid);
 static ObjectAddress ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 									IndexStmt *stmt, bool is_rebuild, LOCKMODE lockmode);
 static ObjectAddress ATExecAddStatistics(AlteredTableInfo *tab, Relation rel,
@@ -699,6 +722,8 @@ static void RememberIndexForRebuilding(Oid indoid, AlteredTableInfo *tab);
 static void RememberStatisticsForRebuilding(Oid stxoid, AlteredTableInfo *tab);
 static void ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab,
 								   LOCKMODE lockmode);
+static void EnsureSavedIndexStatsHashExists(AlteredTableInfo *tab);
+static void SaveIndexStatsForAlterType(AlteredTableInfo *tab, Relation rel, Oid indexOid);
 static void ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId,
 								 char *cmd, List **wqueue, LOCKMODE lockmode,
 								 bool rewrite);
@@ -9743,6 +9768,148 @@ verifyNotNullPKCompatible(HeapTuple tuple, const char *colname)
 }
 
 /*
+ * Helper to restore stats from saved entry to a specific index OID.
+ */
+static void
+ATExecAddIndex_RestoreStatsToIndex(Oid indexOid, PgStat_StatTabEntry *saved_stats)
+{
+	PgStatShared_Relation *shstats;
+	PgStat_EntryRef *entry_ref;
+	Relation	irel = index_open(indexOid, AccessShareLock);
+
+	/* get or create the stats entry for the new index */
+	entry_ref = pgstat_get_entry_ref_locked(PGSTAT_KIND_RELATION,
+											irel->rd_rel->relisshared ?
+											InvalidOid : MyDatabaseId,
+											indexOid,
+											false);
+
+	if (entry_ref != NULL)
+	{
+		shstats = (PgStatShared_Relation *) entry_ref->shared_stats;
+
+		/* restore the saved statistics */
+		shstats->stats = *saved_stats;
+
+		pgstat_unlock_entry(entry_ref);
+	}
+
+	index_close(irel, AccessShareLock);
+}
+
+/*
+ * Restore index statistics that were saved before ALTER TABLE ... TYPE ...
+ *
+ * During ALTER TABLE ... TYPE ... on an indexed column, indexes are rebuilt by
+ * dropping the old index and creating a new one. This function restores the
+ * statistics (such as idx_scan, last_idx_scan, etc.) from the old index to
+ * the new index.
+ *
+ * For partitioned tables, this handles restoring stats for all partition
+ * indexes by matching them based on:
+ *   1. The partition table OID (used as hash key for efficient lookup)
+ *   2. The index name (primary matching criterion)
+ *   3. Index structure verification (sanity check via CompareIndexInfo)
+ *
+ * The matching by name is essential when multiple indexes exist on the same
+ * column(s), ensuring each index gets its own historical statistics.
+ */
+static void
+ATExecAddIndex_RestoreStats(AlteredTableInfo *tab, Oid new_index_oid)
+{
+	Relation	new_idx_rel;
+	List	   *all_parts;
+	ListCell   *lc_new;
+
+	if (tab->savedIndexStatsHash == NULL)
+		return;
+
+	new_idx_rel = index_open(new_index_oid, AccessShareLock);
+
+	/*
+	 * This check is not strictly needed, it's done to avoid calling
+	 * find_all_inheritors().
+	 */
+	if (new_idx_rel->rd_rel->relkind == RELKIND_PARTITIONED_INDEX)
+		all_parts = find_all_inheritors(new_index_oid, NoLock, NULL);
+	else
+		all_parts = list_make1_oid(new_index_oid);
+
+	foreach(lc_new, all_parts)
+	{
+		Oid			new_part_idx_oid;
+		Oid			new_part_table_oid;
+		Relation	new_part_idx_rel;
+		SavedIndexStatsHashEntry *hash_entry;
+
+		new_part_idx_oid = lfirst_oid(lc_new);
+		new_part_idx_rel = index_open(new_part_idx_oid, AccessShareLock);
+		new_part_table_oid = new_part_idx_rel->rd_index->indrelid;
+
+		hash_entry = (SavedIndexStatsHashEntry *) hash_search(tab->savedIndexStatsHash,
+															  &new_part_table_oid,
+															  HASH_FIND,
+															  NULL);
+		if (hash_entry != NULL)
+		{
+			ListCell   *lc_old;
+			Relation	part_table_rel;
+			AttrMap    *attmap;
+			IndexInfo  *new_info;
+			const char *new_idx_name;
+
+			new_idx_name = RelationGetRelationName(new_part_idx_rel);
+
+			/* open the partition table for attribute mapping */
+			new_info = BuildIndexInfo(new_part_idx_rel);
+			part_table_rel = table_open(new_part_table_oid, NoLock);
+
+			/*
+			 * Build an attribute mapping (same table to itself). We use this
+			 * to verify the old and new indexes have the same structure
+			 * relative to the current table layout.
+			 */
+			attmap = build_attrmap_by_name(RelationGetDescr(part_table_rel),
+										   RelationGetDescr(part_table_rel),
+										   false);
+
+			/* iterate through the list of indexes for this partition table */
+			foreach(lc_old, hash_entry->statsList)
+			{
+				SavedIndexStatsEntry *old_entry;
+
+				old_entry = (SavedIndexStatsEntry *) lfirst(lc_old);
+
+				/* match by index name */
+				if (strcmp(old_entry->indexName, new_idx_name) != 0)
+					continue;
+
+				/* match by index structure using CompareIndexInfo */
+				if (CompareIndexInfo(old_entry->indexInfo, new_info,
+									 old_entry->indcollation,
+									 new_part_idx_rel->rd_indcollation,
+									 old_entry->indopfamily,
+									 new_part_idx_rel->rd_opfamily,
+									 attmap))
+				{
+					/* restore the saved statistics */
+					ATExecAddIndex_RestoreStatsToIndex(new_part_idx_oid, &old_entry->stats);
+					break;
+				}
+			}
+
+			table_close(part_table_rel, NoLock);
+			free_attrmap(attmap);
+		}
+
+		index_close(new_part_idx_rel, AccessShareLock);
+	}
+
+	index_close(new_idx_rel, AccessShareLock);
+}
+
+
+/*
  * ALTER TABLE ADD INDEX
  *
  * There is no such command in the grammar, but parse_utilcmd.c converts
@@ -9804,6 +9971,9 @@ ATExecAddIndex(AlteredTableInfo *tab, Relation rel,
 		RelationPreserveStorage(irel->rd_locator, true);
 		index_close(irel, NoLock);
 	}
+
+	if (tab->savedIndexStatsHash != NULL)
+		ATExecAddIndex_RestoreStats(tab, address.objectId);
 
 	return address;
 }
@@ -16322,6 +16492,105 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 }
 
 /*
+ * Initialize the hash table for storing old index stats if not already created.
+ */
+static void
+EnsureSavedIndexStatsHashExists(AlteredTableInfo *tab)
+{
+	if (tab->savedIndexStatsHash == NULL)
+	{
+		HASHCTL		ctl;
+
+		ctl.keysize = sizeof(Oid);
+		ctl.entrysize = sizeof(SavedIndexStatsHashEntry);
+		ctl.hcxt = CurrentMemoryContext;
+
+		tab->savedIndexStatsHash = hash_create("Saved Index Stats Hash",
+											   32,	/* start small and extend */
+											   &ctl,
+											   HASH_ELEM | HASH_BLOBS | HASH_CONTEXT);
+	}
+}
+
+/*
+ * Helper function to save index stats before it's dropped.
+ */
+static void
+SaveIndexStatsForAlterType(AlteredTableInfo *tab, Relation rel, Oid indexOid)
+{
+	List	   *all_parts;
+	ListCell   *lc;
+
+	/*
+	 * If the table is partitioned, the index will be partitioned too, and we
+	 * need to save stats for all partition indexes.
+	 *
+	 * This check is not strictly needed, it's done to avoid calling
+	 * find_all_inheritors().
+	 */
+	if (rel->rd_rel->relkind == RELKIND_PARTITIONED_TABLE)
+		all_parts = find_all_inheritors(indexOid, NoLock, NULL);
+	else
+		all_parts = list_make1_oid(indexOid);
+
+	/* initialize the hash table if needed */
+	EnsureSavedIndexStatsHashExists(tab);
+
+	/* save the stats for each index */
+	foreach(lc, all_parts)
+	{
+		Oid			part_idx_oid;
+		PgStat_StatTabEntry *src_stats;
+
+		part_idx_oid = lfirst_oid(lc);
+		src_stats = pgstat_fetch_stat_tabentry(part_idx_oid);
+
+		if (src_stats)
+		{
+			SavedIndexStatsEntry *entry;
+			SavedIndexStatsHashEntry *hash_entry;
+			Oid			tableOid;
+			bool		found;
+			Relation	part_idx_rel;
+
+			part_idx_rel = index_open(part_idx_oid, AccessShareLock);
+			tableOid = part_idx_rel->rd_index->indrelid;
+
+			/* create the stats entry */
+			entry = palloc(sizeof(SavedIndexStatsEntry));
+			entry->indexInfo = BuildIndexInfo(part_idx_rel);
+			entry->indexName = pstrdup(RelationGetRelationName(part_idx_rel));
+
+			/* copy collation and opfamily arrays */
+			entry->indcollation = palloc(sizeof(Oid) * entry->indexInfo->ii_NumIndexKeyAttrs);
+			memcpy(entry->indcollation, part_idx_rel->rd_indcollation,
+				   sizeof(Oid) * entry->indexInfo->ii_NumIndexKeyAttrs);
+
+			entry->indopfamily = palloc(sizeof(Oid) * entry->indexInfo->ii_NumIndexKeyAttrs);
+			memcpy(entry->indopfamily, part_idx_rel->rd_opfamily,
+				   sizeof(Oid) * entry->indexInfo->ii_NumIndexKeyAttrs);
+
+			/* copy the stats */
+			memcpy(&entry->stats, src_stats, sizeof(PgStat_StatTabEntry));
+
+			/* find or create the hash entry for this partition table OID */
+			hash_entry = (SavedIndexStatsHashEntry *) hash_search(tab->savedIndexStatsHash,
+																  &tableOid,
+																  HASH_ENTER,
+																  &found);
+
+			if (!found)
+				hash_entry->statsList = NIL;
+
+			/* append this entry to the list for this table */
+			hash_entry->statsList = lappend(hash_entry->statsList, entry);
+
+			index_close(part_idx_rel, AccessShareLock);
+		}
+	}
+}
+
+/*
  * Parse the previously-saved definition string for a constraint, index or
  * statistics object against the newly-established column data type(s), and
  * queue up the resulting command parsetrees for execution.
@@ -16402,8 +16671,12 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 			IndexStmt  *stmt = (IndexStmt *) stm;
 			AlterTableCmd *newcmd;
 
+			/* save the stats before dropping the old index */
+			SaveIndexStatsForAlterType(tab, rel, oldId);
+
 			if (!rewrite)
 				TryReuseIndex(oldId, stmt);
+
 			stmt->reset_default_tblspc = true;
 			/* keep the index's comment */
 			stmt->idxcomment = GetComment(oldId, RelationRelationId, 0);
@@ -16431,8 +16704,12 @@ ATPostAlterTypeParse(Oid oldId, Oid oldRelId, Oid refRelId, char *cmd,
 					indstmt = castNode(IndexStmt, cmd->def);
 					indoid = get_constraint_index(oldId);
 
+					/* save the stats before dropping the old index */
+					SaveIndexStatsForAlterType(tab, rel, indoid);
+
 					if (!rewrite)
 						TryReuseIndex(indoid, indstmt);
+
 					/* keep any comment on the index */
 					indstmt->idxcomment = GetComment(indoid,
 													 RelationRelationId, 0);

@@ -3269,6 +3269,8 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
 	/* Set up pstate */
 	pstate = make_parsestate(NULL);
 	pstate->p_sourcetext = queryString;
+	pstate->p_creating_stored_object = true;
+	pstate->p_stored_object_supports_key_join = true;
 
 	/*
 	 * NOTE: 'OLD' must always have a varno equal to 1 and 'NEW' equal to 2.
@@ -3365,6 +3367,8 @@ transformRuleStmt(RuleStmt *stmt, const char *queryString,
 			 * the query text by hand.
 			 */
 			sub_pstate->p_sourcetext = queryString;
+			sub_pstate->p_creating_stored_object = true;
+			sub_pstate->p_stored_object_supports_key_join = true;
 
 			/*
 			 * Set up OLD/NEW in the rtable for this statement.  The entries

@@ -59,6 +59,8 @@ make_parsestate(ParseState *parentParseState)
 		pstate->p_ref_hook_state = parentParseState->p_ref_hook_state;
 		/* query environment stays in context for the whole parse analysis */
 		pstate->p_queryEnv = parentParseState->p_queryEnv;
+		pstate->p_creating_stored_object = parentParseState->p_creating_stored_object;
+		pstate->p_stored_object_supports_key_join = parentParseState->p_stored_object_supports_key_join;
 	}
 
 	return pstate;

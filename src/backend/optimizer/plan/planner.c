@@ -386,6 +386,9 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	glob->lastPlanNodeId = 0;
 	glob->transientPlan = false;
 	glob->dependsOnRole = false;
+	glob->staleKeyJoinProof = false;
+	glob->keyJoinProofRelids = NIL;
+	glob->keyJoinProofRelidsValid = false;
 	glob->partition_directory = NULL;
 	glob->rel_notnullatts_hash = NULL;
 
@@ -662,6 +665,7 @@ standard_planner(Query *parse, const char *query_string, int cursorOptions,
 	result->canSetTag = parse->canSetTag;
 	result->transientPlan = glob->transientPlan;
 	result->dependsOnRole = glob->dependsOnRole;
+	result->staleKeyJoinProof = glob->staleKeyJoinProof;
 	result->parallelModeNeeded = glob->parallelModeNeeded;
 	result->planTree = top_plan;
 	result->partPruneInfos = glob->partPruneInfos;

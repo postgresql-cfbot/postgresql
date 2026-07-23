@@ -1,0 +1,18 @@
+Parsed test spec with 3 sessions
+
+starting permutation: alter_fk drop_function wakeup noop detach
+step alter_fk: 
+	ALTER TABLE c ALTER CONSTRAINT c_parent_id_fkey NOT ENFORCED;
+ <waiting ...>
+step drop_function: 
+	DROP FUNCTION dep();
+ <waiting ...>
+step wakeup: 
+	SELECT FROM injection_points_wakeup('key-join-before-dependent-function-lookup');
+
+step alter_fk: <... completed>
+step drop_function: <... completed>
+step noop: 
+step detach: 
+	SELECT FROM injection_points_detach('key-join-before-dependent-function-lookup');
+

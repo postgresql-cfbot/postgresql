@@ -48,6 +48,7 @@
 #include "catalog/pg_type.h"
 #include "commands/defrem.h"
 #include "commands/extension.h"
+#include "commands/keyjoin.h"
 #include "commands/proclang.h"
 #include "executor/executor.h"
 #include "executor/functions.h"
@@ -62,6 +63,7 @@
 #include "parser/parse_func.h"
 #include "parser/parse_type.h"
 #include "pgstat.h"
+#include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/utility.h"
 #include "utils/acl.h"
@@ -949,6 +951,8 @@ interpret_AS_clause(Oid languageOid, const char *languageName,
 				ParseState *pstate = make_parsestate(NULL);
 
 				pstate->p_sourcetext = queryString;
+				pstate->p_creating_stored_object = true;
+				pstate->p_stored_object_supports_key_join = true;
 				sql_fn_parser_setup(pstate, pinfo);
 				q = transformStmt(pstate, stmt);
 				if (q->commandType == CMD_UTILITY)
@@ -968,6 +972,8 @@ interpret_AS_clause(Oid languageOid, const char *languageName,
 			ParseState *pstate = make_parsestate(NULL);
 
 			pstate->p_sourcetext = queryString;
+			pstate->p_creating_stored_object = true;
+			pstate->p_stored_object_supports_key_join = true;
 			sql_fn_parser_setup(pstate, pinfo);
 			q = transformStmt(pstate, sql_body_in);
 			if (q->commandType == CMD_UTILITY)
@@ -1425,6 +1431,34 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 			elog(ERROR, "option \"%s\" not recognized", defel->defname);
 	}
 
+	/*
+	 * Serialize definition changes with any session recording a dependency on
+	 * this procedure's definition, then refetch the tuple before applying the
+	 * requested changes.
+	 */
+	heap_freetuple(tup);
+	LockDatabaseObject(ProcedureRelationId, funcOid, 0, AccessExclusiveLock);
+
+	tup = SearchSysCacheCopy1(PROCOID, ObjectIdGetDatum(funcOid));
+	if (!HeapTupleIsValid(tup))
+		ereport(ERROR,
+				(errcode(ERRCODE_UNDEFINED_FUNCTION),
+				 errmsg("function \"%s\" was concurrently dropped",
+						NameListToString(stmt->func->objname))));
+
+	procForm = (Form_pg_proc) GETSTRUCT(tup);
+
+	/* Permission check: must own function */
+	if (!object_ownercheck(ProcedureRelationId, funcOid, GetUserId()))
+		aclcheck_error(ACLCHECK_NOT_OWNER, stmt->objtype,
+					   NameListToString(stmt->func->objname));
+
+	/*
+	 * Aggregates were already rejected on the pre-lock tuple, and routine
+	 * kind cannot change for an existing pg_proc OID.
+	 */
+	Assert(procForm->prokind != PROKIND_AGGREGATE);
+
 	if (volatility_item)
 		procForm->provolatile = interpret_func_volatility(volatility_item);
 	if (strict_item)
@@ -1530,6 +1564,16 @@ AlterFunction(ParseState *pstate, AlterFunctionStmt *stmt)
 
 	table_close(rel, NoLock);
 	heap_freetuple(tup);
+
+	/*
+	 * Revalidate stored key-join proofs that captured this function in a
+	 * matched-filter conjunct.  Proof volatility and strictness assumptions
+	 * were decided at parse time; a later relevant function change can break
+	 * those contracts, so conservatively re-run validation after ALTER
+	 * FUNCTION and abort this DDL if the proof no longer holds.
+	 */
+	CommandCounterIncrement();
+	RevalidateDependentKeyJoinObjectsOnProcedure(funcOid);
 
 	return address;
 }

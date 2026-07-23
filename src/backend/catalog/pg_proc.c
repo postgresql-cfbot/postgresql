@@ -27,6 +27,7 @@
 #include "catalog/pg_proc.h"
 #include "catalog/pg_transform.h"
 #include "catalog/pg_type.h"
+#include "commands/keyjoin.h"
 #include "executor/functions.h"
 #include "funcapi.h"
 #include "mb/pg_wchar.h"
@@ -35,6 +36,7 @@
 #include "parser/parse_coerce.h"
 #include "pgstat.h"
 #include "rewrite/rewriteHandler.h"
+#include "storage/lmgr.h"
 #include "tcop/pquery.h"
 #include "tcop/tcopprot.h"
 #include "utils/acl.h"
@@ -394,6 +396,7 @@ ProcedureCreate(const char *procedureName,
 	{
 		/* There is one; okay to replace it? */
 		Form_pg_proc oldproc = (Form_pg_proc) GETSTRUCT(oldtup);
+		Oid			oldprocid = oldproc->oid;
 		Datum		proargnames;
 		bool		isnull;
 		const char *dropcmd;
@@ -576,6 +579,26 @@ ProcedureCreate(const char *procedureName,
 		}
 
 		/*
+		 * Serialize replacement with any session recording a dependency on
+		 * this procedure's definition.
+		 */
+		LockDatabaseObject(ProcedureRelationId, oldprocid, 0,
+						   AccessExclusiveLock);
+		ReleaseSysCache(oldtup);
+		oldtup = SearchSysCache1(PROCOID, ObjectIdGetDatum(oldprocid));
+		if (!HeapTupleIsValid(oldtup))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_FUNCTION),
+					 errmsg("function \"%s\" was concurrently dropped",
+							procedureName)));
+		oldproc = (Form_pg_proc) GETSTRUCT(oldtup);
+
+		/* Ownership might have changed while we waited. */
+		if (!object_ownercheck(ProcedureRelationId, oldproc->oid, proowner))
+			aclcheck_error(ACLCHECK_NOT_OWNER, OBJECT_FUNCTION,
+						   procedureName);
+
+		/*
 		 * Do not change existing oid, ownership or permissions, either.  Note
 		 * dependency-update code below has to agree with this decision.
 		 */
@@ -695,6 +718,10 @@ ProcedureCreate(const char *procedureName,
 
 	free_object_addresses(addrs);
 
+	/* Record FOR KEY proof dependencies separately from ordinary references. */
+	if (languageObjectId == SQLlanguageId && prosqlbody)
+		recordDependencyOnKeyJoinProofs(&myself, prosqlbody);
+
 	/* dependency on owner */
 	if (!is_update)
 		recordDependencyOnOwner(ProcedureRelationId, retval, proowner);
@@ -755,6 +782,20 @@ ProcedureCreate(const char *procedureName,
 	/* ensure that stats are dropped if transaction aborts */
 	if (!is_update)
 		pgstat_create_function(retval);
+
+	/*
+	 * For CREATE OR REPLACE FUNCTION, revalidate stored key-join proofs that
+	 * captured this function in a matched-filter conjunct.  The function's
+	 * body, volatility, or strictness may all have changed; if a stored proof
+	 * no longer holds, revalidation raises an error and aborts the DDL.
+	 * Plain CREATE FUNCTION can't have any dependents yet, so revalidation is
+	 * needed only for the replace path.
+	 */
+	if (is_update)
+	{
+		CommandCounterIncrement();
+		RevalidateDependentKeyJoinObjectsOnProcedure(retval);
+	}
 
 	return myself;
 }

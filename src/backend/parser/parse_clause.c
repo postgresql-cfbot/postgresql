@@ -35,6 +35,7 @@
 #include "parser/parse_coerce.h"
 #include "parser/parse_collate.h"
 #include "parser/parse_expr.h"
+#include "parser/parse_key_join.h"
 #include "parser/parse_func.h"
 #include "parser/parse_graphtable.h"
 #include "parser/parse_oper.h"
@@ -58,8 +59,8 @@ static int	extractRemainingColumns(ParseState *pstate,
 									ParseNamespaceColumn *res_nscolumns);
 static Node *transformJoinUsingClause(ParseState *pstate,
 									  List *leftVars, List *rightVars);
-static Node *transformJoinOnClause(ParseState *pstate, JoinExpr *j,
-								   List *namespace);
+static Node *transformJoinQualClause(ParseState *pstate, Node *qual,
+									 List *namespace, const char *constructName);
 static ParseNamespaceItem *transformTableEntry(ParseState *pstate, RangeVar *r);
 static ParseNamespaceItem *transformRangeSubselect(ParseState *pstate,
 												   RangeSubselect *r);
@@ -352,7 +353,7 @@ transformJoinUsingClause(ParseState *pstate,
 	/*
 	 * Since the references are already Vars, and are certainly from the input
 	 * relations, we don't have to go through the same pushups that
-	 * transformJoinOnClause() does.  Just invoke transformExpr() to fix up
+	 * transformJoinQualClause() does.  Just invoke transformExpr() to fix up
 	 * the operators, and we're done.
 	 */
 	result = transformExpr(pstate, result, EXPR_KIND_JOIN_USING);
@@ -363,12 +364,13 @@ transformJoinUsingClause(ParseState *pstate,
 }
 
 /*
- * transformJoinOnClause()
- *	  Transform the qual conditions for JOIN/ON.
+ * transformJoinQualClause()
+ *	  Transform the qual conditions for JOIN/ON or join FILTER.
  *	  Result is a transformed qualification expression.
  */
 static Node *
-transformJoinOnClause(ParseState *pstate, JoinExpr *j, List *namespace)
+transformJoinQualClause(ParseState *pstate, Node *qual, List *namespace,
+						const char *constructName)
 {
 	Node	   *result;
 	List	   *save_namespace;
@@ -386,8 +388,8 @@ transformJoinOnClause(ParseState *pstate, JoinExpr *j, List *namespace)
 	save_namespace = pstate->p_namespace;
 	pstate->p_namespace = namespace;
 
-	result = transformWhereClause(pstate, j->quals,
-								  EXPR_KIND_JOIN_ON, "JOIN/ON");
+	result = transformWhereClause(pstate, qual,
+								  EXPR_KIND_JOIN_ON, constructName);
 
 	pstate->p_namespace = save_namespace;
 
@@ -1363,7 +1365,7 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		/*
 		 * Generate combined namespace info for possible use below.
 		 */
-		my_namespace = list_concat(l_namespace, r_namespace);
+		my_namespace = list_concat_copy(l_namespace, r_namespace);
 
 		/*
 		 * We'll work from the nscolumns data and eref alias column names for
@@ -1550,11 +1552,48 @@ transformFromClauseItem(ParseState *pstate, Node *n,
 		else if (j->quals)
 		{
 			/* User-written ON-condition; transform it */
-			j->quals = transformJoinOnClause(pstate, j, my_namespace);
+			j->quals = transformJoinQualClause(pstate, j->quals,
+											   my_namespace, "JOIN/ON");
+		}
+		else if (j->keyJoin)
+		{
+			transformAndValidateKeyJoin(pstate, j, l_nsitem, r_nsitem,
+										l_namespace);
 		}
 		else
 		{
 			/* CROSS JOIN: no quals */
+		}
+
+		/*
+		 * Transform and merge FILTER clause for FOR KEY joins.  This
+		 * intentionally happens after validation:
+		 * transformAndValidateKeyJoin proves only the operand surfaces plus
+		 * the generated FK equality.  Join-local FILTER is ordinary join-qual
+		 * semantics applied to the already-proven key-join result, so an inner
+		 * key join may still return fewer rows after the filter.
+		 *
+		 * The filter goes into JoinExpr.quals (ON clause semantics) and is
+		 * also preserved on joinFilter for deparsing and output fact export.
+		 */
+		if (j->joinFilter != NULL)
+		{
+			Assert(j->keyJoin != NULL);
+
+			j->joinFilter = transformJoinQualClause(pstate, j->joinFilter,
+													my_namespace, "FILTER");
+
+			/*
+			 * A later key join can inspect this filter while the FROM clause is
+			 * still being transformed, before assign_query_collations() runs.
+			 */
+			assign_expr_collations(pstate, j->joinFilter);
+
+			Assert(j->quals != NULL);
+			j->quals = (Node *)
+				makeBoolExpr(AND_EXPR,
+							 list_make2(j->quals, copyObject(j->joinFilter)),
+							 -1);
 		}
 
 		/*

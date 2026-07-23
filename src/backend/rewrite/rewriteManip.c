@@ -371,7 +371,8 @@ CombineRangeTables(List **dst_rtable, List **dst_perminfos,
  * Find all Var nodes in the given tree with varlevelsup == sublevels_up,
  * and increment their varno fields (rangetable indexes) by 'offset'.
  * The varnosyn fields are adjusted similarly.  Also, adjust other nodes
- * that contain rangetable indexes, such as RangeTblRef and JoinExpr.
+ * that contain rangetable indexes, such as RangeTblRef, JoinExpr and
+ * KeyJoinNode.
  *
  * NOTE: although this has the form of a walker, we cheat and modify the
  * nodes in-place.  The given expression tree should have been copied
@@ -426,6 +427,22 @@ OffsetVarNodes_walker(Node *node, OffsetVarNodes_context *context)
 
 		if (j->rtindex && context->sublevels_up == 0)
 			j->rtindex += context->offset;
+		OffsetVarNodes_walker(j->keyJoin, context);
+		/* fall through to examine children */
+	}
+	if (IsA(node, KeyJoinNode))
+	{
+		KeyJoinNode *kjn = (KeyJoinNode *) node;
+
+		if (context->sublevels_up == 0)
+		{
+			Assert(kjn->referencingVarno > 0);
+			Assert(kjn->referencedVarno > 0);
+			Assert(kjn->refAliasVarno > 0);
+			kjn->referencingVarno += context->offset;
+			kjn->referencedVarno += context->offset;
+			kjn->refAliasVarno += context->offset;
+		}
 		/* fall through to examine children */
 	}
 	if (IsA(node, PlaceHolderVar))
@@ -529,7 +546,8 @@ OffsetVarNodes(Node *node, int offset, int sublevels_up)
  * Find all Var nodes in the given tree belonging to a specific relation
  * (identified by sublevels_up and rt_index), and change their varno fields
  * to 'new_index'.  The varnosyn fields are changed too.  Also, adjust other
- * nodes that contain rangetable indexes, such as RangeTblRef and JoinExpr.
+ * nodes that contain rangetable indexes, such as RangeTblRef, JoinExpr and
+ * KeyJoinNode.
  *
  * NOTE: although this has the form of a walker, we cheat and modify the
  * nodes in-place.  The given expression tree should have been copied
@@ -587,6 +605,22 @@ ChangeVarNodes_walker(Node *node, ChangeVarNodes_context *context)
 		if (context->sublevels_up == 0 &&
 			j->rtindex == context->rt_index)
 			j->rtindex = context->new_index;
+		ChangeVarNodes_walker(j->keyJoin, context);
+		/* fall through to examine children */
+	}
+	if (IsA(node, KeyJoinNode))
+	{
+		KeyJoinNode *kjn = (KeyJoinNode *) node;
+
+		if (context->sublevels_up == 0)
+		{
+			if (kjn->referencingVarno == context->rt_index)
+				kjn->referencingVarno = context->new_index;
+			if (kjn->referencedVarno == context->rt_index)
+				kjn->referencedVarno = context->new_index;
+			if (kjn->refAliasVarno == context->rt_index)
+				kjn->refAliasVarno = context->new_index;
+		}
 		/* fall through to examine children */
 	}
 	if (IsA(node, PlaceHolderVar))

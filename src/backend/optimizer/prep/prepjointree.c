@@ -27,6 +27,7 @@
 #include "postgres.h"
 
 #include "access/table.h"
+#include "catalog/pg_class.h"
 #include "catalog/pg_type.h"
 #include "funcapi.h"
 #include "miscadmin.h"
@@ -403,6 +404,80 @@ transform_MERGE_to_join(Query *parse)
 }
 
 /*
+ * key_join_proof_relids_walker
+ *		Collect the pg_class OIDs named in key-join proof dependencies.
+ *
+ * KeyJoinNode.proofDependencies is populated by parse analysis and survives
+ * in the plan cache's saved query trees; trees reloaded from the catalogs
+ * read it back as NIL and are guarded by pg_depend revalidation instead.
+ * The generic walkers deliberately do not descend into JoinExpr.keyJoin, so
+ * harvest it here explicitly.
+ */
+static bool
+key_join_proof_relids_walker(Node *node, List **relids)
+{
+	if (node == NULL)
+		return false;
+	if (IsA(node, JoinExpr))
+	{
+		JoinExpr   *j = (JoinExpr *) node;
+
+		if (j->keyJoin != NULL && IsA(j->keyJoin, KeyJoinNode))
+		{
+			KeyJoinNode *kj = (KeyJoinNode *) j->keyJoin;
+			ListCell   *lc;
+
+			foreach(lc, kj->proofDependencies)
+			{
+				KeyJoinProofDependency *dep =
+					lfirst_node(KeyJoinProofDependency, lc);
+
+				if (dep->classId == RelationRelationId)
+					*relids = list_append_unique_oid(*relids, dep->objectId);
+			}
+		}
+		/* fall through to visit the join's inputs and quals */
+	}
+	else if (IsA(node, Query))
+		return query_tree_walker((Query *) node, key_join_proof_relids_walker,
+								 relids, 0);
+	return expression_tree_walker(node, key_join_proof_relids_walker, relids);
+}
+
+/*
+ * key_join_proof_assumes_childless
+ *		Does any key-join proof in this statement assume relid is childless?
+ *
+ * The relid set is collected lazily, only when planning actually meets an
+ * inheritance parent with live children, and is cached statement-wide in
+ * PlannerGlobal.  Collection walks the topmost parse tree: it is reached by
+ * climbing parent_root, and the first occasion that can trigger collection
+ * at any query level runs before join-tree mutation at levels above it could
+ * hide a proof whose dependencies reach this level (self-join elimination
+ * applies only to plain-relation operands, whose dependencies are same-level
+ * and therefore checked from the top level's pristine pass).
+ */
+static bool
+key_join_proof_assumes_childless(PlannerInfo *root, Oid relid)
+{
+	PlannerGlobal *glob = root->glob;
+
+	if (!glob->keyJoinProofRelidsValid)
+	{
+		PlannerInfo *top = root;
+		List	   *relids = NIL;
+
+		while (top->parent_root)
+			top = top->parent_root;
+		(void) query_tree_walker(top->parse, key_join_proof_relids_walker,
+								 &relids, 0);
+		glob->keyJoinProofRelids = relids;
+		glob->keyJoinProofRelidsValid = true;
+	}
+	return list_member_oid(glob->keyJoinProofRelids, relid);
+}
+
+/*
  * preprocess_relation_rtes
  *		Do the preprocessing work for any relation RTEs in the FROM clause.
  *
@@ -453,7 +528,24 @@ preprocess_relation_rtes(PlannerInfo *root)
 		 * such cases as full-fledged inheritance.
 		 */
 		if (rte->inh)
+		{
 			rte->inh = relation->rd_rel->relhassubclass;
+
+			/*
+			 * A key-join proof derived at parse time requires this
+			 * inheritance parent to be childless, which the shape interlock
+			 * guarantees only through the proving transaction.  If a child
+			 * was attached since, a cached analysis replanned here would
+			 * expand an equijoin the proof never covered.  This
+			 * relhassubclass read decides expansion, so flag the plan stale
+			 * at the same read.  We then redo the analysis.
+			 */
+			if (rte->inh &&
+				relation->rd_rel->relkind == RELKIND_RELATION &&
+				!root->glob->staleKeyJoinProof &&
+				key_join_proof_assumes_childless(root, rte->relid))
+				root->glob->staleKeyJoinProof = true;
+		}
 
 		/*
 		 * Check to see if the relation has any column not-null constraints;

@@ -252,6 +252,28 @@ struct ParseState
 	Node	   *p_last_srf;		/* most recent set-returning func/op found */
 
 	/*
+	 * True while parsing a query that will be stored in the catalog as a
+	 * parse tree rather than executed immediately: a view or materialized
+	 * view's defining query, a rule action, a policy expression, or a
+	 * function's SQL body.  FOR KEY join analysis reads it to reject a key
+	 * join in a stored-object container that has not opted into recording
+	 * proofs via p_stored_object_supports_key_join below.  Inherited by child
+	 * parse states.
+	 */
+	bool		p_creating_stored_object;
+
+	/*
+	 * True while parsing a stored-object query whose container records and
+	 * revalidates FOR KEY proofs.  FOR KEY join analysis reads it to record
+	 * the proof's catalog dependencies, so the proof can be revalidated when
+	 * a referenced object later changes.  A stored-object container that does
+	 * not opt in (see p_creating_stored_object) rejects FOR KEY joins
+	 * instead; each container opts in individually.  Inherited by child parse
+	 * states.
+	 */
+	bool		p_stored_object_supports_key_join;
+
+	/*
 	 * Optional hook functions for parser callbacks.  These are null unless
 	 * set up by the caller of make_parsestate.
 	 */

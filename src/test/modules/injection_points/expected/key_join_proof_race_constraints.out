@@ -1,0 +1,69 @@
+Parsed test spec with 3 sessions
+
+starting permutation: create_view drop_fk wakeup noop detach
+step create_view: 
+	CREATE VIEW consumer AS
+	SELECT p.id AS parent_id, c.id AS child_id,
+		   c.parent_id AS child_parent_id
+	FROM parent_v p
+	LEFT JOIN child_v c FOR KEY (parent_id) -> p (id);
+ <waiting ...>
+step drop_fk: 
+	ALTER TABLE child DROP CONSTRAINT child_parent_id_fkey;
+ <waiting ...>
+step wakeup: 
+	SELECT FROM injection_points_wakeup('key-join-after-proof-match');
+
+step create_view: <... completed>
+step drop_fk: <... completed>
+ERROR:  cannot drop constraint child_parent_id_fkey on table child because other objects depend on it
+step noop: 
+step detach: 
+	SELECT FROM injection_points_detach('key-join-after-proof-match');
+
+
+starting permutation: create_view drop_not_null wakeup noop detach
+step create_view: 
+	CREATE VIEW consumer AS
+	SELECT p.id AS parent_id, c.id AS child_id,
+		   c.parent_id AS child_parent_id
+	FROM parent_v p
+	LEFT JOIN child_v c FOR KEY (parent_id) -> p (id);
+ <waiting ...>
+step drop_not_null: 
+	ALTER TABLE child ALTER COLUMN parent_id DROP NOT NULL;
+ <waiting ...>
+step wakeup: 
+	SELECT FROM injection_points_wakeup('key-join-after-proof-match');
+
+step create_view: <... completed>
+step drop_not_null: <... completed>
+ERROR:  cannot drop constraint child_parent_id_not_null on table child because other objects depend on it
+step noop: 
+step detach: 
+	SELECT FROM injection_points_detach('key-join-after-proof-match');
+
+
+starting permutation: create_view drop_pk_cascade wakeup noop detach
+step create_view: 
+	CREATE VIEW consumer AS
+	SELECT p.id AS parent_id, c.id AS child_id,
+		   c.parent_id AS child_parent_id
+	FROM parent_v p
+	LEFT JOIN child_v c FOR KEY (parent_id) -> p (id);
+ <waiting ...>
+step drop_pk_cascade: 
+	ALTER TABLE parent DROP CONSTRAINT parent_pkey CASCADE;
+ <waiting ...>
+step wakeup: 
+	SELECT FROM injection_points_wakeup('key-join-after-proof-match');
+
+ddl: NOTICE:  drop cascades to 2 other objects
+DETAIL:  drop cascades to constraint child_parent_id_fkey on table child
+drop cascades to view consumer
+step create_view: <... completed>
+step drop_pk_cascade: <... completed>
+step noop: 
+step detach: 
+	SELECT FROM injection_points_detach('key-join-after-proof-match');
+

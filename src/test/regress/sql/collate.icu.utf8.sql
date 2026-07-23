@@ -1133,6 +1133,18 @@ SELECT * FROM test12pk;
 SELECT * FROM test12fk;  -- was updated
 DROP TABLE test12pk, test12fk;
 
+-- key join proof rejects nondeterministic collations.  PostgreSQL accepts the
+-- FK, but key join does not use nondeterministic equality as proof evidence.
+CREATE TABLE keyjoin_nondet_pk (x text COLLATE case_insensitive PRIMARY KEY);
+CREATE TABLE keyjoin_nondet_fk
+  (a int PRIMARY KEY, b text COLLATE case_insensitive NOT NULL REFERENCES keyjoin_nondet_pk (x));
+INSERT INTO keyjoin_nondet_pk VALUES ('abc');
+INSERT INTO keyjoin_nondet_fk VALUES (1, 'ABC');
+SELECT *
+FROM keyjoin_nondet_pk p
+JOIN keyjoin_nondet_fk f FOR KEY (b) -> p (x);
+DROP TABLE keyjoin_nondet_fk, keyjoin_nondet_pk;
+
 -- partitioning
 CREATE TABLE test20 (a int, b text COLLATE case_insensitive) PARTITION BY LIST (b);
 CREATE TABLE test20_1 PARTITION OF test20 FOR VALUES IN ('abc');

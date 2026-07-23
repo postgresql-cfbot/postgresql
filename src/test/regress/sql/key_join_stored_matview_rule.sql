@@ -1,0 +1,248 @@
+--
+-- key_join_stored_matview_rule
+--
+-- A FOR KEY proof stored in a materialized view or in a rewrite rule follows
+-- the same pg_depend revalidation path as a view's _RETURN rule: the matview's
+-- _RETURN rule and a user rule's action or qualification carry proof
+-- annotations, so a later change to a depended-on constraint, relation, or
+-- operator must revalidate the proof or reject the change.
+--
+
+-- Materialized views must follow the same proof revalidation path as
+-- regular views.  Their _RETURN rule has the same shape, but the revalidation
+-- helper used to skip them because of a RELKIND_VIEW filter.
+CREATE TABLE mv_kj_parent (id int PRIMARY KEY);
+CREATE TABLE mv_kj_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES mv_kj_parent (id)
+);
+INSERT INTO mv_kj_parent VALUES (1);
+INSERT INTO mv_kj_child VALUES (10, 1);
+
+CREATE MATERIALIZED VIEW mv_kj AS
+SELECT p.id AS parent_id, c.id AS child_id
+FROM mv_kj_parent p
+-- accepted
+JOIN mv_kj_child c FOR KEY (parent_id) -> p (id);
+
+-- rejected, reason: stored matview proof depends on parent having no subclasses
+CREATE TABLE mv_kj_subclass () INHERITS (mv_kj_parent);
+-- rejected, reason: stored matview proof depends on RLS-free referenced surface
+ALTER TABLE mv_kj_parent ENABLE ROW LEVEL SECURITY;
+
+DROP MATERIALIZED VIEW mv_kj;
+DROP TABLE mv_kj_child, mv_kj_parent;
+
+-- Rules on plain tables can also contain FOR KEY joins in their action.
+-- The stored rule action carries proof annotations exactly like a view's
+-- _RETURN rule, so it must participate in the same revalidation.
+CREATE TABLE rule_kj_parent (id int PRIMARY KEY);
+CREATE TABLE rule_kj_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES rule_kj_parent (id)
+);
+CREATE TABLE rule_kj_log (id int);
+INSERT INTO rule_kj_parent VALUES (1);
+INSERT INTO rule_kj_child VALUES (10, 1);
+
+CREATE RULE rule_kj_action AS ON DELETE TO rule_kj_log
+DO ALSO SELECT count(*) FROM rule_kj_parent p
+-- accepted
+JOIN rule_kj_child c FOR KEY (parent_id) -> p (id);
+
+-- rejected, reason: stored rule action depends on parent having no subclasses
+CREATE TABLE rule_kj_subclass () INHERITS (rule_kj_parent);
+-- rejected, reason: stored rule action depends on RLS-free referenced surface
+ALTER TABLE rule_kj_parent ENABLE ROW LEVEL SECURITY;
+-- rejected, reason: stored rule action depends on the FK proof
+ALTER TABLE rule_kj_child
+    ALTER CONSTRAINT rule_kj_child_parent_id_fkey NOT ENFORCED;
+
+-- After dropping the rule, the same DDL succeeds.
+DROP RULE rule_kj_action ON rule_kj_log;
+CREATE TABLE rule_kj_subclass () INHERITS (rule_kj_parent);
+DROP TABLE rule_kj_subclass, rule_kj_log, rule_kj_child, rule_kj_parent;
+
+-- Rule qualifications can also contain stored key-join proofs in sublinks.
+CREATE TABLE rule_qual_kj_parent (id int PRIMARY KEY);
+CREATE TABLE rule_qual_kj_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES rule_qual_kj_parent (id)
+);
+CREATE TABLE rule_qual_kj_log (id int);
+INSERT INTO rule_qual_kj_parent VALUES (1);
+INSERT INTO rule_qual_kj_child VALUES (10, 1);
+
+CREATE RULE rule_qual_kj AS ON INSERT TO rule_qual_kj_log
+WHERE EXISTS (
+    SELECT 1
+    FROM rule_qual_kj_parent p
+    -- accepted
+    JOIN rule_qual_kj_child c FOR KEY (parent_id) -> p (id)
+)
+DO ALSO SELECT 1;
+
+-- rejected, reason: stored rule qualification depends on the FK proof
+ALTER TABLE rule_qual_kj_child
+    ALTER CONSTRAINT rule_qual_kj_child_parent_id_fkey NOT ENFORCED;
+
+-- After dropping the rule, the same DDL succeeds.
+DROP RULE rule_qual_kj ON rule_qual_kj_log;
+ALTER TABLE rule_qual_kj_child
+    ALTER CONSTRAINT rule_qual_kj_child_parent_id_fkey NOT ENFORCED;
+SELECT *
+FROM rule_qual_kj_parent p
+-- rejected, reason: FK is now not enforced
+JOIN rule_qual_kj_child c FOR KEY (parent_id) -> p (id);
+DROP TABLE rule_qual_kj_log, rule_qual_kj_child, rule_qual_kj_parent;
+
+-- Non-_RETURN rules on views also carry stored key-join proofs.
+CREATE TABLE rkv_parent (id int PRIMARY KEY);
+CREATE TABLE rkv_child
+(
+    id int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES rkv_parent (id)
+);
+INSERT INTO rkv_parent VALUES (1);
+INSERT INTO rkv_child VALUES (10, 1);
+
+CREATE VIEW rkv_outer AS SELECT id FROM rkv_parent;
+
+CREATE RULE rkv_extra AS ON UPDATE TO rkv_outer
+DO INSTEAD SELECT count(*) FROM rkv_parent p
+-- accepted
+JOIN rkv_child c FOR KEY (parent_id) -> p (id);
+
+-- rejected, reason: stored rule action depends on parent having no subclasses
+CREATE TABLE rkv_subclass () INHERITS (rkv_parent);
+
+DROP RULE rkv_extra ON rkv_outer;
+DROP VIEW rkv_outer;
+DROP TABLE rkv_child, rkv_parent;
+
+-- Revalidation rejects proof switches that would rebuild executable key
+-- equality with a different operator.  Explicit recreation stores the new
+-- proof normally.
+CREATE FUNCTION key_join_bucket_cmp(a int, b int) RETURNS int
+LANGUAGE sql IMMUTABLE STRICT AS
+$$ SELECT CASE WHEN a / 10 < b / 10 THEN -1
+               WHEN a / 10 > b / 10 THEN 1
+               ELSE 0 END $$;
+
+CREATE FUNCTION key_join_bucket_eq(a int, b int) RETURNS boolean
+LANGUAGE sql IMMUTABLE STRICT AS $$ SELECT a / 10 = b / 10 $$;
+
+CREATE OPERATOR =# (
+    LEFTARG = int,
+    RIGHTARG = int,
+    FUNCTION = key_join_bucket_eq,
+    COMMUTATOR = =#,
+    RESTRICT = eqsel,
+    JOIN = eqjoinsel,
+    MERGES
+);
+
+CREATE OPERATOR CLASS key_join_bucket_int4_ops
+FOR TYPE int USING btree AS
+    OPERATOR 3 =# (int, int),
+    FUNCTION 1 key_join_bucket_cmp(int, int);
+
+CREATE TABLE rv_sound_parent_a (id int PRIMARY KEY);
+CREATE TABLE rv_sound_parent_b (id int);
+CREATE UNIQUE INDEX rv_sound_parent_b_idx
+    ON rv_sound_parent_b USING btree (id key_join_bucket_int4_ops);
+CREATE TABLE rv_sound_child
+(
+    cid int PRIMARY KEY,
+    pid int NOT NULL,
+    FOREIGN KEY (pid) REFERENCES rv_sound_parent_a (id),
+    FOREIGN KEY (pid) REFERENCES rv_sound_parent_b (id)
+);
+INSERT INTO rv_sound_parent_a VALUES (11);
+INSERT INTO rv_sound_parent_b VALUES (10);
+INSERT INTO rv_sound_child VALUES (1, 11);
+
+CREATE VIEW rv_sound_parent_v AS SELECT id FROM rv_sound_parent_a;
+CREATE VIEW rv_sound_child_v AS SELECT cid, pid FROM rv_sound_child;
+
+-- Non-_RETURN rule actions are only validated; reject a proof switch that
+-- would require persisting a rebuilt action tree.
+CREATE TABLE rv_sound_rule_event (id int);
+CREATE RULE rv_sound_rule_action AS ON DELETE TO rv_sound_rule_event
+DO ALSO SELECT p.id AS parent_id, c.cid AS child_id, c.pid
+FROM rv_sound_parent_v p
+-- accepted
+JOIN rv_sound_child_v c FOR KEY (pid) -> p (id);
+
+-- rejected, reason: non-_RETURN rule action would need rewritten key quals
+CREATE OR REPLACE VIEW rv_sound_parent_v AS SELECT id FROM rv_sound_parent_b;
+DROP RULE rv_sound_rule_action ON rv_sound_rule_event;
+DROP VIEW rv_sound_child_v, rv_sound_parent_v;
+DROP TABLE rv_sound_rule_event, rv_sound_child, rv_sound_parent_b, rv_sound_parent_a;
+
+DROP OPERATOR CLASS key_join_bucket_int4_ops USING btree;
+DROP OPERATOR FAMILY key_join_bucket_int4_ops USING btree;
+DROP OPERATOR =# (int, int);
+DROP FUNCTION key_join_bucket_cmp(int, int);
+DROP FUNCTION key_join_bucket_eq(int, int);
+
+CREATE TABLE mcdc_parent
+(
+    id        int PRIMARY KEY,
+    tenant_id int NOT NULL,
+    code      int NOT NULL,
+    UNIQUE (tenant_id, code)
+);
+
+CREATE TABLE mcdc_child
+(
+    id        int PRIMARY KEY,
+    parent_id int UNIQUE NOT NULL REFERENCES mcdc_parent (id),
+    tenant_id int NOT NULL,
+    code      int NOT NULL,
+    UNIQUE (tenant_id, code),
+    FOREIGN KEY (tenant_id, code) REFERENCES mcdc_parent (tenant_id, code)
+);
+
+CREATE TABLE mcdc_reader
+(
+    id        int PRIMARY KEY,
+    parent_id int NOT NULL REFERENCES mcdc_parent (id),
+    tenant_id int NOT NULL,
+    code      int NOT NULL,
+    FOREIGN KEY (tenant_id, code) REFERENCES mcdc_parent (tenant_id, code)
+);
+INSERT INTO mcdc_parent VALUES (1, 10, 100), (2, 20, 200);
+INSERT INTO mcdc_child VALUES (11, 1, 10, 100), (22, 2, 20, 200);
+INSERT INTO mcdc_reader VALUES (101, 1, 10, 100), (202, 2, 20, 200);
+
+CREATE VIEW mcdc_plain_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id);
+
+CREATE TABLE mcdc_rule_search_log (id int);
+
+CREATE RULE mcdc_rule_search_a AS ON DELETE TO mcdc_rule_search_log
+DO ALSO SELECT v.id, r.id AS reader_id
+FROM mcdc_plain_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id);
+
+CREATE RULE mcdc_rule_search_b AS ON UPDATE TO mcdc_rule_search_log
+DO ALSO SELECT v.id, r.id AS reader_id
+FROM mcdc_plain_v v
+JOIN mcdc_reader r FOR KEY (parent_id) -> v (id);
+
+CREATE OR REPLACE VIEW mcdc_plain_v AS
+SELECT p.id
+FROM mcdc_parent p
+LEFT JOIN mcdc_child c FOR KEY (parent_id) -> p (id);
+
+DROP RULE mcdc_rule_search_a ON mcdc_rule_search_log;
+DROP RULE mcdc_rule_search_b ON mcdc_rule_search_log;
+DROP TABLE mcdc_rule_search_log;
+DROP VIEW mcdc_plain_v;
+DROP TABLE mcdc_reader, mcdc_child, mcdc_parent;

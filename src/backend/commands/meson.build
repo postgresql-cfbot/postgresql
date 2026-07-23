@@ -28,6 +28,7 @@ backend_sources += files(
   'foreigncmds.c',
   'functioncmds.c',
   'indexcmds.c',
+  'keyjoincmds.c',
   'lockcmds.c',
   'matview.c',
   'opclasscmds.c',

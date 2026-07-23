@@ -1,0 +1,22 @@
+Parsed test spec with 2 sessions
+
+starting permutation: s1_begin s1_key_join s2_create_child s1_commit
+step s1_begin: BEGIN;
+step s1_key_join: 
+ SELECT c.id, c.parent_id
+ FROM key_join_select_blocks_inherits.p AS p
+ JOIN key_join_select_blocks_inherits.c AS c
+ FOR KEY (parent_id) -> p (id);
+
+id|parent_id
+--+---------
+10|        1
+20|        2
+(2 rows)
+
+step s2_create_child: 
+ CREATE TABLE key_join_select_blocks_inherits.p_child ()
+ INHERITS (key_join_select_blocks_inherits.p);
+ <waiting ...>
+step s1_commit: COMMIT;
+step s2_create_child: <... completed>

@@ -1,0 +1,18 @@
+Parsed test spec with 3 sessions
+
+starting permutation: create_view drop_operator release
+step create_view: 
+	CREATE VIEW consumer AS
+	SELECT p.id AS parent_key, c.parent_id
+	FROM (SELECT id FROM parent WHERE id =## 1::bigint) p
+	LEFT JOIN child c FOR KEY (parent_id) -> p (id);
+ <waiting ...>
+step drop_operator: 
+	DROP OPERATOR =## (integer, bigint) CASCADE;
+
+step release: 
+	SELECT FROM injection_points_wakeup('key-join-after-fkey-list-copy');
+	SELECT FROM injection_points_detach('key-join-after-fkey-list-copy');
+
+step create_view: <... completed>
+ERROR:  key join proof dependency operator was concurrently dropped

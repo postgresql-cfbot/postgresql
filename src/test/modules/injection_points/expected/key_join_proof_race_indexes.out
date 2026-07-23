@@ -1,0 +1,22 @@
+Parsed test spec with 3 sessions
+
+starting permutation: create_view drop_idx wakeup noop detach
+step create_view: 
+	CREATE VIEW consumer AS
+	SELECT pc.parent_id, pc.child_id, g.id AS grandchild_id
+	FROM parent_child_v pc
+	JOIN grandchild_v g FOR KEY (parent_id) -> pc (parent_id);
+ <waiting ...>
+step drop_idx: 
+	DROP INDEX CONCURRENTLY child_parent_id_bare_idx;
+ <waiting ...>
+step wakeup: 
+	SELECT FROM injection_points_wakeup('key-join-after-proof-match');
+
+step create_view: <... completed>
+step drop_idx: <... completed>
+ERROR:  cannot drop index child_parent_id_bare_idx because other objects depend on it
+step noop: 
+step detach: 
+	SELECT FROM injection_points_detach('key-join-after-proof-match');
+

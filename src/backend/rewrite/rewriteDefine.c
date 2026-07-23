@@ -163,6 +163,7 @@ InsertRule(const char *rulname,
 	 */
 	recordDependencyOnExpr(&myself, (Node *) action, NIL,
 						   DEPENDENCY_NORMAL);
+	recordDependencyOnKeyJoinProofs(&myself, (Node *) action);
 
 	if (event_qual != NULL)
 	{
@@ -172,6 +173,7 @@ InsertRule(const char *rulname,
 		qry = getInsertSelectQuery(qry, NULL);
 		recordDependencyOnExpr(&myself, event_qual, qry->rtable,
 							   DEPENDENCY_NORMAL);
+		recordDependencyOnKeyJoinProofs(&myself, event_qual);
 	}
 
 	/* Post creation hook for new rule */

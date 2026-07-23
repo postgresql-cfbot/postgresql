@@ -1,0 +1,24 @@
+Parsed test spec with 3 sessions
+
+starting permutation: create_view replace_inner wakeup noop detach
+step create_view: 
+	CREATE VIEW consumer AS
+	SELECT p.id AS parent_id, c.id AS child_id,
+		   c.parent_id AS child_parent_id
+	FROM outer_parent_v p
+	JOIN child_v c FOR KEY (parent_id) -> p (id);
+ <waiting ...>
+step replace_inner: 
+	CREATE OR REPLACE VIEW inner_parent_v AS
+	SELECT id, visible FROM parent WHERE visible;
+ <waiting ...>
+step wakeup: 
+	SELECT FROM injection_points_wakeup('key-join-after-proof-match');
+
+step create_view: <... completed>
+step replace_inner: <... completed>
+ERROR:  key join from referencing relation c to referenced relation p cannot be proven
+step noop: 
+step detach: 
+	SELECT FROM injection_points_detach('key-join-after-proof-match');
+

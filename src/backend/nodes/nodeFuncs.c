@@ -2413,6 +2413,10 @@ expression_tree_walker_impl(Node *node,
 			return WALK(((NullTest *) node)->arg);
 		case T_BooleanTest:
 			return WALK(((BooleanTest *) node)->arg);
+		case T_KeyJoinProofDependency:
+			break;
+		case T_KeyJoinNode:
+			break;
 		case T_CoerceToDomain:
 			return WALK(((CoerceToDomain *) node)->arg);
 		case T_TargetEntry:
@@ -2630,9 +2634,13 @@ expression_tree_walker_impl(Node *node,
 					return true;
 				if (WALK(join->quals))
 					return true;
+				if (WALK(join->joinFilter))
+					return true;
 
 				/*
-				 * alias clause, using list are deemed uninteresting.
+				 * Key-join proof metadata is not expression semantics, but the
+				 * join-local filter is.  Alias clause, using list are deemed
+				 * uninteresting.
 				 */
 			}
 			break;
@@ -3527,6 +3535,26 @@ expression_tree_mutator_impl(Node *node,
 				return (Node *) newnode;
 			}
 			break;
+		case T_KeyJoinProofDependency:
+			return copyObject(node);
+		case T_KeyJoinNode:
+			{
+				KeyJoinNode *key_join = (KeyJoinNode *) node;
+				KeyJoinNode *newnode;
+
+				FLATCOPY(newnode, key_join, KeyJoinNode);
+				newnode->referencingAttnums =
+					copyObject(key_join->referencingAttnums);
+				newnode->referencedAttnums =
+					copyObject(key_join->referencedAttnums);
+				newnode->refAliasAttnums =
+					copyObject(key_join->refAliasAttnums);
+				newnode->notNullConstraints =
+					copyObject(key_join->notNullConstraints);
+				newnode->proofDependencies =
+					copyObject(key_join->proofDependencies);
+				return (Node *) newnode;
+			}
 		case T_CoerceToDomain:
 			{
 				CoerceToDomain *ctest = (CoerceToDomain *) node;
@@ -3722,6 +3750,14 @@ expression_tree_mutator_impl(Node *node,
 				MUTATE(newnode->larg, join->larg, Node *);
 				MUTATE(newnode->rarg, join->rarg, Node *);
 				MUTATE(newnode->quals, join->quals, Node *);
+
+				/*
+				 * Copy, don't mutate: we assume keyJoin is read only from a
+				 * pre-planning tree (see KeyJoinNode), so it need not track the
+				 * varno rewrites a mutator makes.
+				 */
+				newnode->keyJoin = copyObject(join->keyJoin);
+				MUTATE(newnode->joinFilter, join->joinFilter, Node *);
 				/* We do not mutate alias or using by default */
 				return (Node *) newnode;
 			}
@@ -4326,6 +4362,26 @@ raw_expression_tree_walker_impl(Node *node,
 			return WALK(((NullTest *) node)->arg);
 		case T_BooleanTest:
 			return WALK(((BooleanTest *) node)->arg);
+		case T_KeyJoinProofDependency:
+			break;
+		case T_KeyJoinNode:
+			{
+				KeyJoinNode *key_join = (KeyJoinNode *) node;
+
+				if (WALK(key_join->notNullConstraints))
+					return true;
+				return WALK(key_join->proofDependencies);
+			}
+		case T_KeyJoinClause:
+			{
+				KeyJoinClause *kjc = (KeyJoinClause *) node;
+
+				if (WALK(kjc->localCols))
+					return true;
+				if (WALK(kjc->refCols))
+					return true;
+				return WALK(kjc->filter);
+			}
 		case T_JoinExpr:
 			{
 				JoinExpr   *join = (JoinExpr *) node;
@@ -4335,6 +4391,10 @@ raw_expression_tree_walker_impl(Node *node,
 				if (WALK(join->rarg))
 					return true;
 				if (WALK(join->quals))
+					return true;
+				if (WALK(join->keyJoin))
+					return true;
+				if (WALK(join->joinFilter))
 					return true;
 				if (WALK(join->alias))
 					return true;

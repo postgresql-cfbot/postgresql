@@ -21,6 +21,7 @@ parse_expr.c	handle expressions like col, col + 3, x = 3 or x = 4
 parse_enr.c	handle ephemeral named rels (trigger transition tables, ...)
 parse_func.c	handle functions, table.column and column identifiers
 parse_jsontable.c handle JSON_TABLE
+parse_key_join.c handle FOR KEY joins
 parse_merge.c	handle MERGE
 parse_node.c	create nodes for various structures
 parse_oper.c	handle operators in expressions
@@ -33,3 +34,6 @@ parse_utilcmd.c	parse analysis for utility commands (done at execution time)
 See also src/common/keywords.c, which contains the table of standard
 keywords and the keyword lookup function.  We separated that out because
 various frontend code wants to use it too.
+
+See README.key_join for a glossary of the terminology used by the FOR KEY
+join implementation in parse_key_join.c.

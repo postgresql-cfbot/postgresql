@@ -3556,6 +3556,22 @@ SCRAM-SHA-256$<replaceable>&lt;iteration count&gt;</replaceable>:<replaceable>&l
     </varlistentry>
 
     <varlistentry>
+     <term><symbol>DEPENDENCY_KEYJOIN</symbol> (<literal>k</literal>)</term>
+     <listitem>
+      <para>
+       A normal drop dependency that also identifies an object that a stored
+       <literal>FOR KEY</literal> join's proof depends on.  Revalidation uses
+       this dependency type to find stored joins whose proof is affected by
+       changes to constraints, relations, operators, and functions without
+       following unrelated ordinary expression dependencies.
+       <application>pg_dump</application> follows these edges to restore each
+       dependent object after the constraints its proof needs.  Drop behavior
+       is otherwise the same as <literal>DEPENDENCY_NORMAL</literal>.
+      </para>
+     </listitem>
+    </varlistentry>
+
+    <varlistentry>
      <term><symbol>DEPENDENCY_AUTO</symbol> (<literal>a</literal>)</term>
      <listitem>
       <para>

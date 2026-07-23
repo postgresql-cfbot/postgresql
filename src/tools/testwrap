@@ -4,6 +4,7 @@ import argparse
 import shutil
 import subprocess
 import os
+import shlex
 import sys
 
 parser = argparse.ArgumentParser()
@@ -52,6 +53,14 @@ env_dict = {**os.environ,
 # contains all the environment variables at the time of running the test.
 if "PG_TEST_EXTRA" not in env_dict and args.pg_test_extra:
     env_dict["PG_TEST_EXTRA"] = args.pg_test_extra
+
+# Add extra regress arguments before we add non-option arguments
+if args.testname in ['regress', 'isolation', 'ecpg']:
+    if 'TEMP_CONFIG' in env_dict:
+        args.test_command += ['--temp-config=' + env_dict['TEMP_CONFIG']]
+
+    if 'EXTRA_REGRESS_OPTS' in env_dict:
+        args.test_command += shlex.split(env_dict['EXTRA_REGRESS_OPTS'])
 
 if "TESTS" in env_dict:
     args.test_command += env_dict["TESTS"].split()

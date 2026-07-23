@@ -3406,8 +3406,17 @@ build_new_indexes(Relation NewHeap, Relation OldHeap, List *OldIndexes)
 		Oid			newindex;
 		char	   *newName;
 		Relation	ind;
+		bool		isvalid;
 
 		ind = index_open(oldindex, ShareUpdateExclusiveLock);
+
+		/*
+		 * An invalid index (e.g. left over from a failed CREATE INDEX
+		 * CONCURRENTLY) may contradict its own constraints, so build its copy
+		 * without enforcing them, like reindex_relation() does in the
+		 * non-concurrent case.  The old index stays invalid after the swap.
+		 */
+		isvalid = ind->rd_index->indisvalid;
 
 		newName = ChooseRelationName(get_rel_name(oldindex),
 									 NULL,
@@ -3416,8 +3425,9 @@ build_new_indexes(Relation NewHeap, Relation OldHeap, List *OldIndexes)
 									 false);
 		newindex = index_create_copy(NewHeap, INDEX_CREATE_SUPPRESS_PROGRESS,
 									 oldindex, ind->rd_rel->reltablespace,
-									 newName);
-		copy_index_constraints(ind, newindex, RelationGetRelid(NewHeap));
+									 newName, !isvalid);
+		if (isvalid)
+			copy_index_constraints(ind, newindex, RelationGetRelid(NewHeap));
 		result = lappend_oid(result, newindex);
 
 		index_close(ind, NoLock);

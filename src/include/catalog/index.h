@@ -104,7 +104,8 @@ extern Oid	index_create(Relation heapRelation,
 
 extern Oid	index_create_copy(Relation heapRelation, uint16 flags,
 							  Oid oldIndexId, Oid tablespaceOid,
-							  const char *newName);
+							  const char *newName,
+							  bool skip_constraint_checks);
 
 extern void index_concurrently_build(Oid heapRelationId,
 									 Oid indexRelationId);

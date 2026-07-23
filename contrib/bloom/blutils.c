@@ -392,7 +392,7 @@ BloomNewBuffer(Relation index)
 	}
 
 	/* Must extend the file */
-	buffer = ExtendBufferedRel(BMR_REL(index), MAIN_FORKNUM, NULL,
+	buffer = ExtendBufferedRel(BMR_REL(index), MAIN_FORKNUM,
 							   EB_LOCK_FIRST);
 
 	return buffer;
@@ -460,7 +460,7 @@ BloomInitMetapage(Relation index, ForkNumber forknum)
 	 * block number 0 (BLOOM_METAPAGE_BLKNO).  No need to hold the extension
 	 * lock because there cannot be concurrent inserters yet.
 	 */
-	metaBuffer = ReadBufferExtended(index, forknum, P_NEW, RBM_NORMAL, NULL);
+	metaBuffer = ReadBufferExtended(index, forknum, P_NEW, RBM_NORMAL);
 	LockBuffer(metaBuffer, BUFFER_LOCK_EXCLUSIVE);
 	Assert(BufferGetBlockNumber(metaBuffer) == BLOOM_METAPAGE_BLKNO);
 

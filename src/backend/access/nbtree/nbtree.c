@@ -1324,7 +1324,6 @@ btvacuumscan(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_FULL |
 										READ_STREAM_USE_BATCHING,
-										info->strategy,
 										rel,
 										MAIN_FORKNUM,
 										block_range_read_stream_cb,
@@ -1730,8 +1729,7 @@ backtrack:
 		 * recycle all-zero pages, not fail.  Also, we want to use a
 		 * nondefault buffer access strategy.
 		 */
-		buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL,
-								 info->strategy);
+		buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL);
 		goto backtrack;
 	}
 

@@ -139,8 +139,7 @@ _hash_getinitbuf(Relation rel, BlockNumber blkno)
 	if (blkno == P_NEW)
 		elog(ERROR, "hash AM does not use P_NEW");
 
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_ZERO_AND_LOCK,
-							 NULL);
+	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_ZERO_AND_LOCK);
 
 	/* ref count and lock type are correct */
 
@@ -209,7 +208,7 @@ _hash_getnewbuf(Relation rel, BlockNumber blkno, ForkNumber forkNum)
 	/* smgr insists we explicitly extend the relation */
 	if (blkno == nblocks)
 	{
-		buf = ExtendBufferedRel(BMR_REL(rel), forkNum, NULL,
+		buf = ExtendBufferedRel(BMR_REL(rel), forkNum,
 								EB_LOCK_FIRST | EB_SKIP_EXTENSION_LOCK);
 		if (BufferGetBlockNumber(buf) != blkno)
 			elog(ERROR, "unexpected hash relation size: %u, should be %u",
@@ -217,42 +216,13 @@ _hash_getnewbuf(Relation rel, BlockNumber blkno, ForkNumber forkNum)
 	}
 	else
 	{
-		buf = ReadBufferExtended(rel, forkNum, blkno, RBM_ZERO_AND_LOCK,
-								 NULL);
+		buf = ReadBufferExtended(rel, forkNum, blkno, RBM_ZERO_AND_LOCK);
 	}
 
 	/* ref count and lock type are correct */
 
 	/* initialize the page */
 	_hash_pageinit(BufferGetPage(buf), BufferGetPageSize(buf));
-
-	return buf;
-}
-
-/*
- *	_hash_getbuf_with_strategy() -- Get a buffer with nondefault strategy.
- *
- *		This is identical to _hash_getbuf() but also allows a buffer access
- *		strategy to be specified.  We use this for VACUUM operations.
- */
-Buffer
-_hash_getbuf_with_strategy(Relation rel, BlockNumber blkno,
-						   int access, int flags,
-						   BufferAccessStrategy bstrategy)
-{
-	Buffer		buf;
-
-	if (blkno == P_NEW)
-		elog(ERROR, "hash AM does not use P_NEW");
-
-	buf = ReadBufferExtended(rel, MAIN_FORKNUM, blkno, RBM_NORMAL, bstrategy);
-
-	if (access != HASH_NOLOCK)
-		LockBuffer(buf, access);
-
-	/* ref count and lock type are correct */
-
-	_hash_checkpage(rel, buf, flags);
 
 	return buf;
 }
@@ -758,7 +728,7 @@ restart_expand:
 		/* Release the metapage lock. */
 		LockBuffer(metabuf, BUFFER_LOCK_UNLOCK);
 
-		hashbucketcleanup(rel, old_bucket, buf_oblkno, start_oblkno, NULL,
+		hashbucketcleanup(rel, old_bucket, buf_oblkno, start_oblkno,
 						  maxbucket, highmask, lowmask, NULL, NULL, true,
 						  NULL, NULL);
 
@@ -1333,7 +1303,7 @@ _hash_splitbucket(Relation rel,
 	{
 		LockBuffer(bucket_nbuf, BUFFER_LOCK_UNLOCK);
 		hashbucketcleanup(rel, obucket, bucket_obuf,
-						  BufferGetBlockNumber(bucket_obuf), NULL,
+						  BufferGetBlockNumber(bucket_obuf),
 						  maxbucket, highmask, lowmask, NULL, NULL, true,
 						  NULL, NULL);
 	}

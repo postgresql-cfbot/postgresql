@@ -80,7 +80,8 @@ RelationPutHeapTuple(Relation relation,
 }
 
 /*
- * Read in a buffer in mode, using bulk-insert strategy if bistate isn't NULL.
+ * Read in a buffer in mode, using the bistate's pinned target page if
+ * available.
  */
 static Buffer
 ReadBufferBI(Relation relation, BlockNumber targetBlock,
@@ -91,7 +92,7 @@ ReadBufferBI(Relation relation, BlockNumber targetBlock,
 	/* If not bulk-insert, exactly like ReadBuffer */
 	if (!bistate)
 		return ReadBufferExtended(relation, MAIN_FORKNUM, targetBlock,
-								  mode, NULL);
+								  mode);
 
 	/* If we have the desired block already pinned, re-pin and return it */
 	if (bistate->current_buf != InvalidBuffer)
@@ -113,9 +114,9 @@ ReadBufferBI(Relation relation, BlockNumber targetBlock,
 		bistate->current_buf = InvalidBuffer;
 	}
 
-	/* Perform a read using the buffer strategy */
+	/* Perform the read */
 	buffer = ReadBufferExtended(relation, MAIN_FORKNUM, targetBlock,
-								mode, bistate->strategy);
+								mode);
 
 	/* Save the selected block as target for future inserts */
 	IncrBufferRefCount(buffer);
@@ -337,7 +338,6 @@ RelationAddBlocks(Relation relation, BulkInsertState bistate,
 	 * way larger.
 	 */
 	first_block = ExtendBufferedRelBy(BMR_REL(relation), MAIN_FORKNUM,
-									  bistate ? bistate->strategy : NULL,
 									  EB_LOCK_FIRST,
 									  extend_by_pages,
 									  victim_buffers,
@@ -484,8 +484,7 @@ RelationAddBlocks(Relation relation, BulkInsertState bistate,
  *
  *	The caller can also provide a BulkInsertState object to optimize many
  *	insertions into the same relation.  This keeps a pin on the current
- *	insertion target page (to save pin/unpin cycles) and also passes a
- *	BULKWRITE buffer selection strategy object to the buffer manager.
+ *	insertion target page (to save pin/unpin cycles).
  *	Passing NULL for bistate selects the default behavior.
  *
  *	We don't fill existing pages further than the fillfactor, except for large

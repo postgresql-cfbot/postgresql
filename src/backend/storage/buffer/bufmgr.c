@@ -83,6 +83,7 @@
 /* Bits in SyncOneBuffer's return value */
 #define BUF_WRITTEN				0x01
 #define BUF_REUSABLE			0x02
+#define BUF_COOLED				0x04
 
 #define RELS_BSEARCH_THRESHOLD		20
 
@@ -611,10 +612,9 @@ ForgetPrivateRefCountEntry(PrivateRefCountEntry *ref)
 static Buffer ReadBuffer_common(Relation rel,
 								SMgrRelation smgr, char smgr_persistence,
 								ForkNumber forkNum, BlockNumber blockNum,
-								ReadBufferMode mode, BufferAccessStrategy strategy);
+								ReadBufferMode mode);
 static BlockNumber ExtendBufferedRelCommon(BufferManagerRelation bmr,
 										   ForkNumber fork,
-										   BufferAccessStrategy strategy,
 										   uint32 flags,
 										   uint32 extend_by,
 										   BlockNumber extend_upto,
@@ -622,19 +622,18 @@ static BlockNumber ExtendBufferedRelCommon(BufferManagerRelation bmr,
 										   uint32 *extended_by);
 static BlockNumber ExtendBufferedRelShared(BufferManagerRelation bmr,
 										   ForkNumber fork,
-										   BufferAccessStrategy strategy,
 										   uint32 flags,
 										   uint32 extend_by,
 										   BlockNumber extend_upto,
 										   Buffer *buffers,
 										   uint32 *extended_by);
-static bool PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
+static bool PinBuffer(BufferDesc *buf,
 					  bool skip_if_not_valid);
 static void PinBuffer_Locked(BufferDesc *buf);
 static void UnpinBuffer(BufferDesc *buf);
 static void UnpinBufferNoOwner(BufferDesc *buf);
 static void BufferSync(int flags);
-static int	SyncOneBuffer(int buf_id, bool skip_recently_used,
+static int	SyncOneBuffer(int buf_id, bool skip_recently_used, bool cool_if_hot,
 						  WritebackContext *wb_context);
 static void WaitIO(BufferDesc *buf);
 static void AbortBufferIO(Buffer buffer);
@@ -644,7 +643,6 @@ static inline BufferDesc *BufferAlloc(SMgrRelation smgr,
 									  char relpersistence,
 									  ForkNumber forkNum,
 									  BlockNumber blockNum,
-									  BufferAccessStrategy strategy,
 									  bool *foundPtr, IOContext io_context);
 static bool AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress);
 static void CheckReadBuffersOperation(ReadBuffersOperation *operation, bool is_complete);
@@ -653,7 +651,7 @@ static pg_always_inline void TrackBufferHit(IOObject io_object,
 											IOContext io_context,
 											Relation rel, char persistence, SMgrRelation smgr,
 											ForkNumber forknum, BlockNumber blocknum);
-static Buffer GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context);
+static Buffer GetVictimBuffer(IOContext io_context);
 static void FlushUnlockedBuffer(BufferDesc *buf, SMgrRelation reln,
 								IOObject io_object, IOContext io_context);
 static void FlushBuffer(BufferDesc *buf, SMgrRelation reln,
@@ -857,7 +855,7 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 		 * pin.
 		 */
 		if (BufferTagsEqual(&tag, &bufHdr->tag) &&
-			PinBuffer(bufHdr, NULL, true))
+			PinBuffer(bufHdr, true))
 		{
 			if (BufferTagsEqual(&tag, &bufHdr->tag))
 			{
@@ -873,12 +871,12 @@ ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum, BlockNumber blockN
 
 /*
  * ReadBuffer -- a shorthand for ReadBufferExtended, for reading from main
- *		fork with RBM_NORMAL mode and default strategy.
+ *		fork with RBM_NORMAL mode.
  */
 Buffer
 ReadBuffer(Relation reln, BlockNumber blockNum)
 {
-	return ReadBufferExtended(reln, MAIN_FORKNUM, blockNum, RBM_NORMAL, NULL);
+	return ReadBufferExtended(reln, MAIN_FORKNUM, blockNum, RBM_NORMAL);
 }
 
 /*
@@ -918,13 +916,10 @@ ReadBuffer(Relation reln, BlockNumber blockNum)
  * a cleanup-strength lock on the page.
  *
  * RBM_NORMAL_NO_LOG mode is treated the same as RBM_NORMAL here.
- *
- * If strategy is not NULL, a nondefault buffer access strategy is used.
- * See buffer/README for details.
  */
 inline Buffer
 ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
-				   ReadBufferMode mode, BufferAccessStrategy strategy)
+				   ReadBufferMode mode)
 {
 	Buffer		buf;
 
@@ -934,7 +929,7 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 	 * ReadBuffer_common().
 	 */
 	buf = ReadBuffer_common(reln, RelationGetSmgr(reln), 0,
-							forkNum, blockNum, mode, strategy);
+							forkNum, blockNum, mode);
 
 	return buf;
 }
@@ -953,14 +948,14 @@ ReadBufferExtended(Relation reln, ForkNumber forkNum, BlockNumber blockNum,
 Buffer
 ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forkNum,
 						  BlockNumber blockNum, ReadBufferMode mode,
-						  BufferAccessStrategy strategy, bool permanent)
+						  bool permanent)
 {
 	SMgrRelation smgr = smgropen(rlocator, INVALID_PROC_NUMBER);
 
 	return ReadBuffer_common(NULL, smgr,
 							 permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED,
 							 forkNum, blockNum,
-							 mode, strategy);
+							 mode);
 }
 
 /*
@@ -969,13 +964,12 @@ ReadBufferWithoutRelcache(RelFileLocator rlocator, ForkNumber forkNum,
 Buffer
 ExtendBufferedRel(BufferManagerRelation bmr,
 				  ForkNumber forkNum,
-				  BufferAccessStrategy strategy,
 				  uint32 flags)
 {
 	Buffer		buf;
 	uint32		extend_by = 1;
 
-	ExtendBufferedRelBy(bmr, forkNum, strategy, flags, extend_by,
+	ExtendBufferedRelBy(bmr, forkNum, flags, extend_by,
 						&buf, &extend_by);
 
 	return buf;
@@ -1001,7 +995,6 @@ ExtendBufferedRel(BufferManagerRelation bmr,
 BlockNumber
 ExtendBufferedRelBy(BufferManagerRelation bmr,
 					ForkNumber fork,
-					BufferAccessStrategy strategy,
 					uint32 flags,
 					uint32 extend_by,
 					Buffer *buffers,
@@ -1014,7 +1007,7 @@ ExtendBufferedRelBy(BufferManagerRelation bmr,
 	if (bmr.relpersistence == '\0')
 		bmr.relpersistence = bmr.rel->rd_rel->relpersistence;
 
-	return ExtendBufferedRelCommon(bmr, fork, strategy, flags,
+	return ExtendBufferedRelCommon(bmr, fork, flags,
 								   extend_by, InvalidBlockNumber,
 								   buffers, extended_by);
 }
@@ -1030,7 +1023,6 @@ ExtendBufferedRelBy(BufferManagerRelation bmr,
 Buffer
 ExtendBufferedRelTo(BufferManagerRelation bmr,
 					ForkNumber fork,
-					BufferAccessStrategy strategy,
 					uint32 flags,
 					BlockNumber extend_to,
 					ReadBufferMode mode)
@@ -1096,7 +1088,7 @@ ExtendBufferedRelTo(BufferManagerRelation bmr,
 		if ((uint64) current_size + num_pages > extend_to)
 			num_pages = extend_to - current_size;
 
-		first_block = ExtendBufferedRelCommon(bmr, fork, strategy, flags,
+		first_block = ExtendBufferedRelCommon(bmr, fork, flags,
 											  num_pages, extend_to,
 											  buffers, &extended_by);
 
@@ -1122,7 +1114,7 @@ ExtendBufferedRelTo(BufferManagerRelation bmr,
 	{
 		Assert(extended_by == 0);
 		buffer = ReadBuffer_common(bmr.rel, BMR_GET_SMGR(bmr), bmr.relpersistence,
-								   fork, extend_to - 1, mode, strategy);
+								   fork, extend_to - 1, mode);
 	}
 
 	return buffer;
@@ -1225,7 +1217,6 @@ PinBufferForBlock(Relation rel,
 				  char persistence,
 				  ForkNumber forkNum,
 				  BlockNumber blockNum,
-				  BufferAccessStrategy strategy,
 				  IOObject io_object,
 				  IOContext io_context,
 				  bool *foundPtr)
@@ -1249,7 +1240,7 @@ PinBufferForBlock(Relation rel,
 		bufHdr = LocalBufferAlloc(smgr, forkNum, blockNum, foundPtr);
 	else
 		bufHdr = BufferAlloc(smgr, persistence, forkNum, blockNum,
-							 strategy, foundPtr, io_context);
+							 foundPtr, io_context);
 
 	if (*foundPtr)
 		TrackBufferHit(io_object, io_context, rel, persistence, smgr, forkNum, blockNum);
@@ -1275,8 +1266,7 @@ PinBufferForBlock(Relation rel,
 static pg_always_inline Buffer
 ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 				  ForkNumber forkNum,
-				  BlockNumber blockNum, ReadBufferMode mode,
-				  BufferAccessStrategy strategy)
+				  BlockNumber blockNum, ReadBufferMode mode)
 {
 	ReadBuffersOperation operation;
 	Buffer		buffer;
@@ -1312,7 +1302,7 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 		if (mode == RBM_ZERO_AND_LOCK || mode == RBM_ZERO_AND_CLEANUP_LOCK)
 			flags |= EB_LOCK_FIRST;
 
-		return ExtendBufferedRel(BMR_REL(rel), forkNum, strategy, flags);
+		return ExtendBufferedRel(BMR_REL(rel), forkNum, flags);
 	}
 
 	if (rel)
@@ -1334,12 +1324,12 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 		}
 		else
 		{
-			io_context = IOContextForStrategy(strategy);
+			io_context = IOCONTEXT_NORMAL;
 			io_object = IOOBJECT_RELATION;
 		}
 
 		buffer = PinBufferForBlock(rel, smgr, persistence,
-								   forkNum, blockNum, strategy,
+								   forkNum, blockNum,
 								   io_object, io_context, &found);
 		ZeroAndLockBuffer(buffer, mode, found);
 		return buffer;
@@ -1357,7 +1347,6 @@ ReadBuffer_common(Relation rel, SMgrRelation smgr, char smgr_persistence,
 	operation.rel = rel;
 	operation.persistence = persistence;
 	operation.forknum = forkNum;
-	operation.strategy = strategy;
 	if (StartReadBuffer(&operation,
 						&buffer,
 						blockNum,
@@ -1398,7 +1387,7 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 	}
 	else
 	{
-		io_context = IOContextForStrategy(operation->strategy);
+		io_context = IOCONTEXT_NORMAL;
 		io_object = IOOBJECT_RELATION;
 	}
 
@@ -1449,7 +1438,6 @@ StartReadBuffersImpl(ReadBuffersOperation *operation,
 										   operation->persistence,
 										   operation->forknum,
 										   blockNum + i,
-										   operation->strategy,
 										   io_object, io_context,
 										   &found);
 		}
@@ -1770,7 +1758,7 @@ WaitReadBuffers(ReadBuffersOperation *operation)
 	}
 	else
 	{
-		io_context = IOContextForStrategy(operation->strategy);
+		io_context = IOCONTEXT_NORMAL;
 		io_object = IOOBJECT_RELATION;
 	}
 
@@ -1960,7 +1948,7 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
 	}
 	else
 	{
-		io_context = IOContextForStrategy(operation->strategy);
+		io_context = IOCONTEXT_NORMAL;
 		io_object = IOOBJECT_RELATION;
 	}
 
@@ -2179,24 +2167,18 @@ AsyncReadBuffers(ReadBuffersOperation *operation, int *nblocks_progress)
  *		buffer.  If no buffer exists already, selects a replacement victim and
  *		evicts the old page, but does NOT read in new page.
  *
- * "strategy" can be a buffer replacement strategy object, or NULL for
- * the default strategy.  The selected buffer's usage_count is advanced when
- * using the default strategy, but otherwise possibly not (see PinBuffer).
- *
  * The returned buffer is pinned and is already marked as holding the
  * desired page.  If it already did have the desired page, *foundPtr is
  * set true.  Otherwise, *foundPtr is set false.
  *
- * io_context is passed as an output parameter to avoid calling
- * IOContextForStrategy() when there is a shared buffers hit and no IO
- * statistics need be captured.
+ * io_context is passed as an output parameter to avoid capturing IO
+ * statistics when there is a shared buffers hit and no IO occurs.
  *
  * No locks are held either at entry or exit.
  */
 static pg_always_inline BufferDesc *
 BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 			BlockNumber blockNum,
-			BufferAccessStrategy strategy,
 			bool *foundPtr, IOContext io_context)
 {
 	BufferTag	newTag;			/* identity of requested block */
@@ -2234,7 +2216,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 		 */
 		buf = GetBufferDescriptor(existing_buf_id);
 
-		valid = PinBuffer(buf, strategy, false);
+		valid = PinBuffer(buf, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
 		LWLockRelease(newPartitionLock);
@@ -2265,7 +2247,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * don't hold any conflicting locks. If so we'll have to undo our work
 	 * later.
 	 */
-	victim_buffer = GetVictimBuffer(strategy, io_context);
+	victim_buffer = GetVictimBuffer(io_context);
 	victim_buf_hdr = GetBufferDescriptor(victim_buffer - 1);
 
 	/*
@@ -2296,7 +2278,7 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 
 		existing_buf_hdr = GetBufferDescriptor(existing_buf_id);
 
-		valid = PinBuffer(existing_buf_hdr, strategy, false);
+		valid = PinBuffer(existing_buf_hdr, false);
 
 		/* Can release the mapping lock as soon as we've pinned it */
 		LWLockRelease(newPartitionLock);
@@ -2333,7 +2315,13 @@ BufferAlloc(SMgrRelation smgr, char relpersistence, ForkNumber forkNum,
 	 * checkpoints, except for their "init" forks, which need to be treated
 	 * just like permanent relations.
 	 */
-	set_bits |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
+	set_bits |= BM_TAG_VALID;
+
+	/*
+	 * Admit the newly loaded page COOL (probation); a second access via
+	 * PinBuffer promotes it to HOT.  This is what makes a one-touch scan
+	 * self-evicting -- see the cooling-state notes in buf_internals.h.
+	 */
 	if (relpersistence == RELPERSISTENCE_PERMANENT || forkNum == INIT_FORKNUM)
 		set_bits |= BM_PERMANENT;
 
@@ -2545,12 +2533,11 @@ InvalidateVictimBuffer(BufferDesc *buf_hdr)
 }
 
 static Buffer
-GetVictimBuffer(BufferAccessStrategy strategy, IOContext io_context)
+GetVictimBuffer(IOContext io_context)
 {
 	BufferDesc *buf_hdr;
 	Buffer		buf;
 	uint64		buf_state;
-	bool		from_ring;
 
 	/*
 	 * Ensure, before we pin a victim buffer, that there's a free refcount
@@ -2566,7 +2553,7 @@ again:
 	 * Select a victim buffer.  The buffer is returned pinned and owned by
 	 * this backend.
 	 */
-	buf_hdr = StrategyGetBuffer(strategy, &buf_state, &from_ring);
+	buf_hdr = StrategyGetBuffer(&buf_state);
 	buf = BufferDescriptorGetBuffer(buf_hdr);
 
 	/*
@@ -2610,26 +2597,6 @@ again:
 			goto again;
 		}
 
-		/*
-		 * If using a nondefault strategy, and this victim came from the
-		 * strategy ring, let the strategy decide whether to reject it when
-		 * reusing it would require a WAL flush.  This only applies to
-		 * permanent buffers; unlogged buffers can have fake LSNs, so
-		 * XLogNeedsFlush() is not meaningful for them.
-		 *
-		 * We need to hold the content lock in at least share-exclusive mode
-		 * to safely inspect the page LSN, so this couldn't have been done
-		 * inside StrategyGetBuffer().
-		 */
-		if (strategy && from_ring &&
-			buf_state & BM_PERMANENT &&
-			XLogNeedsFlush(BufferGetLSN(buf_hdr)) &&
-			StrategyRejectBuffer(strategy, buf_hdr, from_ring))
-		{
-			UnlockReleaseBuffer(buf);
-			goto again;
-		}
-
 		/* OK, do the I/O */
 		FlushBuffer(buf_hdr, NULL, IOOBJECT_RELATION, io_context);
 		LockBuffer(buf, BUFFER_LOCK_UNLOCK);
@@ -2642,23 +2609,15 @@ again:
 	if (buf_state & BM_VALID)
 	{
 		/*
-		 * When a BufferAccessStrategy is in use, blocks evicted from shared
-		 * buffers are counted as IOOP_EVICT in the corresponding context
-		 * (e.g. IOCONTEXT_BULKWRITE). Shared buffers are evicted by a
-		 * strategy in two cases: 1) while initially claiming buffers for the
-		 * strategy ring 2) to replace an existing strategy ring buffer
-		 * because it is pinned or in use and cannot be reused.
+		 * Blocks evicted from shared buffers are counted as IOOP_EVICT.
 		 *
-		 * Blocks evicted from buffers already in the strategy ring are
-		 * counted as IOOP_REUSE in the corresponding strategy context.
-		 *
-		 * At this point, we can accurately count evictions and reuses,
-		 * because we have successfully claimed the valid buffer. Previously,
-		 * we may have been forced to release the buffer due to concurrent
-		 * pinners or erroring out.
+		 * At this point, we can accurately count evictions, because we have
+		 * successfully claimed the valid buffer. Previously, we may have been
+		 * forced to release the buffer due to concurrent pinners or erroring
+		 * out.
 		 */
 		pgstat_count_io_op(IOOBJECT_RELATION, io_context,
-						   from_ring ? IOOP_REUSE : IOOP_EVICT, 1, 0);
+						   IOOP_EVICT, 1, 0);
 	}
 
 	/*
@@ -2750,7 +2709,6 @@ LimitAdditionalPins(uint32 *additional_pins)
 static BlockNumber
 ExtendBufferedRelCommon(BufferManagerRelation bmr,
 						ForkNumber fork,
-						BufferAccessStrategy strategy,
 						uint32 flags,
 						uint32 extend_by,
 						BlockNumber extend_upto,
@@ -2785,7 +2743,7 @@ ExtendBufferedRelCommon(BufferManagerRelation bmr,
 											 buffers, &extend_by);
 	}
 	else
-		first_block = ExtendBufferedRelShared(bmr, fork, strategy, flags,
+		first_block = ExtendBufferedRelShared(bmr, fork, flags,
 											  extend_by, extend_upto,
 											  buffers, &extend_by);
 	*extended_by = extend_by;
@@ -2808,7 +2766,6 @@ ExtendBufferedRelCommon(BufferManagerRelation bmr,
 static BlockNumber
 ExtendBufferedRelShared(BufferManagerRelation bmr,
 						ForkNumber fork,
-						BufferAccessStrategy strategy,
 						uint32 flags,
 						uint32 extend_by,
 						BlockNumber extend_upto,
@@ -2816,7 +2773,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 						uint32 *extended_by)
 {
 	BlockNumber first_block;
-	IOContext	io_context = IOContextForStrategy(strategy);
+	IOContext	io_context = IOCONTEXT_NORMAL;
 	instr_time	io_start;
 
 	LimitAdditionalPins(&extend_by);
@@ -2835,7 +2792,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 	{
 		Block		buf_block;
 
-		buffers[i] = GetVictimBuffer(strategy, io_context);
+		buffers[i] = GetVictimBuffer(io_context);
 		buf_block = BufHdrGetBlock(GetBufferDescriptor(buffers[i] - 1));
 
 		/* new buffers are zero-filled */
@@ -2953,7 +2910,7 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 			 * Pin the existing buffer before releasing the partition lock,
 			 * preventing it from being evicted.
 			 */
-			valid = PinBuffer(existing_hdr, strategy, false);
+			valid = PinBuffer(existing_hdr, false);
 
 			LWLockRelease(partition_lock);
 			UnpinBuffer(victim_buf_hdr);
@@ -3002,7 +2959,12 @@ ExtendBufferedRelShared(BufferManagerRelation bmr,
 
 			victim_buf_hdr->tag = tag;
 
-			set_bits |= BM_TAG_VALID | BUF_USAGECOUNT_ONE;
+			set_bits |= BM_TAG_VALID;
+
+			/*
+			 * Admit COOL (probation); see the comment at the other admission
+			 * site and the cooling-state notes in buf_internals.h.
+			 */
 			if (bmr.relpersistence == RELPERSISTENCE_PERMANENT || fork == INIT_FORKNUM)
 				set_bits |= BM_PERMANENT;
 
@@ -3269,13 +3231,8 @@ ReleaseAndReadBuffer(Buffer buffer,
 /*
  * PinBuffer -- make buffer unavailable for replacement.
  *
- * For the default access strategy, the buffer's usage_count is incremented
- * when we first pin it; for other strategies we just make sure the usage_count
- * isn't zero.  (The idea of the latter is that we don't want synchronized
- * heap scans to inflate the count, but we need it to not be zero to discourage
- * other backends from stealing buffers from our ring.  As long as we cycle
- * through the ring faster than the global clock-sweep cycles, buffers in
- * our ring won't be chosen as victims for replacement by other backends.)
+ * The buffer's cooling state is promoted to HOT (the 2Q rescue) when we pin
+ * it; see the cooling-state notes in buf_internals.h.
  *
  * This should be applied only to shared buffers, never local ones.
  *
@@ -3292,7 +3249,7 @@ ReleaseAndReadBuffer(Buffer buffer,
  * (recently) invalid and has not been pinned.
  */
 static bool
-PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
+PinBuffer(BufferDesc *buf,
 		  bool skip_if_not_valid)
 {
 	Buffer		b = BufferDescriptorGetBuffer(buf);
@@ -3332,21 +3289,17 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
 			/* increase refcount */
 			buf_state += BUF_REFCOUNT_ONE;
 
-			if (strategy == NULL)
-			{
-				/* Default case: increase usagecount unless already max. */
-				if (BUF_STATE_GET_USAGECOUNT(buf_state) < BM_MAX_USAGE_COUNT)
-					buf_state += BUF_USAGECOUNT_ONE;
-			}
-			else
-			{
-				/*
-				 * Ring buffers shouldn't evict others from pool.  Thus we
-				 * don't make usagecount more than 1.
-				 */
-				if (BUF_STATE_GET_USAGECOUNT(buf_state) == 0)
-					buf_state += BUF_USAGECOUNT_ONE;
-			}
+			/*
+			 * Accessing a resident buffer promotes it to HOT (the 2Q rescue):
+			 * a page loaded COOL on probation becomes part of the hot working
+			 * set on its second touch.  BM_MAX_USAGE_COUNT is
+			 * BUF_COOLSTATE_HOT (1), so this saturates at HOT and never
+			 * overflows the field.  We also set the second-chance ref bit so
+			 * the bgwriter's next cooling pass spares this recently-used buffer.
+			 */
+			if (BUF_STATE_GET_COOLSTATE(buf_state) < BUF_COOLSTATE_HOT)
+				buf_state += BUF_COOLSTATE_ONE;
+			buf_state |= BUF_REFBIT;
 
 			if (pg_atomic_compare_exchange_u64(&buf->state, &old_buf_state,
 											   buf_state))
@@ -3394,7 +3347,7 @@ PinBuffer(BufferDesc *buf, BufferAccessStrategy strategy,
  * ResourceOwnerEnlarge(CurrentResourceOwner);
  *
  * Currently, no callers of this function want to modify the buffer's
- * usage_count at all, so there's no need for a strategy parameter.
+ * cooling state at all.
  * Also we don't bother with a BM_VALID test (the caller could check that for
  * itself).
  *
@@ -3785,7 +3738,7 @@ BufferSync(int flags)
 		 */
 		if (pg_atomic_read_u64(&bufHdr->state) & BM_CHECKPOINT_NEEDED)
 		{
-			if (SyncOneBuffer(buf_id, false, &wb_context) & BUF_WRITTEN)
+			if (SyncOneBuffer(buf_id, false, false, &wb_context) & BUF_WRITTEN)
 			{
 				TRACE_POSTGRESQL_BUFFER_SYNC_WRITTEN(buf_id);
 				PendingCheckpointerStats.buffers_written++;
@@ -3876,6 +3829,19 @@ BgBufferSync(WritebackContext *wb_context)
 	float		smoothing_samples = 16;
 	float		scan_whole_pool_milliseconds = 120000.0;
 
+	/*
+	 * The cleaner scan directly observes the reusable (COOL, unpinned) buffer
+	 * density over the region it walks, which -- with the cooling-stage
+	 * evictor -- is exactly the sweep's victim predicate.  That observation is
+	 * ground truth for the buffers about to be reused, whereas the strategy
+	 * scan's positional proxy (strategy_delta/recent_alloc) blurs a pool whose
+	 * COOL population is spatially clustered (a scan burst leaves whole regions
+	 * COOL, hot OLTP regions not).  So we let the cleaner's own sample adapt on
+	 * a shorter window than the strategy proxy, tracking a burst of
+	 * probationary/scan COOL pages within a cycle or two instead of lagging it.
+	 */
+	float		cleaner_smoothing_samples = 4;
+
 	/* Used to compute how far we scan ahead */
 	long		strategy_delta;
 	int			bufs_to_lap;
@@ -3889,6 +3855,7 @@ BgBufferSync(WritebackContext *wb_context)
 	int			num_to_scan;
 	int			num_written;
 	int			reusable_buffers;
+	int			write_limit;
 
 	/* Variables for final smoothed_density update */
 	long		new_strategy_delta;
@@ -4063,8 +4030,22 @@ BgBufferSync(WritebackContext *wb_context)
 	 * Now write out dirty reusable buffers, working forward from the
 	 * next_to_clean point, until we have lapped the strategy scan, or cleaned
 	 * enough buffers to match our estimate of the next cycle's allocation
-	 * requirements, or hit the bgwriter_lru_maxpages limit.
+	 * requirements, or hit the write limit.
+	 *
+	 * The per-cycle write cap is normally bgwriter_lru_maxpages.  But under a
+	 * bulk-dirtying workload (COPY, bulk UPDATE, VACUUM) the pool fills with
+	 * dirty COOL buffers faster than that fixed cap can clean, so the
+	 * foreground clock sweep is forced to flush dirty victims inline -- the
+	 * very cost the cooling-stage evictor is meant to keep off the critical
+	 * path.  When predicted demand (upcoming_alloc_est) exceeds the fixed cap,
+	 * raise the limit to meet demand so the bgwriter stays ahead and supplies
+	 * clean victims.  This stays bounded (by demand and by lapping the
+	 * strategy point), so it cannot run away, and normal workloads are
+	 * unaffected because there upcoming_alloc_est <= bgwriter_lru_maxpages.
 	 */
+	write_limit = bgwriter_lru_maxpages;
+	if (upcoming_alloc_est > write_limit)
+		write_limit = upcoming_alloc_est;
 
 	num_to_scan = bufs_to_lap;
 	num_written = 0;
@@ -4073,7 +4054,7 @@ BgBufferSync(WritebackContext *wb_context)
 	/* Execute the LRU scan */
 	while (num_to_scan > 0 && reusable_buffers < upcoming_alloc_est)
 	{
-		int			sync_state = SyncOneBuffer(next_to_clean, true,
+		int			sync_state = SyncOneBuffer(next_to_clean, true, true,
 											   wb_context);
 
 		if (++next_to_clean >= NBuffers)
@@ -4086,7 +4067,7 @@ BgBufferSync(WritebackContext *wb_context)
 		if (sync_state & BUF_WRITTEN)
 		{
 			reusable_buffers++;
-			if (++num_written >= bgwriter_lru_maxpages)
+			if (++num_written >= write_limit)
 			{
 				PendingBgWriterStats.maxwritten_clean++;
 				break;
@@ -4121,7 +4102,7 @@ BgBufferSync(WritebackContext *wb_context)
 	{
 		scans_per_alloc = (float) new_strategy_delta / (float) new_recent_alloc;
 		smoothed_density += (scans_per_alloc - smoothed_density) /
-			smoothing_samples;
+			cleaner_smoothing_samples;
 
 #ifdef BGW_DEBUG
 		elog(DEBUG2, "bgwriter: cleaner density alloc=%u scan=%ld density=%.2f new smoothed=%.2f",
@@ -4140,16 +4121,26 @@ BgBufferSync(WritebackContext *wb_context)
  * If skip_recently_used is true, we don't write currently-pinned buffers, nor
  * buffers marked recently used, as these are not replacement candidates.
  *
+ * If cool_if_hot is true (the bgwriter's LRU scan), an unpinned HOT buffer is
+ * demoted HOT -> COOL as we pass it, pre-staging eviction candidates so the
+ * foreground clock sweep finds a COOL victim in a single pass instead of
+ * having to cool buffers itself (force_cool).  The demotion is done under the
+ * buffer header lock we already hold, so it needs no CAS and cannot race a
+ * concurrent demotion.  A concurrent PinBuffer promotes it back to HOT, which
+ * is the intended 2Q behavior (a re-accessed buffer is rescued).
+ *
  * Returns a bitmask containing the following flag bits:
  *	BUF_WRITTEN: we wrote the buffer.
  *	BUF_REUSABLE: buffer is available for replacement, ie, it has
- *		pin count 0 and usage count 0.
+ *		pin count 0 and is COOL (an eviction candidate).
+ *	BUF_COOLED: we demoted this buffer HOT -> COOL this call.
  *
  * (BUF_WRITTEN could be set in error if FlushBuffer finds the buffer clean
  * after locking it, but we don't care all that much.)
  */
 static int
-SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
+SyncOneBuffer(int buf_id, bool skip_recently_used, bool cool_if_hot,
+			  WritebackContext *wb_context)
 {
 	BufferDesc *bufHdr = GetBufferDescriptor(buf_id);
 	int			result = 0;
@@ -4171,8 +4162,38 @@ SyncOneBuffer(int buf_id, bool skip_recently_used, WritebackContext *wb_context)
 	 */
 	buf_state = LockBufHdr(bufHdr);
 
+	/*
+	 * Pre-cool with a second chance: if asked, act on an unpinned HOT buffer.
+	 * If its ref bit is set (accessed since our last pass), clear the ref bit
+	 * and leave it HOT -- a recently-used buffer earns one reprieve, keeping
+	 * the hot working set out of the COOL stage under scan pressure.  Only a
+	 * HOT buffer whose ref bit is already clear is demoted HOT -> COOL,
+	 * pre-staging it as an eviction candidate for the foreground sweep.  We
+	 * hold the header lock, so each transition is a plain masked store applied
+	 * atomically by UnlockBufHdrExt; we re-lock to continue the dirty-write
+	 * inspection below.
+	 */
+	if (cool_if_hot &&
+		BUF_STATE_GET_REFCOUNT(buf_state) == 0 &&
+		BUF_STATE_GET_COOLSTATE(buf_state) != BUF_COOLSTATE_COOL)
+	{
+		if (BUF_STATE_GET_REFBIT(buf_state))
+		{
+			/* second chance: consume the ref bit, stay HOT */
+			UnlockBufHdrExt(bufHdr, buf_state, 0, BUF_REFBIT, 0);
+			buf_state = LockBufHdr(bufHdr);
+		}
+		else
+		{
+			/* not re-accessed since last pass: demote to COOL */
+			UnlockBufHdrExt(bufHdr, buf_state, 0, BUF_USAGECOUNT_MASK, 0);
+			buf_state = LockBufHdr(bufHdr);
+			result |= BUF_COOLED;
+		}
+	}
+
 	if (BUF_STATE_GET_REFCOUNT(buf_state) == 0 &&
-		BUF_STATE_GET_USAGECOUNT(buf_state) == 0)
+		BUF_STATE_GET_COOLSTATE(buf_state) == BUF_COOLSTATE_COOL)
 	{
 		result |= BUF_REUSABLE;
 	}
@@ -4604,22 +4625,8 @@ FlushBuffer(BufferDesc *buf, SMgrRelation reln, IOObject io_object,
 			  false);
 
 	/*
-	 * When a strategy is in use, only flushes of dirty buffers already in the
-	 * strategy ring are counted as strategy writes (IOCONTEXT
-	 * [BULKREAD|BULKWRITE|VACUUM] IOOP_WRITE) for the purpose of IO
-	 * statistics tracking.
-	 *
-	 * If a shared buffer initially added to the ring must be flushed before
-	 * being used, this is counted as an IOCONTEXT_NORMAL IOOP_WRITE.
-	 *
-	 * If a shared buffer which was added to the ring later because the
-	 * current strategy buffer is pinned or in use or because all strategy
-	 * buffers were dirty and rejected (for BAS_BULKREAD operations only)
-	 * requires flushing, this is counted as an IOCONTEXT_NORMAL IOOP_WRITE
-	 * (from_ring will be false).
-	 *
-	 * When a strategy is not in use, the write can only be a "regular" write
-	 * of a dirty shared buffer (IOCONTEXT_NORMAL IOOP_WRITE).
+	 * All writes of a dirty shared buffer are counted as an IOCONTEXT_NORMAL
+	 * IOOP_WRITE for the purpose of IO statistics tracking.
 	 */
 	pgstat_count_io_op_time(io_object, io_context,
 							IOOP_WRITE, io_start, 1, BLCKSZ);
@@ -5380,8 +5387,6 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	BlockNumber nblocks;
 	BlockNumber blkno;
 	PGIOAlignedBlock buf;
-	BufferAccessStrategy bstrategy_src;
-	BufferAccessStrategy bstrategy_dst;
 	BlockRangeReadStreamPrivate p;
 	ReadStream *src_stream;
 	SMgrRelation src_smgr;
@@ -5409,10 +5414,6 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	smgrextend(smgropen(dstlocator, INVALID_PROC_NUMBER), forkNum, nblocks - 1,
 			   buf.data, true);
 
-	/* This is a bulk operation, so use buffer access strategies. */
-	bstrategy_src = GetAccessStrategy(BAS_BULKREAD);
-	bstrategy_dst = GetAccessStrategy(BAS_BULKWRITE);
-
 	/* Initialize streaming read */
 	p.current_blocknum = 0;
 	p.last_exclusive = nblocks;
@@ -5424,7 +5425,6 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	 */
 	src_stream = read_stream_begin_smgr_relation(READ_STREAM_FULL |
 												 READ_STREAM_USE_BATCHING,
-												 bstrategy_src,
 												 src_smgr,
 												 permanent ? RELPERSISTENCE_PERMANENT : RELPERSISTENCE_UNLOGGED,
 												 forkNum,
@@ -5444,7 +5444,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 
 		dstBuf = ReadBufferWithoutRelcache(dstlocator, forkNum,
 										   BufferGetBlockNumber(srcBuf),
-										   RBM_ZERO_AND_LOCK, bstrategy_dst,
+										   RBM_ZERO_AND_LOCK,
 										   permanent);
 		dstPage = BufferGetPage(dstBuf);
 
@@ -5465,9 +5465,6 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 	}
 	Assert(read_stream_next_buffer(src_stream, NULL) == InvalidBuffer);
 	read_stream_end(src_stream);
-
-	FreeAccessStrategy(bstrategy_src);
-	FreeAccessStrategy(bstrategy_dst);
 }
 
 /* ---------------------------------------------------------------------

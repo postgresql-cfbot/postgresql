@@ -2213,9 +2213,9 @@ heapam_scan_sample_next_block(TableScanDesc scan, SampleScanState *scanstate)
 	 */
 	CHECK_FOR_INTERRUPTS();
 
-	/* Read page using selected strategy */
+	/* Read page */
 	hscan->rs_cbuf = ReadBufferExtended(hscan->rs_base.rs_rd, MAIN_FORKNUM,
-										blockno, RBM_NORMAL, hscan->rs_strategy);
+										blockno, RBM_NORMAL);
 
 	/* in pagemode, prune the page and determine visible tuple offsets */
 	if (hscan->rs_base.rs_flags & SO_ALLOW_PAGEMODE)

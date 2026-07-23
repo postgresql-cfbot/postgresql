@@ -25,21 +25,6 @@
 
 typedef void *Block;
 
-/*
- * Possible arguments for GetAccessStrategy().
- *
- * If adding a new BufferAccessStrategyType, also add a new IOContext so
- * IO statistics using this strategy are tracked.
- */
-typedef enum BufferAccessStrategyType
-{
-	BAS_NORMAL,					/* Normal random access */
-	BAS_BULKREAD,				/* Large read-only scan (hint bit updates are
-								 * ok) */
-	BAS_BULKWRITE,				/* Large multi-block write (e.g. COPY IN) */
-	BAS_VACUUM,					/* VACUUM */
-} BufferAccessStrategyType;
-
 /* Possible modes for ReadBufferExtended() */
 typedef enum
 {
@@ -135,7 +120,6 @@ struct ReadBuffersOperation
 	SMgrRelation smgr;
 	char		persistence;
 	ForkNumber	forknum;
-	BufferAccessStrategy strategy;
 
 	/*
 	 * The following private members are private state for communication
@@ -235,11 +219,10 @@ extern bool ReadRecentBuffer(RelFileLocator rlocator, ForkNumber forkNum,
 							 BlockNumber blockNum, Buffer recent_buffer);
 extern Buffer ReadBuffer(Relation reln, BlockNumber blockNum);
 extern Buffer ReadBufferExtended(Relation reln, ForkNumber forkNum,
-								 BlockNumber blockNum, ReadBufferMode mode,
-								 BufferAccessStrategy strategy);
+								 BlockNumber blockNum, ReadBufferMode mode);
 extern Buffer ReadBufferWithoutRelcache(RelFileLocator rlocator,
 										ForkNumber forkNum, BlockNumber blockNum,
-										ReadBufferMode mode, BufferAccessStrategy strategy,
+										ReadBufferMode mode,
 										bool permanent);
 
 extern bool StartReadBuffer(ReadBuffersOperation *operation,
@@ -266,18 +249,15 @@ extern Buffer ReleaseAndReadBuffer(Buffer buffer, Relation relation,
 
 extern Buffer ExtendBufferedRel(BufferManagerRelation bmr,
 								ForkNumber forkNum,
-								BufferAccessStrategy strategy,
 								uint32 flags);
 extern BlockNumber ExtendBufferedRelBy(BufferManagerRelation bmr,
 									   ForkNumber fork,
-									   BufferAccessStrategy strategy,
 									   uint32 flags,
 									   uint32 extend_by,
 									   Buffer *buffers,
 									   uint32 *extended_by);
 extern Buffer ExtendBufferedRelTo(BufferManagerRelation bmr,
 								  ForkNumber fork,
-								  BufferAccessStrategy strategy,
 								  uint32 flags,
 								  BlockNumber extend_to,
 								  ReadBufferMode mode);
@@ -375,14 +355,6 @@ extern void MarkDirtyAllUnpinnedBuffers(int32 *buffers_dirtied,
 extern void AtProcExit_LocalBuffers(void);
 
 /* in freelist.c */
-
-extern BufferAccessStrategy GetAccessStrategy(BufferAccessStrategyType btype);
-extern BufferAccessStrategy GetAccessStrategyWithSize(BufferAccessStrategyType btype,
-													  int ring_size_kb);
-extern int	GetAccessStrategyBufferCount(BufferAccessStrategy strategy);
-extern int	GetAccessStrategyPinLimit(BufferAccessStrategy strategy);
-
-extern void FreeAccessStrategy(BufferAccessStrategy strategy);
 
 
 /* inline functions */

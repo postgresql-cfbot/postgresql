@@ -2460,7 +2460,7 @@ process_single_relation(RepackStmt *stmt, LOCKMODE lockmode, bool isTopLevel,
 			if (params->options & CLUOPT_VERBOSE)
 				vac_params.options |= VACOPT_VERBOSE;
 			analyze_rel(tableOid, NULL, &vac_params,
-						stmt->relation->va_cols, true, NULL);
+						stmt->relation->va_cols, true);
 			PopActiveSnapshot();
 			CommandCounterIncrement();
 		}

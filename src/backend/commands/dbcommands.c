@@ -262,7 +262,6 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	LockRelId	relid;
 	Snapshot	snapshot;
 	SMgrRelation smgr;
-	BufferAccessStrategy bstrategy;
 
 	/* Get pg_class relfilenumber. */
 	relfilenumber = RelationMapOidToFilenumberForDatabase(srcpath,
@@ -282,9 +281,6 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 	nblocks = smgrnblocks(smgr, MAIN_FORKNUM);
 	smgrclose(smgr);
 
-	/* Use a buffer access strategy since this is a bulk read operation. */
-	bstrategy = GetAccessStrategy(BAS_BULKREAD);
-
 	/*
 	 * As explained in the function header comments, we need a snapshot that
 	 * will see all committed transactions as committed, and our transaction
@@ -299,7 +295,7 @@ ScanSourceDatabasePgClass(Oid tbid, Oid dbid, char *srcpath)
 		CHECK_FOR_INTERRUPTS();
 
 		buf = ReadBufferWithoutRelcache(rlocator, MAIN_FORKNUM, blkno,
-										RBM_NORMAL, bstrategy, true);
+										RBM_NORMAL, true);
 
 		LockBuffer(buf, BUFFER_LOCK_SHARE);
 		page = BufferGetPage(buf);

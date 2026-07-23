@@ -603,7 +603,7 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 			return InvalidBuffer;
 	}
 	else
-		buf = ReadBufferExtended(rel, FSM_FORKNUM, blkno, RBM_ZERO_ON_ERROR, NULL);
+		buf = ReadBufferExtended(rel, FSM_FORKNUM, blkno, RBM_ZERO_ON_ERROR);
 
 	/*
 	 * Initializing the page when needed is trickier than it looks, because of
@@ -638,7 +638,7 @@ fsm_readbuf(Relation rel, FSMAddress addr, bool extend)
 static Buffer
 fsm_extend(Relation rel, BlockNumber fsm_nblocks)
 {
-	return ExtendBufferedRelTo(BMR_REL(rel), FSM_FORKNUM, NULL,
+	return ExtendBufferedRelTo(BMR_REL(rel), FSM_FORKNUM,
 							   EB_CREATE_FORK_IF_NEEDED |
 							   EB_CLEAR_SIZE_CACHE,
 							   fsm_nblocks,

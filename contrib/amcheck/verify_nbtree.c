@@ -88,8 +88,6 @@ typedef struct BtreeCheckState
 	bool		checkunique;
 	/* Per-page context */
 	MemoryContext targetcontext;
-	/* Buffer access strategy */
-	BufferAccessStrategy checkstrategy;
 
 	/*
 	 * Info for uniqueness checking. Fill this field and the one below once
@@ -490,7 +488,6 @@ bt_check_every_level(Relation rel, Relation heaprel, bool heapkeyspace,
 	state->targetcontext = AllocSetContextCreate(CurrentMemoryContext,
 												 "amcheck context",
 												 ALLOCSET_DEFAULT_SIZES);
-	state->checkstrategy = GetAccessStrategy(BAS_BULKREAD);
 
 	/* Get true root block from meta-page */
 	metapage = palloc_btree_page(state, BTREE_METAPAGE);
@@ -1115,7 +1112,7 @@ bt_recheck_sibling_links(BtreeCheckState *state,
 
 		/* Couple locks in the usual order for nbtree:  Left to right */
 		lbuf = ReadBufferExtended(state->rel, MAIN_FORKNUM, leftcurrent,
-								  RBM_NORMAL, state->checkstrategy);
+								  RBM_NORMAL);
 		LockBuffer(lbuf, BT_READ);
 		_bt_checkpage(state->rel, lbuf);
 		page = BufferGetPage(lbuf);
@@ -1138,8 +1135,7 @@ bt_recheck_sibling_links(BtreeCheckState *state,
 		if (newtargetblock != leftcurrent)
 		{
 			newtargetbuf = ReadBufferExtended(state->rel, MAIN_FORKNUM,
-											  newtargetblock, RBM_NORMAL,
-											  state->checkstrategy);
+											  newtargetblock, RBM_NORMAL);
 			LockBuffer(newtargetbuf, BT_READ);
 			_bt_checkpage(state->rel, newtargetbuf);
 			page = BufferGetPage(newtargetbuf);
@@ -3300,8 +3296,7 @@ palloc_btree_page(BtreeCheckState *state, BlockNumber blocknum)
 	 * We copy the page into local storage to avoid holding pin on the buffer
 	 * longer than we must.
 	 */
-	buffer = ReadBufferExtended(state->rel, MAIN_FORKNUM, blocknum, RBM_NORMAL,
-								state->checkstrategy);
+	buffer = ReadBufferExtended(state->rel, MAIN_FORKNUM, blocknum, RBM_NORMAL);
 	LockBuffer(buffer, BT_READ);
 
 	/*

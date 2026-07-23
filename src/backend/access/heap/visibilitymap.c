@@ -580,7 +580,7 @@ vm_readbuf(Relation rel, BlockNumber blkno, bool extend)
 	}
 	else
 		buf = ReadBufferExtended(rel, VISIBILITYMAP_FORKNUM, blkno,
-								 RBM_ZERO_ON_ERROR, NULL);
+								 RBM_ZERO_ON_ERROR);
 
 	/*
 	 * Initializing the page when needed is trickier than it looks, because of
@@ -616,7 +616,7 @@ vm_extend(Relation rel, BlockNumber vm_nblocks)
 {
 	Buffer		buf;
 
-	buf = ExtendBufferedRelTo(BMR_REL(rel), VISIBILITYMAP_FORKNUM, NULL,
+	buf = ExtendBufferedRelTo(BMR_REL(rel), VISIBILITYMAP_FORKNUM,
 							  EB_CREATE_FORK_IF_NEEDED |
 							  EB_CLEAR_SIZE_CACHE,
 							  vm_nblocks,

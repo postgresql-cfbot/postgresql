@@ -2993,28 +2993,6 @@ description | Waiting for a newly initialized WAL file to reach durable storage
           <literal>init</literal>.
          </para>
         </listitem>
-        <listitem>
-         <para>
-          <literal>vacuum</literal>: I/O operations performed outside of shared
-          buffers while vacuuming and analyzing permanent relations. Temporary
-          table vacuums use the same local buffer pool as other temporary table
-          I/O operations and are tracked in <varname>context</varname>
-          <literal>normal</literal>.
-         </para>
-        </listitem>
-        <listitem>
-         <para>
-          <literal>bulkread</literal>: Certain large read I/O operations
-          done outside of shared buffers, for example, a sequential scan of a
-          large table.
-         </para>
-        </listitem>
-        <listitem>
-         <para>
-          <literal>bulkwrite</literal>: Certain large write I/O operations
-          done outside of shared buffers, such as <command>COPY</command>.
-         </para>
-        </listitem>
        </itemizedlist>
       </entry>
      </row>
@@ -3180,13 +3158,8 @@ description | Waiting for a newly initialized WAL file to reach durable storage
         buffer in order to make it available for another use.
        </para>
        <para>
-        In <varname>context</varname> <literal>normal</literal>, this counts
-        the number of times a block was evicted from a buffer and replaced with
-        another block. In <varname>context</varname>s
-        <literal>bulkwrite</literal>, <literal>bulkread</literal>, and
-        <literal>vacuum</literal>, this counts the number of times a block was
-        evicted from shared buffers in order to add the shared buffer to a
-        separate, size-limited ring buffer for use in a bulk I/O operation.
+        This counts the number of times a block was evicted from a buffer and
+        replaced with another block.
         </para>
       </entry>
      </row>
@@ -3197,10 +3170,9 @@ description | Waiting for a newly initialized WAL file to reach durable storage
         <structfield>reuses</structfield> <type>bigint</type>
        </para>
        <para>
-        The number of times an existing buffer in a size-limited ring buffer
-        outside of shared buffers was reused as part of an I/O operation in the
-        <literal>bulkread</literal>, <literal>bulkwrite</literal>, or
-        <literal>vacuum</literal> <varname>context</varname>s.
+        Always zero.  This column previously counted reuses of buffers in a
+        size-limited ring buffer (buffer access strategy); ring buffers have
+        been removed, so no reuses are tracked.
        </para>
       </entry>
      </row>

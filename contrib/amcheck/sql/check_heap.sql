@@ -27,11 +27,11 @@ INSERT INTO heaptest (a, b)
 		FROM generate_series(1,50) gs);
 
 -- pg_stat_io test:
--- verify_heapam always uses a BAS_BULKREAD BufferAccessStrategy, whereas a
--- sequential scan does so only if the table is large enough when compared to
--- shared buffers (see initscan()). CREATE DATABASE ... also unconditionally
--- uses a BAS_BULKREAD strategy, but we have chosen to use a tablespace and
--- verify_heapam to provide coverage instead of adding another expensive
+-- verify_heapam reads the heap through the buffer manager; with the
+-- cooling-stage clock sweep there are no per-strategy IO contexts, so the
+-- reads are counted in the 'normal' context.  CREATE DATABASE ... likewise
+-- reads through the normal context, but we have chosen to use a tablespace
+-- and verify_heapam to provide coverage instead of adding another expensive
 -- operation to the main regression test suite.
 --
 -- Create an alternative tablespace and move the heaptest table to it, causing
@@ -43,7 +43,7 @@ INSERT INTO heaptest (a, b)
 SET allow_in_place_tablespaces = true;
 CREATE TABLESPACE regress_test_stats_tblspc LOCATION '';
 SELECT sum(reads) AS stats_bulkreads_before
-  FROM pg_stat_io WHERE context = 'bulkread' \gset
+  FROM pg_stat_io WHERE context = 'normal' AND object = 'relation' \gset
 BEGIN;
 ALTER TABLE heaptest SET TABLESPACE regress_test_stats_tblspc;
 -- Check that valid options are not rejected nor corruption reported
@@ -56,10 +56,10 @@ COMMIT;
 
 -- verify_heapam should have read in the page written out by
 --   ALTER TABLE ... SET TABLESPACE ...
--- causing an additional bulkread, which should be reflected in pg_stat_io.
+-- causing additional reads, which should be reflected in pg_stat_io.
 SELECT pg_stat_force_next_flush();
 SELECT sum(reads) AS stats_bulkreads_after
-  FROM pg_stat_io WHERE context = 'bulkread' \gset
+  FROM pg_stat_io WHERE context = 'normal' AND object = 'relation' \gset
 SELECT :stats_bulkreads_after > :stats_bulkreads_before;
 
 CREATE ROLE regress_heaptest_role;

@@ -542,7 +542,6 @@ hashbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	 */
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_USE_BATCHING,
-										info->strategy,
 										rel,
 										MAIN_FORKNUM,
 										hash_bulkdelete_read_stream_cb,
@@ -616,7 +615,7 @@ bucket_loop:
 
 		bucket_buf = buf;
 
-		hashbucketcleanup(rel, cur_bucket, bucket_buf, blkno, info->strategy,
+		hashbucketcleanup(rel, cur_bucket, bucket_buf, blkno,
 						  cachedmetap->hashm_maxbucket,
 						  cachedmetap->hashm_highmask,
 						  cachedmetap->hashm_lowmask, &tuples_removed,
@@ -765,7 +764,7 @@ hashvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
  */
 void
 hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
-				  BlockNumber bucket_blkno, BufferAccessStrategy bstrategy,
+				  BlockNumber bucket_blkno,
 				  uint32 maxbucket, uint32 highmask, uint32 lowmask,
 				  double *tuples_removed, double *num_index_tuples,
 				  bool split_cleanup,
@@ -935,9 +934,8 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 		if (!BlockNumberIsValid(blkno))
 			break;
 
-		next_buf = _hash_getbuf_with_strategy(rel, blkno, HASH_WRITE,
-											  LH_OVERFLOW_PAGE,
-											  bstrategy);
+		next_buf = _hash_getbuf(rel, blkno, HASH_WRITE,
+								LH_OVERFLOW_PAGE);
 
 		/*
 		 * release the lock on previous page after acquiring the lock on next
@@ -1004,8 +1002,7 @@ hashbucketcleanup(Relation rel, Bucket cur_bucket, Buffer bucket_buf,
 	 * ordering of tuples for a scan that has started before it.
 	 */
 	if (bucket_dirty && IsBufferCleanupOK(bucket_buf))
-		_hash_squeezebucket(rel, cur_bucket, bucket_blkno, bucket_buf,
-							bstrategy);
+		_hash_squeezebucket(rel, cur_bucket, bucket_blkno, bucket_buf);
 	else
 		LockBuffer(bucket_buf, BUFFER_LOCK_UNLOCK);
 }

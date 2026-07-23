@@ -32,7 +32,6 @@ struct GinVacuumState
 	IndexBulkDeleteCallback callback;
 	void	   *callback_state;
 	GinState	ginstate;
-	BufferAccessStrategy strategy;
 	MemoryContext tmpCxt;
 };
 
@@ -289,7 +288,7 @@ ginScanPostingTreeToDelete(GinVacuumState *gvs, DataPageDeleteStack *myStackItem
 			childBuffer = ReadBufferExtended(gvs->index,
 											 MAIN_FORKNUM,
 											 PostingItemGetBlockNumber(pitem),
-											 RBM_NORMAL, gvs->strategy);
+											 RBM_NORMAL);
 			LockBuffer(childBuffer, GIN_EXCLUSIVE);
 
 			/* Allocate a child stack entry on first use; reuse thereafter */
@@ -389,7 +388,7 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno)
 		PostingItem *pitem;
 
 		buffer = ReadBufferExtended(gvs->index, MAIN_FORKNUM, blkno,
-									RBM_NORMAL, gvs->strategy);
+									RBM_NORMAL);
 		LockBuffer(buffer, GIN_SHARE);
 		page = BufferGetPage(buffer);
 
@@ -430,7 +429,7 @@ ginVacuumPostingTreeLeaves(GinVacuumState *gvs, BlockNumber blkno)
 			break;
 
 		buffer = ReadBufferExtended(gvs->index, MAIN_FORKNUM, blkno,
-									RBM_NORMAL, gvs->strategy);
+									RBM_NORMAL);
 		LockBuffer(buffer, GIN_EXCLUSIVE);
 		page = BufferGetPage(buffer);
 	}
@@ -454,7 +453,7 @@ ginVacuumPostingTree(GinVacuumState *gvs, BlockNumber rootBlkno)
 		bool		deleted PG_USED_FOR_ASSERTS_ONLY;
 
 		buffer = ReadBufferExtended(gvs->index, MAIN_FORKNUM, rootBlkno,
-									RBM_NORMAL, gvs->strategy);
+									RBM_NORMAL);
 
 		/*
 		 * Lock posting tree root for cleanup to ensure there are no
@@ -615,7 +614,6 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	gvs.index = index;
 	gvs.callback = callback;
 	gvs.callback_state = callback_state;
-	gvs.strategy = info->strategy;
 	initGinState(&gvs.ginstate, index);
 
 	/* first time through? */
@@ -636,7 +634,7 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 	gvs.result = stats;
 
 	buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
-								RBM_NORMAL, info->strategy);
+								RBM_NORMAL);
 
 	/* find leaf page */
 	for (;;)
@@ -669,7 +667,7 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 
 		UnlockReleaseBuffer(buffer);
 		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
-									RBM_NORMAL, info->strategy);
+									RBM_NORMAL);
 	}
 
 	/* right now we found leftmost page in entry's BTree */
@@ -712,7 +710,7 @@ ginbulkdelete(IndexVacuumInfo *info, IndexBulkDeleteResult *stats,
 			break;
 
 		buffer = ReadBufferExtended(index, MAIN_FORKNUM, blkno,
-									RBM_NORMAL, info->strategy);
+									RBM_NORMAL);
 		LockBuffer(buffer, GIN_EXCLUSIVE);
 	}
 
@@ -794,7 +792,6 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 	stream = read_stream_begin_relation(READ_STREAM_MAINTENANCE |
 										READ_STREAM_FULL |
 										READ_STREAM_USE_BATCHING,
-										info->strategy,
 										index,
 										MAIN_FORKNUM,
 										block_range_read_stream_cb,

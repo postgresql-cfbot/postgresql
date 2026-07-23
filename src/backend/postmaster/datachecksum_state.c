@@ -390,7 +390,7 @@ static List *BuildRelationList(bool temp_relations, bool include_shared);
 static void FreeDatabaseList(List *dblist);
 static DataChecksumsWorkerResult ProcessDatabase(DataChecksumsWorkerDatabase *db);
 static bool ProcessAllDatabases(void);
-static bool ProcessSingleRelationFork(Relation reln, ForkNumber forkNum, BufferAccessStrategy strategy);
+static bool ProcessSingleRelationFork(Relation reln, ForkNumber forkNum);
 static void ResetDataChecksumsProgressCounters(void);
 static void launcher_cancel_handler(SIGNAL_ARGS);
 static void WaitForAllTransactionsToFinish(void);
@@ -687,7 +687,7 @@ StartDataChecksumsWorkerLauncher(DataChecksumsWorkerOperation op,
  * error is raised in the lower levels.
  */
 static bool
-ProcessSingleRelationFork(Relation reln, ForkNumber forkNum, BufferAccessStrategy strategy)
+ProcessSingleRelationFork(Relation reln, ForkNumber forkNum)
 {
 	BlockNumber numblocks = RelationGetNumberOfBlocksInFork(reln, forkNum);
 	char		activity[NAMEDATALEN * 2 + 128];
@@ -722,7 +722,7 @@ ProcessSingleRelationFork(Relation reln, ForkNumber forkNum, BufferAccessStrateg
 	 */
 	for (BlockNumber blknum = 0; blknum < numblocks; blknum++)
 	{
-		Buffer		buf = ReadBufferExtended(reln, forkNum, blknum, RBM_NORMAL, strategy);
+		Buffer		buf = ReadBufferExtended(reln, forkNum, blknum, RBM_NORMAL);
 
 		/* Need to get an exclusive lock to mark the buffer as dirty */
 		LockBuffer(buf, BUFFER_LOCK_EXCLUSIVE);
@@ -808,7 +808,7 @@ ResetDataChecksumsProgressCounters(void)
  * error is raised in the lower levels.
  */
 static bool
-ProcessSingleRelationByOid(Oid relationId, BufferAccessStrategy strategy)
+ProcessSingleRelationByOid(Oid relationId)
 {
 	Relation	rel;
 	bool		aborted = false;
@@ -835,7 +835,7 @@ ProcessSingleRelationByOid(Oid relationId, BufferAccessStrategy strategy)
 	{
 		if (smgrexists(rel->rd_smgr, fnum))
 		{
-			if (!ProcessSingleRelationFork(rel, fnum, strategy))
+			if (!ProcessSingleRelationFork(rel, fnum))
 			{
 				aborted = true;
 				break;
@@ -1582,7 +1582,6 @@ DataChecksumsWorkerMain(Datum arg)
 	Oid			dboid;
 	List	   *RelationList = NIL;
 	List	   *InitialTempTableList = NIL;
-	BufferAccessStrategy strategy;
 	bool		aborted = false;
 	int64		rels_done;
 	bool		process_shared;
@@ -1650,11 +1649,6 @@ DataChecksumsWorkerMain(Datum arg)
 	VacuumUpdateCosts();
 	VacuumCostBalance = 0;
 
-	/*
-	 * Create and set the vacuum strategy as our buffer strategy.
-	 */
-	strategy = GetAccessStrategy(BAS_VACUUM);
-
 	RelationList = BuildRelationList(false, process_shared);
 
 	/* Update the total number of relations to be processed in this DB. */
@@ -1676,9 +1670,7 @@ DataChecksumsWorkerMain(Datum arg)
 	rels_done = 0;
 	foreach_oid(reloid, RelationList)
 	{
-		bool		costs_updated = false;
-
-		if (!ProcessSingleRelationByOid(reloid, strategy))
+		if (!ProcessSingleRelationByOid(reloid))
 		{
 			aborted = true;
 			break;
@@ -1694,8 +1686,7 @@ DataChecksumsWorkerMain(Datum arg)
 
 		/*
 		 * Check if the cost settings changed during runtime and if so, update
-		 * to reflect the new values and signal that the access strategy needs
-		 * to be refreshed.
+		 * to reflect the new values.
 		 */
 		LWLockAcquire(DataChecksumsWorkerLock, LW_EXCLUSIVE);
 		if (DataChecksumState->worker_invocation != worker_invocation)
@@ -1706,7 +1697,6 @@ DataChecksumsWorkerMain(Datum arg)
 		if ((DataChecksumState->launch_cost_delay != DataChecksumState->cost_delay)
 			|| (DataChecksumState->launch_cost_limit != DataChecksumState->cost_limit))
 		{
-			costs_updated = true;
 			VacuumCostDelay = DataChecksumState->launch_cost_delay;
 			VacuumCostLimit = DataChecksumState->launch_cost_limit;
 			VacuumUpdateCosts();
@@ -1714,19 +1704,10 @@ DataChecksumsWorkerMain(Datum arg)
 			DataChecksumState->cost_delay = DataChecksumState->launch_cost_delay;
 			DataChecksumState->cost_limit = DataChecksumState->launch_cost_limit;
 		}
-		else
-			costs_updated = false;
 		LWLockRelease(DataChecksumsWorkerLock);
-
-		if (costs_updated)
-		{
-			FreeAccessStrategy(strategy);
-			strategy = GetAccessStrategy(BAS_VACUUM);
-		}
 	}
 
 	list_free(RelationList);
-	FreeAccessStrategy(strategy);
 
 	if (aborted || abort_requested)
 	{

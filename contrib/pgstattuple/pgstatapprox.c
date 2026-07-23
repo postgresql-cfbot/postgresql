@@ -116,13 +116,11 @@ static void
 statapprox_heap(Relation rel, output_type *stat)
 {
 	BlockNumber nblocks;
-	BufferAccessStrategy bstrategy;
 	TransactionId OldestXmin;
 	StatApproxReadStreamPrivate p;
 	ReadStream *stream;
 
 	OldestXmin = GetOldestNonRemovableTransactionId(rel);
-	bstrategy = GetAccessStrategy(BAS_BULKREAD);
 
 	nblocks = RelationGetNumberOfBlocks(rel);
 
@@ -141,7 +139,6 @@ statapprox_heap(Relation rel, output_type *stat)
 	 * caution.
 	 */
 	stream = read_stream_begin_relation(READ_STREAM_FULL,
-										bstrategy,
 										rel,
 										MAIN_FORKNUM,
 										statapprox_heap_read_stream_next,

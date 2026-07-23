@@ -519,7 +519,7 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 	{
 		/* page exists in file */
 		buffer = ReadBufferWithoutRelcache(rlocator, forknum, blkno,
-										   mode, NULL, true);
+										   mode, true);
 	}
 	else
 	{
@@ -536,7 +536,6 @@ XLogReadBufferExtended(RelFileLocator rlocator, ForkNumber forknum,
 		Assert(InRecovery);
 		buffer = ExtendBufferedRelTo(BMR_SMGR(smgr, RELPERSISTENCE_PERMANENT),
 									 forknum,
-									 NULL,
 									 EB_PERFORMING_RECOVERY |
 									 EB_SKIP_EXTENSION_LOCK,
 									 blkno + 1,

@@ -126,7 +126,6 @@ typedef struct HeapCheckContext
 	 * recent block in the buffer yielded by the read stream API.
 	 */
 	BlockNumber blkno;
-	BufferAccessStrategy bstrategy;
 	Buffer		buffer;
 	Page		page;
 
@@ -374,7 +373,6 @@ verify_heapam(PG_FUNCTION_ARGS)
 		PG_RETURN_NULL();
 	}
 
-	ctx.bstrategy = GetAccessStrategy(BAS_BULKREAD);
 	ctx.buffer = InvalidBuffer;
 	ctx.page = NULL;
 
@@ -472,7 +470,6 @@ verify_heapam(PG_FUNCTION_ARGS)
 	}
 
 	stream = read_stream_begin_relation(stream_flags,
-										ctx.bstrategy,
 										ctx.rel,
 										MAIN_FORKNUM,
 										stream_cb,

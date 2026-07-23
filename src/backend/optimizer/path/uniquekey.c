@@ -884,7 +884,7 @@ convert_unique_keys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 		if (!IS_UPPER_REL(input_rel))
 		{
 			/* Conversion between base/join rels is currently not needed. */
-			IS_UPPER_REL(rel);
+			Assert(IS_UPPER_REL(rel));
 
 			/*
 			 * For each key, check its ECs and find the EM present in
@@ -942,7 +942,7 @@ convert_unique_keys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 		}
 		else
 		{
-			ListCell	*lc2 = list_head(key->opfamily_lists);
+			ListCell	*opfamily_cell = list_head(key->opfamily_lists);
 
 			/* IS_UPPER_REL(input_rel) */
 
@@ -1007,12 +1007,12 @@ convert_unique_keys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 					}
 					if (target_var)
 					{
-						List		*opfamilies = lfirst(lc2);
+						List		*opfamilies = lfirst(opfamily_cell);
 
 						matched = find_ec_position_matching_expr(root, rel,
 																 (Expr *) target_var,
 																 opfamilies);
-						lc2 = lnext(key->opfamily_lists, lc2);
+						opfamily_cell = lnext(key->opfamily_lists, opfamily_cell);
 					}
 					else
 						matched = -1;

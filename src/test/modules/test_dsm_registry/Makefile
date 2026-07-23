@@ -10,6 +10,7 @@ EXTENSION = test_dsm_registry
 DATA = test_dsm_registry--1.0.sql
 
 REGRESS = test_dsm_registry
+TAP_TESTS = 1
 
 ifdef USE_PGXS
 PG_CONFIG = pg_config

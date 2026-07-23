@@ -162,6 +162,13 @@ int			wal_segment_size = DEFAULT_XLOG_SEG_SIZE;
  */
 int			CheckPointSegments;
 
+/*
+ * Hook for plugins to take control during checkpoint processing. All
+ * preparation procedures have already been done, and only the sync needs
+ * to be done.
+ */
+Checkpoint_hook_type Checkpoint_hook = NULL;
+
 /* Estimated distance between checkpoints, in bytes */
 static double CheckPointDistanceEstimate = 0;
 static double PrevCheckPointDistance = 0;
@@ -8063,6 +8070,14 @@ CheckPointGuts(XLogRecPtr checkPointRedo, int flags)
 	CheckPointMultiXact();
 	CheckPointPredicate();
 	CheckPointBuffers(flags);
+
+	/*
+	 * Allow a plugin that depends on a custom RMGR to retain its state through
+	 * reboots or crashes by following specific steps, ensuring that essential
+	 * WAL records are not truncated.
+	 */
+	if (Checkpoint_hook)
+		Checkpoint_hook(checkPointRedo, flags);
 
 	/* Perform all queued up fsyncs */
 	TRACE_POSTGRESQL_BUFFER_CHECKPOINT_SYNC_START();

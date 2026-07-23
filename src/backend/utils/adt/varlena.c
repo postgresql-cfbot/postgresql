@@ -289,8 +289,24 @@ Datum
 textout(PG_FUNCTION_ARGS)
 {
 	Datum		txt = PG_GETARG_DATUM(0);
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	PG_RETURN_CSTRING(TextDatumGetCString(txt));
+	if (buf)
+	{
+		text	   *tunpacked = pg_detoast_datum_packed(DatumGetPointer(txt));
+		int			len = VARSIZE_ANY_EXHDR(tunpacked);
+		char	   *data = VARDATA_ANY(tunpacked);
+
+		pq_sendcountedtext(buf, data, len);
+		if (tunpacked != DatumGetPointer(txt))
+			pfree(tunpacked);
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		PG_RETURN_CSTRING(TextDatumGetCString(txt));
+	}
 }
 
 /*
@@ -318,11 +334,27 @@ Datum
 textsend(PG_FUNCTION_ARGS)
 {
 	text	   *t = PG_GETARG_TEXT_PP(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendtext(&buf, VARDATA_ANY(t), VARSIZE_ANY_EXHDR(t));
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		int			offset;
+
+		/* reserve space for length, to be filled out after conversion */
+		(void) pq_begincountedfield(buf, 0, &offset);
+		pq_sendtext(buf, VARDATA_ANY(t), VARSIZE_ANY_EXHDR(t));
+		pq_endcountedfield(buf, offset);
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendtext(&buf, VARDATA_ANY(t), VARSIZE_ANY_EXHDR(t));
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 

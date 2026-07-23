@@ -95,6 +95,32 @@ pq_writeint64(StringInfoData *pg_restrict buf, uint64 i)
 }
 
 /*
+ * Reserve a length-prefixed field in a StringInfo buffer, returning the
+ * location at which the payload should be written.  The payload length is
+ * filled in by pq_endcountedfield().
+ */
+static inline char *
+pq_begincountedfield(StringInfo buf, int maxlen, int *offset)
+{
+	enlargeStringInfo(buf, sizeof(uint32) + maxlen);
+
+	*offset = buf->len;
+	buf->len += sizeof(uint32);
+
+	return buf->data + buf->len;
+}
+
+/* Fill in the length of a field started by pq_begincountedfield(). */
+static inline void
+pq_endcountedfield(StringInfo buf, int offset)
+{
+	int			len = buf->len - offset - sizeof(uint32);
+	uint32		len_net = pg_hton32(len);
+
+	memcpy(&buf->data[offset], &len_net, sizeof(uint32));
+}
+
+/*
  * Append a null-terminated text string (with conversion) to a buffer with
  * preallocated space.
  *
@@ -187,6 +213,41 @@ pq_sendint(StringInfo buf, uint32 i, int b)
 	}
 }
 
+/* append length-prefixed binary fields to a StringInfo buffer */
+static inline void
+pq_sendint16_field(StringInfo buf, uint16 i)
+{
+	pq_sendint32(buf, sizeof(uint16));
+	pq_sendint16(buf, i);
+}
+
+static inline void
+pq_sendint32_field(StringInfo buf, uint32 i)
+{
+	pq_sendint32(buf, sizeof(uint32));
+	pq_sendint32(buf, i);
+}
+
+static inline void
+pq_sendint64_field(StringInfo buf, uint64 i)
+{
+	pq_sendint32(buf, sizeof(uint64));
+	pq_sendint64(buf, i);
+}
+
+static inline void
+pq_sendfloat4_field(StringInfo buf, float4 f)
+{
+	pq_sendint32(buf, sizeof(float4));
+	pq_sendfloat4(buf, f);
+}
+
+static inline void
+pq_sendfloat8_field(StringInfo buf, float8 f)
+{
+	pq_sendint32(buf, sizeof(float8));
+	pq_sendfloat8(buf, f);
+}
 
 extern void pq_begintypsend(StringInfo buf);
 extern bytea *pq_endtypsend(StringInfo buf);

@@ -24,6 +24,7 @@
 #include "common/shortest_dec.h"
 #include "libpq/pqformat.h"
 #include "utils/array.h"
+#include "utils/builtins.h"
 #include "utils/float.h"
 #include "utils/fmgrprotos.h"
 #include "utils/sortsupport.h"
@@ -360,17 +361,18 @@ Datum
 float4out(PG_FUNCTION_ARGS)
 {
 	float4		num = PG_GETARG_FLOAT4(0);
-	char	   *ascii = (char *) palloc(32);
+	char		ascii[32];
 	int			ndig = FLT_DIG + extra_float_digits;
 
 	if (extra_float_digits > 0)
-	{
 		float_to_shortest_decimal_buf(num, ascii);
-		PG_RETURN_CSTRING(ascii);
-	}
+	else
+		(void) pg_strfromd(ascii, 32, ndig, num);
 
-	(void) pg_strfromd(ascii, 32, ndig, num);
-	PG_RETURN_CSTRING(ascii);
+	if (pg_send_inout_text(fcinfo, ascii, strlen(ascii)))
+		PG_RETURN_VOID();
+	else
+		PG_RETURN_CSTRING(pstrdup(ascii));
 }
 
 /*
@@ -391,11 +393,21 @@ Datum
 float4send(PG_FUNCTION_ARGS)
 {
 	float4		num = PG_GETARG_FLOAT4(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendfloat4(&buf, num);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendfloat4_field(buf, num);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendfloat4(&buf, num);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 /*
@@ -563,8 +575,18 @@ Datum
 float8out(PG_FUNCTION_ARGS)
 {
 	float8		num = PG_GETARG_FLOAT8(0);
+	char		ascii[32];
+	int			ndig = DBL_DIG + extra_float_digits;
 
-	PG_RETURN_CSTRING(float8out_internal(num));
+	if (extra_float_digits > 0)
+		double_to_shortest_decimal_buf(num, ascii);
+	else
+		(void) pg_strfromd(ascii, 32, ndig, num);
+
+	if (pg_send_inout_text(fcinfo, ascii, strlen(ascii)))
+		PG_RETURN_VOID();
+	else
+		PG_RETURN_CSTRING(pstrdup(ascii));
 }
 
 /*
@@ -608,11 +630,21 @@ Datum
 float8send(PG_FUNCTION_ARGS)
 {
 	float8		num = PG_GETARG_FLOAT8(0);
-	StringInfoData buf;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	pq_begintypsend(&buf);
-	pq_sendfloat8(&buf, num);
-	PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	if (buf)
+	{
+		pq_sendfloat8_field(buf, num);
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		StringInfoData buf;
+
+		pq_begintypsend(&buf);
+		pq_sendfloat8(&buf, num);
+		PG_RETURN_BYTEA_P(pq_endtypsend(&buf));
+	}
 }
 
 

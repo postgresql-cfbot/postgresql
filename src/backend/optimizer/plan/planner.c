@@ -1717,6 +1717,7 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 	RelOptInfo *final_rel;
 	FinalPathExtraData extra;
 	ListCell   *lc;
+	PathTarget *sort_input_target = NULL;
 
 	/* Tweak caller-supplied tuple_fraction if have LIMIT/OFFSET */
 	if (parse->limitCount || parse->limitOffset)
@@ -1762,6 +1763,12 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 		/* Also extract the PathTarget form of the setop result tlist */
 		final_target = current_rel->cheapest_total_path->pathtarget;
 
+		/*
+		 * If in a subquery, the target might be needed by the parent query,
+		 * in order to convert unique keys.
+		 */
+		root->upper_targets[UPPERREL_FINAL] = final_target;
+
 		/* And check whether it's parallel safe */
 		final_target_parallel_safe =
 			is_parallel_safe(root, (Node *) final_target->exprs);
@@ -1794,7 +1801,6 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 	else
 	{
 		/* No set operations, do regular planning */
-		PathTarget *sort_input_target;
 		List	   *sort_input_targets;
 		List	   *sort_input_targets_contain_srfs;
 		bool		sort_input_target_parallel_safe;
@@ -2047,10 +2053,12 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 
 		/*
 		 * Save the various upper-rel PathTargets we just computed into
-		 * root->upper_targets[].  The core code doesn't use this, but it
-		 * provides a convenient place for extensions to get at the info.  For
-		 * consistency, we save all the intermediate targets, even though some
-		 * of the corresponding upperrels might not be needed for this query.
+		 * root->upper_targets[]. In the core we need it to convert unique
+		 * keys of a subquery so the parent query can use them. Besides that
+		 * it provides a convenient place for extensions to get at the info.
+		 * For consistency, we save all the intermediate targets, even though
+		 * some of the corresponding upperrels might not be needed for this
+		 * query.
 		 */
 		root->upper_targets[UPPERREL_FINAL] = final_target;
 		root->upper_targets[UPPERREL_ORDERED] = final_target;
@@ -2073,9 +2081,12 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 												gset_data);
 			/* Fix things up if grouping_target contains SRFs */
 			if (parse->hasTargetSRFs)
+			{
 				adjust_paths_for_srfs(root, current_rel,
 									  grouping_targets,
 									  grouping_targets_contain_srfs);
+				current_rel->uniquekeys = NIL;
+			}
 		}
 
 		/*
@@ -2119,6 +2130,9 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 	 */
 	if (parse->sortClause)
 	{
+		RelOptInfo	*input_rel = current_rel;
+		PathTarget	*input_target;
+
 		current_rel = create_ordered_paths(root,
 										   current_rel,
 										   final_target,
@@ -2130,12 +2144,53 @@ grouping_planner(PlannerInfo *root, double tuple_fraction,
 			adjust_paths_for_srfs(root, current_rel,
 								  final_targets,
 								  final_targets_contain_srfs);
+
+		if (!parse->setOperations)
+			input_target = sort_input_target;
+		else
+			/*
+			 * Unlike other upper rels, UPPERREL_SETOP should have the target
+			 * initialized properly
+			 */
+			input_target = input_rel->reltarget;
+
+		convert_unique_keys_for_rel(root, current_rel, final_target,
+									input_rel, input_target);
 	}
 
 	/*
 	 * Now we are prepared to build the final-output upperrel.
 	 */
 	final_rel = fetch_upper_rel(root, UPPERREL_FINAL, NULL);
+
+
+	if (!parse->setOperations)
+	{
+		/*
+		 * Make sure unique keys are valid for final_rel.
+		 */
+		convert_unique_keys_for_rel(root, final_rel, final_target, current_rel,
+									final_target);
+
+	}
+	/*
+	 * TODO Consider if this is worth the effort. For set operations other
+	 * than UNION ALL, the detection of uniqueness is simple enough to be
+	 * handled by query_is_distinct_for(). (That function probably should not
+	 * be removed because it can be useful before the unique keys have been
+	 * initialized.)
+	 */
+	else
+	{
+		SetOperationStmt *topop;
+
+		Assert(IS_UPPER_REL(current_rel));
+
+		/* For set operations, we can create the keys from scratch. */
+		topop = castNode(SetOperationStmt, parse->setOperations);
+		final_rel->uniquekeys = create_uniquekeys_for_sortop(topop,
+															 root->parse->targetList);
+	}
 
 	/*
 	 * If the input rel is marked consider_parallel and there's nothing that's
@@ -4068,6 +4123,14 @@ create_grouping_paths(PlannerInfo *root,
 	grouped_rel = make_grouping_rel(root, input_rel, target,
 									target_parallel_safe, parse->havingQual);
 
+	/* Try to initialize unique keys. */
+	if (!root->parse->groupingSets)
+		convert_unique_keys_for_rel(root, grouped_rel, target, input_rel,
+									input_rel->reltarget);
+	else
+		/* Grouping sets can break uniqueness. */
+		grouped_rel->uniquekeys = NIL;
+
 	/*
 	 * Create either paths for a degenerate grouping or paths for ordinary
 	 * grouping, as appropriate.
@@ -4394,6 +4457,20 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	/* Now choose the best path(s) for partially_grouped_rel. */
 	if (partially_grouped_rel && partially_grouped_rel->pathlist)
 		set_cheapest(partially_grouped_rel);
+
+	if (root->parse->groupingSets)
+	{
+		/* nothing to do */
+	}
+	else if (root->parse->groupClause && root->group_pathkeys != NIL)
+	{
+		populate_uniquekeys_from_pathkeys(root, grouped_rel,
+										  root->group_pathkeys);
+	}
+	else
+	{
+		/* SingleRow Case */
+	}
 
 	/* Build final grouping paths */
 	add_paths_to_grouping_rel(root, input_rel, grouped_rel,
@@ -4807,6 +4884,10 @@ create_window_paths(PlannerInfo *root,
 	/* For now, do all work in the (WINDOW, NULL) upperrel */
 	window_rel = fetch_upper_rel(root, UPPERREL_WINDOW, NULL);
 
+	/* Make sure unique keys are valid for window_rel. */
+	convert_unique_keys_for_rel(root, window_rel, output_target, input_rel,
+								input_target);
+
 	/*
 	 * If the input relation is not parallel-safe, then the window relation
 	 * can't be parallel-safe, either.  Otherwise, we need to examine the
@@ -5055,8 +5136,26 @@ create_distinct_paths(PlannerInfo *root, RelOptInfo *input_rel,
 {
 	RelOptInfo *distinct_rel;
 
+	/*
+	 * distinct_pathkeys may be NIL if it distinctClause is not sortable. XXX:
+	 * What should we do for the else?
+	 */
+	if (root->distinct_pathkeys &&
+		relation_is_distinct_for(root, input_rel, root->distinct_pathkeys))
+		return input_rel;
+
 	/* For now, do all work in the (DISTINCT, NULL) upperrel */
 	distinct_rel = fetch_upper_rel(root, UPPERREL_DISTINCT, NULL);
+
+	/*
+	 * Make sure unique keys are valid for distinct_rel.
+	 *
+	 * Both input and output relation should use the same target in this case,
+	 * however the targets are not necessarily assigned to the relations, so
+	 * pass them explicitly.
+	 */
+	convert_unique_keys_for_rel(root, distinct_rel, target, input_rel,
+								target);
 
 	/*
 	 * We don't compute anything at this level, so distinct_rel will be

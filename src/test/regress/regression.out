@@ -1,0 +1,2 @@
+# using postmaster on localhost, port 7803
+# command failed: "/tmp/uk_root/usr/local/pgsql/bin/psql" -X -q -c "SET client_min_messages = warning" -c "DROP DATABASE IF EXISTS \"regression\"" "postgres"Bail out!

@@ -274,3 +274,76 @@ SELECT DISTINCT y, x FROM distinct_tbl ORDER BY y;
 RESET enable_hashagg;
 
 DROP TABLE distinct_tbl;
+
+--
+-- Test that DISTINCT is removed when GROUP BY already guarantees uniqueness
+-- of the output rows (via populate_uniquekeys_from_pathkeys() feeding the
+-- generic relation_is_distinct_for() check in create_distinct_paths()).
+--
+
+CREATE TABLE distinct_groupby_tbl (a int, b int, c int);
+INSERT INTO distinct_groupby_tbl VALUES
+    (1, 1, 10), (1, 2, 20), (2, 1, 30), (2, 2, 40),
+    (1, 1, 50);
+ANALYZE distinct_groupby_tbl;
+
+-- GROUP BY (a, b) guarantees unique output rows, so DISTINCT is redundant.
+-- Expect a single aggregation node, no extra Unique node on top.
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a, b FROM distinct_groupby_tbl GROUP BY a, b;
+
+-- Verify correct results
+SELECT DISTINCT a, b FROM distinct_groupby_tbl GROUP BY a, b ORDER BY a, b;
+
+-- Different column order in DISTINCT vs GROUP BY -- still redundant.
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT b, a FROM distinct_groupby_tbl GROUP BY a, b;
+
+SELECT DISTINCT b, a FROM distinct_groupby_tbl GROUP BY a, b ORDER BY a, b;
+
+-- Aggregate in SELECT list does not prevent elimination.
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a, b, sum(c) FROM distinct_groupby_tbl GROUP BY a, b;
+
+SELECT DISTINCT a, b, sum(c) FROM distinct_groupby_tbl GROUP BY a, b ORDER BY a, b;
+
+-- DISTINCT is NOT redundant: GROUP BY key 'b' is absent from DISTINCT.
+-- Different (a, b) groups can produce the same 'a' output value.
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a FROM distinct_groupby_tbl GROUP BY a, b;
+
+SELECT DISTINCT a FROM distinct_groupby_tbl GROUP BY a, b ORDER BY a;
+
+-- DISTINCT is NOT redundant: no GROUP BY clause.
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a, b FROM distinct_groupby_tbl;
+
+-- DISTINCT is NOT redundant: GROUPING SETS can introduce extra NULL rows,
+-- so two grouping sets could yield the same DISTINCT output.
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a FROM distinct_groupby_tbl
+GROUP BY GROUPING SETS ((a), ());
+
+-- DISTINCT ON is unaffected (different semantics).
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT ON (a) a, b FROM distinct_groupby_tbl GROUP BY a, b ORDER BY a;
+
+-- DISTINCT is NOT redundant: a set-returning function in the targetlist is
+-- expanded after grouping but before DISTINCT, so it can (re-)introduce
+-- duplicate rows even though every GROUP BY key is covered by DISTINCT.
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a, unnest(ARRAY[1,1]) AS u FROM distinct_groupby_tbl GROUP BY a;
+
+SELECT DISTINCT a, unnest(ARRAY[1,1]) AS u FROM distinct_groupby_tbl GROUP BY a ORDER BY a, u;
+
+-- DISTINCT is still redundant when the grouped column is nullable: GROUP BY
+-- collapses all NULL-valued rows of a column into a single output row, so a
+-- NULL group is no more of a duplicate risk than any other group value.
+INSERT INTO distinct_groupby_tbl VALUES (NULL, 1, 60), (NULL, 1, 70);
+
+EXPLAIN (COSTS OFF)
+SELECT DISTINCT a FROM distinct_groupby_tbl GROUP BY a;
+
+SELECT DISTINCT a FROM distinct_groupby_tbl GROUP BY a ORDER BY a;
+
+DROP TABLE distinct_groupby_tbl;

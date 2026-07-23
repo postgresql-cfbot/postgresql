@@ -192,6 +192,21 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
 
 	/*
+	 * Seed notnullattrs from notnullattnums (populated above), converting
+	 * between the two Bitmapsets' encodings, instead of re-scanning
+	 * pg_attribute here. Unlike notnullattnums, notnullattrs is also
+	 * augmented elsewhere (e.g. with subquery-derived not-null facts), so
+	 * it has to remain its own Bitmapset rather than just an alias.
+	 */
+	{
+		int			attnum = -1;
+
+		while ((attnum = bms_next_member(rel->notnullattnums, attnum)) >= 0)
+			rel->notnullattrs = bms_add_member(rel->notnullattrs,
+											   attnum - FirstLowInvalidHeapAttributeNumber);
+	}
+
+	/*
 	 * Make list of indexes.  Ignore indexes on system catalogs if told to.
 	 * Don't bother with indexes from traditional inheritance parents.  For
 	 * partitioned tables, we need a list of at least unique indexes as these

@@ -506,6 +506,8 @@ set_rel_size(PlannerInfo *root, RelOptInfo *rel,
 		}
 	}
 
+	populate_baserel_uniquekeys(root, rel);
+
 	/*
 	 * We insist that all non-dummy rels have a nonzero rowcount estimate.
 	 */
@@ -2854,6 +2856,23 @@ set_subquery_pathlist(PlannerInfo *root, RelOptInfo *rel,
 	{
 		set_dummy_rel_pathlist(rel);
 		return;
+	}
+
+	/*
+	 * Translate the subquery unique keys so that 'rel' can use them.
+	 *
+	 * The final relation is not guaranteed to have the target set, so
+	 * retrieve it from ->upper_targets.
+	 *
+	 * Unique keys are currently not supported for RELOPT_OTHER_MEMBER_REL.
+	 */
+	if (rel->reloptkind == RELOPT_BASEREL)
+	{
+		PathTarget	*sub_final_target;
+
+		sub_final_target = rel->subroot->upper_targets[UPPERREL_FINAL];
+		convert_unique_keys_for_rel(root, rel, NULL, sub_final_rel,
+									sub_final_target);
 	}
 
 	/*

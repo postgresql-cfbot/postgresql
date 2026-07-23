@@ -2358,11 +2358,12 @@ explain (costs off)
 select d.* from d left join (select distinct * from b) s
   on d.a = s.id and d.b = s.c_id;
 
--- join removal is not possible when the GROUP BY contains a column that is
--- not in the join condition.  (Note: as of 9.6, we notice that b.id is a
--- primary key and so drop b.c_id from the GROUP BY of the resulting plan;
--- but this happens too late for join removal in the outer plan level.)
-explain (costs off)
+-- when the GROUP BY contains a column that is not in the join condition, join
+-- removal takes place too, due to "unique keys" (Note: as of 9.6, we notice
+-- that b.id is a primary key and so drop b.c_id from the GROUP BY of the
+-- resulting plan; but this happens too late for join removal in the outer
+-- plan level.)
+explain (costs off, verbose on)
 select d.* from d left join (select * from b group by b.id, b.c_id) s
   on d.a = s.id;
 
@@ -2381,7 +2382,7 @@ select d.* from d left join (select 1 as x from b group by grouping sets((), gro
   on d.a = s.x;
 
 -- similarly, but keying off a DISTINCT clause
-explain (costs off)
+explain (costs off, verbose on)
 select d.* from d left join (select distinct * from b) s
   on d.a = s.id;
 

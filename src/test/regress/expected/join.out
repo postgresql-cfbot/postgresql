@@ -6412,24 +6412,32 @@ select d.* from d left join (select distinct * from b) s
  Seq Scan on d
 (1 row)
 
--- join removal is not possible when the GROUP BY contains a column that is
--- not in the join condition.  (Note: as of 9.6, we notice that b.id is a
--- primary key and so drop b.c_id from the GROUP BY of the resulting plan;
--- but this happens too late for join removal in the outer plan level.)
-explain (costs off)
+-- when the GROUP BY contains a column that is not in the join condition, join
+-- removal takes place too, due to "unique keys" (Note: as of 9.6, we notice
+-- that b.id is a primary key and so drop b.c_id from the GROUP BY of the
+-- resulting plan; but this happens too late for join removal in the outer
+-- plan level.)
+explain (costs off, verbose on)
 select d.* from d left join (select * from b group by b.id, b.c_id) s
   on d.a = s.id;
-                QUERY PLAN                
-------------------------------------------
- Merge Right Join
-   Merge Cond: (b.id = d.a)
-   ->  Group
-         Group Key: b.id
-         ->  Index Scan using b_pkey on b
-   ->  Sort
-         Sort Key: d.a
-         ->  Seq Scan on d
-(8 rows)
+                   QUERY PLAN                   
+------------------------------------------------
+ Hash Left Join
+   Output: d.a, d.b
+   Inner Unique: true
+   Hash Cond: (d.a = s.id)
+   ->  Seq Scan on pg_temp.d
+         Output: d.a, d.b
+   ->  Hash
+         Output: s.id
+         ->  Subquery Scan on s
+               Output: s.id
+               ->  HashAggregate
+                     Output: b.id, b.c_id
+                     Group Key: b.id
+                     ->  Seq Scan on pg_temp.b
+                           Output: b.id, b.c_id
+(15 rows)
 
 -- join removal is not possible when the GROUP BY contains non-empty grouping
 -- sets or multiple empty grouping sets
@@ -6481,21 +6489,24 @@ select d.* from d left join (select 1 as x from b group by grouping sets((), gro
 (9 rows)
 
 -- similarly, but keying off a DISTINCT clause
-explain (costs off)
+explain (costs off, verbose on)
 select d.* from d left join (select distinct * from b) s
   on d.a = s.id;
-              QUERY PLAN              
---------------------------------------
- Merge Right Join
-   Merge Cond: (b.id = d.a)
-   ->  Unique
-         ->  Sort
-               Sort Key: b.id, b.c_id
-               ->  Seq Scan on b
-   ->  Sort
-         Sort Key: d.a
-         ->  Seq Scan on d
-(9 rows)
+                QUERY PLAN                
+------------------------------------------
+ Hash Left Join
+   Output: d.a, d.b
+   Inner Unique: true
+   Hash Cond: (d.a = s.id)
+   ->  Seq Scan on pg_temp.d
+         Output: d.a, d.b
+   ->  Hash
+         Output: s.id
+         ->  Subquery Scan on s
+               Output: s.id
+               ->  Seq Scan on pg_temp.b
+                     Output: b.id, b.c_id
+(12 rows)
 
 -- join removal is not possible here
 explain (costs off)

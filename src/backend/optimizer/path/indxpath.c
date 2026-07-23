@@ -152,7 +152,6 @@ static IndexClause *match_clause_to_indexcol(PlannerInfo *root,
 											 RestrictInfo *rinfo,
 											 int indexcol,
 											 IndexOptInfo *index);
-static bool IsBooleanOpfamily(Oid opfamily);
 static IndexClause *match_boolean_index_clause(PlannerInfo *root,
 											   RestrictInfo *rinfo,
 											   int indexcol, IndexOptInfo *index);
@@ -2785,8 +2784,11 @@ match_clause_to_indexcol(PlannerInfo *root,
  * If the opfamily OID is in the range of built-in objects, we can rely
  * on hard-wired knowledge of which built-in opfamilies support this.
  * For extension opfamilies, there's no choice but to do a catcache lookup.
+ *
+ * TODO If the call from equivclass.c remains, move this function to better
+ * place.
  */
-static bool
+bool
 IsBooleanOpfamily(Oid opfamily)
 {
 	if (opfamily < FirstNormalObjectId)

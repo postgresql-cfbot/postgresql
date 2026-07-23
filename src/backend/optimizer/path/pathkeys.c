@@ -234,7 +234,7 @@ make_pathkey_from_sortinfo(PlannerInfo *root,
 	/* Now find or (optionally) create a matching EquivalenceClass */
 	eclass = get_eclass_for_sort_expr(root, expr,
 									  opfamilies, opcintype, collation,
-									  sortref, rel, create_it);
+									  sortref, rel, NULL, create_it);
 
 	/* Fail if no EC and !create_it */
 	if (!eclass)
@@ -1107,6 +1107,7 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 											 sub_eclass->ec_collation,
 											 0,
 											 rel->relids,
+											 NULL,
 											 false);
 
 				/*
@@ -1189,6 +1190,7 @@ convert_subquery_pathkeys(PlannerInfo *root, RelOptInfo *rel,
 														sub_expr_coll,
 														0,
 														rel->relids,
+														NULL,
 														false);
 
 					/*
@@ -1484,6 +1486,7 @@ initialize_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 								 ((OpExpr *) clause)->inputcollid,
 								 0,
 								 NULL,
+								 NULL,
 								 true);
 	restrictinfo->right_ec =
 		get_eclass_for_sort_expr(root,
@@ -1492,6 +1495,7 @@ initialize_mergeclause_eclasses(PlannerInfo *root, RestrictInfo *restrictinfo)
 								 righttype,
 								 ((OpExpr *) clause)->inputcollid,
 								 0,
+								 NULL,
 								 NULL,
 								 true);
 }

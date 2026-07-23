@@ -223,6 +223,19 @@ injection_notice(const char *name, const void *private_data, void *arg)
 		elog(NOTICE, "notice triggered for injection point %s", name);
 }
 
+/*
+ * Error cleanup callback for injection point waits.
+ */
+static void
+injection_wait_cleanup(int code, Datum arg)
+{
+	int			index = DatumGetInt32(arg);
+
+	SpinLockAcquire(&inj_state->lock);
+	inj_state->name[index][0] = '\0';
+	SpinLockRelease(&inj_state->lock);
+}
+
 /* Wait until injection_points_wakeup() is called */
 void
 injection_wait(const char *name, const void *private_data, void *arg)
@@ -275,19 +288,21 @@ injection_wait(const char *name, const void *private_data, void *arg)
 	delay_us = INJ_WAIT_INITIAL_US;
 
 	pgstat_report_wait_start(injection_wait_event);
-	while (pg_atomic_read_u32(&inj_state->wait_counts[index]) == old_wait_counts)
+	PG_ENSURE_ERROR_CLEANUP(injection_wait_cleanup, Int32GetDatum(index));
 	{
-		CHECK_FOR_INTERRUPTS();
-		pg_usleep(delay_us);
-		if (delay_us < INJ_WAIT_MAX_US)
-			delay_us = Min(delay_us * 2, INJ_WAIT_MAX_US);
+		while (pg_atomic_read_u32(&inj_state->wait_counts[index]) == old_wait_counts)
+		{
+			CHECK_FOR_INTERRUPTS();
+			pg_usleep(delay_us);
+			if (delay_us < INJ_WAIT_MAX_US)
+				delay_us = Min(delay_us * 2, INJ_WAIT_MAX_US);
+		}
 	}
+	PG_END_ENSURE_ERROR_CLEANUP(injection_wait_cleanup, Int32GetDatum(index));
 	pgstat_report_wait_end();
 
 	/* Remove this injection point from the waiters. */
-	SpinLockAcquire(&inj_state->lock);
-	inj_state->name[index][0] = '\0';
-	SpinLockRelease(&inj_state->lock);
+	injection_wait_cleanup(0, Int32GetDatum(index));
 }
 
 /*

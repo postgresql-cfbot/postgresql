@@ -4464,10 +4464,8 @@ create_ordinary_grouping_paths(PlannerInfo *root, RelOptInfo *input_rel,
 	}
 	else if (root->parse->groupClause && root->group_pathkeys != NIL)
 	{
-		/*
-		 * populate_uniquekeys_from_pathkeys(root, grouped_rel,
-		 * root->group_pathkeys);
-		 */
+		populate_uniquekeys_from_pathkeys(root, grouped_rel,
+										  root->group_pathkeys);
 	}
 	else
 	{

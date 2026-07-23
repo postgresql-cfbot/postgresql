@@ -125,7 +125,6 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	Relation	relation;
 	bool		hasindex;
 	List	   *indexinfos = NIL;
-	Index		i;
 
 	/*
 	 * We need not lock the relation since it was already locked, either by
@@ -192,13 +191,19 @@ get_relation_info(PlannerInfo *root, Oid relationObjectId, bool inhparent,
 	/* Retrieve the parallel_workers reloption, or -1 if not set. */
 	rel->rel_parallel_workers = RelationGetParallelWorkers(relation, -1);
 
-	for (i = 0; i < relation->rd_att->natts; i++)
+	/*
+	 * Seed notnullattrs from notnullattnums (populated above), converting
+	 * between the two Bitmapsets' encodings, instead of re-scanning
+	 * pg_attribute here. Unlike notnullattnums, notnullattrs is also
+	 * augmented elsewhere (e.g. with subquery-derived not-null facts), so
+	 * it has to remain its own Bitmapset rather than just an alias.
+	 */
 	{
-		Form_pg_attribute attr = TupleDescAttr(relation->rd_att, i);
+		int			attnum = -1;
 
-		if (attr->attnotnull)
+		while ((attnum = bms_next_member(rel->notnullattnums, attnum)) >= 0)
 			rel->notnullattrs = bms_add_member(rel->notnullattrs,
-											   attr->attnum - FirstLowInvalidHeapAttributeNumber);
+											   attnum - FirstLowInvalidHeapAttributeNumber);
 	}
 
 	/*

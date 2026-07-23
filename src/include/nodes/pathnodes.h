@@ -1872,6 +1872,17 @@ typedef struct UniqueKey
 	bool		use_for_distinct;	/* true if it is used in distinct-pathkey,
 									 * in this case we would never check if we
 									 * should discard it during join search. */
+
+	/*
+	 * True if the key's uniqueness already accounts for NULLs, i.e. it is
+	 * known that no two rows can agree on NULL for these columns, so
+	 * uniquekey_contains_multinulls() need not inspect the underlying
+	 * columns' nullability. This holds for keys derived from GROUP BY
+	 * (grouping collapses all NULL-valued rows of a column into a single
+	 * output row), unlike keys derived from a unique index (which permits
+	 * multiple NULLs).
+	 */
+	bool		no_multinulls;
 } UniqueKey;
 
 

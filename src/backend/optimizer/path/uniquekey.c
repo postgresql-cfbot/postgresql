@@ -60,6 +60,7 @@ static void print_uniquekey(PlannerInfo *root, RelOptInfo *rel);
 static bool uniquekey_contains_in(PlannerInfo *root, UniqueKey * ukey, Bitmapset *ecs, Relids relids);
 static bool is_uniquekey_useful_afterjoin(PlannerInfo *root, UniqueKey * ukey, RelOptInfo *joinrel);
 static int find_expr_pos_in_list(Expr *expr, List *list);
+static int find_ec_target_position(EquivalenceClass *ec, List *target_exprs);
 
 /*
  * populate_baserel_uniquekeys
@@ -479,6 +480,9 @@ uniquekey_contains_multinulls(PlannerInfo *root, RelOptInfo *rel, UniqueKey * uk
 {
 	int			i = -1;
 
+	if (ukey->no_multinulls)
+		return false;
+
 	while ((i = bms_next_member(ukey->item_indexes, i)) >= 0)
 	{
 		EquivalenceClass *ec = list_nth_node(EquivalenceClass, root->eq_classes, i);
@@ -512,6 +516,43 @@ uniquekey_contains_multinulls(PlannerInfo *root, RelOptInfo *rel, UniqueKey * uk
 
 
 /*
+ * find_ec_target_position
+ *
+ *		Find a member of 'ec' that also appears (per equal()) in
+ * 'target_exprs', and return its position there, or -1 if none of ec's
+ * members can be matched. This is how an EquivalenceClass (root->eq_classes
+ * position) is translated into an upper rel's target-position indexing (see
+ * the UniqueKey.item_indexes comment).
+ *
+ * Unlike convert_unique_keys_for_rel(), which only accepts plain-Var
+ * members when building a *new* uniquekey's item_indexes, this is used to
+ * locate arbitrary distinct_pathkeys columns (e.g. an aggregate result
+ * like sum(c) can legitimately be its own EC with only an Aggref member),
+ * so any member expression is accepted, not just Vars.
+ */
+static int
+find_ec_target_position(EquivalenceClass *ec, List *target_exprs)
+{
+	ListCell   *lc;
+
+	foreach(lc, ec->ec_members)
+	{
+		EquivalenceMember *em = lfirst_node(EquivalenceMember, lc);
+		Expr	   *expr = em->em_expr;
+		int			pos;
+
+		/* EMs can be wrapped in RelabelType. */
+		while (expr && IsA(expr, RelabelType))
+			expr = ((RelabelType *) expr)->arg;
+
+		pos = find_expr_pos_in_list(expr, target_exprs);
+		if (pos >= 0)
+			return pos;
+	}
+	return -1;
+}
+
+/*
  * relation_is_distinct_for
  *
  * Check if the rel is distinct for distinct_pathkey.
@@ -528,10 +569,22 @@ relation_is_distinct_for(PlannerInfo *root, RelOptInfo *rel, List *distinct_path
 		return !uniquekey_contains_multinulls(root, rel, singlerow_ukey);
 	}
 
+	/*
+	 * rel->uniquekeys' item_indexes are root->eq_classes positions for a
+	 * base/join rel, but target-list positions for an upper rel (e.g. a
+	 * grouped_rel) -- see the UniqueKey.item_indexes comment. Build
+	 * pathkey_bm using whichever indexing rel itself uses, or the
+	 * bms_is_subset() check below compares two incompatible numberings.
+	 */
 	foreach(lc, distinct_pathkey)
 	{
 		PathKey    *pathkey = lfirst_node(PathKey, lc);
-		int			pos = list_member_ptr_pos(root->eq_classes, pathkey->pk_eclass);
+		int			pos;
+
+		if (IS_UPPER_REL(rel))
+			pos = find_ec_target_position(pathkey->pk_eclass, rel->reltarget->exprs);
+		else
+			pos = list_member_ptr_pos(root->eq_classes, pathkey->pk_eclass);
 
 		if (pos == -1)
 			return false;
@@ -1167,6 +1220,61 @@ create_uniquekeys_for_sortop(SetOperationStmt *topop, List *targetlist)
 	key = make_uniquekey(key_idxs, opfamily_lists, true);
 
 	return list_make1(key);
+}
+
+/*
+ * populate_uniquekeys_from_pathkeys
+ *
+ *		Record that 'rel' (an upper rel, e.g. a grouped_rel) is unique on
+ * 'pathkeys' (e.g. the GROUP BY keys). Since 'rel' is an upper rel, the
+ * resulting key's item_indexes must be positions in rel->reltarget->exprs
+ * (per the convention documented on UniqueKey.item_indexes), not
+ * root->eq_classes positions -- so for each pathkey's EquivalenceClass we
+ * look for a plain Var member that also appears in rel->reltarget->exprs,
+ * mirroring the EC-to-target-position matching convert_unique_keys_for_rel()
+ * does when converting a base/join rel's key for an upper rel. If any
+ * pathkey can't be matched this way, give up on the whole key rather than
+ * recording a partial/incorrect one.
+ *
+ * Unlike a unique index, grouping guarantees at most one output row per
+ * distinct key value even when that value is NULL (NULLs are grouped
+ * together), so the resulting key is marked no_multinulls and
+ * uniquekey_contains_multinulls() will not second-guess it based on the
+ * nullability of the underlying columns.
+ */
+void
+populate_uniquekeys_from_pathkeys(PlannerInfo *root, RelOptInfo *rel,
+								  List *pathkeys)
+{
+	Bitmapset  *item_indexes = NULL;
+	List	   *opfamily_lists = NIL;
+	ListCell   *lc;
+	UniqueKey  *ukey;
+
+	if (pathkeys == NIL)
+		return;
+
+	foreach(lc, pathkeys)
+	{
+		PathKey    *pathkey = lfirst_node(PathKey, lc);
+		EquivalenceClass *ec = pathkey->pk_eclass;
+		int			matched;
+
+		matched = find_ec_target_position(ec, rel->reltarget->exprs);
+		if (matched < 0)
+		{
+			bms_free(item_indexes);
+			list_free(opfamily_lists);
+			return;
+		}
+
+		item_indexes = bms_add_member(item_indexes, matched);
+		opfamily_lists = lappend(opfamily_lists, ec->ec_opfamilies);
+	}
+
+	ukey = make_uniquekey(item_indexes, opfamily_lists, true);
+	ukey->no_multinulls = true;
+	rel->uniquekeys = lappend(rel->uniquekeys, ukey);
 }
 
 /*

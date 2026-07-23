@@ -301,6 +301,8 @@ extern void convert_unique_keys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 										PathTarget *input_target);
 extern List *create_uniquekeys_for_sortop(SetOperationStmt *topop,
 										  List *targetlist);
+extern void populate_uniquekeys_from_pathkeys(PlannerInfo *root,
+											  RelOptInfo *rel, List *pathkeys);
 extern bool uniquekey_contains_multinulls(PlannerInfo *root, RelOptInfo *rel,
 										  UniqueKey * ukey);
 #endif							/* PATHS_H */

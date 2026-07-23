@@ -259,8 +259,8 @@ SELECT * FROM x1, GRAPH_TABLE (myshop MATCH (c IS customers WHERE c.address = 'U
 SELECT x1.a, g.* FROM x1, GRAPH_TABLE (myshop MATCH (x1 IS customers WHERE x1.address = 'US')-[IS customer_orders]->(o IS orders) COLUMNS (x1.name AS customer_name, x1.customer_id AS cid, o.order_id)) g;
  a | customer_name | cid | order_id 
 ---+---------------+-----+----------
- 1 | customer1     |   1 |        1
  2 | customer1     |   1 |        1
+ 1 | customer1     |   1 |        1
 (2 rows)
 
 -- bare lateral reference in WHERE clause

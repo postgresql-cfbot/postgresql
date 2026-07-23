@@ -157,6 +157,7 @@ bool		enable_material = true;
 bool		enable_memoize = true;
 bool		enable_mergejoin = true;
 bool		enable_hashjoin = true;
+bool		enable_hashjoin_bloom = true;
 bool		enable_gathermerge = true;
 bool		enable_partitionwise_join = false;
 bool		enable_partitionwise_aggregate = false;
@@ -165,6 +166,39 @@ bool		enable_parallel_hash = true;
 bool		enable_partition_pruning = true;
 bool		enable_presorted_aggregate = true;
 bool		enable_async_append = true;
+
+/*
+ * Minimum fraction of outer tuples a pushed-down hash-join Bloom filter must
+ * be expected to eliminate for the planner to treat it as "interesting" and
+ * generate filter-aware scan paths.  A value of 0.3 means a filter is only
+ * considered if it is expected to discard at least 30% of the scanned tuples.
+ */
+double		bloom_filter_pushdown_threshold = 0.3;
+
+/*
+ * Upper bound on the number of distinct interesting Bloom filters considered
+ * for a single scan relation.  This bounds the number of additional paths
+ * generated per scan (the planner enumerates non-empty subsets of the
+ * interesting filters, i.e. up to 2^bloom_filter_pushdown_max - 1 extra
+ * paths per base scan path).
+ */
+int			bloom_filter_pushdown_max = 3;
+
+/*
+ * Maximum number of base relations allowed in an enumerated Bloom-filter build
+ * side.  Bloom filters over larger joins are unlikely to be worthwhile and
+ * enumerating them would inflate planning time, so we keep this small.  This
+ * bounds the *size* of each candidate build side, which is distinct from
+ * bloom_filter_pushdown_max that bounds how many interesting filters are
+ * ultimately kept per probe relation.
+ */
+int			bloom_filter_pushdown_max_build_relids = 3;
+
+/*
+ * Overall cap on the number of enumerated build-side relid sets, as a safety
+ * valve against pathological join graphs.
+ */
+int			bloom_filter_pushdown_max_build_sets = 100;
 
 typedef struct
 {

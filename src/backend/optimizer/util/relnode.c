@@ -947,6 +947,17 @@ build_join_rel(PlannerInfo *root,
 	build_joinrel_joinlist(joinrel, outer_rel, inner_rel);
 
 	/*
+	 * Compute the joinrel's uniquekeys here, where we know this is the
+	 * first (and only) time this particular joinrel is being built --
+	 * find_join_rel() above returns the same cached RelOptInfo for every
+	 * later decomposition that produces the same relids, and
+	 * populate_joinrel_uniquekeys() is not idempotent against being called
+	 * more than once on the same joinrel (it unconditionally appends).
+	 */
+	populate_joinrel_uniquekeys(root, joinrel, outer_rel, inner_rel,
+							   restrictlist, sjinfo->jointype);
+
+	/*
 	 * This is also the right place to check whether the joinrel has any
 	 * pending EquivalenceClass joins.
 	 */

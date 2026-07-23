@@ -223,6 +223,54 @@ pg_switch_wal(PG_FUNCTION_ARGS)
 }
 
 /*
+ * pg_wal_preallocate: eagerly pre-create future WAL segments
+ *
+ * Pre-creates ceil(bytes / wal_segment_size) WAL segments, starting with the
+ * first unused segment at or after the current WAL insertion location, and
+ * returns the number of segments that were newly created.  If the argument is
+ * NULL (the default), min_wal_size is used.  This lets an operator warm up the
+ * future-segment pool before a burst of write activity, so that foreground WAL
+ * insertion does not have to create and zero-fill segments itself.
+ *
+ * Permission checking for this function is managed through the normal GRANT
+ * system.
+ */
+Datum
+pg_wal_preallocate(PG_FUNCTION_ARGS)
+{
+	int64		bytes;
+	int64		nsegs;
+	int64		nsegsadded;
+
+	if (RecoveryInProgress())
+		ereport(ERROR,
+				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+				 errmsg("recovery is in progress"),
+				 errhint("WAL control functions cannot be executed during recovery.")));
+
+	if (PG_ARGISNULL(0))
+		bytes = (int64) min_wal_size_mb * 1024 * 1024;
+	else
+	{
+		bytes = PG_GETARG_INT64(0);
+
+		if (bytes < 0)
+			ereport(ERROR,
+					(errcode(ERRCODE_NUMERIC_VALUE_OUT_OF_RANGE),
+					 errmsg("number of bytes to preallocate must not be negative")));
+	}
+
+	/* Round up to a whole number of segments (overflow-safe). */
+	nsegs = bytes / wal_segment_size;
+	if (bytes % wal_segment_size != 0)
+		nsegs++;
+
+	nsegsadded = PreallocXlogSegments(nsegs);
+
+	PG_RETURN_INT64(nsegsadded);
+}
+
+/*
  * pg_log_standby_snapshot: call LogStandbySnapshot()
  *
  * Permission checking for this function is managed through the normal

@@ -428,6 +428,20 @@ var_is_nullable(PlannerInfo *root, Var *var, RelOptInfo *rel)
 	if (bms_overlap(var->varnullingrels, rel->relids))
 		return true;
 
+	/*
+	 * varno might not index a populated slot in this root's
+	 * simple_rel_array -- e.g. a special varno (OUTER_VAR/INNER_VAR), or a
+	 * plain varno for which no RelOptInfo was ever built in this
+	 * particular root (this happens for Vars coming from a set-operation's
+	 * targetlist, whose member queries are planned via their own separate
+	 * subroots). Be conservative and treat the var as nullable rather than
+	 * dereferencing a NULL/out-of-range RelOptInfo pointer.
+	 */
+	if (IS_SPECIAL_VARNO(var->varno) ||
+		var->varno >= root->simple_rel_array_size ||
+		root->simple_rel_array[var->varno] == NULL)
+		return true;
+
 	/* check if the user data has the NULL values. */
 	base_rel = root->simple_rel_array[var->varno];
 	return !bms_is_member(var->varattno - FirstLowInvalidHeapAttributeNumber, base_rel->notnullattrs);

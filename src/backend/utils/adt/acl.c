@@ -5460,6 +5460,30 @@ is_admin_of_role(Oid member, Oid role)
 }
 
 /*
+ * Does member have ADMIN OPTION on role (directly or indirectly)?
+ *
+ * Like is_admin_of_role(), but we use ROLERECURSE_PRIVS rather than
+ * ROLERECURSE_MEMBERS. This function is for privilege checking when
+ * doing membership changes to role. For non-membership changes, use
+ * is_admin_of_role() instead.
+ */
+bool
+has_admin_option_on_role(Oid member, Oid role)
+{
+	Oid			admin_role;
+
+	if (superuser_arg(member))
+		return true;
+
+	/* By policy, a role cannot have WITH ADMIN OPTION on itself. */
+	if (member == role)
+		return false;
+
+	(void) roles_is_member_of(member, ROLERECURSE_PRIVS, role, &admin_role);
+	return OidIsValid(admin_role);
+}
+
+/*
  * Find a role whose privileges "member" inherits which has ADMIN OPTION
  * on "role", ignoring super-userness.
  *

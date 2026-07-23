@@ -39,6 +39,7 @@
 #include "commands/async.h"
 #include "commands/tablecmds.h"
 #include "commands/trigger.h"
+#include "commands/session_variable.h"
 #include "common/pg_prng.h"
 #include "executor/spi.h"
 #include "libpq/be-fsstubs.h"
@@ -2362,6 +2363,9 @@ CommitTransaction(void)
 	/* close large objects before lower-level cleanup */
 	AtEOXact_LargeObject(true);
 
+	/* remove stacked session variables */
+	AtPreEOXact_SessionVariables(true);
+
 	/*
 	 * Insert notifications sent by NOTIFY commands into the queue.  This
 	 * should be late in the pre-commit sequence to minimize time spent
@@ -2970,6 +2974,7 @@ AbortTransaction(void)
 	AtAbort_Portals();
 	smgrDoPendingSyncs(false, is_parallel_worker);
 	AtEOXact_LargeObject(false);
+	AtPreEOXact_SessionVariables(false);
 	AtAbort_Notify();
 	AtEOXact_RelationMap(false, is_parallel_worker);
 	AtAbort_Twophase();
@@ -5239,6 +5244,8 @@ CommitSubTransaction(void)
 	AtEOSubXact_SPI(true, s->subTransactionId);
 	AtEOSubXact_on_commit_actions(true, s->subTransactionId,
 								  s->parent->subTransactionId);
+	AtEOSubXact_SessionVariables(true, s->subTransactionId,
+								 s->parent->subTransactionId);
 	AtEOSubXact_Namespace(true, s->subTransactionId,
 						  s->parent->subTransactionId);
 	AtEOSubXact_Files(true, s->subTransactionId,
@@ -5413,6 +5420,8 @@ AbortSubTransaction(void)
 		AtEOSubXact_SPI(false, s->subTransactionId);
 		AtEOSubXact_on_commit_actions(false, s->subTransactionId,
 									  s->parent->subTransactionId);
+		AtEOSubXact_SessionVariables(false, s->subTransactionId,
+									 s->parent->subTransactionId);
 		AtEOSubXact_Namespace(false, s->subTransactionId,
 							  s->parent->subTransactionId);
 		AtEOSubXact_Files(false, s->subTransactionId,

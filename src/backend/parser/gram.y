@@ -291,19 +291,19 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 		ConstraintsSetStmt CopyStmt CreateAsStmt CreateCastStmt
 		CreateDomainStmt CreateExtensionStmt CreateGroupStmt CreateOpClassStmt
 		CreateOpFamilyStmt AlterOpFamilyStmt CreatePLangStmt
-		CreateSchemaStmt CreateSeqStmt CreateStmt CreateStatsStmt CreateTableSpaceStmt
-		CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
+		CreateSchemaStmt CreateSeqStmt CreateSessionVarStmt CreateStmt CreateStatsStmt
+		CreateTableSpaceStmt CreateFdwStmt CreateForeignServerStmt CreateForeignTableStmt
 		CreateAssertionStmt CreateTransformStmt CreateTrigStmt CreateEventTrigStmt
 		CreatePropGraphStmt AlterPropGraphStmt
 		CreateUserStmt CreateUserMappingStmt CreateRoleStmt CreatePolicyStmt
 		CreatedbStmt DeclareCursorStmt DefineStmt DeleteStmt DiscardStmt DoStmt
 		DropOpClassStmt DropOpFamilyStmt DropStmt
-		DropCastStmt DropRoleStmt
+		DropCastStmt DropRoleStmt DropSessionVarStmt
 		DropdbStmt DropTableSpaceStmt
 		DropTransformStmt
 		DropUserMappingStmt ExplainStmt FetchStmt
 		GrantStmt GrantRoleStmt ImportForeignSchemaStmt IndexStmt InsertStmt
-		ListenStmt LoadStmt LockStmt MergeStmt NotifyStmt ExplainableStmt PreparableStmt
+		LetStmt ListenStmt LoadStmt LockStmt MergeStmt NotifyStmt ExplainableStmt PreparableStmt
 		CreateFunctionStmt AlterFunctionStmt ReindexStmt RemoveAggrStmt
 		RemoveFuncStmt RemoveOperStmt RenameStmt RepackStmt ReturnStmt RevokeStmt RevokeRoleStmt
 		RuleActionStmt RuleActionStmtOrEmpty RuleStmt
@@ -534,7 +534,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 %type <node>	def_arg columnElem where_clause where_or_current_clause
 				a_expr b_expr c_expr AexprConst indirection_el opt_slice_bound
 				columnref having_clause func_table xmltable array_expr
-				OptWhereClause operator_def_arg
+				OptWhereClause operator_def_arg variable_fence
 %type <list>	opt_column_and_period_list
 %type <list>	rowsfrom_item rowsfrom_list opt_col_def_list
 %type <boolean> opt_ordinality opt_without_overlaps
@@ -796,7 +796,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	KEEP KEY KEYS
 
 	LABEL LANGUAGE LARGE_P LAST_P LATERAL_P
-	LEADING LEAKPROOF LEAST LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
+	LEADING LEAKPROOF LEAST LET LEFT LEVEL LIKE LIMIT LISTEN LOAD LOCAL
 	LOCALTIME LOCALTIMESTAMP LOCATION LOCK_P LOCKED LOGGED LSN_P
 
 	MAPPING MATCH MATCHED MATERIALIZED MAXVALUE MERGE MERGE_ACTION METHOD
@@ -838,8 +838,8 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
 	UESCAPE UNBOUNDED UNCONDITIONAL UNCOMMITTED UNENCRYPTED UNION UNIQUE UNKNOWN
 	UNLISTEN UNLOGGED UNTIL UPDATE USER USING
 
-	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARYING
-	VERBOSE VERSION_P VERTEX VIEW VIEWS VIRTUAL VOLATILE
+	VACUUM VALID VALIDATE VALIDATOR VALUE_P VALUES VARCHAR VARIADIC VARIABLE
+	VARYING VERBOSE VERSION_P VERTEX VIEW VIEWS VIRTUAL VOLATILE
 
 	WAIT WHEN WHERE WHITESPACE_P WINDOW WITH WITHIN WITHOUT WORK WRAPPER WRITE
 
@@ -939,7 +939,7 @@ static Node *makeRecursiveViewSelect(char *relname, List *aliases, Node *query);
  */
 %nonassoc	UNBOUNDED NESTED /* ideally would have same precedence as IDENT */
 %nonassoc	IDENT PARTITION RANGE ROWS GROUPS PRECEDING FOLLOWING CUBE ROLLUP
-			SET KEYS OBJECT_P SCALAR TO USING VALUE_P WITH WITHOUT PATH
+			SET KEYS OBJECT_P SCALAR TO USING VALUE_P WITH WITHOUT PATH VARIABLE
 %left		Op OPERATOR RIGHT_ARROW '|'	/* multi-character ops and user-defined operators */
 %left		'+' '-'
 %left		'*' '/' '%'
@@ -1109,6 +1109,7 @@ stmt:
 			| CreatePLangStmt
 			| CreatePropGraphStmt
 			| CreateSchemaStmt
+			| CreateSessionVarStmt
 			| CreateSeqStmt
 			| CreateStmt
 			| CreateSubscriptionStmt
@@ -1136,6 +1137,7 @@ stmt:
 			| DropTableSpaceStmt
 			| DropTransformStmt
 			| DropRoleStmt
+			| DropSessionVarStmt
 			| DropUserMappingStmt
 			| DropdbStmt
 			| ExecuteStmt
@@ -1146,6 +1148,7 @@ stmt:
 			| ImportForeignSchemaStmt
 			| IndexStmt
 			| InsertStmt
+			| LetStmt
 			| ListenStmt
 			| RefreshMatViewStmt
 			| LoadStmt
@@ -5453,6 +5456,74 @@ create_extension_opt_item:
 				{
 					$$ = makeDefElem("cascade", (Node *) makeBoolean(true), @1);
 				}
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				CREATE { TEMP | TEMPORARY } VARIABLE [IF NOT EXISTS ] varname [AS] type
+ *
+ *****************************************************************************/
+
+CreateSessionVarStmt:
+			CREATE OptTemp VARIABLE ColId opt_as Typename
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+
+					if ($2 != RELPERSISTENCE_TEMP)
+						ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("only temporal session variables are supported"),
+							 parser_errposition(@2)));
+
+					n->name = $4;
+					n->typeName = $6;
+					n->if_not_exists = false;
+					$$ = (Node *) n;
+				}
+		  | CREATE OptTemp VARIABLE IF_P NOT EXISTS ColId opt_as Typename
+				{
+					CreateSessionVarStmt *n = makeNode(CreateSessionVarStmt);
+
+					if ($2 != RELPERSISTENCE_TEMP)
+						ereport(ERROR,
+							(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+							 errmsg("only temporal session variables are supported"),
+							 parser_errposition(@2)));
+
+					n->name = $7;
+					n->typeName = $9;
+					n->if_not_exists = true;
+					$$ = (Node *) n;
+				}
+
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY :
+ *				DROP VARIABLE [ IF EXISTS ] varname
+ *
+ *****************************************************************************/
+
+DropSessionVarStmt:
+			DROP VARIABLE ColId
+				{
+					DropSessionVarStmt *n = makeNode(DropSessionVarStmt);
+
+					n->name = $3;
+					n->missing_ok = false;
+					$$ = (Node *) n;
+				}
+			| DROP VARIABLE IF_P EXISTS ColId
+				{
+					DropSessionVarStmt *n = makeNode(DropSessionVarStmt);
+
+					n->name = $5;
+					n->missing_ok = true;
+					$$ = (Node *) n;
+				}
+
 		;
 
 /*****************************************************************************
@@ -13594,6 +13665,37 @@ opt_hold: /* EMPTY */						{ $$ = 0; }
 /*****************************************************************************
  *
  *		QUERY:
+ *				LET STATEMENT
+ *
+ *****************************************************************************/
+LetStmt:	LET ColId '=' a_expr
+				{
+					LetStmt	   *n = makeNode(LetStmt);
+					SelectStmt *select;
+					ResTarget  *res;
+
+					n->target = $2;
+
+					select = makeNode(SelectStmt);
+					res = makeNode(ResTarget);
+
+					/* create target list for implicit query */
+					res->name = NULL;
+					res->indirection = NIL;
+					res->val = (Node *) $4;
+					res->location = @4;
+
+					select->targetList = list_make1(res);
+					n->query = (Node *) select;
+
+					n->location = @2;
+					$$ = (Node *) n;
+				}
+		;
+
+/*****************************************************************************
+ *
+ *		QUERY:
  *				SELECT STATEMENTS
  *
  *****************************************************************************/
@@ -16534,6 +16636,8 @@ c_expr:		columnref								{ $$ = $1; }
 					else
 						$$ = $2;
 				}
+			| variable_fence
+				{ $$ = $1; }
 			| case_expr
 				{ $$ = $1; }
 			| func_expr
@@ -17938,6 +18042,17 @@ case_arg:	a_expr									{ $$ = $1; }
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
+variable_fence:
+			VARIABLE '(' ColId ')'
+				{
+					VariableFence *vf = makeNode(VariableFence);
+
+					vf->varname = $3;
+					vf->location = @3;
+					$$ = (Node *) vf;
+				}
+		;
+
 columnref:	ColId
 				{
 					$$ = makeColumnRef($1, NIL, @1, yyscanner);
@@ -19051,6 +19166,7 @@ unreserved_keyword:
 			| LARGE_P
 			| LAST_P
 			| LEAKPROOF
+			| LET
 			| LEVEL
 			| LISTEN
 			| LOAD
@@ -19232,6 +19348,7 @@ unreserved_keyword:
 			| VALIDATE
 			| VALIDATOR
 			| VALUE_P
+			| VARIABLE
 			| VARYING
 			| VERSION_P
 			| VERTEX
@@ -19680,6 +19797,7 @@ bare_label_keyword:
 			| LEAKPROOF
 			| LEAST
 			| LEFT
+			| LET
 			| LEVEL
 			| LIKE
 			| LISTEN
@@ -19904,6 +20022,7 @@ bare_label_keyword:
 			| VALUE_P
 			| VALUES
 			| VARCHAR
+			| VARIABLE
 			| VARIADIC
 			| VERBOSE
 			| VERSION_P

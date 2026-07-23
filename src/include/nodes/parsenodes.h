@@ -152,6 +152,9 @@ typedef struct Query
 	/* FOR PORTION OF clause for UPDATE/DELETE */
 	ForPortionOfExpr *forPortionOf;
 
+	/* target variable of LET statement */
+	char	   *resultVariable;
+
 	/* has aggregates in tlist or havingQual */
 	bool		hasAggs pg_node_attr(query_jumble_ignore);
 	/* has window functions in tlist */
@@ -172,6 +175,8 @@ typedef struct Query
 	bool		hasRowSecurity pg_node_attr(query_jumble_ignore);
 	/* parser has added an RTE_GROUP RTE */
 	bool		hasGroupRTE pg_node_attr(query_jumble_ignore);
+	/* uses session variables */
+	bool		hasSessionVariables pg_node_attr(query_jumble_ignore);
 	/* is a RETURN statement */
 	bool		isReturn pg_node_attr(query_jumble_ignore);
 
@@ -325,6 +330,16 @@ typedef struct ParamRef
 	int			number;			/* the number of the parameter */
 	ParseLoc	location;		/* token location, or -1 if unknown */
 } ParamRef;
+
+/*
+ * VariableFence - ensure so fields will be interpretted as a variable
+ */
+typedef struct VariableFence
+{
+	NodeTag		type;
+	char	   *varname;		/* variable name */
+	ParseLoc	location;		/* token location, or -1 if unknown */
+} VariableFence;
 
 /*
  * A_Expr - infix, prefix, and postfix expressions
@@ -2305,6 +2320,18 @@ typedef struct MergeStmt
 } MergeStmt;
 
 /* ----------------------
+ *		Let Statement
+ * ----------------------
+ */
+typedef struct LetStmt
+{
+	NodeTag		type;
+	char	   *target;			/* target variable */
+	Node	   *query;			/* source expression */
+	ParseLoc	location;
+} LetStmt;
+
+/* ----------------------
  *		Select Statement
  *
  * A "simple" SELECT is represented in the output of gram.y by a single
@@ -3702,6 +3729,31 @@ typedef struct AlterStatsStmt
 	Node	   *stxstattarget;	/* statistics target */
 	bool		missing_ok;		/* skip error if statistics object is missing */
 } AlterStatsStmt;
+
+
+/* ----------------------
+ *		Create Variable Statement
+ * ----------------------
+ */
+typedef struct CreateSessionVarStmt
+{
+	NodeTag		type;
+	char	   *name;		/* the variable to create */
+	TypeName   *typeName;		/* the type of variable */
+	bool		if_not_exists;	/* just do nothing if variable already exists? */
+} CreateSessionVarStmt;
+
+/* ----------------------
+ *		DROP Variable Statement
+ * ----------------------
+ */
+typedef struct DropSessionVarStmt
+{
+	NodeTag		type;
+	char	   *name;			/* the variable name to drop */
+	bool		missing_ok;		/* skip error of variable is missing */
+} DropSessionVarStmt;
+
 
 /* ----------------------
  *		Create Function Statement

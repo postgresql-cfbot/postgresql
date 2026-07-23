@@ -1221,6 +1221,11 @@ Keywords_for_list_of_owner_roles, "PUBLIC"
 "   AND d.datname = pg_catalog.current_database() "\
 "   AND s.subdbid = d.oid"
 
+#define Query_for_list_of_temporary_session_variables \
+"SELECT varname "\
+"   FROM pg_catalog.pg_get_temporary_session_variables_names() AS varname "\
+"  WHERE varname LIKE '%s'"
+
 /* Privilege options shared between GRANT and REVOKE */
 #define Privilege_options_of_grant_and_revoke \
 "SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", \
@@ -1260,8 +1265,8 @@ static const char *const sql_commands[] = {
 	"ABORT", "ALTER", "ANALYZE", "BEGIN", "CALL", "CHECKPOINT", "CLOSE", "CLUSTER",
 	"COMMENT", "COMMIT", "COPY", "CREATE", "DEALLOCATE", "DECLARE",
 	"DELETE FROM", "DISCARD", "DO", "DROP", "END", "EXECUTE", "EXPLAIN",
-	"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LISTEN", "LOAD", "LOCK",
-	"MERGE INTO", "MOVE", "NOTIFY", "PREPARE",
+	"FETCH", "GRANT", "IMPORT FOREIGN SCHEMA", "INSERT INTO", "LET", "LISTEN",
+	"LOAD", "LOCK", "MERGE INTO", "MOVE", "NOTIFY", "PREPARE",
 	"REASSIGN", "REFRESH MATERIALIZED VIEW", "REINDEX", "RELEASE", "REPACK",
 	"RESET", "REVOKE", "ROLLBACK",
 	"SAVEPOINT", "SECURITY LABEL", "SELECT", "SET", "SHOW", "START",
@@ -1360,6 +1365,7 @@ static const pgsql_thing_t words_after_create[] = {
 	{"USER", Query_for_list_of_roles, NULL, NULL, Keywords_for_user_thing},
 	{"USER MAPPING FOR", NULL, NULL, NULL},
 	{"VIEW", NULL, NULL, &Query_for_list_of_views},
+	{"VARIABLE", NULL, NULL, NULL, NULL, THING_NO_CREATE},
 	{NULL}						/* end of list */
 };
 
@@ -3847,7 +3853,7 @@ match_previous_words(int pattern_id,
 /* CREATE TABLE --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete "CREATE TEMP/TEMPORARY" with the possible temp objects */
 	else if (TailMatches("CREATE", "TEMP|TEMPORARY"))
-		COMPLETE_WITH("SEQUENCE", "TABLE", "VIEW");
+		COMPLETE_WITH("SEQUENCE", "TABLE", "VARIABLE", "VIEW");
 	/* Complete "CREATE UNLOGGED" with TABLE or SEQUENCE */
 	else if (TailMatches("CREATE", "UNLOGGED"))
 		COMPLETE_WITH("TABLE", "SEQUENCE");
@@ -4210,6 +4216,13 @@ match_previous_words(int pattern_id,
 			COMPLETE_WITH(",", ")");
 	}
 
+/* CREATE VARIABLE */
+	else if (Matches("CREATE", "TEMP|TEMPORARY", "VARIABLE", MatchAny))
+		COMPLETE_WITH("AS");
+	else if (TailMatches("VARIABLE", MatchAny, "AS"))
+		/* Complete CREATE VARIABLE <name> with AS types */
+		COMPLETE_WITH_SCHEMA_QUERY(Query_for_list_of_datatypes);
+
 /* CREATE VIEW --- is allowed inside CREATE SCHEMA, so use TailMatches */
 	/* Complete CREATE [ OR REPLACE ] VIEW <name> with AS or WITH */
 	else if (TailMatches("CREATE", "VIEW", MatchAny) ||
@@ -4505,6 +4518,10 @@ match_previous_words(int pattern_id,
 	}
 	else if (Matches("DROP", "TRANSFORM", "FOR", MatchAny, "LANGUAGE", MatchAny))
 		COMPLETE_WITH("CASCADE", "RESTRICT");
+
+	/* DROP VARIABLE */
+	else if (Matches("DROP", "VARIABLE"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_temporary_session_variables);
 
 /* EXECUTE */
 	else if (Matches("EXECUTE"))
@@ -4952,6 +4969,13 @@ match_previous_words(int pattern_id,
 	/* Insert an open parenthesis after "VALUES" */
 	else if (TailMatches("VALUES") && !TailMatches("DEFAULT", "VALUES"))
 		COMPLETE_WITH("(");
+
+/* LET */
+	/* Complete LET <variable> with "=" */
+	else if (Matches("LET"))
+		COMPLETE_WITH_QUERY(Query_for_list_of_temporary_session_variables);
+	else if (TailMatches("LET", MatchAny))
+		COMPLETE_WITH("=");
 
 /* LOCK */
 	/* Complete LOCK [TABLE] [ONLY] with a list of tables */
@@ -5570,6 +5594,12 @@ match_previous_words(int pattern_id,
 		else if (TailMatches("mode"))
 			COMPLETE_WITH("'standby_replay'", "'standby_write'", "'standby_flush'", "'primary_flush'");
 	}
+
+/*
+ * VARIABLE fence
+ */
+	else if (TailMatches("VARIABLE", "("))
+		COMPLETE_WITH_QUERY(Query_for_list_of_temporary_session_variables);
 
 /* WITH [RECURSIVE] */
 

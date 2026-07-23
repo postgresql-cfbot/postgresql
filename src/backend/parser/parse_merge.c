@@ -400,6 +400,7 @@ transformMergeStmt(ParseState *pstate, MergeStmt *stmt)
 
 	qry->hasTargetSRFs = false;
 	qry->hasSubLinks = pstate->p_hasSubLinks;
+	qry->hasSessionVariables = pstate->p_hasSessionVariables;
 
 	assign_query_collations(pstate, qry);
 

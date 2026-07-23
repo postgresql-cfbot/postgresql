@@ -5970,6 +5970,58 @@ SELECT ... FROM GRAPH_TABLE (myshop MATCH (IS person WHERE name = '...')-[]->...
   </para>
  </sect1>
 
+ <sect1 id="ddl-session-variables">
+   <title>Session Variables</title>
+
+   <indexterm zone="ddl-session-variables">
+    <primary>Session variables</primary>
+   </indexterm>
+
+   <indexterm>
+    <primary>session variable</primary>
+   </indexterm>
+
+   <para>
+    Session variables are temporary database objects that can hold a value.
+    A session variable can be created by the <command>CREATE VARIABLE</command>
+    command and can only be accessed by its owner. The value of a session
+    variable is stored in session memory and is private to each session. It is
+    automatically released when the session ends.
+   </para>
+
+   <para>
+    In a query, a session variable can only be referenced using the special
+    <literal>VARIABLE(varname)</literal> syntax. This avoids any risk of
+    collision between variable names and column names.
+   </para>
+
+   <para>
+    You set the value of a session variable with the <command>LET</command>
+    statement and retrieve it with <command>SELECT</command>:
+<programlisting>
+CREATE TEMP VARIABLE var1 AS date;
+LET var1 = current_date;
+SELECT VARIABLE(var1);
+</programlisting>
+
+    or
+
+<programlisting>
+CREATE TEMP VARIABLE current_user_id AS integer;
+LET current_user_id = (SELECT id FROM users WHERE usename = session_user);
+SELECT VARIABLE(current_user_id);
+</programlisting>
+   </para>
+
+   <para>
+    By default, retrieving a session variable returns
+    <literal>NULL</literal> unless it has been set in the current session
+    using the <command>LET</command> command. Session variables are not
+    transactional: changes to their values persist even if the transaction
+    is rolled back, similar to variables in procedural languages
+   </para>
+ </sect1>
+
  <sect1 id="ddl-others">
   <title>Other Database Objects</title>
 

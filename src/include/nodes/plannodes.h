@@ -164,6 +164,9 @@ typedef struct PlannedStmt
 	 */
 	List	   *extension_state;
 
+	/* PARAM_VARIABLE Params */
+	List	   *sessionVariables;
+
 	/* statement location in source string (copied from Query) */
 	/* start location, or -1 if unknown */
 	ParseLoc	stmt_location;

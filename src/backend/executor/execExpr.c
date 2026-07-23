@@ -1069,6 +1069,35 @@ ExecInitExprRec(Expr *node, ExprState *state,
 							ExprEvalPushStep(state, &scratch);
 						}
 						break;
+					case PARAM_VARIABLE:
+						{
+							int			es_num_session_variables = 0;
+							SessionVariableValue *es_session_variables = NULL;
+							SessionVariableValue *var;
+
+							if (state->parent && state->parent->state)
+							{
+								es_session_variables = state->parent->state->es_session_variables;
+								es_num_session_variables = state->parent->state->es_num_session_variables;
+							}
+
+							Assert(es_session_variables);
+
+							/* parameter sanity checks */
+							if (param->paramid >= es_num_session_variables)
+								elog(ERROR, "paramid of PARAM_VARIABLE param is out of range");
+
+							var = &es_session_variables[param->paramid];
+
+							/*
+							 * In this case, pass the value like a constant.
+							 */
+							scratch.opcode = EEOP_CONST;
+							scratch.d.constval.value = var->value;
+							scratch.d.constval.isnull = var->isnull;
+							ExprEvalPushStep(state, &scratch);
+						}
+						break;
 					default:
 						elog(ERROR, "unrecognized paramkind: %d",
 							 (int) param->paramkind);

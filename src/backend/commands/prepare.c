@@ -343,6 +343,14 @@ EvaluateParams(ParseState *pstate, PreparedStatement *pstmt, List *params,
 		i++;
 	}
 
+	/*
+	 * The arguments of EXECUTE are evaluated by a direct expression executor
+	 * call.  This mode doesn't support session variables yet. It will be
+	 * enabled later. This case should be blocked parser by
+	 * expr_kind_allows_session_variables, so only assertions is used here.
+	 */
+	Assert(!pstate->p_hasSessionVariables);
+
 	/* Prepare the expressions for execution */
 	exprstates = ExecPrepareExprList(params, estate);
 

@@ -45,6 +45,7 @@ typedef struct ExplainWorkersState
 typedef struct ExplainState
 {
 	StringInfo	str;			/* output buffer */
+
 	/* options */
 	bool		verbose;		/* be verbose */
 	bool		analyze;		/* print actual times */

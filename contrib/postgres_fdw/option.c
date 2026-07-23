@@ -17,6 +17,7 @@
 #include "catalog/pg_foreign_table.h"
 #include "catalog/pg_user_mapping.h"
 #include "commands/defrem.h"
+#include "commands/explain.h"
 #include "commands/extension.h"
 #include "libpq/libpq-be.h"
 #include "postgres_fdw.h"
@@ -39,6 +40,13 @@ typedef struct PgFdwOption
  * Allocated and filled in InitPgFdwOptions.
  */
 static PgFdwOption *postgres_fdw_options;
+
+/*
+ * EXPLAIN hooks
+ */
+static explain_per_node_hook_type prev_explain_per_node_hook;
+static explain_per_plan_hook_type prev_explain_per_plan_hook;
+static explain_validate_options_hook_type prev_explain_validate_options_hook;
 
 /*
  * GUC parameters
@@ -567,6 +575,61 @@ process_pgfdw_appname(const char *appname)
 }
 
 /*
+ * Get the PgFdwExplainState structure from an ExplainState; if there is
+ * none, create one, attach it to the ExplainState, and return it.
+ */
+static PgFdwExplainState *
+pgfdw_ensure_options(ExplainState *es)
+{
+	PgFdwExplainState *pgfdw_explain_state;
+
+	pgfdw_explain_state = GetExplainExtensionState(es, GetExplainExtensionId("postgres_fdw"));
+
+	if (pgfdw_explain_state == NULL)
+	{
+		pgfdw_explain_state = palloc0(sizeof(PgFdwExplainState));
+		SetExplainExtensionState(es, GetExplainExtensionId("postgres_fdw"), pgfdw_explain_state);
+		pgfdw_explain_state->all_remote_plans = NIL;
+	}
+
+	return pgfdw_explain_state;
+}
+
+/*
+ * Parse handler for EXPLAIN (REMOTE_PLANS).
+ */
+static void
+pgfdw_remote_plans_apply(ExplainState *es, DefElem *opt, ParseState *pstate)
+{
+	PgFdwExplainState *options = pgfdw_ensure_options(es);
+
+	options->remote_plans = defGetBoolean(opt);
+}
+
+static void
+postgresExplainValidateOptions(ExplainState *es, List *options, ParseState *pstate)
+{
+	ListCell   *lc;
+	PgFdwExplainState *pgfdw_explain_state = NULL;
+
+	foreach(lc, options)
+	{
+		DefElem    *opt = (DefElem *) lfirst(lc);
+
+		if (strcmp(opt->defname, "remote_plans") == 0)
+		{
+			if (defGetBoolean(opt) && es->analyze)
+				ereport(ERROR,
+						errcode(ERRCODE_INVALID_PARAMETER_VALUE),
+						errmsg("EXPLAIN options REMOTE_PLANS and ANALYZE cannot be used together"));
+
+			pgfdw_explain_state = pgfdw_ensure_options(es);
+			pgfdw_explain_state->options = options;
+		}
+	}
+}
+
+/*
  * Module load callback
  */
 void
@@ -592,4 +655,16 @@ _PG_init(void)
 							   NULL);
 
 	MarkGUCPrefixReserved("postgres_fdw");
+
+	RegisterExtensionExplainOption("remote_plans", pgfdw_remote_plans_apply,
+								   GUCCheckBooleanExplainOption);
+
+	/* per node EXPLAIN hook */
+	prev_explain_per_node_hook = explain_per_node_hook;
+	explain_per_node_hook = postgresExplainPerNode;
+	prev_explain_per_plan_hook = explain_per_plan_hook;
+	explain_per_plan_hook = postgresExplainPerPlan;
+	prev_explain_validate_options_hook = explain_validate_options_hook;
+	explain_validate_options_hook = postgresExplainValidateOptions;
+
 }

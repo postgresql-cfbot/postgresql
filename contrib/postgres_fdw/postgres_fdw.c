@@ -140,6 +140,19 @@ enum FdwDirectModifyPrivateIndex
 };
 
 /*
+ * Track the extension id in the backend.
+ */
+static int	extension_id = -1;
+
+static int
+get_extension_id(void)
+{
+	if (extension_id == -1)
+		extension_id = GetExplainExtensionId("postgres_fdw");
+	return extension_id;
+}
+
+/*
  * Execution state of a foreign scan using postgres_fdw.
  */
 typedef struct PgFdwScanState
@@ -2916,6 +2929,105 @@ postgresEndDirectModify(ForeignScanState *node)
 	/* MemoryContext will be deleted automatically. */
 }
 
+static void
+postgresExplainStatement(int plan_node_id,
+						 ExplainState *es,
+						 PgFdwExplainState *pgfdw_explain_state,
+						 PGconn *conn,
+						 char *sql)
+{
+	PGresult   *volatile res = NULL;
+	StringInfoData explain_sql;
+	int			remote_version = PQserverVersion(conn);
+
+	/*
+	 * GENERIC_PLAN required because deparsed SQL may contain $n placeholders;
+	 * only available from PG 16.
+	 */
+	if (remote_version < 160000)
+		ereport(ERROR,
+				errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("EXPLAIN option REMOTE_PLANS requires a remote server version of 16 or later"),
+				errdetail("The remote server version is %d.", remote_version));
+
+	PG_TRY();
+	{
+		int			numrows,
+					i;
+		PgFdwExplainRemotePlans *explain = (PgFdwExplainRemotePlans *) palloc(sizeof(PgFdwExplainRemotePlans));
+		ListCell   *lc;
+
+		initStringInfo(&explain_sql);
+		initStringInfo(&explain->explain_plan);
+
+		/* Forward user-specified options as-is; force GENERIC_PLAN on. */
+		appendStringInfoString(&explain_sql, "EXPLAIN (GENERIC_PLAN TRUE");
+
+		foreach(lc, pgfdw_explain_state->options)
+		{
+			DefElem    *opt = (DefElem *) lfirst(lc);
+
+			if (strcmp(opt->defname, "remote_plans") == 0 ||
+				strcmp(opt->defname, "generic_plan") == 0)
+				continue;
+
+			if (opt->arg == NULL)
+				appendStringInfo(&explain_sql, ", %s", opt->defname);
+			else
+				appendStringInfo(&explain_sql, ", %s %s", opt->defname,
+								 defGetString(opt));
+		}
+
+		appendStringInfo(&explain_sql, ") %s", sql);
+
+		/* Run the query and collect the remote plan */
+		res = pgfdw_exec_query(conn, explain_sql.data, NULL);
+		if (PQresultStatus(res) != PGRES_TUPLES_OK)
+			pgfdw_report_error(res, conn, explain_sql.data);
+
+		numrows = PQntuples(res);
+
+		for (i = 0; i < numrows; i++)
+			appendStringInfo(&explain->explain_plan, "%s\n", PQgetvalue(res, i, 0));
+
+		if (explain->explain_plan.len > 0 && explain->explain_plan.data[explain->explain_plan.len - 1] == '\n')
+			explain->explain_plan.data[--explain->explain_plan.len] = '\0';
+
+		explain->plan_node_id = plan_node_id;
+		pgfdw_explain_state->all_remote_plans = lappend(pgfdw_explain_state->all_remote_plans, explain);
+	}
+	PG_FINALLY();
+	{
+		if (res)
+			PQclear(res);
+
+		if (explain_sql.data)
+			pfree(explain_sql.data);
+	}
+	PG_END_TRY();
+}
+
+/*
+ * explain_remote_query
+ *		Helper function to get connection and execute remote EXPLAIN
+ */
+static void
+explain_remote_query(int plan_node_id, ExplainState *es,
+					 PgFdwExplainState *pgfdw_explain_state,
+					 Oid foreign_table_oid, char *sql)
+{
+	UserMapping *user;
+	PGconn	   *conn;
+	ForeignTable *table;
+
+	table = GetForeignTable(foreign_table_oid);
+	user = GetUserMapping(GetUserId(), table->serverid);
+	conn = GetConnection(user, false, NULL);
+
+	postgresExplainStatement(plan_node_id, es, pgfdw_explain_state, conn, sql);
+	ReleaseConnection(conn);
+}
+
 /*
  * postgresExplainForeignScan
  *		Produce extra output for EXPLAIN of a ForeignScan on a foreign table
@@ -2925,6 +3037,12 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 {
 	ForeignScan *plan = castNode(ForeignScan, node->ss.ps.plan);
 	List	   *fdw_private = plan->fdw_private;
+	PgFdwExplainState *pgfdw_explain_state;
+	char	   *sql;
+	Oid			foreign_table_oid = InvalidOid;
+
+	if (node->ss.ss_currentRelation)
+		foreign_table_oid = RelationGetRelid(node->ss.ss_currentRelation);
 
 	/*
 	 * Identify foreign scans that are really joins or upper relations.  The
@@ -2986,6 +3104,13 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 				Assert(rte->rtekind == RTE_RELATION);
 				/* This logic should agree with explain.c's ExplainTargetRel */
 				relname = get_rel_name(rte->relid);
+
+				/*
+				 * Save first table OID for getting server connection
+				 */
+				if (!OidIsValid(foreign_table_oid))
+					foreign_table_oid = rte->relid;
+
 				if (es->verbose)
 				{
 					char	   *namespace;
@@ -3011,16 +3136,25 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 		ExplainPropertyText("Relations", relations.data, es);
 	}
 
+	sql = strVal(list_nth(fdw_private, FdwScanPrivateSelectSql));
+
 	/*
 	 * Add remote query, when VERBOSE option is specified.
 	 */
 	if (es->verbose)
-	{
-		char	   *sql;
-
-		sql = strVal(list_nth(fdw_private, FdwScanPrivateSelectSql));
 		ExplainPropertyText("Remote SQL", sql, es);
-	}
+
+	pgfdw_explain_state = GetExplainExtensionState(es, get_extension_id());
+
+	/* If we don't have a foreign table oid by now, something went wrong */
+	Assert(foreign_table_oid);
+
+	if (pgfdw_explain_state && pgfdw_explain_state->remote_plans)
+		explain_remote_query(node->ss.ps.plan->plan_node_id,
+							 es,
+							 pgfdw_explain_state,
+							 foreign_table_oid,
+							 sql);
 }
 
 /*
@@ -3034,11 +3168,12 @@ postgresExplainForeignModify(ModifyTableState *mtstate,
 							 int subplan_index,
 							 ExplainState *es)
 {
+	char	   *sql = strVal(list_nth(fdw_private,
+									  FdwModifyPrivateUpdateSql));
+	PgFdwExplainState *pgfdw_explain_state;
+
 	if (es->verbose)
 	{
-		char	   *sql = strVal(list_nth(fdw_private,
-										  FdwModifyPrivateUpdateSql));
-
 		ExplainPropertyText("Remote SQL", sql, es);
 
 		/*
@@ -3048,6 +3183,14 @@ postgresExplainForeignModify(ModifyTableState *mtstate,
 		if (rinfo->ri_BatchSize > 0)
 			ExplainPropertyInteger("Batch Size", NULL, rinfo->ri_BatchSize, es);
 	}
+
+	pgfdw_explain_state = GetExplainExtensionState(es, get_extension_id());
+	if (pgfdw_explain_state && pgfdw_explain_state->remote_plans)
+		explain_remote_query(mtstate->ps.plan->plan_node_id,
+							 es,
+							 pgfdw_explain_state,
+							 rinfo->ri_RelationDesc->rd_rel->oid,
+							 sql);
 }
 
 /*
@@ -3060,13 +3203,22 @@ postgresExplainDirectModify(ForeignScanState *node, ExplainState *es)
 {
 	List	   *fdw_private;
 	char	   *sql;
+	PgFdwExplainState *pgfdw_explain_state;
+
+	fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
+	sql = strVal(list_nth(fdw_private, FdwDirectModifyPrivateUpdateSql));
 
 	if (es->verbose)
-	{
-		fdw_private = ((ForeignScan *) node->ss.ps.plan)->fdw_private;
-		sql = strVal(list_nth(fdw_private, FdwDirectModifyPrivateUpdateSql));
 		ExplainPropertyText("Remote SQL", sql, es);
-	}
+
+	pgfdw_explain_state = GetExplainExtensionState(es, get_extension_id());
+
+	if (pgfdw_explain_state && pgfdw_explain_state->remote_plans)
+		explain_remote_query(node->ss.ps.plan->plan_node_id,
+							 es,
+							 pgfdw_explain_state,
+							 RelationGetRelid(node->ss.ss_currentRelation),
+							 sql);
 }
 
 /*
@@ -8765,4 +8917,96 @@ get_batch_size_option(Relation rel)
 	}
 
 	return batch_size;
+}
+
+void
+postgresExplainPerNode(PlanState *planstate, List *ancestors,
+					   const char *relationship, const char *plan_name,
+					   ExplainState *es)
+{
+	PgFdwExplainState *pgfdw_explain_state;
+
+	pgfdw_explain_state = GetExplainExtensionState(es, get_extension_id());
+
+	if (pgfdw_explain_state == NULL ||
+		!pgfdw_explain_state->remote_plans)
+		return;
+
+	if (pgfdw_explain_state && pgfdw_explain_state->remote_plans)
+		ExplainPropertyInteger("Plan Node ID", NULL, planstate->plan->plan_node_id, es);
+}
+
+static void
+pgfdwFormatRemotePlan(PgFdwExplainRemotePlans *explain,
+					  ExplainState *es,
+					  int plan_node_id)
+{
+	char	   *token;
+	StringInfoData remote_plan_name;
+
+	initStringInfo(&remote_plan_name);
+	appendStringInfo(&remote_plan_name, "Plan Node ID %d", plan_node_id);
+
+	ExplainOpenGroup(remote_plan_name.data, remote_plan_name.data, false, es);
+
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		appendStringInfo(es->str, "Plan Node ID %d:", plan_node_id);
+		appendStringInfoString(es->str, "\n");
+	}
+
+	while ((token = strsep(&explain->explain_plan.data, "\n")) != NULL)
+	{
+		if (es->format == EXPLAIN_FORMAT_JSON ||
+			es->format == EXPLAIN_FORMAT_YAML)
+			appendStringInfoString(es->str, "\n");
+
+		appendStringInfoSpaces(es->str, (es->indent == 0) ? 2 : es->indent * 2);
+		appendStringInfoString(es->str, token);
+
+		if (es->format == EXPLAIN_FORMAT_XML ||
+			es->format == EXPLAIN_FORMAT_TEXT)
+			appendStringInfoString(es->str, "\n");
+	}
+
+	ExplainCloseGroup(remote_plan_name.data, remote_plan_name.data, false, es);
+	pfree(remote_plan_name.data);
+}
+
+void
+postgresExplainPerPlan(PlannedStmt *plannedstmt,
+					   IntoClause *into,
+					   ExplainState *es,
+					   const char *queryString,
+					   ParamListInfo params,
+					   QueryEnvironment *queryEnv)
+{
+	ListCell   *lc;
+	PgFdwExplainState *pgfdw_explain_state;
+
+	pgfdw_explain_state = GetExplainExtensionState(es, get_extension_id());
+
+	if (pgfdw_explain_state == NULL ||
+		pgfdw_explain_state->all_remote_plans == NIL ||
+		!pgfdw_explain_state->remote_plans)
+		return;
+
+	ExplainOpenGroup("Remote Plans", "Remote Plans", true, es);
+	if (es->format == EXPLAIN_FORMAT_TEXT)
+	{
+		appendStringInfo(es->str, "Remote Plans:\n");
+		appendStringInfo(es->str, "-------------\n");
+	}
+
+	/* Process every remote plan captured */
+	foreach(lc, pgfdw_explain_state->all_remote_plans)
+	{
+		PgFdwExplainRemotePlans *explain = (PgFdwExplainRemotePlans *) lfirst(lc);
+
+		pgfdwFormatRemotePlan(explain,
+							  es,
+							  explain->plan_node_id);
+	}
+
+	ExplainCloseGroup("Remote Plans", "Remote Plans", true, es);
 }

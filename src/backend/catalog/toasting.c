@@ -30,6 +30,7 @@
 #include "catalog/toasting.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
+#include "utils/backend_progress.h"
 #include "utils/fmgroids.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
@@ -325,6 +326,13 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 	coloptions[0] = 0;
 	coloptions[1] = 0;
 
+	/*
+	 * XXX Progress reporting makes little sense for empty table, but
+	 * index_create() does report the progress and it's not worth disabling it
+	 * in this specific case.
+	 */
+	pgstat_progress_start_command(PROGRESS_COMMAND_CREATE_INDEX,
+								  RelationGetRelid(toast_rel));
 	index_create(toast_rel, toast_idxname, toastIndexOid, InvalidOid,
 				 InvalidOid, InvalidOid,
 				 indexInfo,
@@ -333,6 +341,7 @@ create_toast_table(Relation rel, Oid toastOid, Oid toastIndexOid,
 				 rel->rd_rel->reltablespace,
 				 collationIds, opclassIds, NULL, coloptions, NULL, (Datum) 0,
 				 INDEX_CREATE_IS_PRIMARY, 0, true, true, NULL);
+	pgstat_progress_end_command();
 
 	table_close(toast_rel, NoLock);
 

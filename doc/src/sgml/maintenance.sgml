@@ -674,19 +674,19 @@ SELECT datname, age(datfrozenxid) FROM pg_database;
 
 <programlisting>
 WARNING:  database "mydb" must be vacuumed within 99985967 transactions
-DETAIL:  Approximately 4.66% of transaction IDs are available for use.
-HINT:  To avoid XID assignment failures, execute a database-wide VACUUM in that database.
+DETAIL:  Approximately 4.66% of transaction IDs remain before wraparound.
+HINT:  To avoid transaction ID assignment failures, execute a database-wide VACUUM in that database.
 </programlisting>
 
     (A manual <command>VACUUM</command> should fix the problem, as suggested by the
     hint; but note that the <command>VACUUM</command> should be performed by a
     superuser, else it will fail to process system catalogs, which prevent it from
     being able to advance the database's <structfield>datfrozenxid</structfield>.)
-    If these warnings are ignored, the system will refuse to assign new XIDs once
+    If these warnings are ignored, the system will refuse to assign new transaction IDs once
     there are fewer than three million transactions left until wraparound:
 
 <programlisting>
-ERROR:  database is not accepting commands that assign new XIDs to avoid wraparound data loss in database "mydb"
+ERROR:  database is not accepting commands that assign new transaction IDs to avoid wraparound data loss in database "mydb"
 HINT:  Execute a database-wide VACUUM in that database.
 </programlisting>
 

@@ -19,6 +19,7 @@ AbsoluteTime
 AccessMethodInfo
 AccessPriv
 Acl
+AclCheckEntry
 AclItem
 AclMaskHow
 AclMode
@@ -3229,6 +3230,7 @@ ToastedAttribute
 TocEntry
 TokenAuxData
 TokenizedAuthLine
+TrackAclTable
 TrackItem
 TransApplyAction
 TransInvalidationInfo

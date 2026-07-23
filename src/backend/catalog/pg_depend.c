@@ -17,6 +17,7 @@
 #include "access/genam.h"
 #include "access/htup_details.h"
 #include "access/table.h"
+#include "catalog/aclcheck_track.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
 #include "catalog/indexing.h"
@@ -29,6 +30,8 @@
 #include "miscadmin.h"
 #include "storage/lmgr.h"
 #include "storage/lock.h"
+#include "storage/sinval.h"
+#include "utils/acl.h"
 #include "utils/fmgroids.h"
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
@@ -38,6 +41,7 @@
 
 static bool isObjectPinned(const ObjectAddress *object);
 static void dependencyLockAndCheckObject(Oid classId, Oid objectId);
+static void recheckAcl(Oid classId, Oid objectId);
 
 
 /*
@@ -733,11 +737,80 @@ isObjectPinned(const ObjectAddress *object)
 
 
 /*
+ * recheckAcl()
+ *
+ * Re-verify all tracked permission checks on the given object.
+ *
+ * Called after acquiring the lock and verifying the object still exists.
+ * If permission checks were tracked for this object and catalog
+ * invalidations arrived since the original checks, re-verify them all.
+ * This closes the TOCTOU window where a REVOKE could land between the
+ * original permission check and the dependency recording.
+ *
+ * Multiple checks may have been done on the same object with different
+ * modes or roles, so we iterate through all matching entries.
+ *
+ * Since we don't re-resolve names (the OID is fixed), there is no need for
+ * a retry loop here. If a recheck fails, it's a definitive failure.
+ *
+ * The linear scan over the tracking array is O(n) in the number of tracked
+ * entries, but that's fine since a typical DDL statement tracks only a few
+ * objects.
+ */
+static void
+recheckAcl(Oid classId, Oid objectId)
+{
+	TrackAclTable *acltable = CurrentTrackAclTable;
+
+	if (acltable == NULL)
+		return;
+
+	for (int i = acltable->count - 1; i >= 0; i--)
+	{
+		if (acltable->entries[i].classId == classId &&
+			acltable->entries[i].objectId == objectId &&
+			acltable->entries[i].inval_count != SharedInvalidMessageCounter)
+		{
+			AclResult	aclresult;
+
+			if (acltable->entries[i].attnum != InvalidAttrNumber)
+				aclresult = pg_attribute_aclcheck(objectId,
+												  acltable->entries[i].attnum,
+												  acltable->entries[i].roleId,
+												  acltable->entries[i].mode);
+			else if (classId == RelationRelationId)
+				aclresult = pg_class_aclcheck(objectId,
+											  acltable->entries[i].roleId,
+											  acltable->entries[i].mode);
+			else
+				aclresult = object_aclcheck(classId, objectId,
+											acltable->entries[i].roleId,
+											acltable->entries[i].mode);
+
+			if (aclresult != ACLCHECK_OK)
+			{
+				ObjectAddress object;
+
+				object.classId = classId;
+				object.objectId = objectId;
+				object.objectSubId = 0;
+				ereport(ERROR,
+						(errcode(ERRCODE_INSUFFICIENT_PRIVILEGE),
+						 errmsg("permission denied for %s",
+								getObjectDescription(&object, false))));
+			}
+		}
+	}
+}
+
+
+/*
  * dependencyLockAndCheckObject
  *
- * Lock the object that we are about to record a dependency on.  After it's
- * locked, verify that it hasn't been dropped while we weren't looking.  If it
- * has been dropped, throw an an error.
+ * Lock the object that we are about to record a dependency on. After it's
+ * locked, verify that it hasn't been dropped while we weren't looking. If it
+ * has been dropped, throw an error. Then re-verify any tracked permission
+ * check to close the TOCTOU window.
  *
  * If the caller already holds a lock that conflicts with DROP
  * (AccessShareLock or stronger), this does nothing.  Callers should acquire
@@ -773,7 +846,11 @@ dependencyLockAndCheckObject(Oid classId, Oid objectId)
 						   0);
 
 		if (LockHeldByMe(&tag, AccessShareLock, true))
+		{
+			/* Recheck ACL */
+			recheckAcl(classId, objectId);
 			return;
+		}
 
 		/* Assume we should lock the whole object not a sub-object */
 		LockDatabaseObject(classId, objectId, 0, AccessShareLock);
@@ -786,7 +863,11 @@ dependencyLockAndCheckObject(Oid classId, Oid objectId)
 		if (cache != SYSCACHEID_INVALID)
 		{
 			if (SearchSysCacheExists1(cache, ObjectIdGetDatum(objectId)))
+			{
+				/* Recheck ACL */
+				recheckAcl(classId, objectId);
 				return;
+			}
 		}
 
 		/*
@@ -814,6 +895,9 @@ dependencyLockAndCheckObject(Oid classId, Oid objectId)
 
 		systable_endscan(scan);
 		table_close(rel, AccessShareLock);
+
+		/* Recheck ACL */
+		recheckAcl(classId, objectId);
 	}
 	else
 	{
@@ -834,14 +918,23 @@ dependencyLockAndCheckObject(Oid classId, Oid objectId)
 		Assert(!IsSharedRelation(objectId));
 
 		if (CheckRelationOidLockedByMe(objectId, AccessShareLock, true))
+		{
+			/* Recheck ACL */
+			recheckAcl(classId, objectId);
 			return;
+		}
+
+		/* Acquire lock */
 		LockRelationOid(objectId, AccessShareLock);
 
-		if (SearchSysCacheExists1(RELOID, ObjectIdGetDatum(objectId)))
-			return;
-		ereport(ERROR,
-				(errcode(ERRCODE_UNDEFINED_OBJECT),
-				 errmsg("referenced relation was concurrently dropped")));
+		/* Check that the object still exists */
+		if (!SearchSysCacheExists1(RELOID, ObjectIdGetDatum(objectId)))
+			ereport(ERROR,
+					(errcode(ERRCODE_UNDEFINED_OBJECT),
+					 errmsg("referenced relation was concurrently dropped")));
+
+		/* Recheck ACL */
+		recheckAcl(classId, objectId);
 	}
 }
 

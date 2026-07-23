@@ -44,6 +44,7 @@
 #include "access/sysattr.h"
 #include "access/tableam.h"
 #include "access/xact.h"
+#include "catalog/aclcheck_track.h"
 #include "catalog/binary_upgrade.h"
 #include "catalog/catalog.h"
 #include "catalog/dependency.h"
@@ -83,6 +84,10 @@
 #include "utils/lsyscache.h"
 #include "utils/rel.h"
 #include "utils/syscache.h"
+
+#define ACLCHECK_TRACK_INITIAL_SIZE 64
+
+TrackAclTable *CurrentTrackAclTable = NULL;
 
 /*
  * Internal format used by ALTER DEFAULT PRIVILEGES.
@@ -3915,7 +3920,10 @@ object_aclcheck_ext(Oid classid, Oid objectid,
 {
 	if (object_aclmask_ext(classid, objectid, roleid, mode, ACLMASK_ANY,
 						   is_missing) != 0)
+	{
+		aclcheck_track_record(classid, objectid, InvalidAttrNumber, roleid, mode);
 		return ACLCHECK_OK;
+	}
 	else
 		return ACLCHECK_NO_PRIV;
 }
@@ -3948,7 +3956,10 @@ pg_attribute_aclcheck_ext(Oid table_oid, AttrNumber attnum,
 {
 	if (pg_attribute_aclmask_ext(table_oid, attnum, roleid, mode,
 								 ACLMASK_ANY, is_missing) != 0)
+	{
+		aclcheck_track_record(RelationRelationId, table_oid, attnum, roleid, mode);
 		return ACLCHECK_OK;
+	}
 	else
 		return ACLCHECK_NO_PRIV;
 }
@@ -4117,7 +4128,10 @@ pg_class_aclcheck_ext(Oid table_oid, Oid roleid,
 {
 	if (pg_class_aclmask_ext(table_oid, roleid, mode,
 							 ACLMASK_ANY, is_missing) != 0)
+	{
+		aclcheck_track_record(RelationRelationId, table_oid, InvalidAttrNumber, roleid, mode);
 		return ACLCHECK_OK;
+	}
 	else
 		return ACLCHECK_NO_PRIV;
 }
@@ -5057,4 +5071,53 @@ RemoveRoleFromInitPriv(Oid roleid, Oid classid, Oid objid, int32 objsubid)
 	CommandCounterIncrement();
 
 	table_close(rel, RowExclusiveLock);
+}
+
+/*
+ * Allocate a new tracking table in CurrentMemoryContext.
+ */
+TrackAclTable *
+CreateTrackAclTable(void)
+{
+	TrackAclTable *acltable = (TrackAclTable *) palloc(sizeof(TrackAclTable));
+
+	acltable->entries = (AclCheckEntry *)
+		palloc(ACLCHECK_TRACK_INITIAL_SIZE * sizeof(AclCheckEntry));
+	acltable->max = ACLCHECK_TRACK_INITIAL_SIZE;
+	acltable->count = 0;
+	return acltable;
+}
+
+/*
+ * Free a tracking table.
+ */
+void
+FreeTrackAclTable(TrackAclTable *acltable)
+{
+	pfree(acltable->entries);
+	pfree(acltable);
+}
+
+/*
+ * AtEOSubXact_AclTrack
+ *
+ * At subtransaction abort, discard any ACL tracking entries that were added
+ * during the aborted subtransaction. This prevents stale entries from causing
+ * false permission-denied errors in recheckAcl().
+ *
+ * At subtransaction commit, do nothing, entries from committed subtransactions
+ * are valid and should be kept.
+ */
+void
+AtEOSubXact_AclTrack(bool isCommit, SubTransactionId mySubid)
+{
+	TrackAclTable *acltable = CurrentTrackAclTable;
+
+	if (acltable == NULL || isCommit)
+		return;
+
+	/* Discard entries from the aborting subtransaction and any nested ones */
+	while (acltable->count > 0 &&
+		   acltable->entries[acltable->count - 1].subxid >= mySubid)
+		acltable->count--;
 }

@@ -41,6 +41,7 @@ typedef struct DummyIndexOptions
 	double		option_real;
 	bool		option_bool;
 	pg_ternary	option_ternary_1;
+	pg_ternary	option_ternary_2;
 	DummyAmEnum option_enum;
 	int			option_string_val_offset;
 	int			option_string_null_offset;
@@ -104,10 +105,18 @@ create_reloptions_table(void)
 
 	add_ternary_reloption(di_relopt_kind, "option_ternary_1",
 						  "One ternary option for dummy_index_am",
-						  AccessExclusiveLock);
+					   PG_TERNARY_UNSET, NULL, AccessExclusiveLock);
 	di_relopt_tab[i].optname = "option_ternary_1";
 	di_relopt_tab[i].opttype = RELOPT_TYPE_TERNARY;
 	di_relopt_tab[i].offset = offsetof(DummyIndexOptions, option_ternary_1);
+	i++;
+
+	add_ternary_reloption(di_relopt_kind, "option_ternary_2",
+					   "Second ternary option for dummy_index_am",
+					   PG_TERNARY_TRUE, "do_not_know_yet", AccessExclusiveLock);
+	di_relopt_tab[i].optname = "option_ternary_2";
+	di_relopt_tab[i].opttype = RELOPT_TYPE_TERNARY;
+	di_relopt_tab[i].offset = offsetof(DummyIndexOptions, option_ternary_2);
 	i++;
 
 	add_enum_reloption(di_relopt_kind, "option_enum",

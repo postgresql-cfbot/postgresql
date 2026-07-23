@@ -288,6 +288,7 @@ find_ec_position_matching_expr(PlannerInfo *root, RelOptInfo *baserel,
 	/* Create the EC. */
 	jdomain = makeNode(JoinDomain);
 	jdomain->jd_relids = pull_varnos(root, (Node *) expr);
+	root->join_domains = lappend(root->join_domains, jdomain);
 	ec = get_eclass_for_sort_expr(root, expr,
 								  opfamilies,
 								  exprType((Node *) expr),

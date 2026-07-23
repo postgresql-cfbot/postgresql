@@ -249,6 +249,7 @@ find_ec_position_matching_expr(PlannerInfo *root, RelOptInfo *baserel,
 	int		ec_index;
 	JoinDomain *jdomain;
 	ListCell	*lc;
+	Oid			collation = exprCollation((Node *) expr);
 
 	/*
 	 * XXX Currently the function is only used to build unique keys, so we
@@ -273,6 +274,25 @@ find_ec_position_matching_expr(PlannerInfo *root, RelOptInfo *baserel,
 		ec = list_nth(root->eq_classes, i);
 
 		/*
+		 * The EC must compare values the same way the unique index does, or
+		 * its uniqueness guarantee does not apply to it. That requires both
+		 * the same operator family *and* the same collation: a btree
+		 * opfamily like text_ops is shared by every collation, but a unique
+		 * index built under one collation (e.g. case-sensitive) says
+		 * nothing about duplicates under a coarser collation (e.g.
+		 * case-insensitive) that some join/DISTINCT clause elsewhere in the
+		 * query might have used to build this EC. Without this check we can
+		 * attach a unique index's guarantee to an EC that was built with a
+		 * different collation override (the override typically survives
+		 * only as a RelabelType around the member expr, which
+		 * find_ec_member_matching_expr() strips before comparing), which
+		 * makes a case-insensitive join look "inner unique" and drops
+		 * matching rows.
+		 */
+		if (ec->ec_collation != collation)
+			continue;
+
+		/*
 		 * The EC must understand equality in the same way as the unique index
 		 * that guarantees the uniqueness. That is, ec_opfamilies must contain
 		 * all the opfamilies passed by the caller.
@@ -292,7 +312,7 @@ find_ec_position_matching_expr(PlannerInfo *root, RelOptInfo *baserel,
 	ec = get_eclass_for_sort_expr(root, expr,
 								  opfamilies,
 								  exprType((Node *) expr),
-								  exprCollation((Node *) expr),
+								  collation,
 								  0,
 								  NULL,
 								  jdomain,

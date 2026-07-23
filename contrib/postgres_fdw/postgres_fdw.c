@@ -18,6 +18,7 @@
 #include "access/sysattr.h"
 #include "access/table.h"
 #include "catalog/pg_opfamily.h"
+#include "commands/copy.h"
 #include "commands/defrem.h"
 #include "commands/explain_format.h"
 #include "commands/explain_state.h"
@@ -26,6 +27,7 @@
 #include "executor/instrument.h"
 #include "foreign/fdwapi.h"
 #include "funcapi.h"
+#include "mb/pg_wchar.h"
 #include "miscadmin.h"
 #include "nodes/makefuncs.h"
 #include "nodes/nodeFuncs.h"
@@ -68,6 +70,9 @@ PG_MODULE_MAGIC_EXT(
 
 /* If no remote estimates, assume a sort costs 20% extra */
 #define DEFAULT_FDW_SORT_MULTIPLIER 1.2
+
+/* Buffer size to send COPY IN data*/
+#define COPYBUFSIZ 8192
 
 /*
  * Indexes of FDW-private information stored in fdw_private lists.
@@ -203,6 +208,8 @@ typedef struct PgFdwModifyState
 	int			batch_size;		/* value of FDW option "batch_size" */
 	bool		has_returning;	/* is there a RETURNING clause? */
 	List	   *retrieved_attrs;	/* attr numbers retrieved by RETURNING */
+
+	bool		use_copy; /* use COPY protocol for ExecForeignInsert? */
 
 	/* info about parameters for prepared statement */
 	AttrNumber	ctidAttno;		/* attnum of input resjunk ctid column */
@@ -638,6 +645,13 @@ static void merge_fdw_options(PgFdwRelationInfo *fpinfo,
 							  const PgFdwRelationInfo *fpinfo_o,
 							  const PgFdwRelationInfo *fpinfo_i);
 static int	get_batch_size_option(Relation rel);
+static TupleTableSlot **execute_foreign_modify_using_copy(PgFdwModifyState *fmstate,
+														  TupleTableSlot **slots,
+														  int *numSlots);
+static void convert_slot_to_copy_text(StringInfo buf,
+									  PgFdwModifyState *fmstate,
+									  TupleTableSlot *slot);
+static void appendStringInfoText(StringInfo buf, const char *string);
 
 
 /*
@@ -2259,11 +2273,12 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 	RangeTblEntry *rte;
 	TupleDesc	tupdesc = RelationGetDescr(rel);
 	int			attnum;
-	int			values_end_len;
+	int			values_end_len = 0;
 	StringInfoData sql;
 	List	   *targetAttrs = NIL;
 	List	   *retrieved_attrs = NIL;
 	bool		doNothing = false;
+	bool		useCopy = false;
 
 	/*
 	 * If the foreign table we are about to insert routed rows into is also an
@@ -2341,11 +2356,38 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 		rte = exec_rt_fetch(resultRelation, estate);
 	}
 
+	/*
+	 * We can use COPY for remote inserts only if all the following conditions
+	 * are met:
+	 *
+	 * Direct Execution: The command is a COPY FROM on the foreign table
+	 * itself, not part of a partitioned table's tuple routing.
+	 *
+	 * No Local AFTER Triggers: There are no AFTER ROW triggers defined
+	 * locally on the foreign table.
+	 *
+	 * Remote triggers might modify the inserted row. Because the COPY
+	 * protocol does not support a RETURNING clause, we cannot retrieve those
+	 * changes to synchronize the local TupleTableSlot required by local AFTER
+	 * triggers.
+	 */
+	if (resultRelInfo->ri_RootResultRelInfo == NULL)
+	{
+		/* There is no RETURNING clause on COPY */
+		Assert(resultRelInfo->ri_returningList == NIL);
+
+		useCopy = (resultRelInfo->ri_TrigDesc == NULL ||
+				   !resultRelInfo->ri_TrigDesc->trig_insert_after_row);
+	}
+
 	/* Construct the SQL command string. */
-	deparseInsertSql(&sql, rte, resultRelation, rel, targetAttrs, doNothing,
-					 resultRelInfo->ri_WithCheckOptions,
-					 resultRelInfo->ri_returningList,
-					 &retrieved_attrs, &values_end_len);
+	if (useCopy)
+		deparseCopySql(&sql, rel, targetAttrs);
+	else
+		deparseInsertSql(&sql, rte, resultRelation, rel, targetAttrs, doNothing,
+						 resultRelInfo->ri_WithCheckOptions,
+						 resultRelInfo->ri_returningList,
+						 &retrieved_attrs, &values_end_len);
 
 	/* Construct an execution state. */
 	fmstate = create_foreign_modify(mtstate->ps.state,
@@ -2358,6 +2400,7 @@ postgresBeginForeignInsert(ModifyTableState *mtstate,
 									values_end_len,
 									retrieved_attrs != NIL,
 									retrieved_attrs);
+	fmstate->use_copy = useCopy;
 
 	/*
 	 * If the given resultRelInfo already has PgFdwModifyState set, it means
@@ -4186,6 +4229,9 @@ execute_foreign_modify(EState *estate,
 	Assert(operation == CMD_INSERT ||
 		   operation == CMD_UPDATE ||
 		   operation == CMD_DELETE);
+
+	if (fmstate->use_copy)
+		return execute_foreign_modify_using_copy(fmstate, slots, numSlots);
 
 	/* First, process a pending asynchronous request, if any. */
 	if (fmstate->conn_state->pendingAreq)
@@ -8765,4 +8811,150 @@ get_batch_size_option(Relation rel)
 	}
 
 	return batch_size;
+}
+
+/*
+ * execute_foreign_modify_using_copy
+ *		Perform foreign-table modification using the COPY command.
+ */
+static TupleTableSlot **
+execute_foreign_modify_using_copy(PgFdwModifyState *fmstate,
+								  TupleTableSlot **slots,
+								  int *numSlots)
+{
+	PGresult   *res;
+	StringInfoData copy_data;
+	int			n_rows;
+	int			i;
+	int			nestlevel;
+
+	Assert(fmstate->use_copy == true);
+
+	elog(DEBUG1, "foreign modify with COPY batch_size: %d", fmstate->batch_size);
+
+	/* Make sure any constants in the slots are printed portably */
+	nestlevel = set_transmission_modes();
+
+	/* Send COPY command */
+	if (!PQsendQuery(fmstate->conn, fmstate->query))
+		pgfdw_report_error(NULL, fmstate->conn, fmstate->query);
+
+	/* get the COPY result */
+	res = pgfdw_get_result(fmstate->conn);
+	if (PQresultStatus(res) != PGRES_COPY_IN)
+		pgfdw_report_error(res, fmstate->conn, fmstate->query);
+
+	/* Clean up the COPY command result */
+	PQclear(res);
+
+	/* Convert the TupleTableSlot data into a TEXT-formatted line */
+	initStringInfo(&copy_data);
+	for (i = 0; i < *numSlots; i++)
+	{
+		convert_slot_to_copy_text(&copy_data, fmstate, slots[i]);
+
+		/*
+		 * Send initial COPY data if the buffer reaches the limit to avoid
+		 * large memory usage.
+		 */
+		if (copy_data.len >= COPYBUFSIZ)
+		{
+			if (PQputCopyData(fmstate->conn, copy_data.data, copy_data.len) <= 0)
+				pgfdw_report_error(NULL, fmstate->conn, fmstate->query);
+			resetStringInfo(&copy_data);
+		}
+	}
+
+	/* Send the remaining COPY data */
+	if (copy_data.len > 0)
+	{
+		if (PQputCopyData(fmstate->conn, copy_data.data, copy_data.len) <= 0)
+			pgfdw_report_error(NULL, fmstate->conn, fmstate->query);
+	}
+
+	pfree(copy_data.data);
+
+	/* End the COPY operation */
+	if (PQputCopyEnd(fmstate->conn, NULL) < 0 || PQflush(fmstate->conn))
+		pgfdw_report_error(NULL, fmstate->conn, fmstate->query);
+
+	/*
+	 * Get the result, and check for success.
+	 */
+	res = pgfdw_get_result(fmstate->conn);
+	if (PQresultStatus(res) != PGRES_COMMAND_OK)
+		pgfdw_report_error(res, fmstate->conn, fmstate->query);
+
+	n_rows = atoi(PQcmdTuples(res));
+
+	/* And clean up */
+	PQclear(res);
+
+	reset_transmission_modes(nestlevel);
+
+	MemoryContextReset(fmstate->temp_cxt);
+
+	*numSlots = n_rows;
+
+	/*
+	 * Return NULL if nothing was inserted on the remote end
+	 */
+	return (n_rows > 0) ? slots : NULL;
+}
+
+/*
+ *  Write target attribute values from fmstate into buf buffer to be sent as
+ *  COPY FROM STDIN data
+ */
+static void
+convert_slot_to_copy_text(StringInfo buf,
+						  PgFdwModifyState *fmstate,
+						  TupleTableSlot *slot)
+{
+	TupleDesc	tupdesc = RelationGetDescr(fmstate->rel);
+	bool		first = true;
+	int			i = 0;
+
+	foreach_int(attnum, fmstate->target_attrs)
+	{
+		CompactAttribute *attr = TupleDescCompactAttr(tupdesc, attnum - 1);
+		Datum		datum;
+		bool		isnull;
+
+		/* Ignore generated columns; they are set to DEFAULT */
+		if (attr->attgenerated)
+			continue;
+
+		if (!first)
+			appendStringInfoCharMacro(buf, '\t');
+		first = false;
+
+		datum = slot_getattr(slot, attnum, &isnull);
+
+		if (isnull)
+			appendStringInfoString(buf, "\\N");
+		else
+		{
+			const char *value = OutputFunctionCall(&fmstate->p_flinfo[i],
+												   datum);
+
+			/* Escape the value if needed */
+			appendStringInfoText(buf, value);
+		}
+		i++;
+	}
+
+	appendStringInfoCharMacro(buf, '\n');
+}
+
+/* Append a string to buf, escaping special characters for COPY TEXT format. */
+static void
+appendStringInfoText(StringInfo buf, const char *string)
+{
+	CopyEscapeText(buf,
+				   string,
+				   '\t',
+				   PG_UTF8,
+				   false,
+				   false);
 }

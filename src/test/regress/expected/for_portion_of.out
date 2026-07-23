@@ -920,14 +920,21 @@ SELECT * FROM for_portion_of_test ORDER BY id, valid_at;
 \set QUIET true
 -- UPDATE ... RETURNING returns only the updated values
 -- (not the inserted side values, which are added by a separate "statement"):
+CREATE SEQUENCE fpo_returning_seq;
 UPDATE for_portion_of_test
   FOR PORTION OF valid_at FROM '2018-02-01' TO '2018-02-15'
   SET name = 'three^3'
   WHERE id = '[3,4)'
-  RETURNING *;
-  id   |        valid_at         |  name   
--------+-------------------------+---------
- [3,4) | [2018-02-01,2018-02-15) | three^3
+  RETURNING *, nextval('fpo_returning_seq') AS seq;
+  id   |        valid_at         |  name   | seq 
+-------+-------------------------+---------+-----
+ [3,4) | [2018-02-01,2018-02-15) | three^3 |   1
+(1 row)
+
+SELECT last_value FROM fpo_returning_seq;
+ last_value 
+------------
+          1
 (1 row)
 
 -- UPDATE ... RETURNING supports NEW and OLD valid_at
@@ -972,15 +979,23 @@ ERROR:  FOR PORTION OF bounds cannot contain volatile functions
 DELETE FROM for_portion_of_test WHERE id = '[99,100)';
 -- DELETE ... RETURNING returns the deleted values, regardless of bounds
 -- (not the inserted side values, which are added by a separate "statement"):
+ALTER SEQUENCE fpo_returning_seq RESTART;
 DELETE FROM for_portion_of_test
   FOR PORTION OF valid_at FROM '2018-02-02' TO '2018-02-03'
   WHERE id = '[3,4)'
-  RETURNING *;
-  id   |        valid_at         |  name   
--------+-------------------------+---------
- [3,4) | [2018-02-01,2018-02-10) | three^3
+  RETURNING *, nextval('fpo_returning_seq') AS seq;
+  id   |        valid_at         |  name   | seq 
+-------+-------------------------+---------+-----
+ [3,4) | [2018-02-01,2018-02-10) | three^3 |   1
 (1 row)
 
+SELECT last_value FROM fpo_returning_seq;
+ last_value 
+------------
+          1
+(1 row)
+
+DROP SEQUENCE fpo_returning_seq;
 -- DELETE FOR PORTION OF in a PL/pgSQL function
 INSERT INTO for_portion_of_test (id, valid_at, name) VALUES
   ('[10,11)', '[2018-01-01,2020-01-01)', 'ten');
@@ -2137,7 +2152,13 @@ UPDATE temporal_partitioned FOR PORTION OF valid_at FROM '2000-03-01' TO '2000-0
 UPDATE temporal_partitioned FOR PORTION OF valid_at FROM '2000-06-01' TO '2000-07-01'
   SET name = 'one^2',
       id = '[4,5)'
-  WHERE id = '[1,2)';
+  WHERE id = '[1,2)'
+  RETURNING id, valid_at, name;
+  id   |        valid_at         | name  
+-------+-------------------------+-------
+ [4,5) | [2000-06-01,2000-07-01) | one^2
+(1 row)
+
 -- Move from partition 3 to partition 1
 UPDATE temporal_partitioned FOR PORTION OF valid_at FROM '2000-06-01' TO '2000-07-01'
   SET name = 'three^2',

@@ -889,6 +889,16 @@ ExecInsert(ModifyTableContext *context,
 	OnConflictAction onconflict = node->onConflictAction;
 	PartitionTupleRouting *proute = mtstate->mt_partition_tuple_routing;
 	MemoryContext oldContext;
+	bool		fpoLeftover;
+
+	/*
+	 * In FOR PORTION OF, hidden leftover rows are inserted after
+	 * ExecForPortionOfLeftovers() temporarily changes the ModifyTable
+	 * operation from UPDATE or DELETE to INSERT.  A visible cross-partition
+	 * UPDATE can also call ExecInsert(), but it leaves the operation as
+	 * UPDATE.
+	 */
+	fpoLeftover = node->forPortionOf && mtstate->operation == CMD_INSERT;
 
 	/*
 	 * If the input result relation is a partitioned table, find the leaf
@@ -1335,8 +1345,11 @@ ExecInsert(ModifyTableContext *context,
 	if (resultRelInfo->ri_WithCheckOptions != NIL)
 		ExecWithCheckOptions(WCO_VIEW_CHECK, resultRelInfo, slot, estate);
 
-	/* Process RETURNING if present */
-	if (resultRelInfo->ri_projectReturning)
+	/*
+	 * Process RETURNING if present, except for internal FOR PORTION OF
+	 * leftovers
+	 */
+	if (!fpoLeftover && resultRelInfo->ri_projectReturning)
 	{
 		TupleTableSlot *oldSlot = NULL;
 

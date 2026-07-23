@@ -1020,12 +1020,17 @@ convert_unique_keys_for_rel(PlannerInfo *root, RelOptInfo *rel,
 					if (matched >= 0)
 					{
 						/*
-						 * By generating the unique key the subquery
-						 * guarantees that the value of the output column
-						 * cannot be NULL.
+						 * A unique index does not by itself guarantee the
+						 * column is never NULL (Postgres unique indexes
+						 * permit multiple NULLs). Only mark the output
+						 * not-null when the underlying expression is a
+						 * plain Var that is itself already known not-null
+						 * in the subquery's own planning context.
 						 */
-						rel->notnullattrs = bms_add_member(rel->notnullattrs,
-														   target_var->varattno - FirstLowInvalidHeapAttributeNumber);
+						if (IsA(expr, Var) &&
+							!var_is_nullable(rel->subroot, (Var *) expr, input_rel))
+							rel->notnullattrs = bms_add_member(rel->notnullattrs,
+															   target_var->varattno - FirstLowInvalidHeapAttributeNumber);
 					}
 					else
 						matched = -1;

@@ -2044,6 +2044,45 @@ exec_bind_message(StringInfo input_message)
 			rformats[i] = pq_getmsgint(input_message, 2);
 	}
 
+	/*
+	 * Get bind extension flags if present (_pq_.protocol_cursor enabled).
+	 *
+	 * The wire-level flag values (PQ_BIND_CURSOR_*) are defined independently
+	 * of the server-internal CURSOR_OPT_* constants in parsenodes.h, so we
+	 * must map between the two representations here.
+	 */
+	if (MyProcPort->protocol_cursor_enabled &&
+		input_message->cursor < input_message->len)
+	{
+		int			bind_ext_flags;
+
+		bind_ext_flags = pq_getmsgint(input_message, 4);
+
+		/* Reject any bits we don't recognize */
+		if (bind_ext_flags & ~0x0007)
+			ereport(ERROR,
+					(errcode(ERRCODE_PROTOCOL_VIOLATION),
+					 errmsg("unrecognized bind extension flags: 0x%x",
+							bind_ext_flags & ~0x0007)));
+
+		/*
+		 * Only override the default cursorOptions when the client has
+		 * explicitly set flags.  A value of 0 means no cursor options were
+		 * requested, so keep the CreatePortal defaults.
+		 */
+		if (bind_ext_flags != 0)
+		{
+			portal->cursorOptions = 0;
+
+			/* Map protocol flags to internal CURSOR_OPT_* values */
+			if (bind_ext_flags & 0x0001)	/* PQ_BIND_CURSOR_SCROLL */
+				portal->cursorOptions |= CURSOR_OPT_SCROLL;
+			if (bind_ext_flags & 0x0002)	/* PQ_BIND_CURSOR_NO_SCROLL */
+				portal->cursorOptions |= CURSOR_OPT_NO_SCROLL;
+			if (bind_ext_flags & 0x0004)	/* PQ_BIND_CURSOR_HOLD */
+				portal->cursorOptions |= CURSOR_OPT_HOLD;
+		}
+	}
 	pq_getmsgend(input_message);
 
 	/*

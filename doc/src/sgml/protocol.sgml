@@ -346,9 +346,18 @@
 
      <tbody>
       <row>
-       <entry namest="last" align="center" valign="middle">
-        <emphasis>(No supported protocol extensions are currently defined.)</emphasis>
-       </entry>
+      <entry><literal>_pq_.protocol_cursor</literal></entry>
+      <entry><literal>true</literal></entry>
+      <entry>PostgreSQL 19 and later</entry>
+      <entry>Enables cursor options in the Bind message.
+        When set to <literal>true</literal>, the Bind message includes
+        an optional extension bitmap field.  The following flags are
+        defined for this extension:
+        <symbol>PQ_BIND_CURSOR_SCROLL</symbol> (scroll),
+        <symbol>PQ_BIND_CURSOR_NO_SCROLL</symbol> (no scroll), and
+        <symbol>PQ_BIND_CURSOR_HOLD</symbol> (hold).
+        These are defined in <filename>libpq-fe.h</filename>.
+      </entry>
       </row>
      </tbody>
     </tgroup>
@@ -1101,6 +1110,9 @@ SELCT 1/0;<!-- this typo is intentional -->
     pass NULL values for them in the Bind message.)
     Bind also specifies the format to use for any data returned
     by the query; the format can be specified overall, or per-column.
+    If the <literal>_pq_.protocol_cursor</literal> protocol option is enabled,
+    Bind can optionally include cursor options to control portal behavior,
+    such as creating scrollable or holdable cursors.
     The response is either BindComplete or ErrorResponse.
    </para>
 
@@ -4408,6 +4420,15 @@ psql "dbname=postgres replication=database" -c "IDENTIFY_SYSTEM;"
         <para>
          The result-column format codes.  Each must presently be
          zero (text) or one (binary).
+        </para>
+       </listitem>
+      </varlistentry>
+
+      <varlistentry>
+       <term>Int32 (optional)</term>
+       <listitem>
+        <para>
+         Bitmap set by protocol extensions.
         </para>
        </listitem>
       </varlistentry>

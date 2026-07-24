@@ -1545,6 +1545,16 @@ pqGetNegotiateProtocolVersion3(PGconn *conn)
 			strcmp(conn->workBuffer.data, "_pq_.test_protocol_negotiation") == 0)
 		{
 			found_test_protocol_negotiation = true;
+			continue;
+		}
+
+		/*
+		 * Handle rejected protocol extensions we requested. Disable the
+		 * corresponding feature so the client doesn't try to use it.
+		 */
+		if (strcmp(conn->workBuffer.data, "_pq_.protocol_cursor") == 0)
+		{
+			conn->protocol_cursor_enabled = false;
 		}
 		else
 		{
@@ -2533,6 +2543,10 @@ build_startup_packet(const PGconn *conn, char *packet,
 	 */
 	if (conn->pversion == PG_PROTOCOL_GREASE)
 		ADD_STARTUP_OPTION("_pq_.test_protocol_negotiation", "");
+
+	/* Add _pq_.protocol_cursor option if enabled */
+	if (conn->protocol_cursor && conn->protocol_cursor[0] == '1')
+		ADD_STARTUP_OPTION("_pq_.protocol_cursor", "true");
 
 	/* Add any environment-driven GUC settings needed */
 	for (next_eo = options; next_eo->envName; next_eo++)

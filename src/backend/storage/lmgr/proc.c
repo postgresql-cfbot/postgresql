@@ -1646,7 +1646,7 @@ ProcSleep(LOCALLOCK *locallock)
 			msecs = secs * 1000 + usecs / 1000;
 			usecs = usecs % 1000;
 
-			if (log_lock_waits)
+			if (log_lock_waits && message_level_is_interesting(LOG))
 			{
 				StringInfoData buf,
 							lock_waiters_sbuf,

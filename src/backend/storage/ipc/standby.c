@@ -282,6 +282,9 @@ LogRecoveryConflict(RecoveryConflictReason reason, TimestampTz wait_start,
 	StringInfoData buf;
 	int			nprocs = 0;
 
+	if (!message_level_is_interesting(LOG))
+		return;
+
 	/*
 	 * There must be no conflicting processes when the recovery conflict has
 	 * already been resolved.

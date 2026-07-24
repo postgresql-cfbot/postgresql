@@ -4071,8 +4071,9 @@ static void
 WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 {
 	WaitEvent	event;
+	ConditionVariable *cv = NULL;
 
-	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, socket_events, NULL);
+	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetSocketPos, socket_events, NULL, NULL);
 
 	/*
 	 * We use a condition variable to efficiently wake up walsenders in
@@ -4092,9 +4093,6 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 	 * release for every iteration, just to wake up only the waiting
 	 * walsenders. It makes WalSndWakeup() callers' life easy.
 	 *
-	 * XXX: A desirable future improvement would be to add support for CVs
-	 * into WaitEventSetWait().
-	 *
 	 * And, we use separate shared memory CVs for physical and logical
 	 * walsenders for selective wake ups, see WalSndWakeup() for more details.
 	 *
@@ -4103,20 +4101,19 @@ WalSndWait(uint32 socket_events, long timeout, uint32 wait_event)
 	 * the receipt of the LSN.
 	 */
 	if (wait_event == WAIT_EVENT_WAIT_FOR_STANDBY_CONFIRMATION)
-		ConditionVariablePrepareToSleep(&WalSndCtl->wal_confirm_rcv_cv);
+		cv = &WalSndCtl->wal_confirm_rcv_cv;
 	else if (MyWalSnd->kind == REPLICATION_KIND_PHYSICAL)
-		ConditionVariablePrepareToSleep(&WalSndCtl->wal_flush_cv);
+		cv = &WalSndCtl->wal_flush_cv;
 	else if (MyWalSnd->kind == REPLICATION_KIND_LOGICAL)
-		ConditionVariablePrepareToSleep(&WalSndCtl->wal_replay_cv);
+		cv = &WalSndCtl->wal_replay_cv;
+
+	ModifyWaitEvent(FeBeWaitSet, FeBeWaitSetCVPos, WL_CONDITION_VARIABLE, NULL, cv);
 
 	if (WaitEventSetWait(FeBeWaitSet, timeout, &event, 1, wait_event) == 1 &&
 		(event.events & WL_POSTMASTER_DEATH))
 	{
-		ConditionVariableCancelSleep();
 		proc_exit(1);
 	}
-
-	ConditionVariableCancelSleep();
 }
 
 /*

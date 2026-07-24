@@ -73,6 +73,7 @@
 #include "storage/fd.h"
 #include "storage/ipc.h"
 #include "storage/pmsignal.h"
+#include "storage/condition_variable.h"
 #include "storage/latch.h"
 #include "storage/waiteventset.h"
 #include "utils/memutils.h"
@@ -136,6 +137,14 @@ struct WaitEventSet
 	 */
 	Latch	   *latch;
 	int			latch_pos;
+
+	/*
+	 * If WL_CONDITION_VARIABLE is specified in any wait event, cv is a
+	 * pointer to said condition variable, and cv_pos the offset in the
+	 * ->events array.
+	 */
+	ConditionVariable *cv;
+	int			cv_pos;
 
 	/*
 	 * WL_EXIT_ON_PM_DEATH is converted to WL_POSTMASTER_DEATH, but this flag
@@ -414,6 +423,7 @@ CreateWaitEventSet(ResourceOwner resowner, int nevents)
 #endif
 
 	set->latch = NULL;
+	set->cv = NULL;
 	set->nevents_space = nevents;
 	set->exit_on_postmaster_death = false;
 
@@ -501,6 +511,11 @@ FreeWaitEventSet(WaitEventSet *set)
 		{
 			/* uses the latch's HANDLE */
 		}
+		else if (cur_event->events == WL_CONDITION_VARIABLE)
+		{
+			/* uses a dummy HANDLE */
+			CloseHandle(set->handles[cur_event->pos + 1]);
+		}
 		else if (cur_event->events & WL_POSTMASTER_DEATH)
 		{
 			/* uses PostmasterHandle */
@@ -550,6 +565,7 @@ FreeWaitEventSetAfterFork(WaitEventSet *set)
  *	 platforms, this is the same as WL_SOCKET_READABLE)
  * - WL_SOCKET_CLOSED: Wait for socket to be closed by remote peer.
  * - WL_EXIT_ON_PM_DEATH: Exit immediately if the postmaster dies
+ * - WL_CONDITION_VARIABLE: Wait for a condition variable to be signaled.
  *
  * Returns the offset in WaitEventSet->events (starting from 0), which can be
  * used to modify previously added wait events using ModifyWaitEvent().
@@ -568,7 +584,7 @@ FreeWaitEventSetAfterFork(WaitEventSet *set)
  */
 int
 AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
-				  void *user_data)
+				  ConditionVariable *cv, void *user_data)
 {
 	WaitEvent  *event;
 
@@ -594,6 +610,18 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 	{
 		if (events & WL_LATCH_SET)
 			elog(ERROR, "cannot wait on latch without a specified latch");
+	}
+
+	/*
+	 * When add a CV event, we allow a NULL cv, because it can be set later
+	 * with ModifyWaitEvent.
+	 */
+	if (cv)
+	{
+		if (set->cv)
+			elog(ERROR, "cannot wait on more than one condition variable");
+		if ((events & WL_CONDITION_VARIABLE) != WL_CONDITION_VARIABLE)
+			elog(ERROR, "condition variable events only support being set");
 	}
 
 	/* waiting for socket readiness without a socket indicates a bug */
@@ -624,6 +652,16 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
 #endif
 #endif
 	}
+	else if (events == WL_CONDITION_VARIABLE)
+	{
+		set->cv = cv;
+		set->cv_pos = event->pos;
+		event->fd = PGINVALID_SOCKET;
+#ifdef WAIT_USE_WIN32
+		WaitEventAdjustWin32(set, event);
+#endif
+		return event->pos;
+	}
 	else if (events == WL_POSTMASTER_DEATH)
 	{
 #ifndef WIN32
@@ -653,14 +691,15 @@ AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd, Latch *latch,
  * 'pos' is the id returned by AddWaitEventToSet.
  */
 void
-ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
+ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch,
+				ConditionVariable *cv)
 {
 	WaitEvent  *event;
 #if defined(WAIT_USE_KQUEUE)
 	int			old_events;
 #endif
 
-	Assert(pos < set->nevents);
+	Assert(pos >= 0 && pos < set->nevents);
 
 	event = &set->events[pos];
 #if defined(WAIT_USE_KQUEUE)
@@ -679,6 +718,21 @@ ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events, Latch *latch)
 		if (events != WL_POSTMASTER_DEATH && events != WL_EXIT_ON_PM_DEATH)
 			elog(ERROR, "cannot remove postmaster death event");
 		set->exit_on_postmaster_death = ((events & WL_EXIT_ON_PM_DEATH) != 0);
+		return;
+	}
+
+	/*
+	 * Change the condition variable associated with the event.  As CV doesn't
+	 * rely on kernal, go ahead with a fast-path and only update the CV
+	 * pointer.
+	 */
+	if (event->events == WL_CONDITION_VARIABLE)
+	{
+		if (events != WL_CONDITION_VARIABLE)
+			elog(ERROR, "cannot change event type of a condition variable event");
+		if (cv == NULL)
+			elog(ERROR, "cannot set condition variable to NULL");
+		set->cv = cv;
 		return;
 	}
 
@@ -991,6 +1045,18 @@ WaitEventAdjustWin32(WaitEventSet *set, WaitEvent *event)
 		Assert(set->latch != NULL);
 		*handle = set->latch->event;
 	}
+	else if (event->events == WL_CONDITION_VARIABLE)
+	{
+		/*
+		 * Condition-variable waits are handled in userspace, but
+		 * WaitForMultipleObjects() still requires a valid HANDLE in every
+		 * slot.
+		 */
+		*handle = CreateEvent(NULL, TRUE, FALSE, NULL);
+		if (*handle == NULL)
+			elog(ERROR, "failed to create event for condition variable: error code %lu",
+				 GetLastError());
+	}
 	else if (event->events == WL_POSTMASTER_DEATH)
 	{
 		*handle = PostmasterHandle;
@@ -1061,6 +1127,9 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	else
 		INSTR_TIME_SET_ZERO(start_time);
 
+	if (set->cv != NULL)
+		ConditionVariablePrepareToSleep(set->cv);
+
 	pgstat_report_wait_start(wait_event_info);
 
 #ifndef WIN32
@@ -1072,6 +1141,8 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 	while (returned_events == 0)
 	{
 		int			rc;
+		bool		cv_signaled = false;
+		bool		cv_maybe_signaled = false;
 
 		/*
 		 * Check if the latch is set already first.  If so, we either exit
@@ -1133,6 +1204,39 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 			timeout = 0;
 		}
 
+		if (set->cv)
+			cv_signaled = ConditionVariableSignaled(set->cv);
+
+		if (set->cv && !cv_signaled)
+			cv_maybe_signaled = true;
+
+		if (set->cv && cv_signaled)
+		{
+			occurred_events->fd = PGINVALID_SOCKET;
+			occurred_events->pos = set->cv_pos;
+			occurred_events->user_data =
+				set->events[set->cv_pos].user_data;
+			occurred_events->events = WL_CONDITION_VARIABLE;
+			occurred_events++;
+			returned_events++;
+
+			if (returned_events == nevents)
+			{
+				/* could have been set above */
+				if (set->latch && set->latch->maybe_sleeping)
+					set->latch->maybe_sleeping = false;
+				break;			/* output buffer full already */
+			}
+
+			/*
+			 * Even though we already have an event, we'll poll just once with
+			 * zero timeout to see what non-latch events we can fit into the
+			 * output buffer at the same time.
+			 */
+			cur_timeout = 0;
+			timeout = 0;
+		}
+
 		/*
 		 * Wait for events using the readiness primitive chosen at the top of
 		 * this file. If -1 is returned, a timeout has occurred, if 0 we have
@@ -1148,7 +1252,25 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 		if (rc == -1)
 			break;				/* timeout occurred */
 		else
+		{
 			returned_events += rc;
+
+			/* Check CV again after waiting if not done before waiting */
+			if (set->cv && cv_maybe_signaled && returned_events < nevents &&
+				ConditionVariableSignaled(set->cv))
+			{
+				occurred_events->fd = PGINVALID_SOCKET;
+				occurred_events->pos = set->cv_pos;
+				occurred_events->user_data =
+					set->events[set->cv_pos].user_data;
+				occurred_events->events = WL_CONDITION_VARIABLE;
+				occurred_events++;
+				returned_events++;
+
+				if (returned_events == nevents)
+					break;		/* output buffer full already */
+			}
+		}
 
 		/* If we're not done, update cur_timeout for next iteration */
 		if (returned_events == 0 && timeout >= 0)
@@ -1166,9 +1288,11 @@ WaitEventSetWait(WaitEventSet *set, long timeout,
 
 	pgstat_report_wait_end();
 
+	if (set->cv != NULL)
+		ConditionVariableCancelSleep();
+
 	return returned_events;
 }
-
 
 #if defined(WAIT_USE_EPOLL)
 

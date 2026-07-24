@@ -182,13 +182,7 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 		 * by something other than ConditionVariableSignal; though we don't
 		 * guarantee not to return spuriously, we'll avoid this obvious case.
 		 */
-		SpinLockAcquire(&cv->mutex);
-		if (!proclist_contains(&cv->wakeup, MyProcNumber, cvWaitLink))
-		{
-			done = true;
-			proclist_push_tail(&cv->wakeup, MyProcNumber, cvWaitLink);
-		}
-		SpinLockRelease(&cv->mutex);
+		done = ConditionVariableSignaled(cv);
 
 		/*
 		 * Check for interrupts, and return spuriously if that caused the
@@ -215,6 +209,31 @@ ConditionVariableTimedSleep(ConditionVariable *cv, long timeout,
 				return true;
 		}
 	}
+}
+
+/*
+ * Check whether this process was removed from cv's wait list by a CV
+ * signal/broadcast. If so, re-add it to preserve wakeups while the caller
+ * checks the predicate.
+ */
+bool
+ConditionVariableSignaled(ConditionVariable *cv)
+{
+	bool		signaled = false;
+
+	/* Ignore probes for CVs we are not currently prepared to sleep on. */
+	if (cv_sleep_target != cv)
+		return false;
+
+	SpinLockAcquire(&cv->mutex);
+	if (!proclist_contains(&cv->wakeup, MyProcNumber, cvWaitLink))
+	{
+		signaled = true;
+		proclist_push_tail(&cv->wakeup, MyProcNumber, cvWaitLink);
+	}
+	SpinLockRelease(&cv->mutex);
+
+	return signaled;
 }
 
 /*

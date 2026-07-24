@@ -25,6 +25,7 @@
 #ifndef WAITEVENTSET_H
 #define WAITEVENTSET_H
 
+#include "storage/condition_variable.h"
 #include "utils/resowner.h"
 
 /*
@@ -50,6 +51,7 @@
 /* avoid having to deal with case on platforms not requiring it */
 #define WL_SOCKET_ACCEPT	WL_SOCKET_READABLE
 #endif
+#define WL_CONDITION_VARIABLE (1 << 9)
 #define WL_SOCKET_MASK		(WL_SOCKET_READABLE | \
 							 WL_SOCKET_WRITEABLE | \
 							 WL_SOCKET_CONNECTED | \
@@ -81,9 +83,10 @@ extern WaitEventSet *CreateWaitEventSet(ResourceOwner resowner, int nevents);
 extern void FreeWaitEventSet(WaitEventSet *set);
 extern void FreeWaitEventSetAfterFork(WaitEventSet *set);
 extern int	AddWaitEventToSet(WaitEventSet *set, uint32 events, pgsocket fd,
-							  struct Latch *latch, void *user_data);
+							  struct Latch *latch, ConditionVariable *cv,
+							  void *user_data);
 extern void ModifyWaitEvent(WaitEventSet *set, int pos, uint32 events,
-							struct Latch *latch);
+							struct Latch *latch, ConditionVariable *cv);
 extern int	WaitEventSetWait(WaitEventSet *set, long timeout,
 							 WaitEvent *occurred_events, int nevents,
 							 uint32 wait_event_info);

@@ -2810,12 +2810,13 @@ select count(*) from
    ->  Merge Left Join
          Merge Cond: (x.thousand = y.unique2)
          Join Filter: ((x.twothousand = y.hundred) AND (x.fivethous = y.unique2))
-         ->  Sort
-               Sort Key: x.thousand, x.twothousand, x.fivethous
-               ->  Seq Scan on tenk1 x
+         ->  Result
+               ->  Sort
+                     Sort Key: x.thousand, x.twothousand, x.fivethous
+                     ->  Seq Scan on tenk1 x
          ->  Materialize
                ->  Index Scan using tenk1_unique2 on tenk1 y
-(9 rows)
+(10 rows)
 
 select count(*) from
   (select * from tenk1 x order by x.thousand, x.twothousand, x.fivethous) x

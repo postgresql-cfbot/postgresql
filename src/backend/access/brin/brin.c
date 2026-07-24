@@ -2198,7 +2198,7 @@ brin_vacuum_scan(Relation idxrel, BufferAccessStrategy strategy)
 	 * Scan the index in physical order, and clean up any possible mess in
 	 * each page.
 	 */
-	while ((buf = read_stream_next_buffer(stream, NULL)) != InvalidBuffer)
+	while ((buf = read_stream_get_buffer(stream)) != InvalidBuffer)
 	{
 		CHECK_FOR_INTERRUPTS();
 

@@ -1025,6 +1025,9 @@ read_stream_begin_smgr_relation(int flags,
  * valid until the next call to read_stream_next_buffer().  When the stream
  * runs out of data, InvalidBuffer is returned.  The caller may decide to end
  * the stream early at any time by calling read_stream_end().
+ *
+ * See read_stream.h for read_stream_get_buffer() and variants that provide
+ * some degree of type safety for the per_buffer_data argument.
  */
 Buffer
 read_stream_next_buffer(ReadStream *stream, void **per_buffer_data)
@@ -1405,6 +1408,15 @@ read_stream_resume(ReadStream *stream)
 {
 	stream->readahead_distance = stream->resume_readahead_distance;
 	stream->combine_distance = stream->resume_combine_distance;
+}
+
+/*
+ * Return the configured per-buffer data size, for use in assertions.
+ */
+size_t
+read_stream_per_buffer_data_size(ReadStream *stream)
+{
+	return stream->per_buffer_data_size;
 }
 
 /*

@@ -5438,7 +5438,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 		CHECK_FOR_INTERRUPTS();
 
 		/* Read block from source relation. */
-		srcBuf = read_stream_next_buffer(src_stream, NULL);
+		srcBuf = read_stream_get_buffer(src_stream);
 		LockBuffer(srcBuf, BUFFER_LOCK_SHARE);
 		srcPage = BufferGetPage(srcBuf);
 
@@ -5463,7 +5463,7 @@ RelationCopyStorageUsingBuffer(RelFileLocator srclocator,
 		UnlockReleaseBuffer(dstBuf);
 		UnlockReleaseBuffer(srcBuf);
 	}
-	Assert(read_stream_next_buffer(src_stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(src_stream) == InvalidBuffer);
 	read_stream_end(src_stream);
 
 	FreeAccessStrategy(bstrategy_src);

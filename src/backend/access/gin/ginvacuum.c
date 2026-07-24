@@ -808,7 +808,7 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 
 		vacuum_delay_point(false);
 
-		buffer = read_stream_next_buffer(stream, NULL);
+		buffer = read_stream_get_buffer(stream);
 
 		LockBuffer(buffer, GIN_SHARE);
 		page = BufferGetPage(buffer);
@@ -834,7 +834,7 @@ ginvacuumcleanup(IndexVacuumInfo *info, IndexBulkDeleteResult *stats)
 		UnlockReleaseBuffer(buffer);
 	}
 
-	Assert(read_stream_next_buffer(stream, NULL) == InvalidBuffer);
+	Assert(read_stream_get_buffer(stream) == InvalidBuffer);
 	read_stream_end(stream);
 
 	/* Update the metapage with accurate page and entry counts */

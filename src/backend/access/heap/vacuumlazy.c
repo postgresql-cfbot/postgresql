@@ -1325,7 +1325,6 @@ lazy_scan_heap(LVRelState *vacrel)
 		bool		was_eager_scanned = false;
 		int			ndeleted = 0;
 		bool		has_lpdead_items;
-		void	   *per_buffer_data = NULL;
 		bool		vm_page_frozen = false;
 		bool		got_cleanup_lock = false;
 
@@ -1385,13 +1384,12 @@ lazy_scan_heap(LVRelState *vacrel)
 										 PROGRESS_VACUUM_PHASE_SCAN_HEAP);
 		}
 
-		buf = read_stream_next_buffer(stream, &per_buffer_data);
+		buf = read_stream_get_buffer_and_value(stream, &was_eager_scanned);
 
 		/* The relation is exhausted. */
 		if (!BufferIsValid(buf))
 			break;
 
-		was_eager_scanned = *((bool *) per_buffer_data);
 		CheckBufferIsPinnedOnce(buf);
 		page = BufferGetPage(buf);
 		blkno = BufferGetBlockNumber(buf);
@@ -1707,6 +1705,9 @@ heap_vac_scan_next_block(ReadStream *stream,
 	/* Now we must be in one of the two remaining states: */
 	if (next_block < vacrel->next_unskippable_block)
 	{
+		/* read_stream_put_value() requires an lvalue, not a literal */
+		bool		temp = false;
+
 		/*
 		 * 2. We are processing a range of blocks that we could have skipped
 		 * but chose not to.  We know that they are all-visible in the VM,
@@ -1714,7 +1715,7 @@ heap_vac_scan_next_block(ReadStream *stream,
 		 */
 		vacrel->current_block = next_block;
 		/* Block was not eager scanned */
-		*((bool *) per_buffer_data) = false;
+		read_stream_put_value(stream, per_buffer_data, temp);
 		return vacrel->current_block;
 	}
 	else
@@ -1726,7 +1727,7 @@ heap_vac_scan_next_block(ReadStream *stream,
 		Assert(next_block == vacrel->next_unskippable_block);
 
 		vacrel->current_block = next_block;
-		*((bool *) per_buffer_data) = vacrel->next_unskippable_eager_scanned;
+		read_stream_put_value(stream, per_buffer_data, vacrel->next_unskippable_eager_scanned);
 		return vacrel->current_block;
 	}
 }
@@ -2614,7 +2615,7 @@ vacuum_reap_lp_read_stream_next(ReadStream *stream,
 	 * Save the TidStoreIterResult for later, so we can extract the offsets.
 	 * It is safe to copy the result, according to TidStoreIterateNext().
 	 */
-	memcpy(per_buffer_data, iter_result, sizeof(*iter_result));
+	read_stream_put_value(stream, per_buffer_data, *iter_result);
 
 	return iter_result->blkno;
 }
@@ -2689,7 +2690,7 @@ lazy_vacuum_heap_rel(LVRelState *vacrel)
 
 		vacuum_delay_point(false);
 
-		buf = read_stream_next_buffer(stream, (void **) &iter_result);
+		buf = read_stream_get_buffer_and_pointer(stream, &iter_result);
 
 		/* The relation is exhausted */
 		if (!BufferIsValid(buf))

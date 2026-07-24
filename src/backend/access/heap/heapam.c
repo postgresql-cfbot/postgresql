@@ -740,7 +740,7 @@ heap_fetch_next_buffer(HeapScanDesc scan, ScanDirection dir)
 
 	scan->rs_dir = dir;
 
-	scan->rs_cbuf = read_stream_next_buffer(scan->rs_read_stream, NULL);
+	scan->rs_cbuf = read_stream_get_buffer(scan->rs_read_stream);
 	if (BufferIsValid(scan->rs_cbuf))
 		scan->rs_cblock = BufferGetBlockNumber(scan->rs_cbuf);
 }

@@ -642,7 +642,7 @@ autoprewarm_database_main(Datum main_arg)
 			 * read stream callback will check that we still have free buffers
 			 * before requesting each block from the read stream API.
 			 */
-			while ((buf = read_stream_next_buffer(stream, NULL)) != InvalidBuffer)
+			while ((buf = read_stream_get_buffer(stream)) != InvalidBuffer)
 			{
 				apw_state->prewarmed_blocks++;
 				ReleaseBuffer(buf);

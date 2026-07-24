@@ -1117,7 +1117,13 @@ reduce_unique_semijoins(PlannerInfo *root)
 static bool
 rel_supports_distinctness(PlannerInfo *root, RelOptInfo *rel)
 {
-	/* We only know about baserels ... */
+	/*
+	 * If UniqueKeys have already been deduced for the rel, distinctness may
+	 * be provable from them.
+	 */
+	if (rel->uniquekeys != NIL)
+		return true;
+	/* Otherwise we only know about baserels ... */
 	if (rel->reloptkind != RELOPT_BASEREL)
 		return false;
 	if (rel->rtekind == RTE_RELATION)
@@ -1179,6 +1185,16 @@ rel_is_distinct_for(PlannerInfo *root, RelOptInfo *rel, List *clause_list,
 					List **extra_clauses)
 {
 	/*
+	 * UniqueKey fast path: if some key's expressions are all covered by the
+	 * clauses, the rel is distinct for them.
+	 */
+	if (extra_clauses == NULL &&
+		uniquekeys_match_join_clauses(root, rel, clause_list))
+		return true;
+
+	/*
+	 * The fallback proofs below handle base relations only.
+	 *
 	 * We could skip a couple of tests here if we assume all callers checked
 	 * rel_supports_distinctness first, but it doesn't seem worth taking any
 	 * risk for.

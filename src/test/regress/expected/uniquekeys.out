@@ -1,0 +1,354 @@
+--
+-- UNIQUEKEYS
+--
+-- Tests for the planner's inference of what a relation is distinct over
+--
+create table uk_t1 (a int, b int, c int, d int, primary key (a, b));
+create table uk_t2 (id int primary key, v int);
+create table uk_t3 (id int primary key, v int);
+create table uk_t4 (id int primary key, v int);
+create table uk_tn (nu int unique, nz int, k int);
+create unique index uk_tn_nz on uk_tn (nz) nulls not distinct;
+create table uk_def (id int, primary key (id) deferrable);
+create table uk_part (a int, b int);
+create unique index uk_part_a on uk_part (a) where b > 0;
+--
+-- Base relation keys
+--
+-- a non-nullable multi-column key removes the DISTINCT
+explain (costs off)
+select distinct a, b from uk_t1;
+    QUERY PLAN     
+-------------------
+ Seq Scan on uk_t1
+(1 row)
+
+-- a key column equated to a constant is dropped from the key
+explain (costs off)
+select distinct b from uk_t1 where a = 5;
+              QUERY PLAN               
+---------------------------------------
+ Bitmap Heap Scan on uk_t1
+   Recheck Cond: (a = 5)
+   ->  Bitmap Index Scan on uk_t1_pkey
+         Index Cond: (a = 5)
+(4 rows)
+
+-- a nullable unique column is not enough on its own
+explain (costs off)
+select distinct nu from uk_tn;
+       QUERY PLAN        
+-------------------------
+ HashAggregate
+   Group Key: nu
+   ->  Seq Scan on uk_tn
+(3 rows)
+
+-- a NULLS NOT DISTINCT unique column is a full key
+explain (costs off)
+select distinct nz from uk_tn;
+    QUERY PLAN     
+-------------------
+ Seq Scan on uk_tn
+(1 row)
+
+-- a strict restriction makes the nullable unique column non-null
+explain (costs off)
+select distinct nu from uk_tn where nu > 0;
+               QUERY PLAN                
+-----------------------------------------
+ Bitmap Heap Scan on uk_tn
+   Recheck Cond: (nu > 0)
+   ->  Bitmap Index Scan on uk_tn_nu_key
+         Index Cond: (nu > 0)
+(4 rows)
+
+-- a deferrable unique index is unusable
+explain (costs off)
+select distinct id from uk_def;
+        QUERY PLAN        
+--------------------------
+ HashAggregate
+   Group Key: id
+   ->  Seq Scan on uk_def
+(3 rows)
+
+-- a partial unique index is unusable
+explain (costs off)
+select distinct a from uk_part where b > 0;
+                 QUERY PLAN                 
+--------------------------------------------
+ HashAggregate
+   Group Key: a
+   ->  Bitmap Heap Scan on uk_part
+         Recheck Cond: (b > 0)
+         ->  Bitmap Index Scan on uk_part_a
+(5 rows)
+
+--
+-- Subquery-in-FROM keys
+--
+-- a DISTINCT inside is translated
+explain (costs off)
+select distinct a, b from (select distinct a, b from uk_t1) s;
+    QUERY PLAN     
+-------------------
+ Seq Scan on uk_t1
+(1 row)
+
+-- a GROUP BY inside is translated
+explain (costs off)
+select distinct a, b from (select a, b from uk_t1 group by a, b) s;
+    QUERY PLAN     
+-------------------
+ Seq Scan on uk_t1
+(1 row)
+
+-- a plain aggregate emits a single row
+explain (costs off)
+select distinct m from (select max(a) as m from uk_t1) s;
+                            QUERY PLAN                            
+------------------------------------------------------------------
+ Result
+   Replaces: MinMaxAggregate
+   InitPlan minmax_1
+     ->  Limit
+           ->  Index Only Scan Backward using uk_t1_pkey on uk_t1
+(5 rows)
+
+-- a key from a base index carried up through a join
+explain (costs off)
+select distinct x from (select uk_t2.id as x from uk_t2 join uk_t3 on uk_t2.id = uk_t3.id offset 0) s;
+             QUERY PLAN             
+------------------------------------
+ Hash Join
+   Hash Cond: (uk_t2.id = uk_t3.id)
+   ->  Seq Scan on uk_t2
+   ->  Hash
+         ->  Seq Scan on uk_t3
+(5 rows)
+
+-- a non-ALL set operation is distinct over its whole output row (the set
+-- operation's own dedup Aggregate ends up below the join)
+explain (costs off)
+select distinct s.a, s.b from (select a, b from uk_t1 union select a, b from uk_t1) s join uk_t2 on s.a = uk_t2.id;
+                 QUERY PLAN                  
+---------------------------------------------
+ Hash Join
+   Hash Cond: (uk_t1.a = uk_t2.id)
+   ->  HashAggregate
+         Group Key: uk_t1.a, uk_t1.b
+         ->  Append
+               ->  Seq Scan on uk_t1
+               ->  Seq Scan on uk_t1 uk_t1_1
+   ->  Hash
+         ->  Seq Scan on uk_t2
+(9 rows)
+
+-- UNION ALL is not distinct, so the DISTINCT Aggregate stays above the join
+explain (costs off)
+select distinct s.a, s.b from (select a, b from uk_t1 union all select a, b from uk_t1) s join uk_t2 on s.a = uk_t2.id;
+                 QUERY PLAN                  
+---------------------------------------------
+ HashAggregate
+   Group Key: uk_t1.a, uk_t1.b
+   ->  Hash Join
+         Hash Cond: (uk_t1.a = uk_t2.id)
+         ->  Append
+               ->  Seq Scan on uk_t1
+               ->  Seq Scan on uk_t1 uk_t1_1
+         ->  Hash
+               ->  Seq Scan on uk_t2
+(9 rows)
+
+--
+-- Join relation keys
+--
+-- an inner join preserves a side's key when the other side is unique for the
+-- join clauses
+explain (costs off)
+select distinct uk_t3.id from uk_t2 join uk_t3 on uk_t2.id = uk_t3.id;
+             QUERY PLAN             
+------------------------------------
+ Hash Join
+   Hash Cond: (uk_t2.id = uk_t3.id)
+   ->  Seq Scan on uk_t2
+   ->  Hash
+         ->  Seq Scan on uk_t3
+(5 rows)
+
+-- combination: the union of a key from each side (here a cross join)
+explain (costs off)
+select distinct uk_t2.id, uk_t3.id from uk_t2 cross join uk_t3;
+          QUERY PLAN           
+-------------------------------
+ Nested Loop
+   ->  Seq Scan on uk_t2
+   ->  Materialize
+         ->  Seq Scan on uk_t3
+(4 rows)
+
+-- a left join makes the RHS key nullable, so the DISTINCT is kept
+explain (costs off)
+select distinct uk_t3.id from uk_t2 left join uk_t3 on uk_t2.id = uk_t3.id;
+                QUERY PLAN                
+------------------------------------------
+ HashAggregate
+   Group Key: uk_t3.id
+   ->  Hash Left Join
+         Hash Cond: (uk_t2.id = uk_t3.id)
+         ->  Seq Scan on uk_t2
+         ->  Hash
+               ->  Seq Scan on uk_t3
+(7 rows)
+
+-- a left join preserves the non-nullable LHS key
+explain (costs off)
+select distinct uk_t2.id, uk_t3.v from uk_t2 left join uk_t3 on uk_t2.id = uk_t3.id;
+             QUERY PLAN             
+------------------------------------
+ Hash Left Join
+   Hash Cond: (uk_t2.id = uk_t3.id)
+   ->  Seq Scan on uk_t2
+   ->  Hash
+         ->  Seq Scan on uk_t3
+(5 rows)
+
+-- a semijoin preserves the LHS key
+explain (costs off)
+select distinct a, b from uk_t1 where exists (select 1 from uk_t2 where uk_t2.id = uk_t1.c);
+            QUERY PLAN             
+-----------------------------------
+ Hash Join
+   Hash Cond: (uk_t1.c = uk_t2.id)
+   ->  Seq Scan on uk_t1
+   ->  Hash
+         ->  Seq Scan on uk_t2
+(5 rows)
+
+-- an inner join's strict clause strengthens a nullable key to non-nullable
+explain (costs off)
+select distinct nu from uk_tn join uk_t2 on uk_tn.nu = uk_t2.id;
+             QUERY PLAN             
+------------------------------------
+ Hash Join
+   Hash Cond: (uk_t2.id = uk_tn.nu)
+   ->  Seq Scan on uk_t2
+   ->  Hash
+         ->  Seq Scan on uk_tn
+(5 rows)
+
+-- the strict clause does not cover the key column, so no strengthening
+explain (costs off)
+select distinct nu from uk_tn join uk_t2 on uk_tn.k = uk_t2.id;
+               QUERY PLAN                
+-----------------------------------------
+ HashAggregate
+   Group Key: uk_tn.nu
+   ->  Hash Join
+         Hash Cond: (uk_tn.k = uk_t2.id)
+         ->  Seq Scan on uk_tn
+         ->  Hash
+               ->  Seq Scan on uk_t2
+(7 rows)
+
+-- a full join yields no key
+explain (costs off)
+select distinct uk_t2.id from uk_t2 full join uk_t3 on uk_t2.id = uk_t3.id;
+                QUERY PLAN                
+------------------------------------------
+ HashAggregate
+   Group Key: uk_t2.id
+   ->  Hash Full Join
+         Hash Cond: (uk_t2.id = uk_t3.id)
+         ->  Seq Scan on uk_t2
+         ->  Hash
+               ->  Seq Scan on uk_t3
+(7 rows)
+
+-- a key survives stacked outer joins
+explain (costs off)
+select distinct uk_t2.id, y.v from uk_t2 left join uk_t3 x on uk_t2.id = x.id left join uk_t3 y on x.id = y.id;
+              QUERY PLAN               
+---------------------------------------
+ Hash Left Join
+   Hash Cond: (x.id = y.id)
+   ->  Hash Left Join
+         Hash Cond: (uk_t2.id = x.id)
+         ->  Seq Scan on uk_t2
+         ->  Hash
+               ->  Seq Scan on uk_t3 x
+   ->  Hash
+         ->  Seq Scan on uk_t3 y
+(9 rows)
+
+-- uniqueness of a multi-relation inner side is proven from that joinrel's key
+explain (verbose, costs off)
+select distinct uk_t2.id from uk_t2 left join (uk_t3 join uk_t4 on uk_t3.id = uk_t4.id) on uk_t2.v = uk_t3.id;
+                    QUERY PLAN                    
+--------------------------------------------------
+ Hash Left Join
+   Output: uk_t2.id
+   Inner Unique: true
+   Hash Cond: (uk_t2.v = uk_t3.id)
+   ->  Seq Scan on public.uk_t2
+         Output: uk_t2.id, uk_t2.v
+   ->  Hash
+         Output: uk_t3.id
+         ->  Hash Join
+               Output: uk_t3.id
+               Inner Unique: true
+               Hash Cond: (uk_t3.id = uk_t4.id)
+               ->  Seq Scan on public.uk_t3
+                     Output: uk_t3.id, uk_t3.v
+               ->  Hash
+                     Output: uk_t4.id
+                     ->  Seq Scan on public.uk_t4
+                           Output: uk_t4.id
+(18 rows)
+
+-- uniqueness of a semijoin's multi-relation RHS skips the unique-ification step
+explain (costs off)
+select * from uk_t2, uk_t3 where (uk_t2.id, uk_t3.id) in (select t1.a, t1.b from uk_t1 t1 join uk_tn on t1.a = nu and b = nz);
+                             QUERY PLAN                             
+--------------------------------------------------------------------
+ Nested Loop
+   ->  Nested Loop
+         ->  Hash Join
+               Hash Cond: ((uk_tn.nu = t1.a) AND (uk_tn.nz = t1.b))
+               ->  Seq Scan on uk_tn
+               ->  Hash
+                     ->  Seq Scan on uk_t1 t1
+         ->  Index Scan using uk_t2_pkey on uk_t2
+               Index Cond: (id = t1.a)
+   ->  Index Scan using uk_t3_pkey on uk_t3
+         Index Cond: (id = t1.b)
+(11 rows)
+
+--
+-- Grouping step: grouping by a superset of a key is a no-op (with no aggregates)
+--
+explain (costs off)
+select a, b from uk_t1 group by a, b, c;
+    QUERY PLAN     
+-------------------
+ Seq Scan on uk_t1
+(1 row)
+
+-- grouping by a non-key set is not a no-op
+explain (costs off)
+select a, c from uk_t1 group by a, c;
+       QUERY PLAN        
+-------------------------
+ HashAggregate
+   Group Key: a, c
+   ->  Seq Scan on uk_t1
+(3 rows)
+
+drop table uk_t1;
+drop table uk_t2;
+drop table uk_t3;
+drop table uk_t4;
+drop table uk_tn;
+drop table uk_def;
+drop table uk_part;

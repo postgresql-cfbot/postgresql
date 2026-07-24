@@ -573,6 +573,16 @@ ALTER TABLE gtest_parent ALTER COLUMN f3 SET EXPRESSION AS (f2 * 2);
 SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1, 2, 3;
 -- we leave these tables around for purposes of testing dump/reload/upgrade
 
+-- test drop expression with subpartitions
+CREATE TABLE gtest_root (a int, b int, c int GENERATED ALWAYS AS (a + b) STORED) PARTITION BY LIST (a);
+CREATE TABLE gtest_node PARTITION OF gtest_root FOR VALUES IN (1) PARTITION BY LIST (b);
+CREATE TABLE gtest_leaf PARTITION OF gtest_node FOR VALUES IN (1);
+ALTER TABLE gtest_root ALTER COLUMN c DROP EXPRESSION;
+\d gtest_root
+\d gtest_node
+\d gtest_leaf
+DROP TABLE gtest_root;
+
 -- generated columns in partition key (not allowed)
 CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE (f3);
 CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE ((f3));

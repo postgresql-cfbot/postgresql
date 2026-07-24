@@ -8899,8 +8899,12 @@ ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recurs
 	 * here, we'd need extra code to update attislocal of the direct child
 	 * tables, somewhat similar to how DROP COLUMN does it, so that the
 	 * resulting state can be properly dumped and restored.
+	 *
+	 * We must check this only on the root node of an inheritance tree
+	 * (recursing = false), otherwise it would be impossible to apply this
+	 * operation recursively to trees with depth > 2.
 	 */
-	if (!recurse &&
+	if (!recursing && !recurse &&
 		find_inheritance_children(RelationGetRelid(rel), lockmode))
 		ereport(ERROR,
 				(errcode(ERRCODE_FEATURE_NOT_SUPPORTED),

@@ -1168,6 +1168,42 @@ SELECT tableoid::regclass, * FROM gtest_parent ORDER BY 1, 2, 3;
 (3 rows)
 
 -- we leave these tables around for purposes of testing dump/reload/upgrade
+-- test drop expression with subpartitions
+CREATE TABLE gtest_root (a int, b int, c int GENERATED ALWAYS AS (a + b) STORED) PARTITION BY LIST (a);
+CREATE TABLE gtest_node PARTITION OF gtest_root FOR VALUES IN (1) PARTITION BY LIST (b);
+CREATE TABLE gtest_leaf PARTITION OF gtest_node FOR VALUES IN (1);
+ALTER TABLE gtest_root ALTER COLUMN c DROP EXPRESSION;
+\d gtest_root
+Partitioned table "generated_stored_tests.gtest_root"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | integer |           |          | 
+Partition key: LIST (a)
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d gtest_node
+Partitioned table "generated_stored_tests.gtest_node"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | integer |           |          | 
+Partition of: gtest_root FOR VALUES IN (1)
+Partition key: LIST (b)
+Number of partitions: 1 (Use \d+ to list them.)
+
+\d gtest_leaf
+     Table "generated_stored_tests.gtest_leaf"
+ Column |  Type   | Collation | Nullable | Default 
+--------+---------+-----------+----------+---------
+ a      | integer |           |          | 
+ b      | integer |           |          | 
+ c      | integer |           |          | 
+Partition of: gtest_node FOR VALUES IN (1)
+
+DROP TABLE gtest_root;
 -- generated columns in partition key (not allowed)
 CREATE TABLE gtest_part_key (f1 date NOT NULL, f2 bigint, f3 bigint GENERATED ALWAYS AS (f2 * 2) STORED) PARTITION BY RANGE (f3);
 ERROR:  cannot use generated column in partition key

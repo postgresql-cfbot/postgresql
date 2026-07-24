@@ -46,6 +46,7 @@ main(int argc, char *argv[])
 		{"parallel", required_argument, NULL, 'P'},
 		{"schema", required_argument, NULL, 'n'},
 		{"exclude-schema", required_argument, NULL, 'N'},
+		{"exclude-database", required_argument, NULL, 'D'},
 		{"maintenance-db", required_argument, NULL, 2},
 		{"analyze-in-stages", no_argument, NULL, 3},
 		{"disable-page-skipping", no_argument, NULL, 4},
@@ -71,6 +72,7 @@ main(int argc, char *argv[])
 	ConnParams	cparams;
 	vacuumingOptions vacopts;
 	SimpleStringList objects = {NULL, NULL};
+	SimpleStringList excluded_dbs = {NULL, NULL};
 	int			concurrentCons = 1;
 	unsigned int tbl_count = 0;
 	int			ret;
@@ -92,7 +94,7 @@ main(int argc, char *argv[])
 
 	handle_help_version_opts(argc, argv, "vacuumdb", help);
 
-	while ((c = getopt_long(argc, argv, "ad:efFh:j:n:N:p:P:qt:U:vwWzZ",
+	while ((c = getopt_long(argc, argv, "aD:d:efFh:j:n:N:p:P:qt:U:vwWzZ",
 							long_options, &optindex)) != -1)
 	{
 		switch (c)
@@ -128,6 +130,10 @@ main(int argc, char *argv[])
 			case 'N':
 				vacopts.objfilter |= OBJFILTER_SCHEMA_EXCLUDE;
 				simple_string_list_append(&objects, optarg);
+				break;
+			case 'D':
+				vacopts.objfilter |= OBJFILTER_DATABASE_EXCLUDE;
+				simple_string_list_append(&excluded_dbs, optarg);
 				break;
 			case 'p':
 				cparams.pgport = pg_strdup(optarg);
@@ -316,7 +322,7 @@ main(int argc, char *argv[])
 	ret = vacuuming_main(&cparams, dbname, maintenance_db, &vacopts,
 						 &objects, tbl_count,
 						 concurrentCons,
-						 progname);
+						 &excluded_dbs, progname);
 	exit(ret);
 }
 
@@ -341,6 +347,16 @@ check_objfilter(uint32 objfilter)
 	if ((objfilter & OBJFILTER_SCHEMA) &&
 		(objfilter & OBJFILTER_SCHEMA_EXCLUDE))
 		pg_fatal("cannot vacuum all tables in schema(s) and exclude schema(s) at the same time");
+
+	if ((objfilter & OBJFILTER_DATABASE_EXCLUDE) &&
+		(objfilter & OBJFILTER_DATABASE))
+		pg_fatal("cannot use the \"%s\" option with the \"%s\" option",
+				 "exclude-database", "dbname");
+
+	if ((objfilter & OBJFILTER_DATABASE_EXCLUDE) &&
+		!(objfilter & OBJFILTER_ALL_DBS))
+		pg_fatal("cannot use the \"%s\" option without the \"%s\" option",
+				 "exclude-database", "all");
 }
 
 
@@ -354,6 +370,7 @@ help(const char *progname)
 	printf(_("  -a, --all                       vacuum all databases\n"));
 	printf(_("      --buffer-usage-limit=SIZE   size of ring buffer used for vacuum\n"));
 	printf(_("  -d, --dbname=DBNAME             database to vacuum\n"));
+	printf(_("  -D, --exclude-database=DBNAME   exclude database from --all operation\n"));
 	printf(_("      --disable-page-skipping     disable all page-skipping behavior\n"));
 	printf(_("      --dry-run                   show the commands that would be sent to the server\n"));
 	printf(_("  -e, --echo                      show the commands being sent to the server\n"));

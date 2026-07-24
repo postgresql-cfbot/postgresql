@@ -16316,6 +16316,24 @@ ATPostAlterTypeCleanup(List **wqueue, AlteredTableInfo *tab, LOCKMODE lockmode)
 	free_object_addresses(objects);
 
 	/*
+	 * We have already deleted the dependent objects; now remove these objects
+	 * themselves to avoid deleting them twice.
+	 */
+	list_free(tab->changedConstraintOids);
+	list_free(tab->changedConstraintDefs);
+	list_free(tab->changedIndexOids);
+	list_free(tab->changedIndexDefs);
+	list_free(tab->changedStatisticsOids);
+	list_free(tab->changedStatisticsDefs);
+
+	tab->changedConstraintOids = NIL;
+	tab->changedConstraintDefs = NIL;
+	tab->changedIndexOids = NIL;
+	tab->changedIndexDefs = NIL;
+	tab->changedStatisticsOids = NIL;
+	tab->changedStatisticsDefs = NIL;
+
+	/*
 	 * The objects will get recreated during subsequent passes over the work
 	 * queue.
 	 */

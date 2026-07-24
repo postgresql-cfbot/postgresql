@@ -6550,6 +6550,9 @@
   proname => 'age', prolang => 'sql', provolatile => 's',
   prorettype => 'interval', proargtypes => 'timestamp',
   prosrc => 'see system_functions.sql' },
+{ oid => '2173', descr => 'current timestamp minus the specified interval', proname => 'ago', prolang => 'sql',
+  provolatile => 's', prorettype => 'timestamptz', proargtypes => 'interval',
+  prosrc => 'see system_functions.sql' },
 
 { oid => '2069', descr => 'adjust timestamp to new time zone',
   proname => 'timezone', prorettype => 'timestamptz',

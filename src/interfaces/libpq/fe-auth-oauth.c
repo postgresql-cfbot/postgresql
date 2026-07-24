@@ -833,19 +833,7 @@ cleanup_oauth_flow(PGconn *conn)
  * failure, and positive indicates success.
  */
 
-#if !defined(USE_LIBCURL)
-
-/*
- * This configuration doesn't support the builtin flow.
- */
-
-static int
-use_builtin_flow(PGconn *conn, fe_oauth_state *state, PGoauthBearerRequestV2 *request)
-{
-	return 0;
-}
-
-#elif defined(USE_DYNAMIC_OAUTH)
+#if defined(USE_LIBCURL) && defined(USE_DYNAMIC_OAUTH)
 
 /*
  * Use the builtin flow in the libpq-oauth plugin, which is loaded at runtime.
@@ -853,21 +841,34 @@ use_builtin_flow(PGconn *conn, fe_oauth_state *state, PGoauthBearerRequestV2 *re
 
 typedef char *(*libpq_gettext_func) (const char *msgid);
 
+#elif defined(USE_LIBCURL)
+
 /*
- * Loads the libpq-oauth plugin via dlopen(), initializes it, and plugs its
- * callbacks into the connection's async auth handlers.
- *
- * Failure to load here results in a relatively quiet connection error, to
- * handle the use case where the build supports loading a flow but a user does
- * not want to install it. Troubleshooting of linker/loader failures can be done
- * via PGOAUTHDEBUG.
- *
- * The lifetime of *request ends shortly after this call, so it must be copied
- * to longer-lived storage.
+ * For static builds, we can just call pg_start_oauthbearer() directly. It's
+ * provided by libpq-oauth.a.
  */
+extern int	pg_start_oauthbearer(PGconn *conn, PGoauthBearerRequestV2 *request);
+
+#endif
+
 static int
 use_builtin_flow(PGconn *conn, fe_oauth_state *state, PGoauthBearerRequestV2 *request)
 {
+#if !defined(USE_LIBCURL)
+	return 0;
+#elif defined(USE_DYNAMIC_OAUTH)
+	/*
+	 * Load the libpq-oauth plugin via dlopen(), initialize it, and plug its
+	 * callbacks into the connection's async auth handlers.
+	 *
+	 * Failure to load here results in a relatively quiet connection error, to
+	 * handle the use case where the build supports loading a flow but a user
+	 * does not want to install it. Troubleshooting of linker/loader failures
+	 * can be done via PGOAUTHDEBUG.
+	 *
+	 * The lifetime of *request ends shortly after this call, so it must be
+	 * copied to longer-lived storage.
+	 */
 	static bool initialized = false;
 	static pthread_mutex_t init_mutex = PTHREAD_MUTEX_INITIALIZER;
 	int			lockerr;
@@ -976,24 +977,10 @@ use_builtin_flow(PGconn *conn, fe_oauth_state *state, PGoauthBearerRequestV2 *re
 	}
 
 	return (start_flow(conn, request) == 0) ? 1 : -1;
-}
-
 #else
-
-/*
- * For static builds, we can just call pg_start_oauthbearer() directly. It's
- * provided by libpq-oauth.a.
- */
-
-extern int	pg_start_oauthbearer(PGconn *conn, PGoauthBearerRequestV2 *request);
-
-static int
-use_builtin_flow(PGconn *conn, fe_oauth_state *state, PGoauthBearerRequestV2 *request)
-{
 	return (pg_start_oauthbearer(conn, request) == 0) ? 1 : -1;
-}
-
 #endif							/* USE_LIBCURL */
+}
 
 
 /*

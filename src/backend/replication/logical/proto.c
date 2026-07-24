@@ -447,37 +447,49 @@ logicalrep_read_insert(StringInfo in, LogicalRepTupleData *newtup)
  * Write UPDATE to the output stream.
  */
 void
-logicalrep_write_update(StringInfo out, TransactionId xid, Relation rel,
-						TupleTableSlot *oldslot, TupleTableSlot *newslot,
-						bool binary, Bitmapset *columns,
-						PublishGencolsType include_gencols_type)
+logicalrep_write_update_extended(StringInfo out, TransactionId xid,
+								 Relation leafrel, Relation pubrel,
+								 TupleTableSlot *oldslot, TupleTableSlot *newslot,
+								 bool binary, Bitmapset *columns,
+								 PublishGencolsType include_gencols_type)
 {
 	pq_sendbyte(out, LOGICAL_REP_MSG_UPDATE);
-
-	Assert(rel->rd_rel->relreplident == REPLICA_IDENTITY_DEFAULT ||
-		   rel->rd_rel->relreplident == REPLICA_IDENTITY_FULL ||
-		   rel->rd_rel->relreplident == REPLICA_IDENTITY_INDEX);
 
 	/* transaction ID (if not valid, we're not streaming) */
 	if (TransactionIdIsValid(xid))
 		pq_sendint32(out, xid);
 
 	/* use Oid as relation identifier */
-	pq_sendint32(out, RelationGetRelid(rel));
+	pq_sendint32(out, RelationGetRelid(pubrel));
 
 	if (oldslot != NULL)
 	{
-		if (rel->rd_rel->relreplident == REPLICA_IDENTITY_FULL)
+		Assert(leafrel->rd_rel->relreplident == REPLICA_IDENTITY_DEFAULT ||
+			   leafrel->rd_rel->relreplident == REPLICA_IDENTITY_FULL ||
+			   leafrel->rd_rel->relreplident == REPLICA_IDENTITY_INDEX);
+
+		if (leafrel->rd_rel->relreplident == REPLICA_IDENTITY_FULL)
 			pq_sendbyte(out, 'O');	/* old tuple follows */
 		else
 			pq_sendbyte(out, 'K');	/* old key follows */
-		logicalrep_write_tuple(out, rel, oldslot, binary, columns,
+		logicalrep_write_tuple(out, pubrel, oldslot, binary, columns,
 							   include_gencols_type);
 	}
 
 	pq_sendbyte(out, 'N');		/* new tuple follows */
-	logicalrep_write_tuple(out, rel, newslot, binary, columns,
+	logicalrep_write_tuple(out, pubrel, newslot, binary, columns,
 						   include_gencols_type);
+}
+
+/* Backward-compatible wrappers keep the old exported symbols alive. */
+void
+logicalrep_write_update(StringInfo out, TransactionId xid, Relation rel,
+						TupleTableSlot *oldslot, TupleTableSlot *newslot,
+						bool binary, Bitmapset *columns,
+						PublishGencolsType include_gencols_type)
+{
+	logicalrep_write_update_extended(out, xid, rel, rel, oldslot, newslot,
+							   binary, columns, include_gencols_type);
 }
 
 /*
@@ -521,6 +533,29 @@ logicalrep_read_update(StringInfo in, bool *has_oldtuple,
 	return relid;
 }
 
+void
+logicalrep_write_delete_extended(StringInfo out, TransactionId xid,
+								 Relation leafrel, Relation pubrel,
+								 TupleTableSlot *oldslot, bool binary,
+								 Bitmapset *columns,
+								 PublishGencolsType include_gencols_type)
+{
+	pq_sendbyte(out, LOGICAL_REP_MSG_DELETE);
+
+	/* transaction ID (if not valid, we're not streaming) */
+	if (TransactionIdIsValid(xid))
+		pq_sendint32(out, xid);
+
+	/* use Oid as relation identifier */
+	pq_sendint32(out, RelationGetRelid(pubrel));
+	Assert(oldslot != NULL);
+	Assert(leafrel->rd_rel->relreplident == REPLICA_IDENTITY_DEFAULT ||
+		   leafrel->rd_rel->relreplident == REPLICA_IDENTITY_FULL ||
+		   leafrel->rd_rel->relreplident == REPLICA_IDENTITY_INDEX);
+	pq_sendbyte(out, (leafrel->rd_rel->relreplident == REPLICA_IDENTITY_FULL) ? 'O' : 'K');
+	logicalrep_write_tuple(out, pubrel, oldslot, binary, columns, include_gencols_type);
+}
+
 /*
  * Write DELETE to the output stream.
  */
@@ -530,26 +565,8 @@ logicalrep_write_delete(StringInfo out, TransactionId xid, Relation rel,
 						Bitmapset *columns,
 						PublishGencolsType include_gencols_type)
 {
-	Assert(rel->rd_rel->relreplident == REPLICA_IDENTITY_DEFAULT ||
-		   rel->rd_rel->relreplident == REPLICA_IDENTITY_FULL ||
-		   rel->rd_rel->relreplident == REPLICA_IDENTITY_INDEX);
-
-	pq_sendbyte(out, LOGICAL_REP_MSG_DELETE);
-
-	/* transaction ID (if not valid, we're not streaming) */
-	if (TransactionIdIsValid(xid))
-		pq_sendint32(out, xid);
-
-	/* use Oid as relation identifier */
-	pq_sendint32(out, RelationGetRelid(rel));
-
-	if (rel->rd_rel->relreplident == REPLICA_IDENTITY_FULL)
-		pq_sendbyte(out, 'O');	/* old tuple follows */
-	else
-		pq_sendbyte(out, 'K');	/* old key follows */
-
-	logicalrep_write_tuple(out, rel, oldslot, binary, columns,
-						   include_gencols_type);
+	logicalrep_write_delete_extended(out, xid, rel, rel, oldslot, binary,
+									  columns, include_gencols_type);
 }
 
 /*

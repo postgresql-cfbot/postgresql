@@ -839,6 +839,13 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 								 ? PROGRESS_VACUUM_MODE_AGGRESSIVE
 								 : PROGRESS_VACUUM_MODE_NORMAL);
 
+	/*
+	 * Report what held OldestXmin back, so watchers of
+	 * pg_stat_progress_vacuum can see why dead tuples aren't being removed.
+	 */
+	pgstat_progress_update_param(PROGRESS_VACUUM_OLDEST_XMIN_BLOCKER,
+								 vacrel->cutoffs.oldest_xmin_blocker.kind);
+
 	if (verbose)
 	{
 		if (vacrel->aggressive)
@@ -1084,6 +1091,9 @@ heap_vacuum_rel(Relation rel, const VacuumParams *params,
 			appendStringInfo(&buf,
 							 _("removable cutoff: %u, which was %d XIDs old when operation ended\n"),
 							 vacrel->cutoffs.OldestXmin, diff);
+			if (vacrel->cutoffs.oldest_xmin_blocker.kind != OLDEST_XMIN_BLOCKER_NONE)
+				appendStringInfo(&buf, _("oldest xmin held back by: %s\n"),
+								 vacuum_oldest_xmin_blocker_name(vacrel->cutoffs.oldest_xmin_blocker.kind));
 			if (frozenxid_updated)
 			{
 				diff = (int32) (vacrel->NewRelfrozenXid -

@@ -1294,6 +1294,49 @@ ReplicationSlotsComputeRequiredXmin(bool already_locked)
 }
 
 /*
+ * Find a slot whose xmin (catalog_xmin, when catalog is true) equals the given
+ * xid, for diagnostics such as reporting what holds VACUUM's horizon back. The
+ * catalog flag keeps the named slot consistent with the blocker's category.
+ *
+ * Best-effort: returns false rather than erroring when no match is found,
+ * since this is only for reporting and the slot may have advanced by the time
+ * we look. When several slots share the xid, names just the first found.
+ */
+bool
+ReplicationSlotNameForXmin(TransactionId xid, bool catalog,
+						   char *name, int namesize)
+{
+	bool		found = false;
+
+	if (!TransactionIdIsValid(xid))
+		return false;
+
+	LWLockAcquire(ReplicationSlotControlLock, LW_SHARED);
+	for (int i = 0; i < max_replication_slots + max_repack_replication_slots; i++)
+	{
+		ReplicationSlot *s = &ReplicationSlotCtl->replication_slots[i];
+		TransactionId slot_xmin;
+
+		if (!s->in_use)
+			continue;
+
+		SpinLockAcquire(&s->mutex);
+		slot_xmin = catalog ? s->effective_catalog_xmin : s->effective_xmin;
+		SpinLockRelease(&s->mutex);
+
+		if (xid == slot_xmin)
+		{
+			strlcpy(name, NameStr(s->data.name), namesize);
+			found = true;
+			break;
+		}
+	}
+	LWLockRelease(ReplicationSlotControlLock);
+
+	return found;
+}
+
+/*
  * Compute the oldest restart LSN across all slots and inform xlog module.
  *
  * Note: while max_slot_wal_keep_size is theoretically relevant for this

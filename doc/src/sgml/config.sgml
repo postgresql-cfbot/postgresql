@@ -8398,6 +8398,39 @@ log_line_prefix = '%m [%p] %q%u@%d/%a '
      </varlistentry>
 
 
+     <varlistentry id="guc-log-postmaster-stats" xreflabel="log_postmaster_stats">
+      <term><varname>log_postmaster_stats</varname> (<type>integer</type>)
+      <indexterm>
+       <primary><varname>log_postmaster_stats</varname></primary>
+       <secondary>configuration parameter</secondary>
+      </indexterm>
+      </term>
+      <listitem>
+       <para>
+        If set to a positive value, the postmaster periodically emits a
+        message at <literal>LOG</literal> level summarizing its recent
+        activity.  A sample message looks like:
+        <screen>
+            postmaster stats: avg 5.25 conns/sec; 4.50 disconns/sec; 3.00 parallel workers started/sec;
+            CPU: user: 0.12 s, system: 0.04 s, elapsed: 4.41 s
+        </screen>
+        The connection rate counts both regular client connections and
+        replication connections accepted by the postmaster. The parallel
+        query (PQ) workers rate is computed from the number of parallel-worker
+        registrations observed during the window; note that a single parallel
+        query may register multiple workers.  The final <literal>CPU</literal>
+        portion reports postmaster process resource usage over the same window.
+       </para>
+       <para>
+        If this value is specified without units, it is taken as seconds.
+        The default is <literal>0</literal>, which disables this logging.
+        This parameter can only be set in the
+        <filename>postgresql.conf</filename> file or on the server
+        command line.
+       </para>
+      </listitem>
+     </varlistentry>
+
      <varlistentry id="guc-log-recovery-conflict-waits" xreflabel="log_recovery_conflict_waits">
       <term><varname>log_recovery_conflict_waits</varname> (<type>boolean</type>)
       <indexterm>

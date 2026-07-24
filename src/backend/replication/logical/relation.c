@@ -789,22 +789,35 @@ static Oid
 FindUsableIndexForReplicaIdentityFull(Relation localrel, AttrMap *attrmap)
 {
 	List	   *idxlist = RelationGetIndexList(localrel);
+	Oid			chosen_idx = InvalidOid;
 
 	foreach_oid(idxoid, idxlist)
 	{
 		bool		isUsableIdx;
+		bool		is_unique;
 		Relation	idxRel;
 
 		idxRel = index_open(idxoid, AccessShareLock);
 		isUsableIdx = IsIndexUsableForReplicaIdentityFull(idxRel, attrmap);
+		is_unique = idxRel->rd_index->indisunique;
 		index_close(idxRel, AccessShareLock);
 
-		/* Return the first eligible index found */
-		if (isUsableIdx)
+		if (!isUsableIdx)
+			continue;
+
+		/*
+		 * A unique index guarantees at most one tuple per index scan.  Return
+		 * it immediately rather than continuing to look for a better
+		 * candidate.  For non-unique indexes we keep scanning, accepting the
+		 * last usable one found.
+		 */
+		if (is_unique)
 			return idxoid;
+
+		chosen_idx = idxoid;
 	}
 
-	return InvalidOid;
+	return chosen_idx;
 }
 
 /*

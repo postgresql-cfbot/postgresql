@@ -782,12 +782,17 @@ typedef struct TableAmRoutine
 	 * This callback is invoked when detoasting a value stored in a toast
 	 * table implemented by this AM.  See table_relation_fetch_toast_slice()
 	 * for more details.
+	 *
+	 * If TOAST_MISSING_OK is set in flags, returns false when chunks are
+	 * missing instead of raising an error.  Returns true on success.  See
+	 * toast_helper.h for possible values of "flags".
 	 */
-	void		(*relation_fetch_toast_slice) (Relation toastrel, Oid valueid,
+	bool		(*relation_fetch_toast_slice) (Relation toastrel, Oid valueid,
 											   int32 attrsize,
 											   int32 sliceoffset,
 											   int32 slicelength,
-											   varlena *result);
+											   varlena *result,
+											   uint32 flags);
 
 
 	/* ------------------------------------------------------------------------
@@ -1981,16 +1986,21 @@ table_relation_toast_am(Relation rel)
  *
  * result is caller-allocated space into which the fetched bytes should be
  * stored.
+ *
+ * flags: if TOAST_MISSING_OK is set, return false when toast chunks are
+ * missing instead of raising an error.  Returns true on success.  See
+ * also toast_helper.h.
  */
-static inline void
+static inline bool
 table_relation_fetch_toast_slice(Relation toastrel, Oid valueid,
 								 int32 attrsize, int32 sliceoffset,
-								 int32 slicelength, varlena *result)
+								 int32 slicelength, varlena *result,
+								 uint32 flags)
 {
-	toastrel->rd_tableam->relation_fetch_toast_slice(toastrel, valueid,
-													 attrsize,
-													 sliceoffset, slicelength,
-													 result);
+	return toastrel->rd_tableam->relation_fetch_toast_slice(toastrel, valueid,
+															attrsize,
+															sliceoffset, slicelength,
+															result, flags);
 }
 
 

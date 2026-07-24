@@ -211,7 +211,8 @@ typedef struct RewriteMappingDataEntry
 
 
 /* prototypes for internal functions */
-static void raw_heap_insert(RewriteState state, HeapTuple tup);
+static bool raw_heap_insert(RewriteState state, HeapTuple tup,
+							uint32 flags);
 
 /* internal logical remapping prototypes */
 static void logical_begin_heap_rewrite(RewriteState state);
@@ -309,7 +310,7 @@ end_heap_rewrite(RewriteState state)
 	while ((unresolved = hash_seq_search(&seq_status)) != NULL)
 	{
 		ItemPointerSetInvalid(&unresolved->tuple->t_data->t_ctid);
-		raw_heap_insert(state, unresolved->tuple);
+		raw_heap_insert(state, unresolved->tuple, 0);
 	}
 
 	/* Write the last page, if any */
@@ -338,9 +339,10 @@ end_heap_rewrite(RewriteState state)
  * old_tuple	original tuple in the old heap
  * new_tuple	new, rewritten tuple to be inserted to new heap
  */
-void
+bool
 rewrite_heap_tuple(RewriteState state,
-				   HeapTuple old_tuple, HeapTuple new_tuple)
+				   HeapTuple old_tuple, HeapTuple new_tuple,
+				   uint32 flags)
 {
 	MemoryContext old_cxt;
 	ItemPointerData old_tid;
@@ -437,7 +439,7 @@ rewrite_heap_tuple(RewriteState state,
 			 * tuple will be written.
 			 */
 			MemoryContextSwitchTo(old_cxt);
-			return;
+			return true;
 		}
 	}
 
@@ -455,7 +457,13 @@ rewrite_heap_tuple(RewriteState state,
 		ItemPointerData new_tid;
 
 		/* Insert the tuple and find out where it's put in new_heap */
-		raw_heap_insert(state, new_tuple);
+		if (!raw_heap_insert(state, new_tuple, flags))
+		{
+			if (free_new)
+				heap_freetuple(new_tuple);
+			MemoryContextSwitchTo(old_cxt);
+			return false;
+		}
 		new_tid = new_tuple->t_self;
 
 		logical_rewrite_heap_tuple(state, old_tid, new_tuple);
@@ -532,6 +540,7 @@ rewrite_heap_tuple(RewriteState state,
 	}
 
 	MemoryContextSwitchTo(old_cxt);
+	return true;
 }
 
 /*
@@ -593,8 +602,8 @@ rewrite_heap_dead_tuple(RewriteState state, HeapTuple old_tuple)
  * tuple is invalid on entry, it's replaced with the new TID as well (in
  * the inserted data only, not in the caller's copy).
  */
-static void
-raw_heap_insert(RewriteState state, HeapTuple tup)
+static bool
+raw_heap_insert(RewriteState state, HeapTuple tup, uint32 flags)
 {
 	Page		page;
 	Size		pageFreeSpace,
@@ -628,7 +637,9 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 		options |= HEAP_INSERT_NO_LOGICAL;
 
 		heaptup = heap_toast_insert_or_update(state->rs_new_rel, tup, NULL,
-											  options);
+											  options, flags);
+		if (heaptup == NULL)
+			return false;
 	}
 	else
 		heaptup = tup;
@@ -702,6 +713,8 @@ raw_heap_insert(RewriteState state, HeapTuple tup)
 	/* If heaptup is a private copy, release it. */
 	if (heaptup != tup)
 		heap_freetuple(heaptup);
+
+	return true;
 }
 
 /* ------------------------------------------------------------------------

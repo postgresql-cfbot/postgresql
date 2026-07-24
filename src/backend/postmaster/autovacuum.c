@@ -1068,7 +1068,10 @@ rebuild_database_list(Oid newdb)
 		while ((db = hash_seq_search(&seq)) != NULL)
 			memcpy(&(dbary[i++]), db, sizeof(avl_dbase));
 
-		/* sort the array */
+		/*
+		 * Sort the array in descending order so that the databases with the
+		 * highest score get the least adl_next_worker time.
+		 */
 		qsort(dbary, nelems, sizeof(avl_dbase), db_comparator);
 
 		/*
@@ -1109,12 +1112,12 @@ rebuild_database_list(Oid newdb)
 	MemoryContextSwitchTo(oldcxt);
 }
 
-/* qsort comparator for avl_dbase, using adl_score */
+/* qsort comparator for avl_dbase, using adl_score in descending order */
 static int
 db_comparator(const void *a, const void *b)
 {
-	return pg_cmp_s32(((const avl_dbase *) a)->adl_score,
-					  ((const avl_dbase *) b)->adl_score);
+	return pg_cmp_s32(((const avl_dbase *) b)->adl_score,
+					  ((const avl_dbase *) a)->adl_score);
 }
 
 /*

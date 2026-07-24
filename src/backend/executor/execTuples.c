@@ -707,6 +707,14 @@ tts_minimal_store_tuple(TupleTableSlot *slot, MinimalTuple mtup, bool shouldFree
  * TupleTableSlotOps implementation for BufferHeapTupleTableSlot.
  */
 
+static inline void
+heap_page_batch_reset(HeapPageBatch *batch)
+{
+	batch->offsets = NULL;
+	batch->ntuples = 0;
+	batch->current = 0;
+}
+
 static void
 tts_buffer_heap_init(TupleTableSlot *slot)
 {
@@ -745,6 +753,7 @@ tts_buffer_heap_clear(TupleTableSlot *slot)
 	bslot->base.tuple = NULL;
 	bslot->base.off = 0;
 	bslot->buffer = InvalidBuffer;
+	heap_page_batch_reset(&bslot->batch);
 }
 
 static void
@@ -807,6 +816,7 @@ tts_buffer_heap_materialize(TupleTableSlot *slot)
 	MemoryContext oldContext;
 
 	Assert(!TTS_EMPTY(slot));
+	heap_page_batch_reset(&bslot->batch);
 
 	/* If slot has its tuple already materialized, nothing to do. */
 	if (TTS_SHOULDFREE(slot))
@@ -945,6 +955,8 @@ tts_buffer_heap_store_tuple(TupleTableSlot *slot, HeapTuple tuple,
 							Buffer buffer, bool transfer_pin)
 {
 	BufferHeapTupleTableSlot *bslot = (BufferHeapTupleTableSlot *) slot;
+
+	heap_page_batch_reset(&bslot->batch);
 
 	if (TTS_SHOULDFREE(slot))
 	{

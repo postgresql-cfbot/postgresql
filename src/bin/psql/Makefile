@@ -46,7 +46,7 @@ OBJS = \
 
 all: psql
 
-psql: $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+psql: $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 help.o: sql_help.h

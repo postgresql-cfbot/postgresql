@@ -1586,11 +1586,62 @@ EXPLAIN (COSTS OFF)
 SELECT * FROM not_null_tab
 WHERE id NOT IN (SELECT id FROM null_tab WHERE id IS NOT NULL);
 
--- No ANTI JOIN: outer side is nullable (we don't check outer query quals for now)
+-- ANTI JOIN: outer side is forced non-nullable by an "IS NOT NULL" WHERE qual
 EXPLAIN (COSTS OFF)
 SELECT * FROM null_tab
 WHERE id IS NOT NULL
   AND id NOT IN (SELECT id FROM not_null_tab);
+
+-- ANTI JOIN: outer side is forced non-nullable by a strict WHERE qual
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab
+WHERE id > 0
+  AND id NOT IN (SELECT id FROM not_null_tab);
+
+-- ANTI JOIN: outer side is forced non-nullable by an inner join's ON qual
+-- located below the NOT IN
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab t1
+INNER JOIN not_null_tab t2 ON t1.id > 0
+WHERE t1.id NOT IN (SELECT id FROM not_null_tab);
+
+-- ANTI JOIN: both outer columns are forced non-nullable by WHERE quals
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab
+WHERE id IS NOT NULL AND val IS NOT NULL
+  AND (id, val) NOT IN (SELECT id, val FROM not_null_tab);
+
+-- ANTI JOIN: outer side is forced non-nullable by the sibling ON qual
+EXPLAIN (COSTS OFF)
+SELECT * FROM not_null_tab t1
+LEFT JOIN null_tab t2
+ON t2.val > 0 AND t2.val NOT IN (SELECT id FROM not_null_tab);
+
+-- ANTI JOIN: outer side is forced non-nullable by the inner join's ON qual
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab t1 LEFT JOIN
+  (null_tab t2 INNER JOIN null_tab t3 ON t2.id = t3.id)
+  ON t2.id NOT IN (SELECT id FROM not_null_tab);
+
+-- No ANTI JOIN: nothing proves the outer side non-nullable
+EXPLAIN (COSTS OFF)
+SELECT * FROM null_tab t1 LEFT JOIN
+  (null_tab t2 INNER JOIN null_tab t3 ON t2.id = t3.id)
+  ON true
+WHERE t2.id NOT IN (SELECT id FROM not_null_tab);
+
+-- Verify the conversion preserves NOT IN semantics
+CREATE TEMP TABLE qual_outer (a int, b int);
+CREATE TEMP TABLE qual_inner (y int NOT NULL);
+INSERT INTO qual_outer VALUES (1, NULL), (2, 5), (3, 7);
+INSERT INTO qual_inner VALUES (5);
+EXPLAIN (COSTS OFF)
+SELECT * FROM qual_outer
+WHERE b IS NOT NULL AND b NOT IN (SELECT y FROM qual_inner)
+ORDER BY a;
+SELECT * FROM qual_outer
+WHERE b IS NOT NULL AND b NOT IN (SELECT y FROM qual_inner)
+ORDER BY a;
 
 -- ANTI JOIN: outer side is defined NOT NULL, inner side is defined NOT NULL
 -- and is not nulled by outer join

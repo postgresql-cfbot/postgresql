@@ -54,6 +54,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
@@ -1161,6 +1162,13 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		/* Get local relation list. */
 		subrel_states = GetSubscriptionRelations(sub->oid, true, true, false);
 		subrel_count = list_length(subrel_states);
+
+		/*
+		 * The local relation OIDs are now captured but not locked, so a
+		 * concurrent drop can make them stale before the origin checks run.
+		 * This injection point lets a test reproduce that window.
+		 */
+		INJECTION_POINT("subscription-refresh-before-origin-check", NULL);
 
 		/*
 		 * Build qsorted arrays of local table oids and sequence oids for

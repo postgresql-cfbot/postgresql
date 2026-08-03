@@ -54,6 +54,7 @@
 #include "utils/sampling.h"
 #include "utils/selfuncs.h"
 #include "utils/timestamp.h"
+#include "utils/tuplestore.h"
 
 PG_MODULE_MAGIC_EXT(
 					.name = "postgres_fdw",
@@ -84,6 +85,8 @@ enum FdwScanPrivateIndex
 	FdwScanPrivateRetrievedAttrs,
 	/* Integer representing the desired fetch_size */
 	FdwScanPrivateFetchSize,
+	/* Boolean indicating whether streaming_fetch mode is enabled */
+	FdwScanPrivateStreamingFetch,
 
 	/*
 	 * String describing join i.e. names of relations being joined and types
@@ -180,6 +183,12 @@ typedef struct PgFdwScanState
 	MemoryContext temp_cxt;		/* context for per-tuple temporary data */
 
 	int			fetch_size;		/* number of tuples per fetch */
+	/* Fields required for the streaming_fetch mode only */
+	bool		streaming_fetch;	/* set if the scan is using
+									 * streaming_fetch mode */
+	Tuplestorestate *tuplestore;	/* Tuplestore to save the tuples of the
+									 * query for later fetch. */
+	ForeignScanState *fsnode;	/* back-pointer, used by save_to_tuplestore */
 } PgFdwScanState;
 
 /*
@@ -507,6 +516,7 @@ static void adjust_foreign_grouping_path_cost(PlannerInfo *root,
 static bool ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 									  EquivalenceClass *ec, EquivalenceMember *em,
 									  void *arg);
+static void prepare_query(ForeignScanState *node);
 static void create_cursor(ForeignScanState *node);
 static void fetch_more_data(ForeignScanState *node);
 static void close_cursor(PGconn *conn, unsigned int cursor_number,
@@ -639,6 +649,13 @@ static void merge_fdw_options(PgFdwRelationInfo *fpinfo,
 							  const PgFdwRelationInfo *fpinfo_i);
 static int	get_batch_size_option(Relation rel);
 
+/* Only required for non-cursor mode */
+static void set_streaming_fetch(DefElem *def, PgFdwRelationInfo *fpinfo);
+static PGresult *fetch_stream_result(ForeignScanState *node);
+static void fetch_from_tuplestore(ForeignScanState *node);
+static void save_to_tuplestore(PgFdwScanState *fsstate, PGconn *conn);
+static void init_scan(ForeignScanState *node);
+static bool is_active_scan(PgFdwScanState *fsstate);
 
 /*
  * Foreign-data wrapper handler function: return a struct with pointers
@@ -748,9 +765,12 @@ postgresGetForeignRelSize(PlannerInfo *root,
 	fpinfo->shippable_extensions = NIL;
 	fpinfo->fetch_size = 100;
 	fpinfo->async_capable = false;
+	fpinfo->streaming_fetch = false;
 
 	apply_server_options(fpinfo);
 	apply_table_options(fpinfo);
+	if (fpinfo->streaming_fetch)
+		fpinfo->async_capable = false;
 
 	/*
 	 * If the table or the server is configured to use remote estimates,
@@ -1510,9 +1530,9 @@ postgresGetForeignPlan(PlannerInfo *root,
 	 * Build the fdw_private list that will be available to the executor.
 	 * Items in the list must match order in enum FdwScanPrivateIndex.
 	 */
-	fdw_private = list_make3(makeString(sql.data),
+	fdw_private = list_make4(makeString(sql.data),
 							 retrieved_attrs,
-							 makeInteger(fpinfo->fetch_size));
+							 makeInteger(fpinfo->fetch_size), makeBoolean(fpinfo->streaming_fetch));
 	if (IS_JOIN_REL(foreignrel) || IS_UPPER_REL(foreignrel))
 		fdw_private = lappend(fdw_private,
 							  makeString(fpinfo->relation_name));
@@ -1646,6 +1666,8 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 												 FdwScanPrivateRetrievedAttrs);
 	fsstate->fetch_size = intVal(list_nth(fsplan->fdw_private,
 										  FdwScanPrivateFetchSize));
+	fsstate->streaming_fetch = boolVal(list_nth(fsplan->fdw_private,
+												FdwScanPrivateStreamingFetch));
 
 	/* Create contexts for batches of tuples and per-tuple temp workspace. */
 	fsstate->batch_cxt = AllocSetContextCreate(estate->es_query_cxt,
@@ -1687,6 +1709,8 @@ postgresBeginForeignScan(ForeignScanState *node, int eflags)
 
 	/* Set the async-capable flag */
 	fsstate->async_capable = node->ss.ps.async_capable;
+	fsstate->tuplestore = NULL;
+	fsstate->fsnode = node;
 }
 
 /*
@@ -1707,7 +1731,12 @@ postgresIterateForeignScan(ForeignScanState *node)
 	 * first call after Begin or ReScan.
 	 */
 	if (!fsstate->scan_in_progress)
-		create_cursor(node);
+	{
+		if (fsstate->streaming_fetch)
+			init_scan(node);
+		else
+			create_cursor(node);
+	}
 
 	/*
 	 * Get some more tuples, if we've run out.
@@ -1745,6 +1774,7 @@ postgresReScanForeignScan(ForeignScanState *node)
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	char		sql[64];
 	PGresult   *res;
+	bool		reinitialize_scan = false;
 
 	/* If no scan is in progress, nothing to do. */
 	if (!fsstate->scan_in_progress)
@@ -1768,40 +1798,82 @@ postgresReScanForeignScan(ForeignScanState *node)
 	 */
 	if (node->ss.ps.chgParam != NULL)
 	{
-		fsstate->scan_in_progress = false;
-		snprintf(sql, sizeof(sql), "CLOSE c%u",
-				 fsstate->cursor_number);
+		reinitialize_scan = true;
 	}
 	else if (fsstate->fetch_ct_2 > 1)
 	{
-		if (PQserverVersion(fsstate->conn) < 150000)
+		if (!fsstate->streaming_fetch && PQserverVersion(fsstate->conn) < 150000)
+		{
+			save_to_tuplestore(fsstate->conn_state->active_scan, fsstate->conn);
 			snprintf(sql, sizeof(sql), "MOVE BACKWARD ALL IN c%u",
 					 fsstate->cursor_number);
-		else
-		{
-			fsstate->scan_in_progress = false;
-			snprintf(sql, sizeof(sql), "CLOSE c%u",
-					 fsstate->cursor_number);
+			res = pgfdw_exec_query(fsstate->conn, sql, fsstate->conn_state);
+			if (PQresultStatus(res) != PGRES_COMMAND_OK)
+				pgfdw_report_error(res, fsstate->conn, sql);
+
+			PQclear(res);
+
+			/* Now force a fresh FETCH. */
+			fsstate->tuples = NULL;
+			fsstate->num_tuples = 0;
+			fsstate->next_tuple = 0;
+			fsstate->fetch_ct_2 = 0;
+			fsstate->eof_reached = false;
+			return;
 		}
+		else
+			reinitialize_scan = true;
 	}
 	else
 	{
-		/* Easy: just rescan what we already have in memory, if anything */
-		fsstate->next_tuple = 0;
-		return;
+		/*
+		 * Easy: just rescan what we already have in memory, if anything.
+		 *
+		 * Exception: in streaming_fetch mode a populated tuplestore holds
+		 * rows drained from a previous pass; those cannot be rewound to the
+		 * start, so we must reinitialise the scan from scratch.
+		 */
+		if (fsstate->streaming_fetch && fsstate->tuplestore)
+			reinitialize_scan = true;
+		else
+		{
+			fsstate->next_tuple = 0;
+			return;
+		}
 	}
-
-	res = pgfdw_exec_query(fsstate->conn, sql, fsstate->conn_state);
-	if (PQresultStatus(res) != PGRES_COMMAND_OK)
-		pgfdw_report_error(res, fsstate->conn, sql);
-	PQclear(res);
-
-	/* Now force a fresh FETCH. */
-	fsstate->tuples = NULL;
-	fsstate->num_tuples = 0;
-	fsstate->next_tuple = 0;
-	fsstate->fetch_ct_2 = 0;
-	fsstate->eof_reached = false;
+	if (reinitialize_scan)
+	{
+		if (fsstate->streaming_fetch)
+		{
+			if (is_active_scan(fsstate) &&
+				!pgfdw_cancel_query(fsstate->conn, fsstate->conn_state))
+				ereport(ERROR,
+						errcode(ERRCODE_CONNECTION_FAILURE),
+						errmsg("could not cancel query"));
+			if (fsstate->tuplestore)
+			{
+				tuplestore_end(fsstate->tuplestore);
+				fsstate->tuplestore = NULL;
+			}
+		}
+		else
+		{
+			save_to_tuplestore(fsstate->conn_state->active_scan, fsstate->conn);
+			snprintf(sql, sizeof(sql), "CLOSE c%u",
+					 fsstate->cursor_number);
+			res = pgfdw_exec_query(fsstate->conn, sql, fsstate->conn_state);
+			if (PQresultStatus(res) != PGRES_COMMAND_OK)
+				pgfdw_report_error(res, fsstate->conn, sql);
+			PQclear(res);
+		}
+		/* Now force a fresh FETCH. */
+		fsstate->tuples = NULL;
+		fsstate->num_tuples = 0;
+		fsstate->next_tuple = 0;
+		fsstate->fetch_ct_2 = 0;
+		fsstate->eof_reached = false;
+		fsstate->scan_in_progress = false;
+	}
 }
 
 /*
@@ -1819,9 +1891,27 @@ postgresEndForeignScan(ForeignScanState *node)
 
 	/* Close the cursor if open, to prevent accumulation of cursors */
 	if (fsstate->scan_in_progress)
-		close_cursor(fsstate->conn, fsstate->cursor_number,
-					 fsstate->conn_state);
+	{
+		if (fsstate->streaming_fetch)
+		{
+			/* Remove the pointer from conn_state since ending this scan. */
+			if (is_active_scan(fsstate) &&
+				!pgfdw_cancel_query(fsstate->conn, fsstate->conn_state))
+				ereport(ERROR,
+						errcode(ERRCODE_CONNECTION_FAILURE),
+						errmsg("could not cancel query"));
+			if (fsstate->tuplestore)
+				tuplestore_end(fsstate->tuplestore);
 
+			MemoryContextReset(fsstate->batch_cxt);
+		}
+		else
+		{
+			save_to_tuplestore(fsstate->conn_state->active_scan, fsstate->conn);
+			close_cursor(fsstate->conn, fsstate->cursor_number,
+						 fsstate->conn_state);
+		}
+	}
 	/* Release remote connection */
 	ReleaseConnection(fsstate->conn);
 	fsstate->conn = NULL;
@@ -3012,9 +3102,13 @@ postgresExplainForeignScan(ForeignScanState *node, ExplainState *es)
 	if (es->verbose)
 	{
 		char	   *sql;
+		bool		stream_fetch;
 
 		sql = strVal(list_nth(fdw_private, FdwScanPrivateSelectSql));
+		stream_fetch = boolVal(list_nth(fdw_private, FdwScanPrivateStreamingFetch));
 		ExplainPropertyText("Remote SQL", sql, es);
+		if (stream_fetch)
+			ExplainPropertyBool("Streaming Fetch", stream_fetch, es);
 	}
 }
 
@@ -3808,22 +3902,28 @@ ec_member_matches_foreign(PlannerInfo *root, RelOptInfo *rel,
 }
 
 /*
- * Create cursor for node's query with current parameter values.
+ * Do the work common to create_cursor() and init_scan(): finish any
+ * pending async request on this connection, marshal this scan's
+ * parameter values, and drain any other in-flight scan sharing the
+ * connection so it's safe to send a new command.
  */
 static void
-create_cursor(ForeignScanState *node)
+prepare_query(ForeignScanState *node)
 {
 	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
 	ExprContext *econtext = node->ss.ps.ps_ExprContext;
 	int			numParams = fsstate->numParams;
 	const char **values = fsstate->param_values;
-	PGconn	   *conn = fsstate->conn;
-	StringInfoData buf;
-	PGresult   *res;
 
 	/* First, process a pending asynchronous request, if any. */
 	if (fsstate->conn_state->pendingAreq)
 		process_pending_request(fsstate->conn_state->pendingAreq);
+
+	/*
+	 * If the other scan is using streaming_fetch mode, then save the tuples
+	 * to tuplestore before starting a new scan.
+	 */
+	save_to_tuplestore(fsstate->conn_state->active_scan, fsstate->conn);
 
 	/*
 	 * Construct array of query parameter values in text format.  We do the
@@ -3843,6 +3943,22 @@ create_cursor(ForeignScanState *node)
 
 		MemoryContextSwitchTo(oldcontext);
 	}
+}
+
+/*
+ * Create cursor for node's query with current parameter values.
+ */
+static void
+create_cursor(ForeignScanState *node)
+{
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PGconn	   *conn = fsstate->conn;
+	int			numParams = fsstate->numParams;
+	const char **values = fsstate->param_values;
+	StringInfoData buf;
+	PGresult   *res;
+
+	prepare_query(node);
 
 	/* Construct the DECLARE CURSOR command */
 	initStringInfo(&buf);
@@ -3881,6 +3997,55 @@ create_cursor(ForeignScanState *node)
 }
 
 /*
+ * Create a scan for the query, similar to create_cursor
+ * for streaming_fetch mode
+ */
+static void
+init_scan(ForeignScanState *node)
+{
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PGconn	   *conn = fsstate->conn;
+
+	prepare_query(node);
+
+	if (!PQsendQueryParams(conn, fsstate->query, fsstate->numParams,
+						   NULL, fsstate->param_values, NULL, NULL, 0))
+		pgfdw_report_error(NULL, conn, fsstate->query);
+
+	/*
+	 * Call for Chunked rows mode with same size of chunk as the fetch size
+	 */
+#ifdef LIBPQ_HAS_CHUNK_MODE
+	if (!PQsetChunkedRowsMode(conn, fsstate->fetch_size))
+	{
+		pgfdw_cancel_query(fsstate->conn, fsstate->conn_state);
+		pgfdw_report_error(NULL, conn, fsstate->query);
+	}
+#else
+
+	/*
+	 * Unreachable: set_streaming_fetch() rejects streaming_fetch without
+	 * this.
+	 */
+	elog(ERROR, "streaming_fetch is not supported by this build of libpq");
+#endif
+
+	/* Mark the scan as started, and show no tuples have been retrieved */
+	fsstate->scan_in_progress = true;
+	fsstate->tuples = NULL;
+	fsstate->num_tuples = 0;
+	fsstate->next_tuple = 0;
+	fsstate->fetch_ct_2 = 0;
+	fsstate->eof_reached = false;
+
+	/*
+	 * To remember the current scan as the last one, when control switches to
+	 * another scan
+	 */
+	fsstate->conn_state->active_scan = fsstate;
+}
+
+/*
  * Fetch some more rows from the node's cursor.
  */
 static void
@@ -3893,10 +4058,6 @@ fetch_more_data(ForeignScanState *node)
 	int			i;
 	MemoryContext oldcontext;
 
-	/*
-	 * We'll store the tuples in the batch_cxt.  First, flush the previous
-	 * batch.
-	 */
 	fsstate->tuples = NULL;
 	MemoryContextReset(fsstate->batch_cxt);
 	oldcontext = MemoryContextSwitchTo(fsstate->batch_cxt);
@@ -3917,9 +4078,12 @@ fetch_more_data(ForeignScanState *node)
 		/* Reset per-connection state */
 		fsstate->conn_state->pendingAreq = NULL;
 	}
-	else
+	else if (!fsstate->streaming_fetch)
 	{
 		char		sql[64];
+
+		/* Drain the other scan before firing new scan. */
+		save_to_tuplestore(fsstate->conn_state->active_scan, conn);
 
 		/* This is a regular synchronous fetch. */
 		snprintf(sql, sizeof(sql), "FETCH %d FROM c%u",
@@ -3930,7 +4094,25 @@ fetch_more_data(ForeignScanState *node)
 		if (PQresultStatus(res) != PGRES_TUPLES_OK)
 			pgfdw_report_error(res, conn, fsstate->query);
 	}
-
+	else if (fsstate->tuplestore)
+	{
+		/*
+		 * When streaming_fetch is used, there is a special possibility --
+		 * reading from the tuplestore.
+		 */
+		fetch_from_tuplestore(node);
+		MemoryContextSwitchTo(oldcontext);
+		return;
+	}
+	else
+	{
+		res = fetch_stream_result(node);
+		if (res == NULL)
+		{
+			MemoryContextSwitchTo(oldcontext);
+			return;
+		}
+	}
 	/* Convert the data into HeapTuples */
 	numrows = PQntuples(res);
 	fsstate->tuples = (HeapTuple *) palloc0(numrows * sizeof(HeapTuple));
@@ -3959,7 +4141,196 @@ fetch_more_data(ForeignScanState *node)
 
 	PQclear(res);
 
+	/*
+	 * In streaming_fetch mode, a partial chunk signals EOF, but TUPLES_OK and
+	 * the protocol NULL are still pending.  Drain them now so the connection
+	 * is immediately reusable and active_scan is cleared.
+	 */
+	if (fsstate->streaming_fetch && fsstate->eof_reached)
+		fetch_stream_result(node);
+
 	MemoryContextSwitchTo(oldcontext);
+}
+
+/*
+ * Get the next chunked-rows-mode result for a streaming_fetch scan.
+ * Returns the result to convert into tuples, or NULL if the scan is
+ * already fully handled (EOF was reached and active_scan cleared).
+ */
+static PGresult *
+fetch_stream_result(ForeignScanState *node)
+{
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	PGconn	   *conn = fsstate->conn;
+	PGresult   *res;
+
+	res = pgfdw_get_next_result(conn);
+
+	if (!res || PQresultStatus(res) == PGRES_FATAL_ERROR)
+		pgfdw_report_error(res, conn, fsstate->query);
+
+	/*
+	 * PGRES_TUPLES_OK is the end-of-stream sentinel in chunked mode. Consume
+	 * the trailing protocol NULL now and clear active_scan so a concurrent
+	 * init_scan does not call save_to_tuplestore on an already-idle
+	 * connection.
+	 */
+	if (PQresultStatus(res) == PGRES_TUPLES_OK)
+	{
+		Assert(PQntuples(res) == 0);
+		PQclear(res);
+		res = pgfdw_get_next_result(conn);
+		if (res != NULL)
+			pgfdw_report_error(res, conn, fsstate->query);
+		fsstate->conn_state->active_scan = NULL;
+		fsstate->eof_reached = true;
+		return NULL;
+	}
+
+	return res;
+}
+
+/*
+ * This is used in streaming_fetch mode only to fetch the tuples from the
+ * tuplestore.  At most fetch_size tuples are retrieved per call, matching
+ * the batch size used elsewhere for this scan; the tuplestore is released
+ * once it has been fully drained.
+ */
+static void
+fetch_from_tuplestore(ForeignScanState *node)
+{
+	PgFdwScanState *fsstate = (PgFdwScanState *) node->fdw_state;
+	TupleTableSlot *slot;
+	int			numrows = 0;
+
+	/* Retrieve up to fetch_size tuples from the tuplestore at a time. */
+	fsstate->tuples = (HeapTuple *) palloc0(fsstate->fetch_size * sizeof(HeapTuple));
+	slot = MakeSingleTupleTableSlot(fsstate->tupdesc, &TTSOpsMinimalTuple);
+
+	while (numrows < fsstate->fetch_size &&
+		   tuplestore_gettupleslot(fsstate->tuplestore, true, true, slot))
+	{
+		fsstate->tuples[numrows++] = ExecFetchSlotHeapTuple(slot, true, NULL);
+		ExecClearTuple(slot);
+	}
+	fsstate->num_tuples = numrows;
+	fsstate->next_tuple = 0;
+
+	/* Must be EOF if we didn't get as many tuples as we asked for. */
+	fsstate->eof_reached = (numrows < fsstate->fetch_size);
+
+	ExecDropSingleTupleTableSlot(slot);
+
+	/* Clean up once the tuplestore has been fully drained. */
+	if (fsstate->eof_reached)
+	{
+		tuplestore_end(fsstate->tuplestore);
+		fsstate->tuplestore = NULL;
+	}
+}
+
+/*
+ * In streaming_fetch mode only, save the tuples to tuplestore.
+ */
+static void
+save_to_tuplestore(PgFdwScanState *active_fsstate, PGconn *conn)
+{
+	PGresult   *res = NULL;
+	int			numrows = 0,
+				i = 0;
+	MemoryContext oldcontext;
+
+	if (!active_fsstate)
+		return;
+
+	oldcontext = MemoryContextSwitchTo(MemoryContextGetParent(active_fsstate->batch_cxt));
+
+	res = pgfdw_get_next_result(conn);
+
+	if (!res || PQresultStatus(res) == PGRES_FATAL_ERROR)
+		pgfdw_report_error(res, conn, active_fsstate->query);
+	else if (PQresultStatus(res) == PGRES_TUPLES_OK)
+	{
+		/*
+		 * This signifies there is nothing to do, all is fetched. But this
+		 * happened only after this call, so set the eof_reached for the scan.
+		 */
+		active_fsstate->eof_reached = true;
+		Assert(PQntuples(res) == 0);
+		PQclear(res);
+	}
+#ifdef LIBPQ_HAS_CHUNK_MODE
+	else if (PQresultStatus(res) == PGRES_TUPLES_CHUNK)
+	{
+		active_fsstate->tuplestore = tuplestore_begin_heap(true, false, work_mem);
+
+		for (;;)
+		{
+			/*
+			 * Since it is using PQSetChunkedRowsMode, we only get the
+			 * fsstate->fetch_size tuples in one run, so keep on executing
+			 * till we get NULL in PGresult i.e. all the tuples are retrieved.
+			 */
+			CHECK_FOR_INTERRUPTS();
+			numrows = PQntuples(res);
+
+			/* Convert the data into HeapTuples */
+			for (i = 0; i < numrows; i++)
+			{
+				HeapTuple	temp_tuple;
+
+				temp_tuple = make_tuple_from_result_row(res, i,
+														active_fsstate->rel,
+														active_fsstate->attinmeta,
+														active_fsstate->retrieved_attrs,
+														active_fsstate->fsnode,
+														active_fsstate->temp_cxt);
+				tuplestore_puttuple(active_fsstate->tuplestore, temp_tuple);
+				heap_freetuple(temp_tuple);
+			}
+			PQclear(res);
+			res = pgfdw_get_next_result(conn);
+			if (res == NULL || PQresultStatus(res) == PGRES_FATAL_ERROR)
+				pgfdw_report_error(res, conn, active_fsstate->query);
+			else if (PQresultStatus(res) == PGRES_TUPLES_OK)
+			{
+				Assert(PQntuples(res) == 0);
+				PQclear(res);
+				break;
+			}
+		}
+	}
+	else
+	{
+		/* Handle any other unexpected result status. */
+		pgfdw_report_error(res, conn, active_fsstate->query);
+	}
+#endif
+
+	/*
+	 * There are no more tuples to fetch, a final call to reach the terminal
+	 * state.
+	 */
+	res = pgfdw_get_next_result(conn);
+	Assert(res == NULL);
+	MemoryContextSwitchTo(oldcontext);
+
+	/*
+	 * The connection is now idle again; let other scans on this connection
+	 * resume using it.
+	 */
+	active_fsstate->conn_state->active_scan = NULL;
+}
+
+/*
+ * Return true if fsstate is the connection's currently active
+ * streaming_fetch scan.
+ */
+static bool
+is_active_scan(PgFdwScanState *fsstate)
+{
+	return fsstate->streaming_fetch &&
+		fsstate->conn_state->active_scan == fsstate;
 }
 
 /*
@@ -4230,6 +4601,12 @@ execute_foreign_modify(EState *estate,
 
 	/* Convert parameters needed by prepared statement to text form */
 	p_values = convert_prep_stmt_params(fmstate, ctid, slots, *numSlots);
+
+	/*
+	 * If the other scan_in_progress is using streaming_fetch mode, then save
+	 * the tuples to tuplestore before proceeding further.
+	 */
+	save_to_tuplestore(fmstate->conn_state->active_scan, fmstate->conn);
 
 	/*
 	 * Execute the prepared statement.
@@ -4620,6 +4997,12 @@ execute_dml_stmt(ForeignScanState *node)
 							 dmstate->param_flinfo,
 							 dmstate->param_exprs,
 							 values);
+
+	/*
+	 * If the other scan_in_progress is using streaming_fetch mode, then save
+	 * the tuples to tuplestore before proceeding further.
+	 */
+	save_to_tuplestore(dmstate->conn_state->active_scan, dmstate->conn);
 
 	/*
 	 * Notice that we pass NULL for paramTypes, thus forcing the remote server
@@ -7038,6 +7421,8 @@ apply_server_options(PgFdwRelationInfo *fpinfo)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
+		else if (strcmp(def->defname, "streaming_fetch") == 0)
+			set_streaming_fetch(def, fpinfo);
 	}
 }
 
@@ -7061,7 +7446,20 @@ apply_table_options(PgFdwRelationInfo *fpinfo)
 			(void) parse_int(defGetString(def), &fpinfo->fetch_size, 0, NULL);
 		else if (strcmp(def->defname, "async_capable") == 0)
 			fpinfo->async_capable = defGetBoolean(def);
+		else if (strcmp(def->defname, "streaming_fetch") == 0)
+			set_streaming_fetch(def, fpinfo);
 	}
+}
+
+static void
+set_streaming_fetch(DefElem *def, PgFdwRelationInfo *fpinfo)
+{
+	fpinfo->streaming_fetch = defGetBoolean(def);
+#ifndef LIBPQ_HAS_CHUNK_MODE
+	if (fpinfo->streaming_fetch)
+		ereport(ERROR, errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+				errmsg("streaming_fetch is not supported by this build of libpq"));
+#endif
 }
 
 /*
@@ -7096,6 +7494,7 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 	fpinfo->use_remote_estimate = fpinfo_o->use_remote_estimate;
 	fpinfo->fetch_size = fpinfo_o->fetch_size;
 	fpinfo->async_capable = fpinfo_o->async_capable;
+	fpinfo->streaming_fetch = fpinfo_o->streaming_fetch;
 
 	/* Merge the table level options from either side of the join. */
 	if (fpinfo_i)
@@ -7127,6 +7526,11 @@ merge_fdw_options(PgFdwRelationInfo *fpinfo,
 		 */
 		fpinfo->async_capable = fpinfo_o->async_capable ||
 			fpinfo_i->async_capable;
+		fpinfo->streaming_fetch = fpinfo_o->streaming_fetch ||
+			fpinfo_i->streaming_fetch;
+		/* streaming_fetch and async execution are mutually exclusive */
+		if (fpinfo->streaming_fetch)
+			fpinfo->async_capable = false;
 	}
 }
 

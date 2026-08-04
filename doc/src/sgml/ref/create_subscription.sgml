@@ -272,8 +272,10 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
             <term><literal>log</literal></term>
             <listitem>
              <para>
-              Conflict details are recorded in the server log.
-              This is the default behavior.
+              Conflict details are recorded in the server log. This is
+              the default behavior. See
+              <xref linkend="logical-replication-conflict-file-based-logging"/>
+              for details.
              </para>
             </listitem>
            </varlistentry>
@@ -284,14 +286,17 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
               The system automatically creates a structured table named
               <literal>pg_conflict_log_&lt;subid&gt;</literal> in the
               <literal>pg_conflict</literal> schema. This allows for easy
-              querying and analysis of conflicts.
+              querying and analysis of conflicts. See
+              <xref linkend="logical-replication-conflict-table-based-logging"/>
+              for details.
              </para>
              <caution>
               <para>
                The conflict log table is strictly tied to the lifecycle of the
                subscription or the <literal>conflict_log_destination</literal> setting. If
                the subscription is dropped, or if the destination is changed to
-               <literal>log</literal>, the table is <emphasis>dropped</emphasis>.
+               <literal>log</literal>, the table and all its recorded conflict data are
+               <emphasis>permanently deleted</emphasis>.
               </para>
              </caution>
             </listitem>
@@ -300,8 +305,8 @@ CREATE SUBSCRIPTION <replaceable class="parameter">subscription_name</replaceabl
             <term><literal>all</literal></term>
             <listitem>
              <para>
-              This is equivalent to configuring both destinations <literal>log</literal>
-              and <literal>table</literal> together.
+              Records conflict details to both destinations <literal>log</literal>
+              and <literal>table</literal>.
              </para>
             </listitem>
            </varlistentry>

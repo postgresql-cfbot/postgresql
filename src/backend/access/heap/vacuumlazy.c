@@ -3049,6 +3049,10 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	ivinfo.num_heap_tuples = reltuples;
 	ivinfo.strategy = vacrel->bstrategy;
 
+	/* Report which index we're currently processing */
+	pgstat_progress_update_param(PROGRESS_VACUUM_CURRENT_INDEX_RELID,
+								 RelationGetRelid(indrel));
+
 	/*
 	 * Update error traceback information.
 	 *
@@ -3069,6 +3073,10 @@ lazy_vacuum_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	restore_vacuum_error_info(vacrel, &saved_err_info);
 	pfree(vacrel->indname);
 	vacrel->indname = NULL;
+
+	/* Reset the current index relid */
+	pgstat_progress_update_param(PROGRESS_VACUUM_CURRENT_INDEX_RELID,
+								 InvalidOid);
 
 	return istat;
 }
@@ -3100,6 +3108,10 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	ivinfo.num_heap_tuples = reltuples;
 	ivinfo.strategy = vacrel->bstrategy;
 
+	/* Report which index we're currently processing */
+	pgstat_progress_update_param(PROGRESS_VACUUM_CURRENT_INDEX_RELID,
+								 RelationGetRelid(indrel));
+
 	/*
 	 * Update error traceback information.
 	 *
@@ -3118,6 +3130,10 @@ lazy_cleanup_one_index(Relation indrel, IndexBulkDeleteResult *istat,
 	restore_vacuum_error_info(vacrel, &saved_err_info);
 	pfree(vacrel->indname);
 	vacrel->indname = NULL;
+
+	/* Reset the current index relid */
+	pgstat_progress_update_param(PROGRESS_VACUUM_CURRENT_INDEX_RELID,
+								 InvalidOid);
 
 	return istat;
 }

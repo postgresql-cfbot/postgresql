@@ -121,9 +121,6 @@ typedef enum ParallelTransState
 	PARALLEL_TRANS_UNKNOWN,
 	PARALLEL_TRANS_STARTED,
 	PARALLEL_TRANS_FINISHED,
-	PARALLEL_TRANS_ERROR,		/* worker failed; it will report the error
-								 * (and log the conflict, if any) before
-								 * exiting */
 } ParallelTransState;
 
 /*
@@ -277,6 +274,7 @@ extern bool logicalrep_worker_launch(LogicalRepWorkerType wtype,
 extern void logicalrep_worker_stop(LogicalRepWorkerType wtype, Oid subid,
 								   Oid relid);
 extern void logicalrep_pa_worker_stop(ParallelApplyWorkerInfo *winfo);
+extern bool logicalrep_pa_worker_running(ParallelApplyWorkerInfo *winfo);
 extern void logicalrep_worker_wakeup(LogicalRepWorkerType wtype, Oid subid,
 									 Oid relid);
 extern void logicalrep_worker_wakeup_ptr(LogicalRepWorker *worker);

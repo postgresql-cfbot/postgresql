@@ -933,17 +933,36 @@ hexdecode_string(uint8 *result, char *input, int nbytes)
 	return true;
 }
 
+/* Maximum number of hexadecimal digits in each half of an LSN */
+#define MAXPG_LSNCOMPONENT	8
+
 /*
  * Parse an XLogRecPtr expressed using the usual string format.
+ *
+ * Each half must consist of one to eight hexadecimal digits, and the whole
+ * input must be consumed.  We can't use sscanf() for this, because "%X" would
+ * accept a value too large for uint32 (silently keeping only its low-order
+ * bits) as well as trailing garbage.  These are the same rules that
+ * pg_lsn_in_safe() applies to the pg_lsn data type.
  */
 static bool
 parse_xlogrecptr(XLogRecPtr *result, char *input)
 {
+	size_t		len1;
+	size_t		len2;
 	uint32		hi;
 	uint32		lo;
 
-	if (sscanf(input, "%X/%08X", &hi, &lo) != 2)
+	len1 = strspn(input, "0123456789abcdefABCDEF");
+	if (len1 < 1 || len1 > MAXPG_LSNCOMPONENT || input[len1] != '/')
 		return false;
+
+	len2 = strspn(input + len1 + 1, "0123456789abcdefABCDEF");
+	if (len2 < 1 || len2 > MAXPG_LSNCOMPONENT || input[len1 + 1 + len2] != '\0')
+		return false;
+
+	hi = (uint32) strtoul(input, NULL, 16);
+	lo = (uint32) strtoul(input + len1 + 1, NULL, 16);
 	*result = ((uint64) hi) << 32 | lo;
 	return true;
 }

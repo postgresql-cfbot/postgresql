@@ -341,7 +341,7 @@ DROP FUNCTION func_parted_mod_b();
 -- RLS policies with update-row-movement
 -----------------------------------------
 
-ALTER TABLE range_parted ENABLE ROW LEVEL SECURITY;
+ALTER TABLE ONLY range_parted ENABLE ROW LEVEL SECURITY;
 CREATE USER regress_range_parted_user;
 GRANT ALL ON range_parted, mintab TO regress_range_parted_user;
 CREATE POLICY seeall ON range_parted AS PERMISSIVE FOR SELECT USING (true);

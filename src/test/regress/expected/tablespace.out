@@ -290,13 +290,13 @@ CREATE TABLE testschema.part_2 PARTITION OF testschema.part FOR VALUES IN (2);
 SET default_tablespace TO pg_global;
 CREATE TABLE testschema.part_3 PARTITION OF testschema.part FOR VALUES IN (3);
 ERROR:  only shared relations can be placed in pg_global tablespace
-ALTER TABLE testschema.part SET TABLESPACE regress_tblspace;
+ALTER TABLE ONLY testschema.part SET TABLESPACE regress_tblspace;
 CREATE TABLE testschema.part_3 PARTITION OF testschema.part FOR VALUES IN (3);
 CREATE TABLE testschema.part_4 PARTITION OF testschema.part FOR VALUES IN (4)
   TABLESPACE pg_default;
 CREATE TABLE testschema.part_56 PARTITION OF testschema.part FOR VALUES IN (5, 6)
   PARTITION BY LIST (a);
-ALTER TABLE testschema.part SET TABLESPACE pg_default;
+ALTER TABLE ONLY testschema.part SET TABLESPACE pg_default;
 CREATE TABLE testschema.part_78 PARTITION OF testschema.part FOR VALUES IN (7, 8)
   PARTITION BY LIST (a);
 ERROR:  only shared relations can be placed in pg_global tablespace

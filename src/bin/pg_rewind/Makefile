@@ -34,8 +34,8 @@ EXTRA_CLEAN = xlogreader.c
 
 all: pg_rewind
 
-pg_rewind: $(OBJS) | submake-libpq submake-libpgport
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pg_rewind: $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 xlogreader.c: % : $(top_srcdir)/src/backend/access/transam/%
 	rm -f $@ && $(LN_S) $< .

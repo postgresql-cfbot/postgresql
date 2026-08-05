@@ -45,13 +45,13 @@ OBJS = \
 
 all: pg_dump pg_restore pg_dumpall
 
-pg_dump: pg_dump.o common.o pg_dump_sort.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_dump: pg_dump.o common.o pg_dump_sort.o $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) pg_dump.o common.o pg_dump_sort.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
-pg_restore: pg_restore.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_restore: pg_restore.o $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) pg_restore.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
-pg_dumpall: pg_dumpall.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_dumpall: pg_dumpall.o $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) pg_dumpall.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs

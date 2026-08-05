@@ -637,6 +637,12 @@ ifeq ($(PORTNAME),cygwin)
 libpq_pgport += $(LDAP_LIBS_FE)
 endif
 
+# libpgfeutils is for client executables that link with fe_utils.  Targets
+# should depend on this when they need to be relinked after fe_utils changes.
+ifndef PGXS
+libpgfeutils = $(top_builddir)/src/fe_utils/libpgfeutils.a
+endif
+
 
 ##########################################################################
 #
@@ -653,6 +659,10 @@ submake-libpgfeutils: | submake-generated-headers
 	$(MAKE) -C $(top_builddir)/src/port all
 	$(MAKE) -C $(top_builddir)/src/common all
 	$(MAKE) -C $(top_builddir)/src/fe_utils all
+
+ifndef PGXS
+$(libpgfeutils): | submake-libpgfeutils
+endif
 
 .PHONY: submake-libpq submake-libpgport submake-libpgfeutils
 

@@ -41,16 +41,16 @@ BBOBJS = \
 
 all: pg_basebackup pg_createsubscriber pg_receivewal pg_recvlogical
 
-pg_basebackup: $(BBOBJS) $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_basebackup: $(BBOBJS) $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) $(BBOBJS) $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
-pg_createsubscriber: pg_createsubscriber.o $(WIN32RES) | submake-libpq submake-libpgport submake-libpgfeutils
-	$(CC) $(CFLAGS) $^ $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
+pg_createsubscriber: pg_createsubscriber.o $(WIN32RES) $(libpgfeutils) | submake-libpq submake-libpgport
+	$(CC) $(CFLAGS) pg_createsubscriber.o $(WIN32RES) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
-pg_receivewal: pg_receivewal.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_receivewal: pg_receivewal.o $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) pg_receivewal.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
-pg_recvlogical: pg_recvlogical.o $(OBJS) | submake-libpq submake-libpgport submake-libpgfeutils
+pg_recvlogical: pg_recvlogical.o $(OBJS) $(libpgfeutils) | submake-libpq submake-libpgport
 	$(CC) $(CFLAGS) pg_recvlogical.o $(OBJS) $(LDFLAGS) $(LDFLAGS_EX) $(LIBS) -o $@$(X)
 
 install: all installdirs

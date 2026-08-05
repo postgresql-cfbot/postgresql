@@ -2757,6 +2757,7 @@ apply_handle_insert_internal(ApplyExecutionData *edata,
 							 TupleTableSlot *remoteslot)
 {
 	EState	   *estate = edata->estate;
+	ApplyConflictInfo conflict;
 
 	/* Caller should have opened indexes already. */
 	Assert(relinfo->ri_IndexRelationDescs != NULL ||
@@ -2769,7 +2770,19 @@ apply_handle_insert_internal(ApplyExecutionData *edata,
 
 	/* Do the insert. */
 	TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_INSERT);
-	ExecSimpleRelationInsert(relinfo, estate, remoteslot);
+	if (ExecSimpleRelationInsert(relinfo, estate, remoteslot, &conflict))
+	{
+		/*
+		 * This is where a future conflict resolution strategy could decide
+		 * to resolve the conflict without raising an ERROR (e.g. skip the
+		 * insert and log at LOG level). For now, always report at ERROR,
+		 * matching the previous behavior.
+		 */
+		ReportApplyConflict(estate, relinfo, ERROR, conflict.type,
+							conflict.searchslot, conflict.remoteslot,
+							conflict.conflicttuples);
+		pg_unreachable();
+	}
 }
 
 /*
@@ -2952,6 +2965,7 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 	EPQState	epqstate;
 	TupleTableSlot *localslot = NULL;
 	ConflictTupleInfo conflicttuple = {0};
+	ApplyConflictInfo conflict;
 	bool		found;
 	MemoryContext oldctx;
 
@@ -3002,8 +3016,19 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 
 		/* Do the actual update. */
 		TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_UPDATE);
-		ExecSimpleRelationUpdate(relinfo, estate, &epqstate, localslot,
-								 remoteslot);
+		if (ExecSimpleRelationUpdate(relinfo, estate, &epqstate, localslot,
+									 remoteslot, &conflict))
+		{
+			/*
+			 * This is where a future conflict resolution strategy could
+			 * decide to resolve the conflict without raising an ERROR. For
+			 * now, always report at ERROR, matching the previous behavior.
+			 */
+			ReportApplyConflict(estate, relinfo, ERROR, conflict.type,
+								conflict.searchslot, conflict.remoteslot,
+								conflict.conflicttuples);
+			pg_unreachable();
+		}
 	}
 	else
 	{
@@ -3491,6 +3516,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 				bool		found;
 				EPQState	epqstate;
 				ConflictTupleInfo conflicttuple = {0};
+				ApplyConflictInfo conflict;
 
 				/* Get the matching local tuple from the partition. */
 				found = FindReplTupleInLocalRel(edata, partrel,
@@ -3585,8 +3611,22 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 					EvalPlanQualSetSlot(&epqstate, remoteslot_part);
 					TargetPrivilegesCheck(partrelinfo->ri_RelationDesc,
 										  ACL_UPDATE);
-					ExecSimpleRelationUpdate(partrelinfo, estate, &epqstate,
-											 localslot, remoteslot_part);
+					if (ExecSimpleRelationUpdate(partrelinfo, estate, &epqstate,
+												 localslot, remoteslot_part,
+												 &conflict))
+					{
+						/*
+						 * This is where a future conflict resolution
+						 * strategy could decide to resolve the conflict
+						 * without raising an ERROR. For now, always report
+						 * at ERROR, matching the previous behavior.
+						 */
+						ReportApplyConflict(estate, partrelinfo, ERROR,
+											conflict.type, conflict.searchslot,
+											conflict.remoteslot,
+											conflict.conflicttuples);
+						pg_unreachable();
+					}
 				}
 				else
 				{

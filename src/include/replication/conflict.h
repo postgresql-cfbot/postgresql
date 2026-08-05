@@ -81,6 +81,23 @@ typedef struct ConflictTupleInfo
 } ConflictTupleInfo;
 
 /*
+ * Conflict detected by ExecSimpleRelationInsert()/ExecSimpleRelationUpdate()
+ * while rechecking unique indexes for a duplicate key.
+ *
+ * The executor functions fill this in and return control to their caller
+ * instead of invoking ReportApplyConflict() themselves, so that the apply
+ * worker call site -- which knows the subscription's conflict resolution
+ * strategy -- decides whether/how to report it.
+ */
+typedef struct ApplyConflictInfo
+{
+	ConflictType type;
+	TupleTableSlot *searchslot;
+	TupleTableSlot *remoteslot;
+	List	   *conflicttuples;
+} ApplyConflictInfo;
+
+/*
  * Defines where logical replication conflict details are recorded.
  *
  * While stored as a text-based array/string in

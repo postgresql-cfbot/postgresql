@@ -20,6 +20,7 @@
 #include "fmgr.h"
 #include "nodes/lockoptions.h"
 #include "nodes/parsenodes.h"
+#include "replication/conflict.h"
 #include "utils/memutils.h"
 
 
@@ -791,11 +792,13 @@ extern bool RelationFindDeletedTupleInfoByIndex(Relation rel, Oid idxoid,
 												TransactionId *delete_xid,
 												ReplOriginId *delete_origin,
 												TimestampTz *delete_time);
-extern void ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
-									 EState *estate, TupleTableSlot *slot);
-extern void ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
+extern bool ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
+									 EState *estate, TupleTableSlot *slot,
+									 ApplyConflictInfo *conflict);
+extern bool ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 									 EState *estate, EPQState *epqstate,
-									 TupleTableSlot *searchslot, TupleTableSlot *slot);
+									 TupleTableSlot *searchslot, TupleTableSlot *slot,
+									 ApplyConflictInfo *conflict);
 extern void ExecSimpleRelationDelete(ResultRelInfo *resultRelInfo,
 									 EState *estate, EPQState *epqstate,
 									 TupleTableSlot *searchslot);

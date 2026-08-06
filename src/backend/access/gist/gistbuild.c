@@ -213,9 +213,9 @@ gistbuild(Relation heap, Relation index, IndexInfo *indexInfo)
 	 */
 	if (options)
 	{
-		if (options->buffering_mode == GIST_OPTION_BUFFERING_ON)
+		if (options->buffering_mode == PG_TERNARY_TRUE)
 			buildstate.buildMode = GIST_BUFFERING_STATS;
-		else if (options->buffering_mode == GIST_OPTION_BUFFERING_OFF)
+		else if (options->buffering_mode == PG_TERNARY_FALSE)
 			buildstate.buildMode = GIST_BUFFERING_DISABLED;
 		else					/* must be "auto" */
 			buildstate.buildMode = GIST_BUFFERING_AUTO;

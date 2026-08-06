@@ -593,6 +593,28 @@
        <structfield>max_exec_time</structfield>)
       </para></entry>
      </row>
+
+     <row>
+      <entry role="catalog_table_entry"><para role="column_definition">
+       <structfield>last_execution_start</structfield> <type>timestamp with time zone</type>
+      </para>
+      <para>
+       Time at which the most recent execution of this statement started.
+       For nested statements (<structfield>toplevel</structfield> = false),
+       this is the start time of the top-level statement that caused the
+       nested statement to be executed.
+      </para>
+      <para>
+       This field is useful for monitoring queries that have executed since
+       a given point in time, for example:
+<programlisting>
+SELECT query, calls, last_execution_start
+FROM pg_stat_statements
+WHERE last_execution_start &gt;= $1
+ORDER BY last_execution_start DESC;
+</programlisting>
+      </para></entry>
+     </row>
     </tbody>
    </tgroup>
   </table>

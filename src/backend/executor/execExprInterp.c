@@ -5031,7 +5031,7 @@ ExecEvalJsonExprPath(ExprState *state, ExprEvalStep *op,
 
 		fcinfo->isnull = false;
 		*op->resvalue = FunctionCallInvoke(fcinfo);
-		if (SOFT_ERROR_OCCURRED(&jsestate->escontext))
+		if (SOFT_ERROR_OCCURRED((Node *) &jsestate->escontext))
 			error = true;
 	}
 
@@ -5267,7 +5267,7 @@ ExecEvalJsonCoercionFinish(ExprState *state, ExprEvalStep *op)
 {
 	JsonExprState *jsestate = op->d.jsonexpr.jsestate;
 
-	if (SOFT_ERROR_OCCURRED(&jsestate->escontext))
+	if (SOFT_ERROR_OCCURRED((Node *) &jsestate->escontext))
 	{
 		/*
 		 * jsestate->error or jsestate->empty being set means that the error

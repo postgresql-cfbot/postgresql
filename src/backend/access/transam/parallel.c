@@ -28,6 +28,7 @@
 #include "commands/async.h"
 #include "commands/vacuum.h"
 #include "executor/execParallel.h"
+#include "executor/instrument.h"
 #include "libpq/libpq.h"
 #include "libpq/pqformat.h"
 #include "libpq/pqmq.h"
@@ -1024,6 +1025,79 @@ DestroyParallelContext(ParallelContext *pcxt)
 	pfree(pcxt->library_name);
 	pfree(pcxt->function_name);
 	pfree(pcxt);
+}
+
+/*
+ * Helpers for passing the current query text down to parallel workers.
+ */
+
+/* Reserve DSM space for the query text, if any. */
+void
+EstimateParallelQueryText(ParallelContext *pcxt)
+{
+	if (debug_query_string)
+	{
+		shm_toc_estimate_chunk(&pcxt->estimator, strlen(debug_query_string) + 1);
+		shm_toc_estimate_keys(&pcxt->estimator, 1);
+	}
+}
+
+/* Copy the query text into DSM under the given key, if any. */
+void
+StoreParallelQueryText(ParallelContext *pcxt, uint64 key)
+{
+	if (debug_query_string)
+	{
+		Size		querylen = strlen(debug_query_string);
+		char	   *sharedquery;
+
+		sharedquery = (char *) shm_toc_allocate(pcxt->toc, querylen + 1);
+		memcpy(sharedquery, debug_query_string, querylen + 1);
+		shm_toc_insert(pcxt->toc, key, sharedquery);
+	}
+}
+
+/*
+ * Restore the query text in a worker: set debug_query_string and report it as
+ * the current activity.  The key is looked up with missing_ok, so this is a
+ * no-op (leaving debug_query_string NULL) when the leader stored no text.
+ */
+void
+RestoreParallelQueryText(shm_toc *toc, uint64 key)
+{
+	debug_query_string = shm_toc_lookup(toc, key, true);
+	pgstat_report_activity(STATE_RUNNING, debug_query_string);
+}
+
+/*
+ * Helpers for managing the per-worker Instrumentation array that parallel
+ * leaders allocate in DSM.  The worker side fills in its own slot directly via
+ * InstrEndParallelQuery.
+ */
+
+/* Reserve DSM space for the per-worker Instrumentation array. */
+void
+EstimateParallelInstrumentation(ParallelContext *pcxt)
+{
+	shm_toc_estimate_chunk(&pcxt->estimator,
+						   mul_size(sizeof(Instrumentation), pcxt->nworkers));
+	shm_toc_estimate_keys(&pcxt->estimator, 1);
+}
+
+/*
+ * Allocate the per-worker Instrumentation array in DSM and publish it under
+ * the given key.  No need to initialize; each worker fills in its own slot.
+ * Returns the array for the leader's convenience.
+ */
+Instrumentation *
+StoreParallelInstrumentation(ParallelContext *pcxt, uint64 key)
+{
+	Instrumentation *instr;
+
+	instr = shm_toc_allocate(pcxt->toc,
+							 mul_size(sizeof(Instrumentation), pcxt->nworkers));
+	shm_toc_insert(pcxt->toc, key, instr);
+	return instr;
 }
 
 /*

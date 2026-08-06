@@ -49,6 +49,7 @@
 #include "commands/schemacmds.h"
 #include "commands/seclabel.h"
 #include "commands/sequence.h"
+#include "commands/session_variable.h"
 #include "commands/subscriptioncmds.h"
 #include "commands/tablecmds.h"
 #include "commands/tablespace.h"
@@ -186,6 +187,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_CreateRangeStmt:
 		case T_CreateRoleStmt:
 		case T_CreateSchemaStmt:
+		case T_CreateSessionVarStmt:
 		case T_CreateSeqStmt:
 		case T_CreateStatsStmt:
 		case T_CreateStmt:
@@ -204,6 +206,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 		case T_DropTableSpaceStmt:
 		case T_DropUserMappingStmt:
 		case T_DropdbStmt:
+		case T_DropSessionVarStmt:
 		case T_GrantRoleStmt:
 		case T_GrantStmt:
 		case T_ImportForeignSchemaStmt:
@@ -237,6 +240,7 @@ ClassifyUtilityCommandAsReadOnly(Node *parsetree)
 
 		case T_CallStmt:
 		case T_DoStmt:
+		case T_LetStmt:
 			{
 				/*
 				 * Commands inside the DO block or the called procedure might
@@ -1067,6 +1071,20 @@ standard_ProcessUtility(PlannedStmt *pstmt,
 			}
 			break;
 
+		case T_CreateSessionVarStmt:
+			CreateVariable(pstate, (CreateSessionVarStmt *) parsetree);
+			break;
+
+		case T_DropSessionVarStmt:
+			/* No event triggers for catalog less session variables */
+			DropVariableByName((DropSessionVarStmt *) parsetree);
+			break;
+
+		case T_LetStmt:
+			ExecuteLetStmt(pstate, (LetStmt *) parsetree, params,
+						   queryEnv, qc);
+			break;
+
 		default:
 			/* All other statement types have event trigger support */
 			ProcessUtilitySlow(pstate, pstmt, queryString,
@@ -1391,6 +1409,7 @@ ProcessUtilitySlow(ParseState *pstate,
 					}
 				}
 				break;
+
 
 				/*
 				 * ************* object creation / destruction **************
@@ -2220,6 +2239,10 @@ UtilityContainsQuery(Node *parsetree)
 				return UtilityContainsQuery(qry->utilityStmt);
 			return qry;
 
+		case T_LetStmt:
+			qry = castNode(Query, ((LetStmt *) parsetree)->query);
+			return qry;
+
 		default:
 			return NULL;
 	}
@@ -2416,6 +2439,10 @@ CreateCommandTag(Node *parsetree)
 
 		case T_PLAssignStmt:
 			tag = CMDTAG_SELECT;
+			break;
+
+		case T_LetStmt:
+			tag = CMDTAG_LET;
 			break;
 
 			/* utility statements --- same whether raw or cooked */
@@ -3266,6 +3293,14 @@ CreateCommandTag(Node *parsetree)
 			}
 			break;
 
+		case T_CreateSessionVarStmt:
+			tag = CMDTAG_CREATE_VARIABLE;
+			break;
+
+		case T_DropSessionVarStmt:
+			tag = CMDTAG_DROP_VARIABLE;
+			break;
+
 		default:
 			elog(WARNING, "unrecognized node type: %d",
 				 (int) nodeTag(parsetree));
@@ -3314,6 +3349,7 @@ GetCommandLogLevel(Node *parsetree)
 			break;
 
 		case T_PLAssignStmt:
+		case T_LetStmt:
 			lev = LOGSTMT_ALL;
 			break;
 
@@ -3810,6 +3846,11 @@ GetCommandLogLevel(Node *parsetree)
 						break;
 				}
 			}
+			break;
+
+		case T_CreateSessionVarStmt:
+		case T_DropSessionVarStmt:
+			lev = LOGSTMT_DDL;
 			break;
 
 		default:

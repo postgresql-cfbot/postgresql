@@ -592,6 +592,7 @@ CreateReplicationSlotCmd
 CreateRoleStmt
 CreateSchemaStmt
 CreateSeqStmt
+CreateSessionVarStmt
 CreateStatsStmt
 CreateStmt
 CreateStmtContext
@@ -705,6 +706,7 @@ DropBehavior
 DropOwnedStmt
 DropReplicationSlotCmd
 DropRoleStmt
+DropSessionVarStmt
 DropStmt
 DropSubscriptionStmt
 DropTableSpaceStmt
@@ -1628,6 +1630,7 @@ LargeObjectDesc
 Latch
 LauncherLastStartTimesEntry
 LerpFunc
+LetStmt
 LexDescr
 LexemeEntry
 LexemeHashKey
@@ -2786,6 +2789,9 @@ SSL_CTX
 STARTUPINFO
 STRLEN
 SV
+SVariableData
+SVariable
+SVariableState
 SYNCHRONIZATION_BARRIER
 SYSTEM_INFO
 SampleScan
@@ -2845,6 +2851,7 @@ SerializedTransactionState
 Session
 SessionBackupState
 SessionEndType
+SessionVariableValue
 SetConstraintState
 SetConstraintStateData
 SetConstraintTriggerData
@@ -3371,6 +3378,7 @@ ValidatorValidateCB
 ValuesScan
 ValuesScanState
 Var
+VariableFence
 VarBit
 VarChar
 VarParamState

@@ -8355,7 +8355,8 @@ exec_is_simple_query(PLpgSQL_expr *expr)
 		query->sortClause ||
 		query->limitOffset ||
 		query->limitCount ||
-		query->setOperations)
+		query->setOperations ||
+		query->hasSessionVariables)
 		return false;
 
 	/*

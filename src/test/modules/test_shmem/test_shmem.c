@@ -39,6 +39,7 @@ static void test_shmem_request(void *arg);
 static void test_shmem_init(void *arg);
 static void test_shmem_attach(void *arg);
 static void test_shmem_failure_request(void *arg);
+static void test_shmem_failure_init(void *arg);
 
 static const ShmemCallbacks TestShmemCallbacks = {
 	.flags = SHMEM_CALLBACKS_ALLOW_AFTER_STARTUP,
@@ -50,6 +51,7 @@ static const ShmemCallbacks TestShmemCallbacks = {
 static const ShmemCallbacks TestShmemFailureCallbacks = {
 	.flags = SHMEM_CALLBACKS_ALLOW_AFTER_STARTUP,
 	.request_fn = test_shmem_failure_request,
+	.init_fn = test_shmem_failure_init,
 };
 
 static int	failure_mode;
@@ -114,9 +116,22 @@ test_shmem_failure_request(void *arg)
 							   .size = (Size) 1024 * 1024 * 1024,
 							   .ptr = &ptr1);
 			break;
+		case 3:
+			ShmemRequestStruct(.name = "test_shmem legacy caller area",
+							   .size = 1024, .ptr = &ptr1);
+			break;
 		default:
 			elog(ERROR, "unrecognized test_shmem failure mode: %d", failure_mode);
 	}
+}
+
+static void
+test_shmem_failure_init(void *arg)
+{
+	bool		found;
+
+	if (failure_mode == 3)
+		(void) ShmemInitStruct("test_shmem legacy target area", 1024, &found);
 }
 
 void

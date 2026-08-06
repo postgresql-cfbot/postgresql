@@ -66,6 +66,12 @@ is( $node->safe_psql(
 	),
 	'0',
 	'a partly oversized batch creates no areas');
+
+my ($legacy_ret, $legacy_out, $legacy_err) =
+  $node->psql('postgres', 'SELECT test_shmem_failure(3);');
+isnt($legacy_ret, 0, 'legacy allocation from an init callback is rejected');
+like($legacy_err, qr/cannot call ShmemInitStruct\(\) while holding ShmemIndexLock/,
+	'legacy allocation reports a clear error instead of hanging');
 $node->stop;
 
 ###

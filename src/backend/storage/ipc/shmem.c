@@ -1097,6 +1097,9 @@ ShmemInitStruct(const char *name, Size size, bool *foundPtr)
 	};
 	ShmemRequest request = {&options, SHMEM_KIND_STRUCT};
 
+	if (LWLockHeldByMe(ShmemIndexLock))
+		elog(ERROR, "cannot call ShmemInitStruct() while holding ShmemIndexLock");
+
 	Assert(shmem_request_state == SRS_DONE ||
 		   shmem_request_state == SRS_INITIALIZING ||
 		   shmem_request_state == SRS_REQUESTING);

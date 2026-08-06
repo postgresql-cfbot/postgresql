@@ -233,6 +233,76 @@ SET client_min_messages = DEBUG1;
   <variablelist>
    <varlistentry>
     <term>
+     <function>brin_index_check(index regclass, regularpagescheck boolean, heapallindexed boolean, variadic text[]) returns void</function>
+     <indexterm>
+      <primary>brin_index_check</primary>
+     </indexterm>
+    </term>
+
+    <listitem>
+     <para>
+      <function>brin_index_check</function> tests that its target BRIN index
+      has no structural corruptions. A <literal>ShareUpdateExclusiveLock</literal>
+      is required on the target index by <function>brin_index_check</function>.
+     </para>
+     <para>
+      The following optional arguments are recognized:
+     </para>
+     <variablelist>
+      <varlistentry>
+       <term><literal>regularpagescheck</literal></term>
+       <listitem>
+        <para>
+         If true, check does another run over all regular pages and tries to
+         find some corruptions that was not possible to find during the basic check.
+        </para>
+        <para>
+         Defaults to false.
+        </para>
+       </listitem>
+      </varlistentry>
+      <varlistentry>
+       <term><literal>heapallindexed</literal></term>
+       <listitem>
+        <para>
+         If true, the check verifies that every heap tuple is consistent with the
+         index. This check phase needs an operator for which an expression
+         <literal>LHS OPERATOR RHS</literal> evaluates to <literal>true</literal>
+         when we use the same value of the indexed type for both <literal>LHS</literal> and <literal>RHS</literal>.
+         For example, if the indexed column's type is <type>bigint</type>,
+         equality operator can be used because expression
+         <literal>x = x</literal> result in <literal>true</literal>
+         for every value of <type>bigint</type>
+         (e.g. <literal>1 = 1</literal> is <literal>true</literal>, <literal>2 = 2</literal> is <literal>true</literal>, and so on).
+         Operator also should be part of the operator family of the indexed column.
+         Most of the time, the equality operator can be used.
+         If all indexed column operator classes support equality operator,
+         the function call looks like this:
+<programlisting>
+   SELECT brin_index_check('index_name', true, true);
+</programlisting>
+         If any indexed column operator class doesn't support equality operator then
+         a suitable operator for every such column should be found and
+         operators for all indexed columns should be listed in the function call.
+         For instance, we have two indexed columns
+         (<parameter>a</parameter> <type>int8_minmax_ops</type>, <parameter>b</parameter> <type>box_inclusion_ops</type>).
+         <type>box_inclusion_ops</type> operator class does not support equality operator.
+         The appropriate operator would be <literal>@></literal>.
+         Then the function call looks like this:
+<programlisting>
+   SELECT brin_index_check('index_name', true, true, '=', '@>');
+</programlisting>
+        </para>
+        <para>
+         Defaults to false.
+        </para>
+       </listitem>
+      </varlistentry>
+     </variablelist>
+    </listitem>
+   </varlistentry>
+   <varlistentry>
+    <term>
      <function>
       verify_heapam(relation regclass,
                     on_error_stop boolean,

@@ -142,6 +142,7 @@
 #include "storage/shmem_internal.h"
 #include "storage/spin.h"
 #include "utils/builtins.h"
+#include "utils/memutils.h"
 #include "utils/tuplestore.h"
 
 /*
@@ -167,6 +168,13 @@ typedef struct
 } ShmemRequest;
 
 static List *pending_shmem_requests;
+
+/*
+ * During an after-startup request, allocate the request list in a context
+ * that is reset on error, so that it cannot become a dangling pointer.
+ */
+static MemoryContext late_shmem_requests_context;
+static MemoryContextCallback late_shmem_requests_callback;
 
 /*
  * Per-process state machine, for sanity checking that we do things in the
@@ -274,6 +282,8 @@ typedef struct
 static bool firstNumaTouch = true;
 
 static void CallShmemCallbacksAfterStartup(const ShmemCallbacks *callbacks);
+static void BeginLateShmemRequests(void);
+static void ForgetLateShmemRequests(void *arg);
 static void InitShmemIndexEntry(ShmemRequest *request);
 static bool AttachShmemIndexEntry(ShmemRequest *request, bool missing_ok);
 
@@ -336,6 +346,7 @@ void
 ShmemRequestInternal(ShmemStructOpts *options, ShmemRequestKind kind)
 {
 	ShmemRequest *request;
+	MemoryContext oldcontext = NULL;
 
 	/* Check the options */
 	if (options->name == NULL)
@@ -374,10 +385,47 @@ ShmemRequestInternal(ShmemStructOpts *options, ShmemRequestKind kind)
 	}
 
 	/* Request looks valid, remember it */
+	if (late_shmem_requests_context != NULL)
+		oldcontext = MemoryContextSwitchTo(late_shmem_requests_context);
 	request = palloc(sizeof(ShmemRequest));
 	request->options = options;
 	request->kind = kind;
 	pending_shmem_requests = lappend(pending_shmem_requests, request);
+	if (oldcontext != NULL)
+		MemoryContextSwitchTo(oldcontext);
+}
+
+/* Start collecting an after-startup request. */
+static void
+BeginLateShmemRequests(void)
+{
+	MemoryContext parent = CurTransactionContext != NULL ?
+		CurTransactionContext : CurrentMemoryContext;
+
+	Assert(pending_shmem_requests == NIL);
+	Assert(late_shmem_requests_context == NULL);
+	Assert(late_shmem_requests_callback.func == NULL);
+
+	late_shmem_requests_context =
+		AllocSetContextCreate(parent, "Pending shmem requests",
+						  ALLOCSET_SMALL_SIZES);
+	late_shmem_requests_callback.func = ForgetLateShmemRequests;
+	late_shmem_requests_callback.arg = NULL;
+	MemoryContextRegisterResetCallback(late_shmem_requests_context,
+									   &late_shmem_requests_callback);
+}
+
+/* Discard an after-startup request and reset the process-local state. */
+static void
+ForgetLateShmemRequests(void *arg)
+{
+	foreach_ptr(ShmemRequest, request, pending_shmem_requests)
+		pfree(request->options);
+
+	pending_shmem_requests = NIL;
+	late_shmem_requests_context = NULL;
+	late_shmem_requests_callback.func = NULL;
+	shmem_request_state = SRS_DONE;
 }
 
 /*
@@ -901,6 +949,7 @@ CallShmemCallbacksAfterStartup(const ShmemCallbacks *callbacks)
 	bool		notfound_any;
 
 	Assert(shmem_request_state == SRS_DONE);
+	BeginLateShmemRequests();
 	shmem_request_state = SRS_REQUESTING;
 
 	/*
@@ -914,7 +963,7 @@ CallShmemCallbacksAfterStartup(const ShmemCallbacks *callbacks)
 
 	if (pending_shmem_requests == NIL)
 	{
-		shmem_request_state = SRS_DONE;
+		MemoryContextDelete(late_shmem_requests_context);
 		return;
 	}
 
@@ -952,11 +1001,7 @@ CallShmemCallbacksAfterStartup(const ShmemCallbacks *callbacks)
 			AttachShmemIndexEntry(request, false);
 		else
 			InitShmemIndexEntry(request);
-
-		pfree(request->options);
 	}
-	list_free_deep(pending_shmem_requests);
-	pending_shmem_requests = NIL;
 
 	/* Finish by calling the appropriate subsystem-specific callback */
 	if (found_any)
@@ -971,7 +1016,7 @@ CallShmemCallbacksAfterStartup(const ShmemCallbacks *callbacks)
 	}
 
 	LWLockRelease(ShmemIndexLock);
-	shmem_request_state = SRS_DONE;
+	MemoryContextDelete(late_shmem_requests_context);
 }
 
 /*

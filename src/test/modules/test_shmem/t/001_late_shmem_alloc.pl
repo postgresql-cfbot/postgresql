@@ -25,6 +25,34 @@ my $attach_count2 =
   $node->safe_psql("postgres", "SELECT get_test_shmem_attach_count();");
 cmp_ok($attach_count2, '>', $attach_count1,
 	"attach callback is called in each backend");
+
+sub try_shmem_failure_twice
+{
+	my ($mode) = @_;
+	my $sql = qq[
+DO \$\$
+BEGIN
+	FOR i IN 1..2 LOOP
+		BEGIN
+			PERFORM test_shmem_failure($mode);
+		EXCEPTION WHEN others THEN
+			RAISE NOTICE 'attempt %: %', i, SQLERRM;
+		END;
+	END LOOP;
+END
+\$\$;];
+	return $node->psql('postgres', $sql);
+}
+
+# The state is backend-local, so the two attempts must share a session.
+foreach my $mode (0, 1)
+{
+	my ($ret, $stdout, $stderr) = try_shmem_failure_twice($mode);
+
+	is($ret, 0, "session survives repeated failing shmem request $mode");
+	like($stderr, qr/attempt 1: /, "shmem request $mode fails");
+	like($stderr, qr/attempt 2: /, "shmem request $mode fails when retried");
+}
 $node->stop;
 
 ###

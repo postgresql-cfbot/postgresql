@@ -6808,10 +6808,26 @@ assign_session_replication_role(int newval, void *extra)
 /*
  * SQL function pg_trigger_depth()
  */
+/*
+ * GetMyTriggerDepth - return current trigger nesting depth.
+ *
+ * This is a C-callable accessor for MyTriggerDepth, allowing other
+ * subsystems (e.g., EXPLAIN NESTED_STATEMENTS) to detect whether
+ * execution is currently inside a trigger function.
+ */
+int
+GetMyTriggerDepth(void)
+{
+	return MyTriggerDepth;
+}
+
+/*
+ * SQL-callable function to report trigger nesting depth.
+ */
 Datum
 pg_trigger_depth(PG_FUNCTION_ARGS)
 {
-	PG_RETURN_INT32(MyTriggerDepth);
+	PG_RETURN_INT32(GetMyTriggerDepth());
 }
 
 /*

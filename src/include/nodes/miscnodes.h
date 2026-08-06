@@ -54,4 +54,16 @@ typedef struct ErrorSaveContext
 	((escontext) != NULL && IsA(escontext, ErrorSaveContext) && \
 	 ((ErrorSaveContext *) (escontext))->error_occurred)
 
+
+/*
+ * Type optionally passed to input/receive/output/send functions that allows
+ * those functions to opt into more efficient ways of performing their work
+ * (mainly reducing allocations & copies).
+ */
+typedef struct InOutContext
+{
+	NodeTag		type;
+	StringInfo	buf;
+} InOutContext;
+
 #endif							/* MISCNODES_H */

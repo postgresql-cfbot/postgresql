@@ -63,19 +63,37 @@ Datum
 int8out(PG_FUNCTION_ARGS)
 {
 	int64		val = PG_GETARG_INT64(0);
-	char		buf[MAXINT8LEN + 1];
-	char	   *result;
-	int			len;
+	int			maxlen = MAXINT8LEN + 1;
+	StringInfo	buf = pg_get_inout_context_buf(fcinfo);
 
-	len = pg_lltoa(val, buf) + 1;
+	if (buf)
+	{
+		int			offset;
+		int			len;
 
-	/*
-	 * Since the length is already known, we do a manual palloc() and memcpy()
-	 * to avoid the strlen() call that would otherwise be done in pstrdup().
-	 */
-	result = palloc(len);
-	memcpy(result, buf, len);
-	PG_RETURN_CSTRING(result);
+		len = pg_lltoa(val, pq_begincountedfield(buf, maxlen, &offset));
+		buf->len += len;
+		pq_endcountedfield(buf, offset);
+
+		PG_RETURN_VOID();
+	}
+	else
+	{
+		char		buf[MAXINT8LEN + 1];
+		char	   *result;
+		int			len;
+
+		len = pg_lltoa(val, buf) + 1;
+
+		/*
+		 * Since the length is already known, we do a manual palloc() and
+		 * memcpy() to avoid the strlen() call that would otherwise be done in
+		 * pstrdup().
+		 */
+		result = palloc(len);
+		memcpy(result, buf, len);
+		PG_RETURN_CSTRING(result);
+	}
 }
 
 /*

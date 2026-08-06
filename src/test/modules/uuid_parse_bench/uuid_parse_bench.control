@@ -1,0 +1,5 @@
+# uuid_parse_bench extension
+comment = 'Microbenchmark for UUID input parsing'
+default_version = '1.0'
+module_pathname = '$libdir/uuid_parse_bench'
+relocatable = true

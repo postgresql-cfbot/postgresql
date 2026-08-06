@@ -171,6 +171,12 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       is specified and a column already exists with this name,
       no error is thrown.
      </para>
+     <para>
+      When applied to a partitioned table, the column is added to the
+      partitioned table definition and is implicitly added to all
+      partitions. Specifying <literal>ONLY</literal> is not allowed, and
+      this command cannot be used on individual partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -189,6 +195,18 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       If <literal>IF EXISTS</literal> is specified and the column
       does not exist, no error is thrown. In this case a notice
       is issued instead.
+     </para>
+     <para>
+      When applied to a partitioned table, the column is removed from the
+      partitioned table definition and is implicitly removed from all
+      partitions. Specifying <literal>ONLY</literal> is not allowed, and
+      this command cannot be used on individual partitions.
+     </para>
+     <para>
+      For inheritance setups, a descendant column is removed only if all the
+      following are true: <literal>ONLY</literal> is not specified, no other
+      parent defines the column, and the column is not marked as having been independent.
+      Otherwise, the descendant column is instead marked as having been independent.
      </para>
     </listitem>
    </varlistentry>
@@ -211,7 +229,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       clause must be provided if there is no implicit or assignment
       cast from old to new type.
      </para>
-
      <para>
       When this form is used, the column's statistics are removed,
       so running <link linkend="sql-analyze"><command>ANALYZE</command></link>
@@ -219,6 +236,12 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       For a virtual generated column, <command>ANALYZE</command>
       is not necessary unless extended statistics are defined on it,
       since such columns do not have statistics by default.
+     </para>
+     <para>
+      When applied to a partitioned table, the data type change is applied
+      to the partitioned table definition and is implicitly applied to all
+      partitions. Specifying <literal>ONLY</literal> is not allowed,
+      and this command cannot be used on individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -233,6 +256,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       or <command>UPDATE</command> commands; it does not cause rows already
       in the table to change.
      </para>
+     <para>
+      When applied to a partitioned table, the default value propagates
+      to all partitions unless <literal>ONLY</literal> is specified.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -243,7 +270,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       These forms change whether a column is marked to allow null
       values or to reject null values.
      </para>
-
      <para>
       <literal>SET NOT NULL</literal> may only be applied to a column
       provided none of the records in the table contain a
@@ -256,18 +282,18 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       If a column has an invalid not-null constraint,
       <literal>SET NOT NULL</literal> validates it.
      </para>
-
      <para>
-      If this table is a partition, one cannot perform <literal>DROP NOT NULL</literal>
-      on a column if it is marked <literal>NOT NULL</literal> in the parent
-      table.  To drop the <literal>NOT NULL</literal> constraint from all the
-      partitions, perform <literal>DROP NOT NULL</literal> on the parent
-      table.  Even if there is no <literal>NOT NULL</literal> constraint on the
-      parent, such a constraint can still be added to individual partitions,
-      if desired; that is, the children can disallow nulls even if the parent
-      allows them, but not the other way around.  It is also possible to drop
-      the <literal>NOT NULL</literal> constraint from <literal>ONLY</literal>
-      the parent table, which does not remove it from the children.
+      If this table is a partition, one cannot perform
+      <literal>DROP NOT NULL</literal> on a column if it is marked
+      <literal>NOT NULL</literal> in the parent table. To drop the
+      <literal>NOT NULL</literal> constraint from all partitions, perform
+      <literal>DROP NOT NULL</literal> on the parent table. Even if there is
+      no <literal>NOT NULL</literal> constraint on the parent, such a
+      constraint can still be added to individual partitions; that is, the
+      children can disallow nulls even if the parent allows them, but not
+      the other way around. It is also possible to apply
+      <literal>SET NOT NULL</literal> or <literal>DROP NOT NULL</literal> to
+      <literal>ONLY</literal> the parent table.
      </para>
     </listitem>
    </varlistentry>
@@ -283,7 +309,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       table rewrite, but if the column is used in a constraint, the table will
       be scanned to check that existing rows meet the constraint.
      </para>
-
      <para>
       When this form is used on a stored generated column, its statistics
       are removed, so running
@@ -292,6 +317,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       For a virtual generated column, <command>ANALYZE</command>
       is not necessary unless extended statistics are defined on it,
       since such columns do not have statistics by default.
+     </para>
+     <para>
+      When applied to a partitioned table, the generation expression
+      propagates to all partitions unless <literal>ONLY</literal>
+      is specified.
      </para>
     </listitem>
    </varlistentry>
@@ -304,16 +334,19 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       Existing data in the columns is retained, but future changes will no
       longer apply the generation expression.
      </para>
-
      <para>
       This form is currently only supported for stored generated columns (not
       virtual ones).
      </para>
-
      <para>
       If <literal>DROP EXPRESSION IF EXISTS</literal> is specified and the
       column is not a generated column, no error is thrown.  In this case a
       notice is issued instead.
+     </para>
+     <para>
+      When applied to a partitioned table, the generation expression is
+      removed from all partitions. Specifying <literal>ONLY</literal> is not
+      allowed, and this command cannot be used on individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -332,11 +365,15 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       and <command>UPDATE</command> commands; they do not cause rows
       already in the table to change.
      </para>
-
      <para>
       If <literal>DROP IDENTITY IF EXISTS</literal> is specified and the
       column is not an identity column, no error is thrown.  In this case a
       notice is issued instead.
+     </para>
+     <para>
+      When applied to a partitioned table, the action propagates to all partitions.
+      Specifying <literal>ONLY</literal> is not allowed, and these forms
+      cannot be used on individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -350,6 +387,13 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       column.  <replaceable>sequence_option</replaceable> is an option
       supported by <link linkend="sql-altersequence"><command>ALTER SEQUENCE</command></link> such
       as <literal>INCREMENT BY</literal>.
+     </para>
+     <para>
+      When applied to a partitioned table, these forms alter the sequences
+      associated with the identity column on the partitioned table
+      and those on individual partitions. Specifying <literal>ONLY</literal>
+      is not allowed, and these forms cannot be used on individual
+      partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -379,6 +423,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       <literal>SET STATISTICS</literal> acquires a
       <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
+     </para>
+     <para>
+      For partitioned tables, this action propagates to all partitions
+      unless <literal>ONLY</literal> is specified.
      </para>
     </listitem>
    </varlistentry>
@@ -414,6 +462,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       Changing per-attribute options acquires a
       <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
      </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      these forms must be applied separately to the parent table and partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -448,6 +500,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       during future table updates.
       See <xref linkend="storage-toast"/> for more information.
      </para>
+     <para>
+      When applied to a partitioned table, the storage setting propagates
+      to all existing partitions unless <literal>ONLY</literal> is specified.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -478,6 +534,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       consulting the <xref linkend="guc-default-toast-compression"/> setting
       at the time of data insertion to determine the method to use.
      </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      the compression method must be applied separately to the parent table
+      and partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -490,7 +551,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       VALID</literal>, which is currently only allowed for foreign-key,
       <literal>CHECK</literal>, and not-null constraints.
      </para>
-
      <para>
       Normally, this form will cause a scan of the table to verify that all
       existing rows in the table satisfy the new constraint.  But if
@@ -506,7 +566,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       See <xref linkend="sql-altertable-notes"/> below for more information
       about using the <literal>NOT VALID</literal> option.
      </para>
-
      <para>
       Although most forms of <literal>ADD
       <replaceable class="parameter">table_constraint</replaceable></literal>
@@ -517,12 +576,19 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       referenced table, in addition to the lock on the table on which the
       constraint is declared.
      </para>
-
      <para>
       Additional restrictions apply when unique or primary key constraints
       are added to partitioned tables; see <link linkend="sql-createtable"><command>CREATE TABLE</command></link>.
      </para>
-
+     <para>
+      When applied to a partitioned table, the constraint is added to the
+      partitioned table and is implicitly added to all partitions.
+      Specifying <literal>ONLY</literal> is not allowed.
+     </para>
+     <para>
+      For inheritance setups, the constraint is not added to child tables unless it is
+      a <literal>CHECK</literal> constraint that is inheritable (that is, not declared <literal>NO INHERIT</literal>).
+     </para>
     </listitem>
    </varlistentry>
 
@@ -534,7 +600,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       constraint to a table based on an existing unique index.  All the
       columns of the index will be included in the constraint.
      </para>
-
      <para>
       The index cannot have expression columns nor be a partial index.
       Also, it must be a b-tree index with default sort ordering.  These
@@ -542,7 +607,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       built by a regular <literal>ADD PRIMARY KEY</literal> or <literal>ADD UNIQUE</literal>
       command.
      </para>
-
      <para>
       If <literal>PRIMARY KEY</literal> is specified, and the index's columns are not
       already marked <literal>NOT NULL</literal>, then this command will attempt to
@@ -550,13 +614,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       That requires a full table scan to verify the column(s) contain no
       nulls.  In all other cases, this is a fast operation.
      </para>
-
      <para>
       If a constraint name is provided then the index will be renamed to match
       the constraint name.  Otherwise the constraint will be named the same as
       the index.
      </para>
-
      <para>
       After this command is executed, the index is <quote>owned</quote> by the
       constraint, in the same way as if the index had been built by
@@ -564,11 +626,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       command.  In particular, dropping the constraint will make the index
       disappear too.
      </para>
-
      <para>
-      This form is not currently supported on partitioned tables.
+      This form is not supported on partitioned tables, but can be used on
+      individual partitions.
      </para>
-
      <note>
       <para>
        Adding a constraint using an existing index can be helpful in
@@ -599,6 +660,12 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       to verify that existing rows satisfy the constraint and to check it
       for new or updated rows.
      </para>
+     <para>
+      When applied to a partitioned table, the constraint alterations
+      propagate to all partitions.
+      Specifying <literal>ONLY</literal> is not allowed, and this command
+      cannot be used on individual partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -617,7 +684,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       non-inheritable on a table with children, then the corresponding
       constraint on children will be marked as no longer inherited,
       but not removed.
-      </para>
+     </para>
+     <para>
+      These forms are not supported on partitioned tables, but can be used
+      on individual partitions.
+     </para>
      </listitem>
     </varlistentry>
 
@@ -636,6 +707,12 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       This command acquires a <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
      </para>
+     <para>
+      When applied to a partitioned table, validation propogates to all partitions.
+      Unlike most constraint-related sub-commands, individual partitions may
+      validate the constraint independently of the partitioned table,
+      so long as the partitioned table itself is not yet validated.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -647,6 +724,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       any index underlying the constraint.
       If <literal>IF EXISTS</literal> is specified and the constraint
       does not exist, no error is thrown. In this case a notice is issued instead.
+     </para>
+     <para>
+      When applied to a partitioned table, the constraint is dropped from
+      all partitions unless <literal>ONLY</literal> is specified.
+      Dropping an inherited constraint from an individual partition is not allowed.
      </para>
     </listitem>
    </varlistentry>
@@ -669,7 +751,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       of course the integrity of the constraint cannot be guaranteed if the
       triggers are not executed.
      </para>
-
      <para>
       The trigger firing mechanism is also affected by the configuration
       variable <xref linkend="guc-session-replication-role"/>. Simply enabled
@@ -679,7 +760,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       mode, and triggers configured as <literal>ENABLE ALWAYS</literal> will
       fire regardless of the current replication role.
      </para>
-
      <para>
       The effect of this mechanism is that in the default configuration,
       triggers do not fire on replicas.  This is useful because if a trigger
@@ -691,13 +771,15 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       to <literal>ENABLE ALWAYS</literal> so that it is also fired on
       replicas.
      </para>
-
      <para>
       When this command is applied to a partitioned table, the states of
-      corresponding clone triggers in the partitions are updated too,
-      unless <literal>ONLY</literal> is specified.
+      corresponding clone triggers are updated too, unless <literal>ONLY</literal>
+      is specified.
      </para>
-
+     <para>
+      For inheritance setups <literal>ONLY</literal> is implied, though it may
+      be specified.
+     </para>
      <para>
       This command acquires a <literal>SHARE ROW EXCLUSIVE</literal> lock.
      </para>
@@ -715,11 +797,14 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       are always applied in order to keep views working even if the current
       session is in a non-default replication role.
      </para>
-
      <para>
       The rule firing mechanism is also affected by the configuration variable
       <xref linkend="guc-session-replication-role"/>, analogous to triggers as
       described above.
+     </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      these forms must be applied separately to the parent table and individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -736,6 +821,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       See also
       <link linkend="sql-createpolicy"><command>CREATE POLICY</command></link>.
      </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      these forms must be applied separately to the parent table and individual partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -751,6 +840,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       See also
       <link linkend="sql-createpolicy"><command>CREATE POLICY</command></link>.
      </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      this form must be applied separately to the parent table and individual partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -764,6 +857,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      </para>
      <para>
       Changing cluster options acquires a <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
+     </para>
+     <para>
+      This form is not supported on partitioned tables, but can be used on
+      individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -779,6 +876,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      </para>
      <para>
       Changing cluster options acquires a <literal>SHARE UPDATE EXCLUSIVE</literal> lock.
+     </para>
+     <para>
+      This form is not supported on partitioned tables, but can be used on
+      individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -807,11 +908,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      </para>
      <para>
       When applied to a partitioned table, there is no data to rewrite,
-      but partitions created afterwards will default to the given access
-      method unless overridden by a <literal>USING</literal> clause.
-      Specifying <varname>DEFAULT</varname> removes a previous value,
-      causing future partitions to default to
-      <varname>default_table_access_method</varname>.
+      only the default for newly created partitions is changed.
+      Specifying <literal>DEFAULT</literal> removes a previously set access method,
+      causing future partitions to use <varname>default_table_access_method</varname>.
+      Individual partitions are affected just like a regular table.
      </para>
     </listitem>
    </varlistentry>
@@ -824,12 +924,9 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       moves the data file(s) associated with the table to the new tablespace.
       Indexes on the table, if any, are not moved; but they can be moved
       separately with additional <literal>SET TABLESPACE</literal> commands.
-      When applied to a partitioned table, nothing is moved, but any
-      partitions created afterwards with
-      <command>CREATE TABLE PARTITION OF</command> will use that tablespace,
-      unless overridden by a <literal>TABLESPACE</literal> clause.
+      When applied to a partitioned table, no data is moved, only the default
+      for newly created partitions is changed.
      </para>
-
      <para>
       All tables in the current database in a tablespace can be moved by using
       the <literal>ALL IN TABLESPACE</literal> form, which will lock all tables
@@ -856,15 +953,14 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       (see <xref linkend="sql-createtable-unlogged"/>).  It cannot be applied
       to a temporary table.
      </para>
-
      <para>
       This also changes the persistence of any sequences linked to the table
       (for identity or serial columns).  However, it is also possible to
       change the persistence of such sequences separately.
      </para>
-
      <para>
-      This form is not supported for partitioned tables.
+      This form is not supported on partitioned tables, but can be used on
+      individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -886,11 +982,14 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       time the table is locked so currently executing queries will not be
       affected.
      </para>
-
      <para>
       <literal>SHARE UPDATE EXCLUSIVE</literal> lock will be taken for
       fillfactor, TOAST and autovacuum storage parameters, as well as the
       planner parameter <varname>parallel_workers</varname>.
+     </para>
+     <para>
+      This form is not supported on partitioned tables, but can be used on
+      individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -902,6 +1001,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       This form resets one or more storage parameters to their
       defaults.  As with <literal>SET</literal>, a table rewrite might be
       needed to update the table entirely.
+     </para>
+     <para>
+      When applied to a partitioned table, this form is accepted but has no
+      practical effect.  It can be used on individual partitions, where it
+      behaves as for a regular table.
      </para>
     </listitem>
    </varlistentry>
@@ -916,7 +1020,6 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       already contain all the same columns as the parent (it could have
       additional columns, too).  The columns must have matching data types.
      </para>
-
      <para>
       In addition, all <literal>CHECK</literal> and <literal>NOT NULL</literal>
       constraints on the parent must also exist on the child, except those
@@ -927,6 +1030,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       <literal>UNIQUE</literal>, <literal>PRIMARY KEY</literal>, and
       <literal>FOREIGN KEY</literal> constraints are not considered, but
       this might change in the future.
+     </para>
+     <para>
+      This form does not support partitioned tables; it cannot be applied to
+      either a partitioned table or its partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -939,6 +1046,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       specified parent table.
       Queries against the parent table will no longer include records drawn
       from the target table.
+     </para>
+     <para>
+      This form does not support partitioned tables; it cannot be applied to
+      either a partitioned table or its partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -954,6 +1065,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       that <command>CREATE TABLE OF</command> would permit an equivalent table
       definition.
      </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      and this form cannot be used on individual partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -962,6 +1077,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
     <listitem>
      <para>
       This form dissociates a typed table from its type.
+     </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      and this form cannot be used on individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -972,6 +1091,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       This form changes the owner of the table, sequence, view, materialized view,
       or foreign table to the specified user.
+     </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      this form must be applied separately to the parent table and individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -1029,6 +1152,11 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
        </listitem>
       </varlistentry>
      </variablelist></para>
+
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      this form must be applied independently to the parent table and individual partitions.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -1043,6 +1171,18 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
       the index is renamed as well.
       There is no effect on the stored data.
      </para>
+     <para>
+      When applied to a partitioned table’s name, only the parent is changed,
+      partitions must be renamed separately.  In contrast, column or constraint
+      renaming must be done on the parent without <literal>ONLY</literal>, the
+      corresponding partition columns or constraints will be renamed implicitly.
+     </para>
+     <para>
+      For inheritance setups, the behavior described for partitioned tables applies
+      only to the dependent column(s) on the descendant table(s).  It is always
+      allowed to target a descendant table with column altering commands on independent
+      columns.
+     </para>
     </listitem>
    </varlistentry>
 
@@ -1052,6 +1192,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
      <para>
       This form moves the table into another schema.  Associated indexes,
       constraints, and sequences owned by table columns are moved as well.
+     </para>
+     <para>
+      When applied to a partitioned table, <literal>ONLY</literal> is implicit,
+      this form must be applied independently to the parent table and individual partitions.
      </para>
     </listitem>
    </varlistentry>
@@ -1465,6 +1609,27 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
         <literal>*</literal> can be specified after the table name to explicitly
         indicate that descendant tables are included.
        </para>
+
+       <para>
+        For a table that uses table inheritance, descendant tables are those
+        that inherit from the named table, directly or indirectly.
+        For a partitioned table, descendant tables are its partitions.
+       </para>
+
+       <para>
+        Note that for partitioned tables, <literal>ONLY</literal> does not control
+        recursion for all <command>ALTER TABLE</command> actions. Some actions
+        apply only to the partitioned table itself, regardless of whether
+        <literal>ONLY</literal> is specified, while others propagate to
+        partitions. The exact behavior depends on the specific action being
+        performed.
+       </para>
+
+       <para>
+        Users should consult the documentation of each individual
+        <command>ALTER TABLE</command> action to determine whether and how it
+        affects partitions.
+       </para>
       </listitem>
      </varlistentry>
 
@@ -1823,45 +1988,10 @@ WITH ( MODULUS <replaceable class="parameter">numeric_literal</replaceable>, REM
    </para>
 
    <para>
-    If a table has any descendant tables, it is not permitted to add,
-    rename, or change the type of a column in the parent table without doing
-    the same to the descendants.  This ensures that the descendants always
-    have columns matching the parent.  Similarly, a <literal>CHECK</literal>
-    constraint cannot be renamed in the parent without also renaming it in
-    all descendants, so that <literal>CHECK</literal> constraints also match
-    between the parent and its descendants.  (That restriction does not apply
-    to index-based constraints, however.)
-    Also, because selecting from the parent also selects from its descendants,
-    a constraint on the parent cannot be marked valid unless it is also marked
-    valid for those descendants.  In all of these cases, <command>ALTER TABLE
-    ONLY</command> will be rejected.
-   </para>
-
-   <para>
-    A recursive <literal>DROP COLUMN</literal> operation will remove a
-    descendant table's column only if the descendant does not inherit
-    that column from any other parents and never had an independent
-    definition of the column.  A nonrecursive <literal>DROP
-    COLUMN</literal> (i.e., <command>ALTER TABLE ONLY ... DROP
-    COLUMN</command>) never removes any descendant columns, but
-    instead marks them as independently defined rather than inherited.
-    A nonrecursive <literal>DROP COLUMN</literal> command will fail for a
-    partitioned table, because all partitions of a table must have the same
-    columns as the partitioning root.
-   </para>
-
-   <para>
-    The actions for identity columns (<literal>ADD
-    GENERATED</literal>, <literal>SET</literal> etc., <literal>DROP
-    IDENTITY</literal>), as well as the actions
-    <literal>CLUSTER</literal>, <literal>OWNER</literal>,
-    and <literal>TABLESPACE</literal> never recurse to descendant tables;
-    that is, they always act as though <literal>ONLY</literal> were specified.
-    Actions affecting trigger states recurse to partitions of partitioned
-    tables (unless <literal>ONLY</literal> is specified), but never to
-    traditional-inheritance descendants.
-    Adding a constraint recurses only for <literal>CHECK</literal> constraints
-    that are not marked <literal>NO INHERIT</literal>.
+    For inheritance setups, the behavior described for partitioned tables applies
+    only to the dependent column(s) on the descendant table(s).  It is always
+    allowed to target a descendant table with column altering commands on independent
+    columns.
    </para>
 
    <para>

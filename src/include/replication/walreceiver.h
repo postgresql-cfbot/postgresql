@@ -28,6 +28,7 @@
 extern PGDLLIMPORT int wal_receiver_status_interval;
 extern PGDLLIMPORT int wal_receiver_timeout;
 extern PGDLLIMPORT bool hot_standby_feedback;
+extern PGDLLIMPORT int	wal_receiver_start_at;
 
 /*
  * MAXCONNINFO: maximum size of a connection string.
@@ -53,6 +54,15 @@ typedef enum
 	WALRCV_RESTARTING,			/* asked to restart streaming */
 	WALRCV_STOPPING,			/* requested to stop, but still running */
 } WalRcvState;
+
+typedef enum
+{
+	WAL_RCV_START_AT_STARTUP,	/* start a WAL receiver immediately at startup */
+	WAL_RCV_START_AT_CONSISTENCY,	/* start a WAL receiver once consistency
+									 * has been reached */
+	WAL_RCV_START_AT_EXHAUST,	/* start a WAL receiver after WAL from archive
+								 * and pg_wal has been replayed (default) */
+} WalRcvStartCondition;
 
 /* Shared memory area for management of walreceiver process */
 typedef struct

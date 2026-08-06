@@ -53,6 +53,19 @@ foreach my $mode (0, 1)
 	like($stderr, qr/attempt 1: /, "shmem request $mode fails");
 	like($stderr, qr/attempt 2: /, "shmem request $mode fails when retried");
 }
+
+my ($ret, $stdout, $stderr) = try_shmem_failure_twice(2);
+is($ret, 0, 'session survives a partly oversized request batch');
+like($stderr, qr/attempt 2: .*not enough shared memory/,
+	'a partly oversized batch can be retried');
+unlike($stderr, qr/already been initialized/,
+	'a partly oversized batch does not wedge later attempts');
+is( $node->safe_psql(
+		'postgres',
+		"SELECT count(*) FROM pg_shmem_allocations WHERE name LIKE 'test_shmem partial%';"
+	),
+	'0',
+	'a partly oversized batch creates no areas');
 $node->stop;
 
 ###

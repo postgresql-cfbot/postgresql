@@ -107,6 +107,13 @@ test_shmem_failure_request(void *arg)
 							   .size = (Size) 1024 * 1024 * 1024,
 							   .ptr = &ptr1);
 			break;
+		case 2:
+			ShmemRequestStruct(.name = "test_shmem partial small area",
+							   .size = 1024, .ptr = &ptr1);
+			ShmemRequestStruct(.name = "test_shmem partial huge area",
+							   .size = (Size) 1024 * 1024 * 1024,
+							   .ptr = &ptr1);
+			break;
 		default:
 			elog(ERROR, "unrecognized test_shmem failure mode: %d", failure_mode);
 	}

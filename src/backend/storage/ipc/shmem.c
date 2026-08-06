@@ -992,6 +992,38 @@ CallShmemCallbacksAfterStartup(const ShmemCallbacks *callbacks)
 		elog(ERROR, "some of the requested shmem areas have already been initialized");
 
 	/*
+	 * Check that the whole batch fits before creating any of it.  Otherwise a
+	 * failure partway through leaves a mix of present and missing areas, which
+	 * cannot be retried.  Low-level ShmemAlloc() callers can still race this
+	 * check, but named allocations are serialized by ShmemIndexLock.
+	 */
+	if (!found_any)
+	{
+		Size		offset;
+
+		SpinLockAcquire(&ShmemAllocator->shmem_lock);
+		offset = ShmemAllocator->free_offset;
+		SpinLockRelease(&ShmemAllocator->shmem_lock);
+
+		foreach_ptr(ShmemRequest, request, pending_shmem_requests)
+		{
+			Size		alignment = request->options->alignment;
+
+			if (alignment < PG_CACHE_LINE_SIZE)
+				alignment = PG_CACHE_LINE_SIZE;
+			offset = TYPEALIGN(alignment, offset);
+			offset = add_size(offset, request->options->size);
+			if (offset > ShmemSegHdr->totalsize)
+				ereport(ERROR,
+						(errcode(ERRCODE_OUT_OF_MEMORY),
+						 errmsg("not enough shared memory for data structure"
+								" \"%s\" (%zd bytes requested)",
+								request->options->name,
+								request->options->size)));
+		}
+	}
+
+	/*
 	 * Allocate or attach all the shmem areas requested by the request_fn
 	 * callback.
 	 */

@@ -348,7 +348,7 @@ static relopt_int intRelOpts[] =
 			RELOPT_KIND_HEAP | RELOPT_KIND_TOAST,
 			ShareUpdateExclusiveLock
 		},
-		-1, -1, INT_MAX
+		-2, -1, INT_MAX
 	},
 	{
 		{

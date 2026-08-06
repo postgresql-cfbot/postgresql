@@ -248,6 +248,14 @@ typedef struct VacuumParams
 	 * disabled.
 	 */
 	int			nworkers;
+
+	/*
+	 * Main table fallback values for TOAST tables to inherit when they have
+	 * no setting of their own.
+	 */
+	VacOptValue main_index_cleanup;
+	VacOptValue main_truncate;
+	double		main_max_eager_freeze_failure_rate;
 } VacuumParams;
 
 /*

@@ -373,6 +373,11 @@ typedef struct pg_conn_host
 struct pg_conn
 {
 	/* Saved values of connection options */
+	char	   *srvhost;		/* DNS SRV cluster domain for service
+								 * discovery; when set, _postgresql._tcp.<srvhost>
+								 * is resolved at connect time and the result
+								 * replaces pghost/pgport.  Mutually exclusive
+								 * with pghost and pghostaddr. */
 	char	   *pghost;			/* the machine on which the server is running,
 								 * or a path to a UNIX-domain socket, or a
 								 * comma-separated list of machines and/or

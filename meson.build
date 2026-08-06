@@ -376,6 +376,8 @@ elif host_system == 'windows'
   secur32_dep = cc.find_library('secur32', required: true)
   backend_deps += secur32_dep
   libpq_deps += secur32_dep
+  # DnsQuery() for SRV record lookup on Windows
+  libpq_deps += cc.find_library('dnsapi', required: true)
 
   postgres_inc_d += 'src/include/port/win32'
   if cc.get_id() == 'msvc'
@@ -1849,6 +1851,24 @@ else
   zstd = not_found_dep
 endif
 
+
+
+###############################################################
+# DNS SRV support (libpq)
+###############################################################
+
+# res_query() and dn_expand() are used by fe-connect-srv.c to resolve SRV
+# records.  On most POSIX systems they live in libresolv; on macOS they are
+# in the system library but still require explicit linking with libresolv.
+if host_machine.system() != 'windows'
+  resolv_dep = cc.find_library('resolv', required: false)
+  if resolv_dep.found()
+    cdata.set('HAVE_RES_QUERY', 1)
+    libpq_deps += resolv_dep
+  elif cc.has_function('res_query')
+    cdata.set('HAVE_RES_QUERY', 1)
+  endif
+endif
 
 
 ###############################################################

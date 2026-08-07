@@ -84,10 +84,35 @@ $node_subscriber->wait_for_log(
 .*Key already exists in unique index \"conf_tab_c_key\", modified in transaction .*: key \(c\)=\(4\), local row \(4, 4, 4\)./,
 	$log_offset);
 
+# Verify the contents of the Conflict Log Table (CLT)
+# This section ensures that the CLT contains the expected
+# type and specific key data.
+my $subid = $node_subscriber->safe_psql('postgres',
+	"SELECT oid FROM pg_subscription WHERE subname = 'sub_tab';");
+my $clt = "pg_conflict.pg_conflict_log_$subid";
+
+# Wait for the conflict to be logged in the CLT
+my $log_check = $node_subscriber->poll_query_until(
+    'postgres',
+    "SELECT count(*) > 0 FROM $clt;"
+);
+
+my $conflict_check = $node_subscriber->safe_psql('postgres',
+    "SELECT count(*) >= 1 FROM $clt WHERE conflict_type = 'multiple_unique_conflicts';");
+is($conflict_check, 't', 'Verified multiple_unique_conflicts logged into conflict log table');
+
+my $json_query = "SELECT local_conflicts FROM $clt;";
+my $raw_json = $node_subscriber->safe_psql('postgres', $json_query);
+
+# Verify that '2' is present inside the JSON structure using a regex
+# This matches the key/value pattern for "a": 2
+like($raw_json, qr/\\"a\\":2/, 'Verified that key 2 exists in the local_conflicts');
+
 pass('multiple_unique_conflicts detected during insert');
 
 # Truncate table to get rid of the error
 $node_subscriber->safe_psql('postgres', "TRUNCATE conf_tab;");
+$node_subscriber->safe_psql('postgres', "DELETE FROM $clt");
 
 ##################################################
 # Test multiple_unique_conflicts due to UPDATE
@@ -113,6 +138,26 @@ $node_subscriber->wait_for_log(
 .*Key already exists in unique index \"conf_tab_b_key\", modified in transaction .*: key \(b\)=\(7\), local row \(7, 7, 7\).*
 .*Key already exists in unique index \"conf_tab_c_key\", modified in transaction .*: key \(c\)=\(8\), local row \(8, 8, 8\)./,
 	$log_offset);
+
+# Verify the contents of the Conflict Log Table (CLT)
+# This section ensures that the CLT contains the expected
+# type and specific key data.
+
+# Wait for the conflict to be logged in the CLT
+$log_check = $node_subscriber->poll_query_until(
+    'postgres',
+    "SELECT count(*) > 0 FROM $clt;"
+);
+
+$conflict_check = $node_subscriber->safe_psql('postgres',
+    "SELECT count(*) >= 1 FROM $clt WHERE conflict_type = 'multiple_unique_conflicts';");
+is($conflict_check, 't', 'Verified multiple_unique_conflicts logged into conflict log table');
+
+$raw_json = $node_subscriber->safe_psql('postgres', $json_query);
+
+# Verify that '6' is present inside the JSON structure using a regex
+# This matches the key/value pattern for "a": 6
+like($raw_json, qr/\\"a\\":6/, 'Verified that key 6 exists in the local_conflicts');
 
 pass('multiple_unique_conflicts detected during update');
 
@@ -674,10 +719,6 @@ ok( $node_A->poll_query_until(
 # A conflict log table is system-managed and cannot be altered directly, so
 # moving it to another tablespace must be rejected.
 ###############################################################################
-my $subid = $node_subscriber->safe_psql('postgres',
-	"SELECT oid FROM pg_subscription WHERE subname = 'sub_tab';");
-my $clt = "pg_conflict.pg_conflict_log_$subid";
-
 (undef, undef, $stderr) = $node_subscriber->psql('postgres',
 	"ALTER TABLE $clt SET TABLESPACE pg_default");
 like(

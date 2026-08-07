@@ -256,6 +256,10 @@ extern PGDLLIMPORT bool InitializingApplyWorker;
 
 extern PGDLLIMPORT List *table_states_not_ready;
 
+extern XLogRecPtr remote_final_lsn;
+extern TimestampTz remote_commit_ts;
+extern TransactionId remote_xid;
+
 extern void logicalrep_worker_attach(int slot);
 extern LogicalRepWorker *logicalrep_worker_find(LogicalRepWorkerType wtype,
 												Oid subid, Oid relid,
@@ -270,6 +274,7 @@ extern bool logicalrep_worker_launch(LogicalRepWorkerType wtype,
 extern void logicalrep_worker_stop(LogicalRepWorkerType wtype, Oid subid,
 								   Oid relid);
 extern void logicalrep_pa_worker_stop(ParallelApplyWorkerInfo *winfo);
+extern bool logicalrep_pa_worker_running(ParallelApplyWorkerInfo *winfo);
 extern void logicalrep_worker_wakeup(LogicalRepWorkerType wtype, Oid subid,
 									 Oid relid);
 extern void logicalrep_worker_wakeup_ptr(LogicalRepWorker *worker);

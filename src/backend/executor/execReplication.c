@@ -764,12 +764,16 @@ retry:
 
 /*
  * Check all the unique indexes in 'recheckIndexes' for conflict with the
- * tuple in 'remoteslot' and report if found.
+ * tuple in 'remoteslot'.  If a conflict is found, fill '*conflict' with the
+ * details and return true; the caller is responsible for reporting it (via
+ * ReportApplyConflict()) since only the caller knows the subscription's
+ * conflict resolution strategy.
  */
-static void
-CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
-					   ConflictType type, List *recheckIndexes,
-					   TupleTableSlot *searchslot, TupleTableSlot *remoteslot)
+static bool
+CheckForConflict(ResultRelInfo *resultRelInfo, EState *estate,
+				 ConflictType type, List *recheckIndexes,
+				 TupleTableSlot *searchslot, TupleTableSlot *remoteslot,
+				 ApplyConflictInfo *conflict)
 {
 	List	   *conflicttuples = NIL;
 	TupleTableSlot *conflictslot;
@@ -793,11 +797,16 @@ CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
 		}
 	}
 
-	/* Report the conflict, if found */
-	if (conflicttuples)
-		ReportApplyConflict(estate, resultRelInfo, ERROR,
-							list_length(conflicttuples) > 1 ? CT_MULTIPLE_UNIQUE_CONFLICTS : type,
-							searchslot, remoteslot, conflicttuples);
+	if (!conflicttuples)
+		return false;
+
+	conflict->type = list_length(conflicttuples) > 1 ?
+		CT_MULTIPLE_UNIQUE_CONFLICTS : type;
+	conflict->searchslot = searchslot;
+	conflict->remoteslot = remoteslot;
+	conflict->conflicttuples = conflicttuples;
+
+	return true;
 }
 
 /*
@@ -805,12 +814,22 @@ CheckAndReportConflict(ResultRelInfo *resultRelInfo, EState *estate,
  * and execute any constraints and per-row triggers.
  *
  * Caller is responsible for opening the indexes.
+ *
+ * If a unique index conflict is detected, the tuple and index entries are
+ * still left in place (see the XXX below), '*conflict' is filled in with the
+ * conflict details, and true is returned -- the AFTER ROW trigger is
+ * skipped in that case, since the row is not really going to survive. The
+ * caller is responsible for calling ReportApplyConflict() on '*conflict';
+ * this function does not do so itself, since only the caller knows how the
+ * subscription is configured to handle the conflict.
  */
-void
+bool
 ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
-						 EState *estate, TupleTableSlot *slot)
+						 EState *estate, TupleTableSlot *slot,
+						 ApplyConflictInfo *conflict)
 {
 	bool		skip_tuple = false;
+	bool		found_conflict = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 
 	/* For now we support only tables. */
@@ -830,7 +849,7 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 	{
 		List	   *recheckIndexes = NIL;
 		List	   *conflictindexes;
-		bool		conflict = false;
+		bool		index_conflict = false;
 
 		/* Compute stored generated columns */
 		if (rel->rd_att->constr &&
@@ -860,40 +879,46 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   estate, flags,
 												   slot, conflictindexes,
-												   &conflict);
+												   &index_conflict);
 		}
 
 		/*
 		 * Checks the conflict indexes to fetch the conflicting local row and
-		 * reports the conflict. We perform this check here, instead of
-		 * performing an additional index scan before the actual insertion and
-		 * reporting the conflict if any conflicting rows are found. This is
-		 * to avoid the overhead of executing the extra scan for each INSERT
-		 * operation, even when no conflict arises, which could introduce
-		 * significant overhead to replication, particularly in cases where
-		 * conflicts are rare.
+		 * hand the details back to the caller. We perform this check here,
+		 * instead of performing an additional index scan before the actual
+		 * insertion and reporting the conflict if any conflicting rows are
+		 * found. This is to avoid the overhead of executing the extra scan
+		 * for each INSERT operation, even when no conflict arises, which
+		 * could introduce significant overhead to replication, particularly
+		 * in cases where conflicts are rare.
 		 *
 		 * XXX OTOH, this could lead to clean-up effort for dead tuples added
 		 * in heap and index in case of conflicts. But as conflicts shouldn't
 		 * be a frequent thing so we preferred to save the performance
 		 * overhead of extra scan before each insertion.
 		 */
-		if (conflict)
-			CheckAndReportConflict(resultRelInfo, estate, CT_INSERT_EXISTS,
-								   recheckIndexes, NULL, slot);
+		if (index_conflict)
+			found_conflict = CheckForConflict(resultRelInfo, estate,
+											  CT_INSERT_EXISTS, recheckIndexes,
+											  NULL, slot, conflict);
 
-		/* AFTER ROW INSERT Triggers */
-		ExecARInsertTriggers(estate, resultRelInfo, slot,
-							 recheckIndexes, NULL);
+		if (!found_conflict)
+		{
+			/* AFTER ROW INSERT Triggers */
+			ExecARInsertTriggers(estate, resultRelInfo, slot,
+								 recheckIndexes, NULL);
 
-		/*
-		 * XXX we should in theory pass a TransitionCaptureState object to the
-		 * above to capture transition tuples, but after statement triggers
-		 * don't actually get fired by replication yet anyway
-		 */
+			/*
+			 * XXX we should in theory pass a TransitionCaptureState object to
+			 * the above to capture transition tuples, but after statement
+			 * triggers don't actually get fired by replication yet anyway
+			 */
+		}
 
 		list_free(recheckIndexes);
 	}
+
+	return found_conflict;
 }
 
 /*
@@ -901,13 +926,18 @@ ExecSimpleRelationInsert(ResultRelInfo *resultRelInfo,
  * update the indexes, and execute any constraints and per-row triggers.
  *
  * Caller is responsible for opening the indexes.
+ *
+ * See ExecSimpleRelationInsert() for the meaning of the return value and
+ * '*conflict'.
  */
-void
+bool
 ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 						 EState *estate, EPQState *epqstate,
-						 TupleTableSlot *searchslot, TupleTableSlot *slot)
+						 TupleTableSlot *searchslot, TupleTableSlot *slot,
+						 ApplyConflictInfo *conflict)
 {
 	bool		skip_tuple = false;
+	bool		found_conflict = false;
 	Relation	rel = resultRelInfo->ri_RelationDesc;
 	ItemPointer tid = &(searchslot->tts_tid);
 
@@ -934,7 +964,7 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 		List	   *recheckIndexes = NIL;
 		TU_UpdateIndexes update_indexes;
 		List	   *conflictindexes;
-		bool		conflict = false;
+		bool		index_conflict = false;
 
 		/* Compute stored generated columns */
 		if (rel->rd_att->constr &&
@@ -964,26 +994,32 @@ ExecSimpleRelationUpdate(ResultRelInfo *resultRelInfo,
 			recheckIndexes = ExecInsertIndexTuples(resultRelInfo,
 												   estate, flags,
 												   slot, conflictindexes,
-												   &conflict);
+												   &index_conflict);
 		}
 
 		/*
-		 * Refer to the comments above the call to CheckAndReportConflict() in
+		 * Refer to the comments above the call to CheckForConflict() in
 		 * ExecSimpleRelationInsert to understand why this check is done at
 		 * this point.
 		 */
-		if (conflict)
-			CheckAndReportConflict(resultRelInfo, estate, CT_UPDATE_EXISTS,
-								   recheckIndexes, searchslot, slot);
+		if (index_conflict)
+			found_conflict = CheckForConflict(resultRelInfo, estate,
+											  CT_UPDATE_EXISTS, recheckIndexes,
+											  searchslot, slot, conflict);
 
-		/* AFTER ROW UPDATE Triggers */
-		ExecARUpdateTriggers(estate, resultRelInfo,
-							 NULL, NULL,
-							 tid, NULL, slot,
-							 recheckIndexes, NULL, false);
+		if (!found_conflict)
+		{
+			/* AFTER ROW UPDATE Triggers */
+			ExecARUpdateTriggers(estate, resultRelInfo,
+								 NULL, NULL,
+								 tid, NULL, slot,
+								 recheckIndexes, NULL, false);
+		}
 
 		list_free(recheckIndexes);
 	}
+
+	return found_conflict;
 }
 
 /*

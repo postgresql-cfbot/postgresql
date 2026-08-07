@@ -1283,6 +1283,11 @@ pa_wait_for_xact_state(ParallelApplyWorkerInfo *winfo,
 
 		/* An interrupt may have occurred while we were waiting. */
 		CHECK_FOR_INTERRUPTS();
+
+		if (!logicalrep_pa_worker_running(winfo))
+			ereport(ERROR,
+					(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
+					 errmsg("lost connection to the logical replication parallel apply worker")));
 	}
 }
 
@@ -1309,14 +1314,11 @@ pa_wait_for_xact_finish(ParallelApplyWorkerInfo *winfo)
 	pa_unlock_transaction(winfo->shared->xid, AccessShareLock);
 
 	/*
-	 * Check if the state becomes PARALLEL_TRANS_FINISHED in case the parallel
-	 * apply worker failed while applying changes causing the lock to be
-	 * released.
+	 * Wait for the transaction state to reach PARALLEL_TRANS_FINISHED. The wait
+	 * function handles the case where the parallel apply worker errors out
+	 * before updating the state.
 	 */
-	if (pa_get_xact_state(winfo->shared) != PARALLEL_TRANS_FINISHED)
-		ereport(ERROR,
-				(errcode(ERRCODE_OBJECT_NOT_IN_PREREQUISITE_STATE),
-				 errmsg("lost connection to the logical replication parallel apply worker")));
+	pa_wait_for_xact_state(winfo, PARALLEL_TRANS_FINISHED);
 }
 
 /*

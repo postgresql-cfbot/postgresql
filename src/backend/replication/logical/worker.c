@@ -488,7 +488,9 @@ static bool MySubscriptionValid = false;
 static List *on_commit_wakeup_workers_subids = NIL;
 
 bool		in_remote_transaction = false;
-static XLogRecPtr remote_final_lsn = InvalidXLogRecPtr;
+XLogRecPtr	remote_final_lsn = InvalidXLogRecPtr;
+TransactionId remote_xid = InvalidTransactionId;
+TimestampTz remote_commit_ts = 0;
 
 /* fields valid only when processing streamed transaction */
 static bool in_streamed_transaction = false;
@@ -1237,6 +1239,8 @@ apply_handle_begin(StringInfo s)
 	set_apply_error_context_xact(begin_data.xid, begin_data.final_lsn);
 
 	remote_final_lsn = begin_data.final_lsn;
+	remote_commit_ts = begin_data.committime;
+	remote_xid = begin_data.xid;
 
 	maybe_start_skipping_changes(begin_data.final_lsn);
 
@@ -1297,6 +1301,8 @@ apply_handle_begin_prepare(StringInfo s)
 	set_apply_error_context_xact(begin_data.xid, begin_data.prepare_lsn);
 
 	remote_final_lsn = begin_data.prepare_lsn;
+	remote_xid = begin_data.xid;
+	remote_commit_ts = 0;
 
 	maybe_start_skipping_changes(begin_data.prepare_lsn);
 
@@ -1767,6 +1773,10 @@ apply_handle_stream_start(StringInfo s)
 		ereport(ERROR,
 				(errcode(ERRCODE_PROTOCOL_VIOLATION),
 				 errmsg_internal("invalid transaction ID in streamed replication transaction")));
+
+	remote_xid = stream_xid;
+	remote_final_lsn = InvalidXLogRecPtr;
+	remote_commit_ts = 0;
 
 	set_apply_error_context_xact(stream_xid, InvalidXLogRecPtr);
 
@@ -2429,6 +2439,9 @@ apply_handle_stream_commit(StringInfo s)
 	{
 		case TRANS_LEADER_APPLY:
 
+			/* Set remote_commit_ts for conflict logging. */
+			remote_commit_ts = commit_data.committime;
+
 			/*
 			 * The transaction has been serialized to file, so replay all the
 			 * spooled operations.
@@ -2744,6 +2757,7 @@ apply_handle_insert_internal(ApplyExecutionData *edata,
 							 TupleTableSlot *remoteslot)
 {
 	EState	   *estate = edata->estate;
+	ApplyConflictInfo conflict;
 
 	/* Caller should have opened indexes already. */
 	Assert(relinfo->ri_IndexRelationDescs != NULL ||
@@ -2756,7 +2770,19 @@ apply_handle_insert_internal(ApplyExecutionData *edata,
 
 	/* Do the insert. */
 	TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_INSERT);
-	ExecSimpleRelationInsert(relinfo, estate, remoteslot);
+	if (ExecSimpleRelationInsert(relinfo, estate, remoteslot, &conflict))
+	{
+		/*
+		 * This is where a future conflict resolution strategy could decide
+		 * to resolve the conflict without raising an ERROR (e.g. skip the
+		 * insert and log at LOG level). For now, always report at ERROR,
+		 * matching the previous behavior.
+		 */
+		ReportApplyConflict(estate, relinfo, ERROR, conflict.type,
+							conflict.searchslot, conflict.remoteslot,
+							conflict.conflicttuples);
+		pg_unreachable();
+	}
 }
 
 /*
@@ -2939,6 +2965,7 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 	EPQState	epqstate;
 	TupleTableSlot *localslot = NULL;
 	ConflictTupleInfo conflicttuple = {0};
+	ApplyConflictInfo conflict;
 	bool		found;
 	MemoryContext oldctx;
 
@@ -2989,8 +3016,19 @@ apply_handle_update_internal(ApplyExecutionData *edata,
 
 		/* Do the actual update. */
 		TargetPrivilegesCheck(relinfo->ri_RelationDesc, ACL_UPDATE);
-		ExecSimpleRelationUpdate(relinfo, estate, &epqstate, localslot,
-								 remoteslot);
+		if (ExecSimpleRelationUpdate(relinfo, estate, &epqstate, localslot,
+									 remoteslot, &conflict))
+		{
+			/*
+			 * This is where a future conflict resolution strategy could
+			 * decide to resolve the conflict without raising an ERROR. For
+			 * now, always report at ERROR, matching the previous behavior.
+			 */
+			ReportApplyConflict(estate, relinfo, ERROR, conflict.type,
+								conflict.searchslot, conflict.remoteslot,
+								conflict.conflicttuples);
+			pg_unreachable();
+		}
 	}
 	else
 	{
@@ -3478,6 +3516,7 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 				bool		found;
 				EPQState	epqstate;
 				ConflictTupleInfo conflicttuple = {0};
+				ApplyConflictInfo conflict;
 
 				/* Get the matching local tuple from the partition. */
 				found = FindReplTupleInLocalRel(edata, partrel,
@@ -3572,8 +3611,22 @@ apply_handle_tuple_routing(ApplyExecutionData *edata,
 					EvalPlanQualSetSlot(&epqstate, remoteslot_part);
 					TargetPrivilegesCheck(partrelinfo->ri_RelationDesc,
 										  ACL_UPDATE);
-					ExecSimpleRelationUpdate(partrelinfo, estate, &epqstate,
-											 localslot, remoteslot_part);
+					if (ExecSimpleRelationUpdate(partrelinfo, estate, &epqstate,
+												 localslot, remoteslot_part,
+												 &conflict))
+					{
+						/*
+						 * This is where a future conflict resolution
+						 * strategy could decide to resolve the conflict
+						 * without raising an ERROR. For now, always report
+						 * at ERROR, matching the previous behavior.
+						 */
+						ReportApplyConflict(estate, partrelinfo, ERROR,
+											conflict.type, conflict.searchslot,
+											conflict.remoteslot,
+											conflict.conflicttuples);
+						pg_unreachable();
+					}
 				}
 				else
 				{
@@ -6088,6 +6141,14 @@ DisableSubscriptionAndExit(void)
 	RESUME_INTERRUPTS();
 
 	/*
+	 * The error context callbacks in effect when the error was thrown belong
+	 * to now-unwound stack frames; reset the stack before running further
+	 * code (including the deferred conflict log insertion, which installs its
+	 * own).
+	 */
+	error_context_stack = NULL;
+
+	/*
 	 * Report the worker failed during sequence synchronization, table
 	 * synchronization, or apply.
 	 */
@@ -6114,6 +6175,19 @@ DisableSubscriptionAndExit(void)
 	ereport(LOG,
 			errmsg("subscription \"%s\" has been disabled because of an error",
 				   MySubscription->name));
+
+	/*
+	 * Insert the deferred conflict log tuple (if any) now that the
+	 * subscription has been disabled and committed.  Doing it after the
+	 * disable means a failure to log the conflict (treated as a hard error,
+	 * see ProcessPendingConflictLogTuple) cannot prevent the subscription
+	 * from being disabled and so cannot leave the worker restarting and
+	 * failing forever.  Do it before the dead-tuple retention check below:
+	 * that check only warns today, but it takes an elevel and could raise an
+	 * error, which must not prevent the conflict from being recorded.  The
+	 * original error was already reported above.
+	 */
+	ProcessPendingConflictLogTuple();
 
 	/*
 	 * Skip the track_commit_timestamp check when disabling the worker due to

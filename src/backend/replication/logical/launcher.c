@@ -726,6 +726,35 @@ logicalrep_pa_worker_stop(ParallelApplyWorkerInfo *winfo)
 }
 
 /*
+ * Is the given parallel apply worker still running?
+ *
+ * The generation guards against the slot having been reused by a different
+ * worker after ours exited.
+ */
+bool
+logicalrep_pa_worker_running(ParallelApplyWorkerInfo *winfo)
+{
+	int			slot_no;
+	uint16		generation;
+	LogicalRepWorker *worker;
+	bool		running;
+
+	SpinLockAcquire(&winfo->shared->mutex);
+	generation = winfo->shared->logicalrep_worker_generation;
+	slot_no = winfo->shared->logicalrep_worker_slot_no;
+	SpinLockRelease(&winfo->shared->mutex);
+
+	Assert(slot_no >= 0 && slot_no < max_logical_replication_workers);
+
+	LWLockAcquire(LogicalRepWorkerLock, LW_SHARED);
+	worker = &LogicalRepCtx->workers[slot_no];
+	running = (worker->generation == generation && worker->proc != NULL);
+	LWLockRelease(LogicalRepWorkerLock);
+
+	return running;
+}
+
+/*
  * Wake up (using latch) any logical replication worker that matches the
  * specified worker type, subscription id, and relation id.
  */

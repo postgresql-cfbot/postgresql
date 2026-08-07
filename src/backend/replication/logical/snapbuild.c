@@ -378,7 +378,7 @@ SnapBuildBuildSnapshot(SnapBuild *builder)
 
 	/*
 	 * We misuse the original meaning of SnapshotData's xip and subxip fields
-	 * to make the more fitting for our needs.
+	 * to make them more fitting for our needs.
 	 *
 	 * In the 'xip' array we store transactions that have to be treated as
 	 * committed. Since we will only ever look at tuples from transactions
@@ -406,10 +406,14 @@ SnapBuildBuildSnapshot(SnapBuild *builder)
 	/* store all transactions to be treated as committed by this snapshot */
 	snapshot->xip =
 		(TransactionId *) ((char *) snapshot + sizeof(SnapshotData));
-	snapshot->xcnt = builder->committed.xcnt;
-	memcpy(snapshot->xip,
-		   builder->committed.xip,
-		   builder->committed.xcnt * sizeof(TransactionId));
+
+	for (int i = 0; i < builder->committed.xcnt; i++)
+	{
+		if (!TransactionIdIsInProgress(builder->committed.xip[i]))
+		{
+			snapshot->xip[snapshot->xcnt++] = builder->committed.xip[i];
+		}
+	}
 
 	/* sort so we can bsearch() */
 	qsort(snapshot->xip, snapshot->xcnt, sizeof(TransactionId), xidComparator);

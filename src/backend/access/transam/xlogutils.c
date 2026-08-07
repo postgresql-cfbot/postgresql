@@ -900,6 +900,7 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 	int			count;
 	WALReadError errinfo;
 	TimeLineID	currTLI;
+	Size		bytesRead;
 
 	loc = targetPagePtr + reqLen;
 
@@ -1031,9 +1032,25 @@ read_local_xlog_page_guts(XLogReaderState *state, XLogRecPtr targetPagePtr,
 		count = read_upto - targetPagePtr;
 	}
 
-	if (!WALRead(state, cur_page, targetPagePtr, count, tli,
-				 &errinfo))
-		WALReadRaiseError(&errinfo);
+	/* First attempt to read from WAL buffers */
+	bytesRead = WALReadFromBuffers(cur_page, targetPagePtr, count, currTLI);
+
+	/* If we still have bytes to read, get them from WAL file */
+	if (bytesRead < count)
+	{
+		if (!WALRead(state,
+					 cur_page + bytesRead,
+					 targetPagePtr + bytesRead,
+					 count - bytesRead,
+					 tli,
+					 &errinfo))
+		{
+			WALReadRaiseError(&errinfo);
+		}
+		bytesRead = count;		/* All requested bytes read */
+	}
+
+	Assert(bytesRead == count);
 
 	/* number of valid bytes in the buffer */
 	return count;

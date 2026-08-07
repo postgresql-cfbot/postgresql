@@ -287,6 +287,13 @@ struct VacuumCutoffs
 	 */
 	TransactionId FreezeLimit;
 	MultiXactId MultiXactCutoff;
+
+	/*
+	 * Oldest xmin and catalog xmin of any replication slot obtained from the
+	 * same ComputeXidHorizons() call that computed OldestXmin.
+	 */
+	TransactionId OldestSlotXmin;
+	TransactionId OldestSlotCatalogXmin;
 };
 
 /*
@@ -399,6 +406,9 @@ extern IndexBulkDeleteResult *vac_bulkdel_one_index(IndexVacuumInfo *ivinfo,
 													VacDeadItemsInfo *dead_items_info);
 extern IndexBulkDeleteResult *vac_cleanup_one_index(IndexVacuumInfo *ivinfo,
 													IndexBulkDeleteResult *istat);
+extern bool maybe_invalidate_xid_aged_slots(TransactionId oldest_xmin,
+											TransactionId oldest_slot_xmin,
+											TransactionId oldest_slot_catalog_xmin);
 
 /* In postmaster/autovacuum.c */
 extern void AutoVacuumUpdateCostLimit(void);

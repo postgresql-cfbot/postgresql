@@ -467,6 +467,31 @@ SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'inc
 SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
 \pset format aligned
 
+-- Check that virtual generated columns are omitted from the output (their
+-- values are not stored on disk so heap_getattr() would otherwise emit a
+-- wrong NULL), while stored generated columns are emitted normally.
+CREATE TABLE gtest1 (
+    a int PRIMARY KEY,
+    b int,
+    c int GENERATED ALWAYS AS (a + b) VIRTUAL,
+    d int GENERATED ALWAYS AS (a * 2) STORED
+);
+INSERT INTO gtest1 (a, b) VALUES (1, 10), (2, 20);
+UPDATE gtest1 SET b = 99 WHERE a = 1;
+DELETE FROM gtest1 WHERE a = 2;
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+
+-- table with only virtual generated columns alongside the key
+CREATE TABLE gtest2 (
+    a int PRIMARY KEY,
+    b int GENERATED ALWAYS AS (a + 1) VIRTUAL,
+    c text GENERATED ALWAYS AS ('row-' || a::text) VIRTUAL
+);
+INSERT INTO gtest2 (a) VALUES (10), (20);
+SELECT data FROM pg_logical_slot_get_changes('regression_slot', NULL, NULL, 'include-xids', '0', 'skip-empty-xacts', '1');
+DROP TABLE gtest1;
+DROP TABLE gtest2;
+
 SELECT pg_drop_replication_slot('regression_slot');
 
 /* check that the slot is gone */

@@ -54,6 +54,7 @@
 #include "utils/acl.h"
 #include "utils/builtins.h"
 #include "utils/guc.h"
+#include "utils/injection_point.h"
 #include "utils/lsyscache.h"
 #include "utils/memutils.h"
 #include "utils/pg_lsn.h"
@@ -127,6 +128,8 @@ typedef struct PublicationRelKind
 } PublicationRelKind;
 
 static List *fetch_relation_list(WalReceiverConn *wrconn, List *publications);
+static void append_quoted_rel_filters(StringInfo cmd, Oid *relids,
+									  int nrelids);
 static void check_publications_origin_tables(WalReceiverConn *wrconn,
 											 List *publications, bool copydata,
 											 bool retain_dead_tuples,
@@ -1159,6 +1162,13 @@ AlterSubscription_refresh(Subscription *sub, bool copy_data,
 		/* Get local relation list. */
 		subrel_states = GetSubscriptionRelations(sub->oid, true, true, false);
 		subrel_count = list_length(subrel_states);
+
+		/*
+		 * The local relation OIDs are now captured but not locked, so a
+		 * concurrent drop can make them stale before the origin checks run.
+		 * This injection point lets a test reproduce that window.
+		 */
+		INJECTION_POINT("subscription-refresh-before-origin-check", NULL);
 
 		/*
 		 * Build qsorted arrays of local table oids and sequence oids for
@@ -3095,6 +3105,44 @@ AlterSubscriptionOwner_oid(Oid subid, Oid newOwnerId)
 }
 
 /*
+ * Append filter clauses to the origin-check query that exclude the given local
+ * relations, matching each by its schema-qualified name.
+ *
+ * The local relations are not locked, so a relation may be dropped
+ * concurrently. try_table_open() returns NULL if it is already gone, in which
+ * case it is skipped, as a dropped relation is not synchronized.
+ */
+static void
+append_quoted_rel_filters(StringInfo cmd, Oid *relids, int nrelids)
+{
+	for (int i = 0; i < nrelids; i++)
+	{
+		Relation	rel;
+		char	   *schemaname;
+		char	   *relname;
+		char	   *schemaname_lit;
+		char	   *relname_lit;
+
+		rel = try_table_open(relids[i], AccessShareLock);
+		if (rel == NULL)
+			continue;
+
+		schemaname = get_namespace_name(RelationGetNamespace(rel));
+		relname = RelationGetRelationName(rel);
+		schemaname_lit = quote_literal_cstr(schemaname);
+		relname_lit = quote_literal_cstr(relname);
+
+		appendStringInfo(cmd, "AND NOT (N.nspname = %s AND C.relname = %s)\n",
+						 schemaname_lit, relname_lit);
+
+		pfree(schemaname_lit);
+		pfree(relname_lit);
+
+		table_close(rel, AccessShareLock);
+	}
+}
+
+/*
  * Check and log a warning if the publisher has subscribed to the same table,
  * its partition ancestors (if it's a partition), or its partition children (if
  * it's a partitioned table), from some other publishers. This check is
@@ -3128,7 +3176,6 @@ check_publications_origin_tables(WalReceiverConn *wrconn, List *publications,
 	TupleTableSlot *slot;
 	Oid			tableRow[1] = {TEXTOID};
 	List	   *publist = NIL;
-	int			i;
 	bool		check_rdt;
 	bool		check_table_sync;
 	bool		origin_none = origin &&
@@ -3177,22 +3224,7 @@ check_publications_origin_tables(WalReceiverConn *wrconn, List *publications,
 	 * created subscriptions on the publisher.
 	 */
 	if (check_table_sync)
-	{
-		for (i = 0; i < subrel_count; i++)
-		{
-			Oid			relid = subrel_local_oids[i];
-			char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
-			char	   *tablename = get_rel_name(relid);
-			char	   *schemaname_lit = quote_literal_cstr(schemaname);
-			char	   *tablename_lit = quote_literal_cstr(tablename);
-
-			appendStringInfo(&cmd, "AND NOT (N.nspname = %s AND C.relname = %s)\n",
-							 schemaname_lit, tablename_lit);
-
-			pfree(schemaname_lit);
-			pfree(tablename_lit);
-		}
-	}
+		append_quoted_rel_filters(&cmd, subrel_local_oids, subrel_count);
 
 	res = walrcv_exec(wrconn, cmd.data, 1, tableRow);
 	pfree(cmd.data);
@@ -3305,21 +3337,7 @@ check_publications_origin_sequences(WalReceiverConn *wrconn, List *publications,
 	 * present on the subscriber. This check should be skipped as these will
 	 * not be re-synced.
 	 */
-	for (int i = 0; i < subrel_count; i++)
-	{
-		Oid			relid = subrel_local_oids[i];
-		char	   *schemaname = get_namespace_name(get_rel_namespace(relid));
-		char	   *seqname = get_rel_name(relid);
-		char	   *schemaname_lit = quote_literal_cstr(schemaname);
-		char	   *seqname_lit = quote_literal_cstr(seqname);
-
-		appendStringInfo(&cmd,
-						 "AND NOT (N.nspname = %s AND C.relname = %s)\n",
-						 schemaname_lit, seqname_lit);
-
-		pfree(schemaname_lit);
-		pfree(seqname_lit);
-	}
+	append_quoted_rel_filters(&cmd, subrel_local_oids, subrel_count);
 
 	res = walrcv_exec(wrconn, cmd.data, 1, tableRow);
 	pfree(cmd.data);

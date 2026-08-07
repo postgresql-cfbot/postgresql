@@ -263,6 +263,36 @@ PostgreSQL documentation
      </varlistentry>
 
      <varlistentry>
+      <term><option>--initdb</option></term>
+      <listitem>
+       <para>
+        Create the new cluster automatically by running
+        <command>initdb</command> before upgrading, instead of requiring the
+        user to have created it manually.  The WAL segment size, data checksum
+        setting, encoding, and locale are derived from the old cluster so that
+        <application>pg_upgrade</application> can verify compatibility.
+       </para>
+       <para>
+        The new cluster data directory specified with
+        <option>-D</option>/<option>--new-datadir</option> must not already
+        exist when this option is given; if it does,
+        <application>pg_upgrade</application> will exit with an error.
+       </para>
+       <para>
+        This option cannot be combined with
+        <option>-c</option>/<option>--check</option>, because
+        <option>--check</option> is read-only and must not create the new
+        cluster.  It also cannot be combined with
+        <option>-O</option>/<option>--new-options</option>: those options are
+        passed to the new cluster's server process, which accepts a different
+        set of options than <command>initdb</command>.  If you need to supply
+        such options, create the new cluster manually and omit
+        <option>--initdb</option>.
+       </para>
+      </listitem>
+     </varlistentry>
+
+     <varlistentry>
       <term><option>--no-statistics</option></term>
       <listitem>
        <para>
@@ -457,10 +487,24 @@ make prefix=/usr/local/pgsql.new install
 
     <para>
      Initialize the new cluster using <command>initdb</command>.
-     Again, use compatible <command>initdb</command>
-     flags that match the old cluster. Many
-     prebuilt installers do this step automatically. There is no need to
+     The new cluster must be created with settings that are compatible with
+     the old cluster, otherwise the upgrade will fail a compatibility check.
+     In particular, the WAL segment size
+     (<option>--wal-segsize</option>), the data checksum setting
+     (<option>--data-checksums</option> or
+     <option>--no-data-checksums</option>), and the encoding and locale
+     (<option>--encoding</option>, <option>--locale-provider</option> and the
+     related locale options) must match those of the old cluster; you can read
+     the old cluster's values with
+     <link linkend="app-pgcontroldata"><application>pg_controldata</application></link>.
+     Many prebuilt installers do this step automatically. There is no need to
      start the new cluster.
+    </para>
+    <para>
+     Alternatively, pass <option>--initdb</option> to
+     <application>pg_upgrade</application> to have it run
+     <command>initdb</command> automatically, deriving the required settings
+     from the old cluster.  In that case this manual step can be skipped.
     </para>
    </step>
 

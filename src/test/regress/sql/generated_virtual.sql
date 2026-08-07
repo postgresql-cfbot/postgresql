@@ -986,6 +986,44 @@ insert into gtest34p values (1, 2)
     on conflict (id) do update set a = gtest34p.c + excluded.c returning *;
 drop table gtest34p;
 
+-- CREATE TABLE gtest_pk AS SELECT g::int as b FROM generate_series(1, 10) g;
+-- ALTER TABLE gtest_pk ADD PRIMARY KEY (b);
+CREATE TABLE gtest35(a int, b int GENERATED ALWAYS AS (a) NOT NULL, CONSTRAINT cc check (b > 0)) PARTITION BY RANGE (a);
+CREATE TABLE gtest35_1 PARTITION OF gtest35 FOR VALUES FROM (1) TO (100);
+-- CREATE INDEX gtest35_b_idx ON gtest35(b);
+INSERT INTO gtest35 SELECT g FROM generate_series(1, 10) g;
+-- ALTER TABLE gtest35 ADD CONSTRAINT gtest35_fk FOREIGN KEY (b) REFERENCES gtest_pk;
+
+ALTER TABLE ONLY gtest35 ALTER COLUMN b SET EXPRESSION AS (a); -- error
+ALTER TABLE gtest35_1 ALTER COLUMN b SET EXPRESSION AS (a); -- error
+
+ALTER TABLE gtest35 DROP CONSTRAINT cc;
+ALTER TABLE gtest35 ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE ONLY gtest35 ALTER COLUMN b SET EXPRESSION AS (a); -- ok
+ALTER TABLE gtest35_1 ALTER COLUMN b SET EXPRESSION AS (a); -- ok
+-- ALTER TABLE gtest35 DROP CONSTRAINT gtest35_fk;
+-- DROP INDEX gtest35_b_idx;
+-- ALTER TABLE ONLY gtest35 ALTER COLUMN b SET EXPRESSION AS (a); -- ok
+-- ALTER TABLE gtest35_1 ALTER COLUMN b SET EXPRESSION AS (a + 1); -- ok
+
+DROP TABLE gtest36;
+CREATE TABLE gtest36(a int, b int GENERATED ALWAYS AS (a) NOT NULL, CONSTRAINT cc check (b > 0));
+CREATE TABLE gtest36_1 () INHERITS (gtest36);
+CREATE TABLE gtest36_12 () INHERITS (gtest36, gtest36_1);
+-- CREATE INDEX gtest36_b_idx ON gtest36(b);
+INSERT INTO gtest36 SELECT g FROM generate_series(1, 10) g;
+-- ALTER TABLE gtest36 ADD CONSTRAINT gtest36_fk FOREIGN KEY (b) REFERENCES gtest_pk;
+ALTER TABLE ONLY gtest36 ALTER COLUMN b SET EXPRESSION AS (a); -- error
+ALTER TABLE gtest36_1 ALTER COLUMN b SET EXPRESSION AS (a); -- error
+ALTER TABLE gtest36 DROP CONSTRAINT cc;
+ALTER TABLE gtest36 ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE ONLY gtest36 ALTER COLUMN b SET EXPRESSION AS (a); -- ok
+ALTER TABLE gtest36_1 ALTER COLUMN b SET EXPRESSION AS (a); -- ok
+-- ALTER TABLE gtest36 DROP CONSTRAINT gtest36_fk;
+-- DROP INDEX gtest36_b_idx;
+-- ALTER TABLE ONLY gtest36 ALTER COLUMN b SET EXPRESSION AS (a); -- ok
+-- ALTER TABLE gtest6_1 ALTER COLUMN b SET EXPRESSION AS (a + 1); -- ok
+
 -- Ensure that virtual generated columns work with WHERE CURRENT OF
 create table gtest_cursor (id int primary key, a int, b int generated always as (a * 2) virtual);
 insert into gtest_cursor values (1, 10), (2, 20), (3, 30);

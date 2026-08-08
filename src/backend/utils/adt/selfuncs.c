@@ -427,6 +427,9 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 		{
 			LOCAL_FCINFO(fcinfo, 2);
 			FmgrInfo	eqproc;
+			pg_locale_t sta_locale = 0;
+			pg_locale_t const_locale = 0;
+			bool		scan_all_values = false;
 
 			fmgr_info(opfuncoid, &eqproc);
 
@@ -446,6 +449,11 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 			else
 				fcinfo->args[0].value = constval;
 
+			sta_locale = pg_newlocale_from_collation(sslot.stacoll);
+			const_locale = pg_newlocale_from_collation(collation);
+			scan_all_values = (!const_locale->deterministic && sta_locale->deterministic);
+			selec = 0.0;
+
 			for (i = 0; i < sslot.nvalues; i++)
 			{
 				Datum		fresult;
@@ -459,7 +467,18 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 				if (!fcinfo->isnull && DatumGetBool(fresult))
 				{
 					match = true;
-					break;
+					if (scan_all_values == false)
+					{
+						selec = sslot.numbers[i];
+						break;
+					}
+					else
+						/* 
+			 			 * When the column statistics have deterministic collation while
+			 			 * the constant has non-deterministic collation, scan all statistical
+			 			 * entries and accumulate selectivity for matching items.
+						*/
+						selec += sslot.numbers[i];
 				}
 			}
 		}
@@ -469,15 +488,7 @@ var_eq_const(VariableStatData *vardata, Oid oproid, Oid collation,
 			i = 0;				/* keep compiler quiet */
 		}
 
-		if (match)
-		{
-			/*
-			 * Constant is "=" to this common value.  We know selectivity
-			 * exactly (or as exactly as ANALYZE could calculate it, anyway).
-			 */
-			selec = sslot.numbers[i];
-		}
-		else
+		if (match == false)
 		{
 			/*
 			 * Comparison is against a constant that is neither NULL nor any

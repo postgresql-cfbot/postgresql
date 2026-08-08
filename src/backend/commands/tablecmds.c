@@ -565,8 +565,8 @@ static ObjectAddress ATExecSetIdentity(Relation rel, const char *colName,
 									   Node *def, LOCKMODE lockmode, bool recurse, bool recursing);
 static ObjectAddress ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode,
 										bool recurse, bool recursing);
-static ObjectAddress ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
-										 Node *newExpr, LOCKMODE lockmode);
+static ObjectAddress ATExecSetExpression(List **wqueue, AlteredTableInfo *tab, Relation rel, const char *colName,
+										 Node *newExpr, bool recurse, bool recursing, LOCKMODE lockmode);
 static void ATPrepDropExpression(Relation rel, AlterTableCmd *cmd, bool recurse, bool recursing, LOCKMODE lockmode);
 static ObjectAddress ATExecDropExpression(Relation rel, const char *colName, bool missing_ok, LOCKMODE lockmode);
 static ObjectAddress ATExecSetStatistics(Relation rel, const char *colName, int16 colNum,
@@ -5125,7 +5125,9 @@ ATPrepCmd(List **wqueue, Relation rel, AlterTableCmd *cmd,
 		case AT_SetExpression:	/* ALTER COLUMN SET EXPRESSION */
 			ATSimplePermissions(cmd->subtype, rel,
 								ATT_TABLE | ATT_PARTITIONED_TABLE | ATT_FOREIGN_TABLE);
-			ATSimpleRecursion(wqueue, rel, cmd, recurse, lockmode, context);
+			/* Set up recursion for phase 2; no other prep needed */
+			if (recurse)
+				cmd->recurse = true;
 			pass = AT_PASS_SET_EXPRESSION;
 			break;
 		case AT_DropExpression: /* ALTER COLUMN DROP EXPRESSION */
@@ -5520,7 +5522,8 @@ ATExecCmd(List **wqueue, AlteredTableInfo *tab,
 									   cmd->recurse, false, lockmode);
 			break;
 		case AT_SetExpression:
-			address = ATExecSetExpression(tab, rel, cmd->name, cmd->def, lockmode);
+			address = ATExecSetExpression(wqueue, tab, rel,
+										  cmd->name, cmd->def, cmd->recurse, false, lockmode);
 			break;
 		case AT_DropExpression:
 			address = ATExecDropExpression(rel, cmd->name, cmd->missing_ok, lockmode);
@@ -8736,8 +8739,9 @@ ATExecDropIdentity(Relation rel, const char *colName, bool missing_ok, LOCKMODE 
  * Return the address of the affected column.
  */
 static ObjectAddress
-ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
-					Node *newExpr, LOCKMODE lockmode)
+ATExecSetExpression(List **wqueue, AlteredTableInfo *tab,
+					Relation rel, const char *colName,
+					Node *newExpr, bool recurse, bool recursing, LOCKMODE lockmode)
 {
 	HeapTuple	tuple;
 	Form_pg_attribute attTup;
@@ -8749,6 +8753,15 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 	Expr	   *defval;
 	NewColumnValue *newval;
 	RawColumnDefault *rawEnt;
+	List	   *children = NIL;
+
+	/* Guard against stack overflow due to overly deep inheritance tree. */
+	check_stack_depth();
+
+	/* At top level, permission check was done in ATPrepCmd, else do it */
+	if (recursing)
+		ATSimplePermissions(AT_AddConstraint, rel,
+							ATT_PARTITIONED_TABLE | ATT_TABLE | ATT_FOREIGN_TABLE);
 
 	tuple = SearchSysCacheAttName(RelationGetRelid(rel), colName);
 	if (!HeapTupleIsValid(tuple))
@@ -8820,6 +8833,34 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 	 */
 	RememberWholeRowDependentForRebuilding(tab, AT_SetExpression, rel);
 
+	children = find_inheritance_children(RelationGetRelid(rel),
+										 lockmode);
+
+	if (tab->changedConstraintOids != NIL || tab->changedIndexOids != NIL)
+	{
+		/*
+		 * Cannot use ONLY to modify a generated column's expression when
+		 * there are dependencies (e.g. constraints, indexes) that need to be
+		 * rebuilt, since that rebuild must cascade to the children too.
+		 */
+		if (!recurse && children != NIL)
+			ereport(ERROR,
+					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("ALTER TABLE ONLY ... SET EXPRESSION is not supported for generated columns with dependent objects on a parent table"),
+					errdetail("Dependent objects, such as constraints and indexes, must be rebuilt in child tables as well, which conflicts with ONLY."));
+
+		/*
+		 * Cannot modify a partition's generated column expression directly
+		 * when it has dependencies, since the partition's inherited
+		 * constraints and indexes cannot be rebuilt independently.
+		 */
+		if (!recursing && (rel->rd_rel->relispartition || has_superclass(RelationGetRelid(rel))))
+			ereport(ERROR,
+					errcode(ERRCODE_FEATURE_NOT_SUPPORTED),
+					errmsg("cannot use ALTER TABLE ... SET EXPRESSION on a generated column in a child table with dependent objects"),
+					errdetail("Inherited objects, such as constraints and indexes, cannot be rebuilt independently for a child table."));
+	}
+
 	/*
 	 * Drop the dependency records of the GENERATED expression, in particular
 	 * its INTERNAL dependency on the column, which would otherwise cause
@@ -8877,6 +8918,33 @@ ATExecSetExpression(AlteredTableInfo *tab, Relation rel, const char *colName,
 
 	ObjectAddressSubSet(address, RelationRelationId,
 						RelationGetRelid(rel), attnum);
+
+	/*
+	 * Recurse to propagate the constraint to children that don't have one.
+	 */
+	if (recurse)
+	{
+		foreach_oid(childoid, children)
+		{
+			AlteredTableInfo *childtab;
+
+			/* find_inheritance_children already got lock */
+			Relation	childrel = table_open(childoid, NoLock);
+
+			CheckAlterTableIsSafe(childrel);
+
+			CommandCounterIncrement();
+
+			/* Find or create work queue entry for this table */
+			childtab = ATGetQueueEntry(wqueue, childrel);
+
+			ATExecSetExpression(wqueue, childtab, childrel, colName,
+								newExpr, recurse, true, lockmode);
+
+			table_close(childrel, NoLock);
+		}
+	}
+
 	return address;
 }
 

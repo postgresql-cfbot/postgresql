@@ -38,6 +38,8 @@ static bool attached_or_initialized = false;
 static void test_shmem_request(void *arg);
 static void test_shmem_init(void *arg);
 static void test_shmem_attach(void *arg);
+static void test_shmem_failure_request(void *arg);
+static void test_shmem_failure_init(void *arg);
 
 static const ShmemCallbacks TestShmemCallbacks = {
 	.flags = SHMEM_CALLBACKS_ALLOW_AFTER_STARTUP,
@@ -45,6 +47,14 @@ static const ShmemCallbacks TestShmemCallbacks = {
 	.init_fn = test_shmem_init,
 	.attach_fn = test_shmem_attach,
 };
+
+static const ShmemCallbacks TestShmemFailureCallbacks = {
+	.flags = SHMEM_CALLBACKS_ALLOW_AFTER_STARTUP,
+	.request_fn = test_shmem_failure_request,
+	.init_fn = test_shmem_failure_init,
+};
+
+static int	failure_mode;
 
 static void
 test_shmem_request(void *arg)
@@ -82,11 +92,62 @@ test_shmem_attach(void *arg)
 	attached_or_initialized = true;
 }
 
+/* Request callback used by the after-startup failure tests. */
+static void
+test_shmem_failure_request(void *arg)
+{
+	static void *ptr1;
+
+	switch (failure_mode)
+	{
+		case 0:
+			ShmemRequestStruct(.name = "test_shmem callback error area",
+							   .size = 1024, .ptr = &ptr1);
+			elog(ERROR, "test_shmem request callback failed on purpose");
+		case 1:
+			ShmemRequestStruct(.name = "test_shmem oversized area",
+							   .size = (Size) 1024 * 1024 * 1024,
+							   .ptr = &ptr1);
+			break;
+		case 2:
+			ShmemRequestStruct(.name = "test_shmem partial small area",
+							   .size = 1024, .ptr = &ptr1);
+			ShmemRequestStruct(.name = "test_shmem partial huge area",
+							   .size = (Size) 1024 * 1024 * 1024,
+							   .ptr = &ptr1);
+			break;
+		case 3:
+			ShmemRequestStruct(.name = "test_shmem legacy caller area",
+							   .size = 1024, .ptr = &ptr1);
+			break;
+		default:
+			elog(ERROR, "unrecognized test_shmem failure mode: %d", failure_mode);
+	}
+}
+
+static void
+test_shmem_failure_init(void *arg)
+{
+	bool		found;
+
+	if (failure_mode == 3)
+		(void) ShmemInitStruct("test_shmem legacy target area", 1024, &found);
+}
+
 void
 _PG_init(void)
 {
 	elog(LOG, "test_shmem module's _PG_init called");
 	RegisterShmemCallbacks(&TestShmemCallbacks);
+}
+
+PG_FUNCTION_INFO_V1(test_shmem_failure);
+Datum
+test_shmem_failure(PG_FUNCTION_ARGS)
+{
+	failure_mode = PG_GETARG_INT32(0);
+	RegisterShmemCallbacks(&TestShmemFailureCallbacks);
+	PG_RETURN_VOID();
 }
 
 PG_FUNCTION_INFO_V1(get_test_shmem_attach_count);

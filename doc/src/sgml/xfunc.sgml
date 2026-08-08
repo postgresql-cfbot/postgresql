@@ -3742,6 +3742,12 @@ my_shmem_init(void *arg)
       lock (ShmemIndexLock), which prevents the race condition of two backends
       trying to initialize the memory area at the same time.
      </para>
+     <para>
+      The legacy <function>ShmemInitStruct()</function> and
+      <function>ShmemInitHash()</function> functions cannot be used from these
+      callbacks because they take the same lock.  Request all required areas
+      from <function>request_fn</function> instead.
+     </para>
     </sect3>
 
     <sect3 id="xfunc-shared-addin-dynamic">

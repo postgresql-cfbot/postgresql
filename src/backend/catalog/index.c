@@ -1745,7 +1745,7 @@ index_concurrently_swap(Oid newIndexId, Oid oldIndexId, const char *oldName)
 
 			tgForm->tgconstrindid = newIndexId;
 
-			CatalogTupleUpdate(pg_trigger, &triggerTuple->t_self, triggerTuple);
+			CatalogTupleUpdate(pg_trigger, &triggerTuple->t_self,  triggerTuple);
 
 			heap_freetuple(triggerTuple);
 		}

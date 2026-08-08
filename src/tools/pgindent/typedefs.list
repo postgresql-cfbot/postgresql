@@ -2325,6 +2325,7 @@ PgStatShared_CustomVarEntry
 PgStatShared_Database
 PgStatShared_Function
 PgStatShared_HashEntry
+PgStatShared_Index
 PgStatShared_IO
 PgStatShared_Lock
 PgStatShared_Relation
@@ -2347,6 +2348,7 @@ PgStat_FunctionCallUsage
 PgStat_FunctionCounts
 PgStat_HashKey
 PgStat_IO
+PgStat_IndexCounts
 PgStat_KindInfo
 PgStat_LocalState
 PgStat_Lock
@@ -2354,6 +2356,8 @@ PgStat_LockEntry
 PgStat_PendingDroppedStatsItem
 PgStat_PendingIO
 PgStat_PendingLock
+PgStat_RelXactStatus
+PgStat_RelationStatus
 PgStat_SLRUStats
 PgStat_ShmemControl
 PgStat_Snapshot
@@ -2362,14 +2366,13 @@ PgStat_StatCustomFixedEntry
 PgStat_StatCustomVarEntry
 PgStat_StatDBEntry
 PgStat_StatFuncEntry
+PgStat_StatIdxEntry
 PgStat_StatReplSlotEntry
 PgStat_StatSubEntry
 PgStat_StatTabEntry
 PgStat_StatsFileOp
 PgStat_SubXactStatus
 PgStat_TableCounts
-PgStat_TableStatus
-PgStat_TableXactStatus
 PgStat_WalCounters
 PgStat_WalStats
 PgXmlErrorContext

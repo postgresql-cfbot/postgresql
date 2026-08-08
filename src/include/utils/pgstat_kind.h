@@ -29,16 +29,15 @@
 #define PGSTAT_KIND_FUNCTION	3	/* per-function statistics */
 #define PGSTAT_KIND_REPLSLOT	4	/* per-slot statistics */
 #define PGSTAT_KIND_SUBSCRIPTION	5	/* per-subscription statistics */
-#define PGSTAT_KIND_BACKEND	6	/* per-backend statistics */
 
 /* stats for fixed-numbered objects */
-#define PGSTAT_KIND_ARCHIVER	7
-#define PGSTAT_KIND_BGWRITER	8
-#define PGSTAT_KIND_CHECKPOINTER	9
-#define PGSTAT_KIND_IO	10
-#define PGSTAT_KIND_LOCK	11
-#define PGSTAT_KIND_SLRU	12
-#define PGSTAT_KIND_WAL	13
+#define PGSTAT_KIND_ARCHIVER	6
+#define PGSTAT_KIND_BGWRITER	7
+#define PGSTAT_KIND_CHECKPOINTER	8
+#define PGSTAT_KIND_IO	9
+#define PGSTAT_KIND_LOCK	10
+#define PGSTAT_KIND_SLRU	11
+#define PGSTAT_KIND_WAL	12
 
 #define PGSTAT_KIND_BUILTIN_MIN PGSTAT_KIND_DATABASE
 #define PGSTAT_KIND_BUILTIN_MAX PGSTAT_KIND_WAL

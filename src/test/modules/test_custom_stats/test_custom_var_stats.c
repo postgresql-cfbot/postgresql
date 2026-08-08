@@ -90,8 +90,9 @@ static dsa_area *custom_stats_description_dsa = NULL;
  */
 
 /* Flush callback: merge pending stats into shared memory */
-static bool test_custom_stats_var_flush_pending_cb(PgStat_EntryRef *entry_ref,
-												   bool nowait);
+static PgStat_FlushResult test_custom_stats_var_flush_pending_cb(PgStat_EntryRef *entry_ref,
+																 bool nowait,
+																 bool xact_boundary);
 
 /* Serialization callback: write auxiliary entry data */
 static bool test_custom_stats_var_to_serialized_data(const PgStat_HashKey *key,
@@ -151,10 +152,13 @@ _PG_init(void)
  * Called by pgstat collector to flush accumulated local statistics
  * to shared memory where other backends can read them.
  *
- * Returns false only if nowait=true and lock acquisition fails.
+ * These stats are not transactional, so xact_boundary is unused; returns
+ * PGSTAT_FLUSH_LOCK_CONFLICT only if nowait=true and lock acquisition fails,
+ * otherwise PGSTAT_FLUSH_DONE.
  */
-static bool
-test_custom_stats_var_flush_pending_cb(PgStat_EntryRef *entry_ref, bool nowait)
+static PgStat_FlushResult
+test_custom_stats_var_flush_pending_cb(PgStat_EntryRef *entry_ref, bool nowait,
+									   bool xact_boundary)
 {
 	PgStat_StatCustomVarEntry *pending_entry;
 	PgStatShared_CustomVarEntry *shared_entry;
@@ -163,14 +167,14 @@ test_custom_stats_var_flush_pending_cb(PgStat_EntryRef *entry_ref, bool nowait)
 	shared_entry = (PgStatShared_CustomVarEntry *) entry_ref->shared_stats;
 
 	if (!pgstat_lock_entry(entry_ref, nowait))
-		return false;
+		return PGSTAT_FLUSH_LOCK_CONFLICT;
 
 	/* Add pending counts to shared totals */
 	shared_entry->stats.numcalls += pending_entry->numcalls;
 
 	pgstat_unlock_entry(entry_ref);
 
-	return true;
+	return PGSTAT_FLUSH_DONE;
 }
 
 /*

@@ -473,8 +473,9 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 			so->pageData[so->nPageData].offnum = i;
 
 			/*
-			 * In an index-only scan, also fetch the data from the tuple.  The
-			 * reconstructed tuples are stored in pageDataCxt.
+			 * In an index-only scan, also fetch the data from the tuple and
+			 * its visibility state.  The reconstructed tuples are stored in
+			 * pageDataCxt.
 			 */
 			if (scan->xs_want_itup)
 			{
@@ -482,6 +483,10 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 				so->pageData[so->nPageData].recontup =
 					gistFetchTuple(giststate, r, it);
 				MemoryContextSwitchTo(oldcxt);
+
+				so->pageData[so->nPageData].visrecheck =
+					table_index_vischeck_tuple(scan->heapRelation,
+											   &so->vmbuf, &it->t_tid);
 			}
 			so->nPageData++;
 		}
@@ -509,10 +514,16 @@ gistScanPage(IndexScanDesc scan, GISTSearchItem *pageItem,
 				item->data.heap.recheckDistances = recheck_distances;
 
 				/*
-				 * In an index-only scan, also fetch the data from the tuple.
+				 * In an index-only scan, also fetch the data from the tuple
+				 * and its visibility state.
 				 */
 				if (scan->xs_want_itup)
+				{
 					item->data.heap.recontup = gistFetchTuple(giststate, r, it);
+					item->data.heap.visrecheck =
+						table_index_vischeck_tuple(scan->heapRelation,
+												   &so->vmbuf, &it->t_tid);
+				}
 			}
 			else
 			{
@@ -597,9 +608,16 @@ getNextNearest(IndexScanDesc scan)
 												 item->distances,
 												 item->data.heap.recheckDistances);
 
-			/* in an index-only scan, also return the reconstructed tuple. */
+			/*
+			 * In an index-only scan, also return the reconstructed tuple and
+			 * the visibility check we did when we still had a pin on the
+			 * index page.
+			 */
 			if (scan->xs_want_itup)
+			{
 				scan->xs_hitup = item->data.heap.recontup;
+				scan->xs_visrecheck = item->data.heap.visrecheck;
+			}
 			res = true;
 		}
 		else
@@ -684,9 +702,17 @@ gistgettuple(IndexScanDesc scan, ScanDirection dir)
 				scan->xs_heaptid = so->pageData[so->curPageData].heapPtr;
 				scan->xs_recheck = so->pageData[so->curPageData].recheck;
 
-				/* in an index-only scan, also return the reconstructed tuple */
+				/*
+				 * In an index-only scan, also return the reconstructed tuple
+				 * and the visibility check we did when we still had a pin on
+				 * the index page.
+				 */
 				if (scan->xs_want_itup)
+				{
 					scan->xs_hitup = so->pageData[so->curPageData].recontup;
+					scan->xs_visrecheck =
+						so->pageData[so->curPageData].visrecheck;
+				}
 
 				so->curPageData++;
 

@@ -5197,7 +5197,8 @@ List of access methods
  heap   | Table
  heap2  | Table
  spgist | Index
-(8 rows)
+ stir   | Index
+(9 rows)
 
 \dA *
 List of access methods
@@ -5211,7 +5212,8 @@ List of access methods
  heap   | Table
  heap2  | Table
  spgist | Index
-(8 rows)
+ stir   | Index
+(9 rows)
 
 \dA h*
 List of access methods
@@ -5236,9 +5238,9 @@ List of access methods
 
 \dA: extra argument "bar" ignored
 \dA+
-                             List of access methods
-  Name  | Type  |       Handler        |              Description               
---------+-------+----------------------+----------------------------------------
+                               List of access methods
+  Name  | Type  |       Handler        |                Description                 
+--------+-------+----------------------+--------------------------------------------
  brin   | Index | brinhandler          | block range index (BRIN) access method
  btree  | Index | bthandler            | b-tree index access method
  gin    | Index | ginhandler           | GIN index access method
@@ -5247,12 +5249,13 @@ List of access methods
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
  spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+ stir   | Index | stirhandler          | short term index replacement access method
+(9 rows)
 
 \dA+ *
-                             List of access methods
-  Name  | Type  |       Handler        |              Description               
---------+-------+----------------------+----------------------------------------
+                               List of access methods
+  Name  | Type  |       Handler        |                Description                 
+--------+-------+----------------------+--------------------------------------------
  brin   | Index | brinhandler          | block range index (BRIN) access method
  btree  | Index | bthandler            | b-tree index access method
  gin    | Index | ginhandler           | GIN index access method
@@ -5261,7 +5264,8 @@ List of access methods
  heap   | Table | heap_tableam_handler | heap table access method
  heap2  | Table | heap_tableam_handler | 
  spgist | Index | spghandler           | SP-GiST index access method
-(8 rows)
+ stir   | Index | stirhandler          | short term index replacement access method
+(9 rows)
 
 \dA+ h*
                      List of access methods

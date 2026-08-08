@@ -330,6 +330,13 @@ CREATE TEMP VIEW v_window AS
 
 SELECT pg_get_viewdef('v_window');
 
+-- A window name that is an unreserved keyword cannot be an existing_window_name
+CREATE TEMP VIEW v2_window_unreserved_kw AS
+	SELECT count(*) OVER w2 FROM generate_series(1, 1) s(v)
+  WINDOW "rows" AS (PARTITION BY v), w2 AS ("rows" ORDER BY v);
+
+SELECT pg_get_viewdef('v2_window_unreserved_kw');
+
 -- test overflow frame specifications
 SELECT sum(unique1) over (rows between current row and 9223372036854775807 following exclude current row),
 	unique1, four

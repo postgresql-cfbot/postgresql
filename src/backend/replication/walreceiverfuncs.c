@@ -213,6 +213,7 @@ ShutdownWalRcv(void)
 
 		case WALRCV_CONNECTING:
 		case WALRCV_STREAMING:
+		case WALRCV_SWITCHING_TIMELINE:
 		case WALRCV_WAITING:
 		case WALRCV_RESTARTING:
 			walrcv->walRcvState = WALRCV_STOPPING;
@@ -276,6 +277,19 @@ RequestXLogStreaming(TimeLineID tli, XLogRecPtr recptr, const char *conninfo,
 		recptr -= XLogSegmentOffset(recptr, wal_segment_size);
 
 	SpinLockAcquire(&walrcv->mutex);
+
+	/*
+	 * If walreceiver is in WALRCV_SWITCHING_TIMELINE, it's fetching the
+	 * timeline history file from the primary after detecting end-of-timeline.
+	 * It will transition to WALRCV_WAITING on its own and then call
+	 * WakeupRecovery(), at which point the startup process should call us
+	 * again.  Don't interrupt the fetch now.
+	 */
+	if (walrcv->walRcvState == WALRCV_SWITCHING_TIMELINE)
+	{
+		SpinLockRelease(&walrcv->mutex);
+		return;
+	}
 
 	/* It better be stopped if we try to restart it */
 	Assert(walrcv->walRcvState == WALRCV_STOPPED ||

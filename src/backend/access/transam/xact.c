@@ -50,6 +50,7 @@
 #include "replication/logicallauncher.h"
 #include "replication/logicalworker.h"
 #include "replication/origin.h"
+#include "replication/slot.h"
 #include "replication/snapbuild.h"
 #include "replication/syncrep.h"
 #include "storage/aio_subsys.h"
@@ -5204,6 +5205,8 @@ CommitSubTransaction(void)
 						s->parent->curTransactionOwner);
 	AtEOSubXact_LargeObject(true, s->subTransactionId,
 							s->parent->subTransactionId);
+	AtEOSubXact_ReplicationSlot(true, s->subTransactionId,
+								s->parent->subTransactionId);
 	AtSubCommit_Notify();
 
 	CallSubXactCallbacks(SUBXACT_EVENT_COMMIT_SUB, s->subTransactionId,
@@ -5380,6 +5383,8 @@ AbortSubTransaction(void)
 						   s->parent->curTransactionOwner);
 		AtEOSubXact_LargeObject(false, s->subTransactionId,
 								s->parent->subTransactionId);
+		AtEOSubXact_ReplicationSlot(false, s->subTransactionId,
+									s->parent->subTransactionId);
 		AtSubAbort_Notify();
 
 		/* Advertise the fact that we aborted in pg_xact. */
